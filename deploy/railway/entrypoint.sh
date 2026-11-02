@@ -7,6 +7,21 @@ set -euo pipefail
 user=t3
 home=/home/$user
 
+# The tunnel's connector token goes to a file only cloudflared reads. Then the
+# script re-executes without it: `unset` alone leaves it in /proc/<pid>/environ
+# of every subshell forked from here.
+tunnel_token=/run/t3-tunnel/token
+if [ -n "${CF_TUNNEL_TOKEN:-}" ]; then
+  rm -rf /run/t3-tunnel
+  install -d -o "$user" -g "$user" -m 700 /run/t3-tunnel
+  (umask 077 && printf '%s' "$CF_TUNNEL_TOKEN" > "$tunnel_token")
+  chown "$user:$user" "$tunnel_token"
+  exec env -u CF_TUNNEL_TOKEN -u TUNNEL_TOKEN T3_TUNNEL_TOKEN_WRITTEN=1 "$0" "$@"
+elif [ -z "${T3_TUNNEL_TOKEN_WRITTEN:-}" ]; then
+  rm -rf /run/t3-tunnel
+fi
+unset T3_TUNNEL_TOKEN_WRITTEN TUNNEL_TOKEN
+
 mkdir -p "$home"
 
 # Seed shell dotfiles once. Never overwrite: after the first boot the volume
@@ -57,16 +72,6 @@ keep() {
 # at boot; otherwise Claude Code keeps its own login. A bare
 # ANTHROPIC_AUTH_TOKEN would point Claude Code's own login at the wrong key.
 unset ANTHROPIC_AUTH_TOKEN ANTHROPIC_BASE_URL CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY
-# The tunnel's connector token goes to a file only cloudflared reads, and
-# leaves the environment before any child starts.
-tunnel_token=/run/t3-tunnel/token
-rm -rf /run/t3-tunnel
-if [ -n "${CF_TUNNEL_TOKEN:-}" ]; then
-  install -d -o "$user" -g "$user" -m 700 /run/t3-tunnel
-  (umask 077 && printf '%s' "$CF_TUNNEL_TOKEN" > "$tunnel_token")
-  chown "$user:$user" "$tunnel_token"
-fi
-unset CF_TUNNEL_TOKEN TUNNEL_TOKEN
 
 # Tailscale, so agents reach the CLIProxyAPI hub (README: Hub over Tailscale).
 # Userspace networking because Railway has no TUN device; the state on the

@@ -3,7 +3,7 @@
 import * as NodeHttp from "node:http";
 
 const handle = (req, res) => {
-  const path = new URL(req.url ?? "/", "http://stub").pathname;
+  const path = (req.url ?? "/").split("?")[0];
   const healthy = path === "/healthz" || path === "/health";
   res.writeHead(healthy ? 200 : 503, { "content-type": "application/json" });
   res.end(JSON.stringify(healthy ? { ok: true, stub: true } : { error: "browsers are off" }));

@@ -7,15 +7,15 @@ set -euo pipefail
 user=t3
 home=/home/$user
 
-# The tunnel's connector token goes to a file only cloudflared reads. Then the
-# script re-executes without it: `unset` alone leaves it in /proc/<pid>/environ
-# of every subshell forked from here.
+# The tunnel's connector token goes to a file only cloudflared's own user reads
+# (agents run as t3). Then the script re-executes without it: `unset` alone
+# leaves it in /proc/<pid>/environ of every subshell forked from here.
 tunnel_token=/run/t3-tunnel/token
 if [ -n "${CF_TUNNEL_TOKEN:-}" ]; then
   rm -rf /run/t3-tunnel
-  install -d -o "$user" -g "$user" -m 700 /run/t3-tunnel
+  install -d -o t3-tunnel -g t3-tunnel -m 700 /run/t3-tunnel
   (umask 077 && printf '%s' "$CF_TUNNEL_TOKEN" > "$tunnel_token")
-  chown "$user:$user" "$tunnel_token"
+  chown t3-tunnel:t3-tunnel "$tunnel_token"
   exec env -u CF_TUNNEL_TOKEN -u TUNNEL_TOKEN T3_TUNNEL_TOKEN_WRITTEN=1 "$0" "$@"
 elif [ -z "${T3_TUNNEL_TOKEN_WRITTEN:-}" ]; then
   rm -rf /run/t3-tunnel
@@ -53,8 +53,8 @@ redact() {
 
 as_user() {
   setpriv --reuid="$user" --regid="$user" --init-groups \
-    env -u TS_AUTHKEY -u HUB_ACCESS_TOKEN HOME="$home" USER="$user" LOGNAME="$user" \
-    SHELL=/bin/bash "$@"
+    env -u TS_AUTHKEY -u HUB_ACCESS_TOKEN -u ANTHROPIC_AUTH_TOKEN HOME="$home" USER="$user" \
+    LOGNAME="$user" SHELL=/bin/bash "$@"
 }
 
 # Keeps a helper running; its exit never takes the server down.
@@ -137,11 +137,15 @@ fi
 # which serves whatever `t3-expose` mapped. Login shells get the names too.
 printf 'export T3_TUNNEL_NAMES=%q T3_TUNNEL_ZONE=%q\n' "${T3_TUNNEL_NAMES:-}" "${T3_TUNNEL_ZONE:-}" \
   > /etc/profile.d/t3-tunnel.sh
+# Exposed servers died with the old container; a stale entry would publish
+# whatever binds that port next.
+rm -f "$home/.t3-expose/map.json"
 if [ -s "$tunnel_token" ]; then
   install -d -o "$user" -g "$user" -m 700 "$home/.t3-expose"
   keep t3-router as_user node /usr/local/lib/t3-router.mjs &
-  keep cloudflared as_user cloudflared --no-autoupdate tunnel --metrics 127.0.0.1:20241 \
-    --management-diagnostics=false run --token-file "$tunnel_token" \
+  keep cloudflared setpriv --reuid=t3-tunnel --regid=t3-tunnel --clear-groups \
+    env -i PATH="$PATH" HOME=/nonexistent cloudflared --no-autoupdate tunnel \
+    --metrics 127.0.0.1:20241 --management-diagnostics=false run --token-file "$tunnel_token" \
     > "$home/.t3-expose/cloudflared.log" 2>&1 &
   echo "tunnel: on (${T3_TUNNEL_NAMES:-no names} on ${T3_TUNNEL_ZONE:-no zone})"
 else

@@ -34,14 +34,15 @@ const backend = async (t, handler) => {
   return { server, port };
 };
 
-const request = (port, host, { method = "GET", body } = {}) =>
+const request = (port, host, { method = "GET", body, headers = {} } = {}) =>
   new Promise((resolve, reject) => {
     const req = NodeHttp.request(
-      { port, host: "127.0.0.1", method, path: "/p?q=1", headers: { host } },
+      { port, host: "127.0.0.1", method, path: "/p?q=1", headers: { ...headers, host } },
       (res) => {
         let text = "";
         res.setEncoding("utf8");
         res.on("data", (c) => (text += c));
+        res.on("error", reject);
         res.on("end", () => resolve({ status: res.statusCode, headers: res.headers, text }));
       },
     );
@@ -64,6 +65,9 @@ NodeTest.test(
             url: req.url,
             host: req.headers.host,
             fwd: req.headers["x-forwarded-host"],
+            proto: req.headers["x-forwarded-proto"],
+            cookie: req.headers.cookie,
+            jwt: req.headers["cf-access-jwt-assertion"],
             body,
           }),
         ),
@@ -72,7 +76,15 @@ NodeTest.test(
     const b = await backend(t, (_req, res) => res.end("b"));
     expose({ "t3-1": a.port, "t3-2": b.port });
 
-    const one = await request(port, "T3-1.steddy.dev:443", { method: "POST", body: "payload" });
+    const one = await request(port, "T3-1.steddy.dev:443", {
+      method: "POST",
+      body: "payload",
+      headers: {
+        cookie: "a=1; CF_Authorization=jwt; b=2",
+        "cf-access-jwt-assertion": "jwt",
+        "x-forwarded-proto": "http",
+      },
+    });
     NodeAssert.equal(one.status, 200);
     NodeAssert.deepEqual(JSON.parse(one.text), {
       app: "a",
@@ -80,6 +92,8 @@ NodeTest.test(
       url: "/p?q=1",
       host: "T3-1.steddy.dev:443",
       fwd: "T3-1.steddy.dev:443",
+      proto: "https",
+      cookie: "a=1; b=2",
       body: "payload",
     });
     NodeAssert.equal((await request(port, "t3-2.steddy.dev")).text, "b");
@@ -89,7 +103,7 @@ NodeTest.test(
   },
 );
 
-NodeTest.test("404 for an unmapped name, 502 when the mapped port is down", async (t) => {
+NodeTest.test("404 unmapped, 502 port down, 508 mapped to itself, reset mid-body", async (t) => {
   const { port, expose } = await setup(t);
   const down = NodeNet.createServer();
   const downPort = await listen(down);
@@ -103,13 +117,23 @@ NodeTest.test("404 for an unmapped name, 502 when the mapped port is down", asyn
   const refused = await request(port, "t3-1.steddy.dev");
   NodeAssert.equal(refused.status, 502);
   NodeAssert.match(JSON.parse(refused.text).error, /port \d+ is not answering/);
+
+  expose({ "t3-1": port });
+  NodeAssert.equal((await request(port, "t3-1.steddy.dev")).status, 508);
+
+  const dies = await backend(t, (_req, res) => {
+    res.writeHead(200, { "content-length": "100" });
+    res.write("partial", () => res.destroy());
+  });
+  expose({ "t3-1": dies.port });
+  await NodeAssert.rejects(request(port, "t3-1.steddy.dev"));
 });
 
 const upgrade = (port, host) =>
   new Promise((resolve, reject) => {
     const socket = NodeNet.connect(port, "127.0.0.1", () =>
       socket.write(
-        `GET /ws HTTP/1.1\r\nHost: ${host}\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\nhello`,
+        `GET /ws HTTP/1.1\r\nHost: ${host}\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nCf-Access-Jwt-Assertion: jwt\r\n\r\nhello`,
       ),
     );
     let data = "";
@@ -132,7 +156,7 @@ NodeTest.test("WebSocket upgrades pass through both ways, 404 and 502 as JSON", 
     // Upgraded sockets are outside closeAllConnections.
     t.after(() => socket.destroy());
     socket.write(
-      `HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nX-Path: ${req.url}\r\n\r\n`,
+      `HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nX-Path: ${req.url}\r\nX-Seen: ${req.headers["x-forwarded-host"]} ${req.headers["cf-access-jwt-assertion"] ?? "no-jwt"}\r\n\r\n`,
     );
     const echo = (c) => socket.write(`echo:${c}`);
     if (head.length) echo(head);
@@ -146,6 +170,7 @@ NodeTest.test("WebSocket upgrades pass through both ways, 404 and 502 as JSON", 
   const ok = await upgrade(port, "t3-1.steddy.dev");
   NodeAssert.match(ok, /^HTTP\/1\.1 101 /);
   NodeAssert.match(ok, /X-Path: \/ws/);
+  NodeAssert.match(ok, /X-Seen: t3-1\.steddy\.dev no-jwt/);
   NodeAssert.match(ok, /echo:hello/);
 
   NodeAssert.match(

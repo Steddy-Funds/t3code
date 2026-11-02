@@ -79,8 +79,10 @@ RUN curl -fsSL "https://github.com/cloudflare/cloudflared/releases/download/${CL
 
 # The image's uid 1000 user becomes t3. Its home is the Railway volume; the
 # skeleton is copied in by the entrypoint on first boot.
+# cloudflared runs as t3-tunnel so agents, which run as t3, cannot read its token.
 RUN usermod -l t3 -d /home/t3 node \
     && groupmod -n t3 node \
+    && useradd --system --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin t3-tunnel \
     && mkdir -p /opt/t3-home-skel \
     && cp /etc/skel/.bashrc /etc/skel/.profile /opt/t3-home-skel/
 

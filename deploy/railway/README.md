@@ -274,21 +274,23 @@ t3-unexpose t3-1
 - `t3-expose` takes a name from `T3_TUNNEL_NAMES`, with or without the zone,
   and a port that already answers on `127.0.0.1` (a server bound to
   `0.0.0.0` or `::` does). A name serves one port and a port one name;
-  unexpose first to move either. The map is `~/.t3-expose/map.json` and takes
-  effect at once.
+  unexpose first to move either. The router's own port is refused. The map is
+  `~/.t3-expose/map.json`, takes effect at once and is cleared at every boot.
 - The router keeps the original `Host` (and adds `X-Forwarded-Host` and
   `X-Forwarded-Proto: https`), so a dev server that checks hosts must allow
-  `.steddy.dev`, for example Vite's `server.allowedHosts`.
+  `.steddy.dev`, for example Vite's `server.allowedHosts`. It drops Access's
+  credentials (`Cf-Access-Jwt-Assertion` and the `CF_Authorization` cookie);
+  `Cf-Access-Authenticated-User-Email` still names the viewer.
 - An unmapped name answers 404, a mapped port that is down 502, both as JSON.
 
-What runs, as `t3`, when `CF_TUNNEL_TOKEN` is set:
-`cloudflared` for the remotely managed tunnel `qa-bot-t3`
+What runs when `CF_TUNNEL_TOKEN` is set: `cloudflared`, as its own user
+`t3-tunnel`, for the remotely managed tunnel `qa-bot-t3`
 (`2176e233-b0f9-4a39-b2ce-0ed40034dbb4`), which sends every name to
-[`t3-router.mjs`](t3-router.mjs) on `127.0.0.1:8787`; the router picks the
-port by the first label of the `Host`. The entrypoint writes the token to
-`/run/t3-tunnel/token` (mode 600, gone at the next deploy) and removes it from
-the environment before anything starts, so neither the server nor an agent
-sees it. cloudflared's log is `~/.t3-expose/cloudflared.log`; the deploy log
+[`t3-router.mjs`](t3-router.mjs) on `127.0.0.1:8787`, run as `t3`; the router
+picks the port by the first label of the `Host`. The entrypoint writes the
+token to `/run/t3-tunnel/token` (mode 600, owned by `t3-tunnel`, gone at the
+next deploy) and re-executes itself without it before anything starts, so
+neither the server nor an agent can read it. cloudflared's log is `~/.t3-expose/cloudflared.log`; the deploy log
 says `tunnel: on (...)` or `tunnel: off`.
 
 | Variable          | Value                                          |

@@ -84,13 +84,16 @@ if (args[0] === "--list" || (!unexpose && args.length === 0)) {
   const port = Number(args[1]);
   if (!Number.isInteger(port) || port < 1 || port > 65535)
     fail(`${args[1]} is not a port (1-65535)`);
+  const routerPort = Number(process.env.T3_ROUTER_PORT || 8787);
+  if (port === routerPort) fail(`port ${port} is the tunnel router itself`);
+  if (!(await listening(port)))
+    fail(`nothing listens on 127.0.0.1:${port}; bind the server to 127.0.0.1 or 0.0.0.0 first`);
+  // Read after the slow probe, so agents exposing at once rarely lose an entry.
   const map = readMap();
   const holder = Object.keys(map).find((n) => map[n] === port && n !== name);
   if (holder) fail(`port ${port} is already exposed on ${holder}; t3-unexpose ${holder} first`);
   if (map[name] && map[name] !== port)
     fail(`${name} already serves port ${map[name]}; t3-unexpose ${name} first`);
-  if (!(await listening(port)))
-    fail(`nothing listens on 127.0.0.1:${port}; bind the server to 127.0.0.1 or 0.0.0.0 first`);
   writeMap({ ...map, [name]: port });
   console.log(url(name));
   console.log(

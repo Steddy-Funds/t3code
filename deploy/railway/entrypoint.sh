@@ -57,9 +57,16 @@ keep() {
 # at boot; otherwise Claude Code keeps its own login. A bare
 # ANTHROPIC_AUTH_TOKEN would point Claude Code's own login at the wrong key.
 unset ANTHROPIC_AUTH_TOKEN ANTHROPIC_BASE_URL CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY
-# The Cloudflare tunnel's connector token is set on the service but not used
-# yet; no child may inherit it.
-unset CF_TUNNEL_TOKEN
+# The tunnel's connector token goes to a file only cloudflared reads, and
+# leaves the environment before any child starts.
+tunnel_token=/run/t3-tunnel/token
+rm -rf /run/t3-tunnel
+if [ -n "${CF_TUNNEL_TOKEN:-}" ]; then
+  install -d -o "$user" -g "$user" -m 700 /run/t3-tunnel
+  (umask 077 && printf '%s' "$CF_TUNNEL_TOKEN" > "$tunnel_token")
+  chown "$user:$user" "$tunnel_token"
+fi
+unset CF_TUNNEL_TOKEN TUNNEL_TOKEN
 
 # Tailscale, so agents reach the CLIProxyAPI hub (README: Hub over Tailscale).
 # Userspace networking because Railway has no TUN device; the state on the
@@ -119,6 +126,21 @@ else
     chown "$user:$user" "$settings"
   } || echo "hub: settings.json not updated"
   echo "hub: on (${HUB_URL:-https://omarchy.tail43a582.ts.net:8317})"
+fi
+
+# steddy.dev tunnels (README): cloudflared sends t3-N.<zone> to the router,
+# which serves whatever `t3-expose` mapped. Login shells get the names too.
+printf 'export T3_TUNNEL_NAMES=%q T3_TUNNEL_ZONE=%q\n' "${T3_TUNNEL_NAMES:-}" "${T3_TUNNEL_ZONE:-}" \
+  > /etc/profile.d/t3-tunnel.sh
+if [ -s "$tunnel_token" ]; then
+  install -d -o "$user" -g "$user" -m 700 "$home/.t3-expose"
+  keep t3-router as_user node /usr/local/lib/t3-router.mjs &
+  keep cloudflared as_user cloudflared --no-autoupdate tunnel --metrics 127.0.0.1:20241 \
+    --management-diagnostics=false run --token-file "$tunnel_token" \
+    > "$home/.t3-expose/cloudflared.log" 2>&1 &
+  echo "tunnel: on (${T3_TUNNEL_NAMES:-no names} on ${T3_TUNNEL_ZONE:-no zone})"
+else
+  echo "tunnel: off"
 fi
 
 cd "$home/work"

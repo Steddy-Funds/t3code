@@ -67,6 +67,16 @@ RUN curl -fsSL "https://pkgs.tailscale.com/stable/tailscale_${TAILSCALE_VERSION}
     && rm /tmp/tailscale.tgz \
     && tailscale version
 
+# cloudflared for the steddy.dev tunnels (README: steddy.dev tunnels). Bump the
+# version and its checksum (the release notes list it) together.
+ARG CLOUDFLARED_VERSION=2026.10.7
+ARG CLOUDFLARED_SHA256=1f99fb518b83dec2ba8d870a7cc991d82a77e6196295a3d2754ba17ab9f91872
+RUN curl -fsSL "https://github.com/cloudflare/cloudflared/releases/download/${CLOUDFLARED_VERSION}/cloudflared-linux-amd64" \
+       -o /usr/local/bin/cloudflared \
+    && echo "${CLOUDFLARED_SHA256}  /usr/local/bin/cloudflared" | sha256sum -c - \
+    && chmod 755 /usr/local/bin/cloudflared \
+    && cloudflared --version
+
 # The image's uid 1000 user becomes t3. Its home is the Railway volume; the
 # skeleton is copied in by the entrypoint on first boot.
 RUN usermod -l t3 -d /home/t3 node \
@@ -81,17 +91,25 @@ RUN npm install -g "$(node -p 'require("/opt/t3code/package.json").packageManage
       "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
     && npm cache clean --force
 COPY deploy/railway/entrypoint.sh /usr/local/bin/t3-entrypoint
-COPY deploy/railway/hub-forward.mjs /usr/local/lib/hub-forward.mjs
+COPY deploy/railway/hub-forward.mjs deploy/railway/t3-router.mjs deploy/railway/t3-expose.mjs /usr/local/lib/
 
 # `railway ssh` lands as root. Running t3 as root would leave root-owned
 # files in ~/.t3, so the CLI always drops to the t3 user.
 RUN printf '%s\n' '#!/bin/sh' \
       'if [ "$(id -u)" = 0 ]; then' \
-      '  exec setpriv --reuid=t3 --regid=t3 --init-groups env -u RAILWAY_API_TOKEN HOME=/home/t3 USER=t3 LOGNAME=t3 SHELL=/bin/bash "$0" "$@"' \
+      '  exec setpriv --reuid=t3 --regid=t3 --init-groups env -u RAILWAY_API_TOKEN -u CF_TUNNEL_TOKEN -u TS_AUTHKEY -u HUB_ACCESS_TOKEN HOME=/home/t3 USER=t3 LOGNAME=t3 SHELL=/bin/bash "$0" "$@"' \
       'fi' \
       'exec node /opt/t3code/apps/server/dist/bin.mjs "$@"' \
       > /usr/local/bin/t3 \
-    && chmod 755 /usr/local/bin/t3 /usr/local/bin/t3-entrypoint \
+    && for cmd in t3-expose t3-unexpose; do \
+         printf '%s\n' '#!/bin/sh' \
+           'if [ "$(id -u)" = 0 ]; then' \
+           '  exec setpriv --reuid=t3 --regid=t3 --init-groups env -u RAILWAY_API_TOKEN -u CF_TUNNEL_TOKEN -u TS_AUTHKEY -u HUB_ACCESS_TOKEN HOME=/home/t3 USER=t3 LOGNAME=t3 "$0" "$@"' \
+           'fi' \
+           "exec node /usr/local/lib/t3-expose.mjs $([ $cmd = t3-unexpose ] && echo --unexpose) \"\$@\"" \
+           > /usr/local/bin/$cmd; \
+       done \
+    && chmod 755 /usr/local/bin/t3 /usr/local/bin/t3-entrypoint /usr/local/bin/t3-expose /usr/local/bin/t3-unexpose \
     && printf '%s\n' 'export DISABLE_AUTOUPDATER=1' \
          'export UV_CACHE_DIR=/home/t3/.cache/uv UV_PYTHON_INSTALL_DIR=/home/t3/.local/share/uv/python' \
          > /etc/profile.d/t3.sh

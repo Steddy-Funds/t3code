@@ -27,7 +27,8 @@ redeploys.
   `.bashrc` and `.profile` into the home only if they are missing, creates the
   home directories below, gives anything not owned by `t3` back to `t3`,
   starts Tailscale and the hub forwarder when configured
-  ([Hub over Tailscale](#hub-over-tailscale)), and starts
+  ([Hub over Tailscale](#hub-over-tailscale)), starts the tunnel and its router
+  when configured ([steddy.dev tunnels](#steddydev-tunnels)), and starts
   `t3 serve --host 0.0.0.0 --port $PORT ~/work` as `t3`.
 - `t3 serve` prints a fresh admin pairing token, its URL and a QR code at every
   start. The entrypoint strips all three from stdout, so the deploy logs show
@@ -42,8 +43,8 @@ redeploys.
 Service settings (not in a config file): Dockerfile path
 `deploy/railway/Dockerfile` (also set as `RAILWAY_DOCKERFILE_PATH`), healthcheck
 `/`, restart policy always, the limits above. The server itself needs no
-variables; the others on the service are for the hub, the Railway proxies and
-the S3 proxy.
+variables; the others on the service are for the hub, the tunnels, the Railway
+proxies, the S3 proxy and the (stubbed) browsers.
 
 ## Pair a browser
 
@@ -254,6 +255,54 @@ its own login, and the node stays on the tailnet doing nothing. The
 `promptCacheTtl` setting stays; on a Claude subscription 1 hour is the default
 anyway. To leave the tailnet too, also delete `TS_AUTHKEY`, remove
 `~/.tailscale` and remove the machine in the admin console.
+
+## steddy.dev tunnels
+
+Agents can put a server running in this instance, such as a dev server, on a
+public HTTPS name for review: `t3-1.steddy.dev` to `t3-8.steddy.dev`.
+
+```bash
+python3 -m http.server 5173 --bind 127.0.0.1 &
+t3-expose t3-1 5173        # prints https://t3-1.steddy.dev/
+t3-expose --list           # every name, its port or "free"
+t3-unexpose t3-1
+```
+
+- Every name is behind Cloudflare Access (the "orch pods" application): only
+  Akiva and Aman, signing in with a PIN by email, or a service token get
+  through. Anyone else gets Access's login redirect, never the app.
+- `t3-expose` takes a name from `T3_TUNNEL_NAMES`, with or without the zone,
+  and a port that already answers on `127.0.0.1` (a server bound to
+  `0.0.0.0` or `::` does). A name serves one port and a port one name;
+  unexpose first to move either. The map is `~/.t3-expose/map.json` and takes
+  effect at once.
+- The router keeps the original `Host` (and adds `X-Forwarded-Host` and
+  `X-Forwarded-Proto: https`), so a dev server that checks hosts must allow
+  `.steddy.dev`, for example Vite's `server.allowedHosts`.
+- An unmapped name answers 404, a mapped port that is down 502, both as JSON.
+
+What runs, as `t3`, when `CF_TUNNEL_TOKEN` is set:
+`cloudflared` for the remotely managed tunnel `qa-bot-t3`
+(`2176e233-b0f9-4a39-b2ce-0ed40034dbb4`), which sends every name to
+[`t3-router.mjs`](t3-router.mjs) on `127.0.0.1:8787`; the router picks the
+port by the first label of the `Host`. The entrypoint writes the token to
+`/run/t3-tunnel/token` (mode 600, gone at the next deploy) and removes it from
+the environment before anything starts, so neither the server nor an agent
+sees it. cloudflared's log is `~/.t3-expose/cloudflared.log`; the deploy log
+says `tunnel: on (...)` or `tunnel: off`.
+
+| Variable          | Value                                          |
+| ----------------- | ---------------------------------------------- |
+| `CF_TUNNEL_TOKEN` | The tunnel's connector token (sealed)          |
+| `T3_TUNNEL_NAMES` | `t3-1,t3-2,…,t3-8`, the names `t3-expose` uses |
+| `T3_TUNNEL_ZONE`  | `steddy.dev`                                   |
+
+The container holds no Cloudflare API token, so it cannot add names. To add
+one, on the host side: a proxied CNAME `<name>.steddy.dev` to
+`2176e233-b0f9-4a39-b2ce-0ed40034dbb4.cfargotunnel.com`, an ingress rule for
+it to `http://localhost:8787` on that tunnel (before the 404 catch-all, with
+Access required like the others), then add the name to `T3_TUNNEL_NAMES` and
+redeploy. To turn the tunnels off, delete `CF_TUNNEL_TOKEN` and redeploy.
 
 ## Limits
 

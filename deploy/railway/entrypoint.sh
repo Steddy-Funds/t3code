@@ -57,6 +57,9 @@ keep() {
 # at boot; otherwise Claude Code keeps its own login. A bare
 # ANTHROPIC_AUTH_TOKEN would point Claude Code's own login at the wrong key.
 unset ANTHROPIC_AUTH_TOKEN ANTHROPIC_BASE_URL CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY
+# The Cloudflare tunnel's connector token is set on the service but not used
+# yet; no child may inherit it.
+unset CF_TUNNEL_TOKEN
 
 # Tailscale, so agents reach the CLIProxyAPI hub (README: Hub over Tailscale).
 # Userspace networking because Railway has no TUN device; the state on the

@@ -83,6 +83,7 @@ import { TimelineRowCtx, TimelineRowActivityCtx, type TimelineRow } from "./time
 import {
   MESSAGE_HEADING_LEVEL,
   MessageAuthorHeading,
+  MessageReplyButton,
   TimelineRowTimestamp,
 } from "./TimelineRowParts";
 import { UserMessageContextReferenceChip } from "./UserMessageContextChips";
@@ -298,6 +299,7 @@ function AutomationMessageRow({ row }: { row: Extract<TimelineRow, { kind: "mess
         <UserMessageIntentMarker intent={row.message.inputIntent} />
       ) : null}
       <div
+        data-swipe-reply-surface
         className={cn(
           "min-w-0 max-w-[80%] rounded-2xl bg-message text-message-foreground",
           BUBBLE_CHIP_CLASS_NAME,
@@ -355,6 +357,7 @@ function AutomationMessageRow({ row }: { row: Extract<TimelineRow, { kind: "mess
                   variant="ghost"
                 />
               )}
+              <MessageReplyButton messageId={row.message.id} />
             </div>
           </div>
         </div>
@@ -549,6 +552,7 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
     (reference) => reference.label,
   );
   const promptLink = promptLinkFor(plainText);
+  const canReply = /\S/.test(plainText);
   const foldSummary =
     plainText
       .split(/\r?\n/)
@@ -819,6 +823,7 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
             variant="ghost"
           />
         )}
+        {canReply && <MessageReplyButton messageId={row.message.id} />}
       </div>
     </div>
   );
@@ -854,6 +859,7 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
         </div>
       ) : null}
       <div
+        data-swipe-reply-surface={canReply || undefined}
         className={cn(
           "relative min-w-0 max-w-[80%] rounded-2xl text-message-foreground",
           (mediaAboveText || row.groupedWithPrevious) && "rounded-tr-md",

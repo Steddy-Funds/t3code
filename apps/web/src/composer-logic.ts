@@ -1,8 +1,9 @@
 import type { ClientSettings } from "@t3tools/contracts/settings";
-import type {
-  AssistantCitation,
-  EnvironmentId,
-  ResolvedKeybindingsConfig,
+import {
+  ASSISTANT_CITATION_MAX_TEXT_LENGTH,
+  type AssistantCitation,
+  type EnvironmentId,
+  type ResolvedKeybindingsConfig,
 } from "@t3tools/contracts";
 import type { ComposerPathSearchTarget } from "@t3tools/client-runtime/state/threads";
 import {
@@ -44,6 +45,47 @@ export function isPathSuggestionCurrent(
 
 export function formatAssistantCitationForComposer(citation: AssistantCitation, comment = "") {
   return `${serializeAssistantCitation(withAssistantCitationComment(citation, comment))} `;
+}
+
+/** Assistant text is cited so the provider sees it as quoted material; user text is quoted inline. */
+export type MessageReply =
+  | { readonly kind: "citation"; readonly citation: AssistantCitation }
+  | { readonly kind: "quote"; readonly text: string };
+
+const FENCE_LINE = /^\s*(?:```|~~~)/;
+
+/** A quote block for the composer, without the quotes the message was itself replying to. */
+export function formatReplyQuote(text: string, richText: boolean): string | null {
+  let fenced = false;
+  const lines = text.split(/\r?\n/).map((raw) => {
+    // The rich editor reads "> " and any indent after it as the quote marker, so its quoted code
+    // loses indentation; only plain Markdown keeps code as written.
+    const line = richText ? raw.trim() : raw.trimEnd();
+    const prose = !fenced;
+    if (FENCE_LINE.test(line)) fenced = !fenced;
+    return { line, prose };
+  });
+  const own = lines.filter(({ line, prose }) => !(prose && line.trimStart().startsWith(">")));
+  const kept: string[] = [];
+  for (const { line, prose } of own.some(({ line }) => line.trim()) ? own : lines) {
+    if (prose && !line.trim() && !kept.at(-1)?.trim()) continue;
+    kept.push(line);
+  }
+  while (kept.length > 0 && !kept.at(-1)?.trim()) kept.pop();
+  let quoted = kept.join("\n");
+  if (quoted.length > ASSISTANT_CITATION_MAX_TEXT_LENGTH) {
+    let end = ASSISTANT_CITATION_MAX_TEXT_LENGTH;
+    if (/[\uD800-\uDBFF]/.test(quoted[end - 1] ?? "")) end -= 1;
+    quoted = quoted.slice(0, end).trimEnd();
+  }
+  if (!quoted) return null;
+  // Every line keeps the same "> " prefix, or the composer splits the quote in two. Plain
+  // Markdown needs a blank line to end the quote; the rich editor writes that line itself, and
+  // a second break there would leave an empty paragraph between the quote and the caret.
+  return `${quoted
+    .split("\n")
+    .map((line) => `> ${line}`)
+    .join("\n")}${richText ? "\n" : "\n\n"}`;
 }
 
 export function composerRequiresModifier(

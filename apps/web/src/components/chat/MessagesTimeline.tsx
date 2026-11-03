@@ -71,7 +71,13 @@ import {
   rememberTimelinePosition,
 } from "./timelineScrollAnchoring";
 import { AssistantSelectionToolbar } from "./AssistantSelectionToolbar";
-import type { AssistantCitationSourceAnchor } from "~/lib/assistantTextSelection";
+import { MessageSwipeReply } from "./MessageSwipeReply";
+import {
+  captureAssistantMessageSelector,
+  type AssistantCitationSourceAnchor,
+} from "~/lib/assistantTextSelection";
+import { type MessageReply } from "../../composer-logic";
+import { userMessageReplyText } from "./TimelineUserMessageRow.logic";
 import { type AssistantCitationRequest } from "./AssistantCitationSource";
 import { useAssistantCitationTarget } from "./useAssistantCitationTarget";
 import { worktreeSetupAgentStarted } from "@t3tools/client-runtime/worktree-setup";
@@ -223,6 +229,8 @@ interface MessagesTimelineProps {
     citation: AssistantCitation,
     sourceAnchor: AssistantCitationSourceAnchor,
   ) => boolean;
+  /** Absent turns off swipe and button replies, as in the guest view. */
+  onReplyToMessage?: (reply: MessageReply) => boolean;
   isWorking: boolean;
   runlessWorkActive?: boolean;
   activeTurnStartedAt?: string | null;
@@ -336,6 +344,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
   citationRequest = null,
   citationHistory = CITED_HISTORY_LOADING,
   onCiteAssistantText,
+  onReplyToMessage,
   isWorking,
   runlessWorkActive = false,
   activeTurnStartedAt = null,
@@ -999,6 +1008,30 @@ const ConversationTimeline = memo(function ConversationTimeline({
     };
   };
 
+  const replyToMessage = useStableCallback((messageId: MessageId) => {
+    if (!onReplyToMessage || !citationThreadRef) return;
+    const row = rows.find(
+      (candidate) => candidate.kind === "message" && candidate.message.id === messageId,
+    );
+    if (row?.kind !== "message") return;
+    if (row.message.role === "user") {
+      onReplyToMessage({ kind: "quote", text: userMessageReplyText(row.message) });
+      return;
+    }
+    const source = timelineViewportElement?.querySelector<HTMLElement>(
+      `[data-assistant-citation-source="${CSS.escape(messageId)}"]`,
+    );
+    const selector = source ? captureAssistantMessageSelector(source) : null;
+    // A virtualized-away message, or one with no readable text such as a diagram, is quoted.
+    onReplyToMessage(
+      selector
+        ? {
+            kind: "citation",
+            citation: { version: 1, ...citationThreadRef, messageId, ...selector },
+          }
+        : { kind: "quote", text: row.message.text },
+    );
+  });
   // Built from props after the last hook so the compiler can memoize the row context; a map
   // made before a hook would rebuild it, and re-render every row, on each streamed update.
   const pendingApprovalsByRequestId = new Map(
@@ -1023,6 +1056,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
     runs,
     activeThreadEnvironmentId,
     onRevertToTurnCount,
+    onReplyToMessage: onReplyToMessage && citationThreadRef ? replyToMessage : undefined,
     onRunShellCommand,
     findActive,
     onImageExpand,
@@ -1297,6 +1331,9 @@ const ConversationTimeline = memo(function ConversationTimeline({
             className="relative h-full min-h-0"
             data-assistant-citation-viewport="true"
           >
+            {onReplyToMessage && citationThreadRef ? (
+              <MessageSwipeReply viewport={timelineViewportElement} onReply={replyToMessage} />
+            ) : null}
             {onCiteAssistantText && citationThreadRef ? (
               <AssistantSelectionToolbar
                 viewport={timelineViewportElement}

@@ -524,6 +524,7 @@ describe("composer rich text document model", () => {
     "- item\n> quote after list",
     "> quoted\n\ncomment",
     "> line one\n> line two\n\ncomment",
+    "> paragraph one\n> \n> paragraph two\n\nreply",
   ])("round-trips the quote %s through a real ProseMirror document", (value) => {
     expect(roundTrip(value).value).toBe(value);
   });

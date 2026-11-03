@@ -22,7 +22,14 @@ import { useUiStateStore } from "~/uiStateStore";
 import { formatChatTimestampTooltip, formatDayAwareTimestamp } from "../../timestampFormat";
 import { useV2ItemSupport } from "../../state/v2ItemSupport";
 import { TimelineRowCtx, TimelineRowActivityCtx, type TimelineRow } from "./timelineRowContext";
-import { MESSAGE_HEADING_LEVEL, MessageAuthorHeading } from "./TimelineRowParts";
+import {
+  MESSAGE_HEADING_LEVEL,
+  MessageAuthorHeading,
+  MessageReplyButton,
+} from "./TimelineRowParts";
+
+const canReplyToAssistantMessage = (message: ChatMessage) =>
+  message.role === "assistant" && !message.streaming && /\S/.test(message.text);
 
 export function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" }> }) {
   const ctx = use(TimelineRowCtx);
@@ -36,7 +43,10 @@ export function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind
 
   return (
     <>
-      <div className="relative min-w-0 px-1 py-0.5">
+      <div
+        className="relative min-w-0 px-1 py-0.5"
+        data-swipe-reply-surface={canReplyToAssistantMessage(row.message) || undefined}
+      >
         <MessageAuthorHeading>T3 Code</MessageAuthorHeading>
         <div data-thread-find-text="true">
           <AssistantCitationSource
@@ -188,6 +198,7 @@ function AssistantMessageMeta({
       {projectedItem?.item.type === "assistant_message" ? (
         <AssistantForkButton projectedItem={projectedItem} />
       ) : null}
+      {canReplyToAssistantMessage(message) ? <MessageReplyButton messageId={message.id} /> : null}
       {!message.streaming && (
         <Tooltip>
           <TooltipTrigger render={<p className="text-muted-foreground text-xs tabular-nums" />}>

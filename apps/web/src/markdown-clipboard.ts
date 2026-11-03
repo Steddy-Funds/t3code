@@ -331,6 +331,13 @@ export function serializeRenderedMarkdownFragment(container: Node): string {
   return tidyMarkdown(serializeChildren(container));
 }
 
+/** One rendered block as Markdown. Unlike a copied fragment, a lone code block keeps its fence. */
+export function serializeRenderedMarkdownBlock(block: Element): string {
+  const fragment = block.ownerDocument.createDocumentFragment();
+  fragment.append(block.cloneNode(true));
+  return tidyMarkdown(serializeChildren(fragment));
+}
+
 export function serializeTableElementToMarkdown(table: Element): string {
   return serializeTable(table).trim();
 }

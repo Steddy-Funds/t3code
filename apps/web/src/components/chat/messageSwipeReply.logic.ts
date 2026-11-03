@@ -7,6 +7,8 @@ export const SWIPE_REPLY_RELEASE_IDLE_MS = 140;
 export const SWIPE_REPLY_DESKTOP_RELEASE_FALLBACK_MS = 1000;
 // Resting fingers send nothing, so a pause can release; the rest of that swipe must not reply again.
 export const SWIPE_REPLY_COOLDOWN_MS = 400;
+// A held modifier that is part of a shortcut is released or joined by a key within this.
+export const SWIPE_REPLY_SECTION_HOLD_MS = 150;
 // Trackpads open a gesture with 1-3px deltas on both axes; decide the axis once it is clear.
 const AXIS_DECISION_PX = 6;
 // A tilt wheel notch arrives as one ~100px event. Trackpads open that fast too when the swipe

@@ -524,6 +524,7 @@ describe("composer rich text document model", () => {
     "- item\n> quote after list",
     "> quoted\n\ncomment",
     "> line one\n> line two\n\ncomment",
+    "> paragraph one\n> \n> paragraph two\n\nreply",
   ])("round-trips the quote %s through a real ProseMirror document", (value) => {
     expect(roundTrip(value).value).toBe(value);
   });
@@ -557,6 +558,14 @@ describe("composer rich text document model", () => {
       expect(serialize(quote("quoted"), paragraph(), paragraph("Comment to it")).map.value).toBe(
         "> quoted\n\nComment to it",
       );
+    });
+
+    it("reads that blank line back as the separator, not an empty paragraph", () => {
+      const blocks = (value: string) =>
+        buildDocJson(value, () => null).content.map((block) => block.type);
+      expect(blocks("> quoted\n\nComment to it")).toEqual(["blockquote", "paragraph"]);
+      // A blank line before another quote still keeps the two quotes apart.
+      expect(blocks("> a\n\n> b")).toEqual(["blockquote", "paragraph", "blockquote"]);
     });
 
     it("settles on the blank line when a draft glued it to the quote", () => {

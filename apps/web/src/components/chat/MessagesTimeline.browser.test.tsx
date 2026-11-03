@@ -52,6 +52,7 @@ import {
   decodeComposerContextFragment,
 } from "@t3tools/shared/composerContextClipboard";
 import { collectComposerContextReferences } from "@t3tools/shared/composerContextReferences";
+import { SWIPE_REPLY_COOLDOWN_MS, SWIPE_REPLY_RELEASE_IDLE_MS } from "./messageSwipeReply.logic";
 
 const environmentQuery = vi.hoisted(() => ({
   error: "Pull request not found",
@@ -734,6 +735,116 @@ describe("MessagesTimeline citations", () => {
     );
     await expect.element(screen.getByText("the cited answer")).toBeVisible();
     expect(toast).not.toHaveBeenCalled();
+  });
+});
+
+describe("MessagesTimeline replies", () => {
+  async function swipe(
+    target: Element,
+    deltas: ReadonlyArray<readonly [number, number]>,
+    modifiers: { ctrlKey?: boolean } = {},
+  ) {
+    await act(() => {
+      for (const [deltaX, deltaY] of deltas) {
+        target.dispatchEvent(
+          new WheelEvent("wheel", { deltaX, deltaY, bubbles: true, ...modifiers }),
+        );
+      }
+    });
+    // The fingers lift when the wheel events stop.
+    await act(() => vi.advanceTimersByTime(SWIPE_REPLY_RELEASE_IDLE_MS));
+  }
+  const pause = () => act(() => vi.advanceTimersByTime(SWIPE_REPLY_COOLDOWN_MS));
+  const swipeRight = Array.from({ length: 8 }, () => [-10, 0] as const);
+
+  it("replies to the swiped message once the fingers lift past the threshold", async () => {
+    const onReplyToMessage = vi.fn((_reply: unknown) => true);
+    await using screen = await renderTimeline(
+      [
+        message("Rename the **flag**", {}, "user-1"),
+        message("Renamed it.\n\nAnything else?", { role: "assistant" }, "assistant-1"),
+      ],
+      { onReplyToMessage },
+    );
+    const textIn = (id: string) => {
+      const row = screen.container.querySelector(`[data-message-id="${id}"]`);
+      return row?.querySelector("p:last-of-type") ?? null;
+    };
+    await vi.waitFor(() => expect(textIn("assistant-1")).not.toBeNull());
+    using _timers = fakeTimers();
+
+    await swipe(textIn("user-1")!, [[0, 12], ...swipeRight]);
+    expect(onReplyToMessage).not.toHaveBeenCalled();
+    // A scroll that never moved the row leaves it alone when it ends.
+    expect(
+      screen.container.querySelector<HTMLElement>('[data-message-id="user-1"]')!.dataset
+        .swipeReplyRelease,
+    ).toBeUndefined();
+
+    await swipe(textIn("user-1")!, swipeRight);
+    expect(onReplyToMessage).toHaveBeenLastCalledWith({
+      kind: "quote",
+      text: "Rename the **flag**",
+    });
+    // Resting fingers released it; moving on is the same swipe and must not reply twice.
+    await swipe(textIn("user-1")!, swipeRight);
+    expect(onReplyToMessage).toHaveBeenCalledTimes(1);
+
+    await pause();
+    // A short flick's momentum carries it past the threshold, and it replies right away.
+    const flick = [-6, -12, -10, -8, -6.4, -5.1, -4.1, -3.3, -2.6, -2.1];
+    await act(() => {
+      for (const deltaX of flick) {
+        textIn("assistant-1")!.dispatchEvent(
+          new WheelEvent("wheel", { deltaX, deltaY: 0, bubbles: true }),
+        );
+      }
+    });
+    expect(onReplyToMessage).toHaveBeenLastCalledWith({
+      kind: "citation",
+      citation: expect.objectContaining({
+        messageId: "assistant-1",
+        text: expect.stringMatching(/^Renamed it\.\s+Anything else\?$/),
+        start: 0,
+      }),
+    });
+    expect(onReplyToMessage).toHaveBeenCalledTimes(2);
+
+    await pause();
+    // Chromium reports a pinch as a vertical wheel with Control; Control over a swipe still replies.
+    const pinch = [
+      [0, -12],
+      [0, -14],
+    ] as const;
+    await swipe(textIn("user-1")!, pinch, { ctrlKey: true });
+    expect(onReplyToMessage).toHaveBeenCalledTimes(2);
+    await swipe(textIn("user-1")!, swipeRight, { ctrlKey: true });
+    expect(onReplyToMessage).toHaveBeenCalledTimes(3);
+  });
+
+  it("waits for the desktop app to report the lift, however long the fingers rest", async () => {
+    const lift = { end: () => {} };
+    using _desktop = stubGlobal("desktopBridge", {
+      onTrackpadScrollBegin: () => () => {},
+      onTrackpadScrollEnd: (listener: () => void) => {
+        lift.end = listener;
+        return () => {};
+      },
+    });
+    const onReplyToMessage = vi.fn((_reply: unknown) => true);
+    await using screen = await renderTimeline([message("Rename the flag", {}, "user-1")], {
+      onReplyToMessage,
+    });
+    const find = () => screen.container.querySelector('[data-message-id="user-1"] p');
+    await vi.waitFor(() => expect(find()).not.toBeNull());
+    const text = find();
+    using _timers = fakeTimers();
+
+    await swipe(text!, swipeRight);
+    await act(() => vi.advanceTimersByTime(SWIPE_REPLY_COOLDOWN_MS));
+    expect(onReplyToMessage).not.toHaveBeenCalled();
+    await act(() => lift.end());
+    expect(onReplyToMessage).toHaveBeenCalledWith({ kind: "quote", text: "Rename the flag" });
   });
 });
 

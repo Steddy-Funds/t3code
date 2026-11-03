@@ -75,7 +75,9 @@ import {
   detectComposerTrigger,
   expandCollapsedComposerCursor,
   formatAssistantCitationForComposer,
+  formatReplyQuote,
   isPathSuggestionCurrent,
+  type MessageReply,
   extendReplacementRangeForTrailingSpace,
   replaceTextRange,
 } from "../../composer-logic";
@@ -302,6 +304,7 @@ export interface ChatComposerHandle {
     citation: AssistantCitation,
     sourceAnchor: AssistantCitationSourceAnchor,
   ) => boolean;
+  replyToMessage: (reply: MessageReply) => boolean;
   openModelPicker: () => void;
   stepReasoningEffort: (direction: 1 | -1) => void;
   toggleModelPicker: () => void;
@@ -2406,6 +2409,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     position: "cursor" | "end",
     options?: {
       ensureLeadingBoundary?: boolean;
+      ensureLeadingLineBreak?: boolean;
       citationCommentAnchor?: AssistantCitationSourceAnchor;
       clipboardData?: DataTransfer;
     },
@@ -2428,11 +2432,13 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       (options?.ensureLeadingBoundary ?? false) &&
       cursor > 0 &&
       !/\s/.test(prompt[cursor - 1] ?? "");
+    const needsLeadingLineBreak =
+      (options?.ensureLeadingLineBreak ?? false) && cursor > 0 && prompt[cursor - 1] !== "\n";
     const rangeEnd = extendReplacementRangeForTrailingSpace(prompt, cursor, text);
     return applyPromptReplacement(
       cursor,
       rangeEnd,
-      needsLeadingSpace ? ` ${text}` : text,
+      needsLeadingSpace ? ` ${text}` : needsLeadingLineBreak ? `\n${text}` : text,
       options?.citationCommentAnchor
         ? {
             citationComment: {
@@ -2866,6 +2872,17 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           "cursor",
           { ensureLeadingBoundary: true, citationCommentAnchor: sourceAnchor },
         ),
+      // Each reply opens its own line at the caret, so swipe, type, swipe, type pairs every
+      // quote with the words written under it.
+      replyToMessage: (reply) => {
+        const text =
+          reply.kind === "citation"
+            ? formatAssistantCitationForComposer(reply.citation)
+            : formatReplyQuote(reply.text, settings.composerRichTextEnabled);
+        return text !== null
+          ? insertComposerTextStable(text, "cursor", { ensureLeadingLineBreak: true })
+          : false;
+      },
       openModelPicker: openModelPickerStable,
       stepReasoningEffort: (direction) => {
         if (noProviderAvailable || pendingUserInputs.length > 0 || isEditingQueuedMessage) {

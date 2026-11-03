@@ -21,6 +21,7 @@ import {
   expandCollapsedComposerCursor,
   extendReplacementRangeForTrailingSpace,
   formatAssistantCitationForComposer,
+  formatReplyQuote,
   isPathSuggestionCurrent,
   parseSideChatCommand,
   replaceTextRange,
@@ -92,6 +93,32 @@ describe("formatAssistantCitationForComposer", () => {
     expect(text).toBe(`${serializeAssistantCitation(boundCitation)} `);
     expect(collectAssistantCitations(text).map((entry) => entry.citation)).toEqual([boundCitation]);
     expect(expandAssistantCitationsForProvider(text)).toMatch(/^\[assistant-quote-1\] \n\n/);
+  });
+});
+
+describe("formatReplyQuote", () => {
+  it.each([
+    ["one line", "Ship it", "> Ship it\n\n"],
+    ["keeps one blank line between paragraphs", "\na\n\n\nb  \n", "> a\n> \n> b\n\n"],
+    ["drops the quote the message replied to", "> earlier\n\nYes, that one", "> Yes, that one\n\n"],
+    [
+      "keeps fenced code as written in plain Markdown",
+      "Try:\n```py\nif x:\n    y()\n\n\n>>> z\n```",
+      "> Try:\n> ```py\n> if x:\n>     y()\n> \n> \n> >>> z\n> ```\n\n",
+    ],
+    [
+      "drops the earlier quote before it cuts to the limit",
+      `> ${"q".repeat(9000)}\n\nYes`,
+      "> Yes\n\n",
+    ],
+    ["keeps a message that is only a quote", "> earlier", "> > earlier\n\n"],
+    ["has nothing to quote in whitespace", " \n ", null],
+  ])("%s", (_name, text, expected) => {
+    expect(formatReplyQuote(text, false)).toBe(expected);
+  });
+
+  it("leaves the blank line after the quote to the rich editor", () => {
+    expect(formatReplyQuote("Ship it", true)).toBe("> Ship it\n");
   });
 });
 

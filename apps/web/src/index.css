@@ -1865,6 +1865,55 @@ code {
   background: var(--app-scrollbar-thumb-hover);
 }
 
+/* Swipe to reply (MessageSwipeReply): JS follows the fingers, CSS runs the release. */
+[data-swipe-reply-release] {
+  /* An underdamped spring (damping 0.72), sampled; it overshoots by about 4%. */
+  transition: transform 340ms
+    linear(
+      0,
+      0.057,
+      0.188,
+      0.35,
+      0.513,
+      0.66,
+      0.781,
+      0.876,
+      0.944,
+      0.99,
+      1.018,
+      1.033,
+      1.038,
+      1.037,
+      1.033,
+      1.027,
+      1.02,
+      1.015,
+      1.01,
+      1.006,
+      1.003,
+      1.001,
+      1,
+      0.999,
+      1
+    );
+}
+
+.swipe-reply-indicator {
+  transition:
+    background-color 120ms,
+    color 120ms;
+}
+
+.swipe-reply-indicator[data-armed="true"] {
+  transition: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-swipe-reply-release] {
+    transition: none;
+  }
+}
+
 /* Chat markdown rendering */
 
 .chat-markdown > :first-child {

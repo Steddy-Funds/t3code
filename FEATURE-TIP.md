@@ -6,10 +6,11 @@ upstream.
 
 ## Included
 
-| Feature | PR | Merge |
-| --- | --- | --- |
-| Two-finger swipe to reply | #39 | e920434 |
-| Cmd/Option section reply (built on #39) | #40 | 7b822bb |
+| Feature                                                             | PR  | Merge   |
+| ------------------------------------------------------------------- | --- | ------- |
+| Two-finger swipe to reply                                           | #39 | e920434 |
+| Cmd/Option section reply (built on #39)                             | #40 | 7b822bb |
+| Cmd+swipe to one bullet, Cmd-only sections, composer blank-line fix | #41 | 44c451d |
 
 Held: #38 (pods notes in the t3-orchestration skill). It edits
 `.agents/skills/t3-orchestration/`, which exists only on

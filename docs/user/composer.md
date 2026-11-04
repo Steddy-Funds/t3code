@@ -30,6 +30,22 @@ at the end, leave the block. **Backspace** at the start of a code block turns it
 back into plain lines. Choose the language in a code block's corner to change
 it. Very large code blocks are shown without syntax highlighting.
 
+### Write a long prompt
+
+When the chat has room beside the conversation, press **Cmd+Shift+Enter**
+(Ctrl+Shift+Enter on Windows and Linux) to move the composer into a full-height
+editor beside the conversation. There, Enter and Cmd+Enter add lines, and
+Cmd+Shift+Enter sends and returns the composer to the bottom. Once a prompt grows
+past a few lines, a button beside Send does the same. When the chat gets too narrow,
+the composer returns to the bottom, and it moves back beside the conversation once
+there is room again, until you send. Drag the editor's left edge to widen it for
+the rest of the session, or double-click the edge to reset it.
+
+While the long prompt is open, a second composer rests just below the conversation.
+Point at the conversation and it slides up, so you can ask the agent something
+without touching the long prompt. It keeps its own draft and uses
+the thread's model.
+
 ## Attach files
 
 Attach up to 100 files per message. Each image can be up to 10 MiB, with at most

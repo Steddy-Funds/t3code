@@ -17,6 +17,7 @@ import {
   composerSubmissionIntentForKey,
 } from "../../composer-logic";
 import { type PendingUserInput } from "../../session-logic";
+import { isComposerDockChord } from "./composerDock.logic";
 import { type PreviewAnnotationPayload } from "@t3tools/contracts";
 import { type ReviewCommentContext } from "../../reviewCommentContext";
 import { composerTargetKey } from "../../composerDraftStore";
@@ -84,6 +85,9 @@ export function composerCommandKeyHandler(input: {
     dispatchMode: ComposerDispatchMode,
     submissionIntent: ComposerSubmissionIntent,
   ) => void;
+  readonly composerDocked: boolean;
+  readonly composerDockAvailable: boolean;
+  readonly setComposerDocked: (docked: boolean) => void;
 }) {
   const {
     keybindings,
@@ -121,6 +125,9 @@ export function composerCommandKeyHandler(input: {
     readComposerSnapshot,
     applyPromptReplacement,
     submitComposer,
+    composerDocked,
+    composerDockAvailable,
+    setComposerDocked,
   } = input;
 
   // The composer persists across threads. A recall from thread A must not
@@ -199,15 +206,37 @@ export function composerCommandKeyHandler(input: {
   };
 
   const onComposerCommandKey = (key: string, event: KeyboardEvent, isTaskItem = false) => {
-    const submissionIntent = composerSubmissionIntentForKey({
-      event,
-      keybindings,
-      isSoftwareKeyboardOpen,
-      isDraftThread: routeKind === "draft",
-      isRunning: phase === "running",
-      sendShortcut,
-      prompt: promptRef.current,
-    });
+    if (key === "Enter" && isComposerDockChord(event)) {
+      if (composerDocked) {
+        submitComposer(
+          undefined,
+          resolveComposerDispatchMode({
+            running: phase === "running",
+            alternateModifier: false,
+            activeTurnDefault: followUpBehavior,
+            canSteer: !isCompacting,
+          }),
+          "foreground",
+        );
+        return true;
+      }
+      if (composerDockAvailable) {
+        setComposerDocked(true);
+        return true;
+      }
+    }
+    // The docked editor is for long prompts: Enter and Cmd+Enter only add lines.
+    const submissionIntent = composerDocked
+      ? null
+      : composerSubmissionIntentForKey({
+          event,
+          keybindings,
+          isSoftwareKeyboardOpen,
+          isDraftThread: routeKind === "draft",
+          isRunning: phase === "running",
+          sendShortcut,
+          prompt: promptRef.current,
+        });
     if (key === "Tab" && event.shiftKey && submissionIntent === null) {
       if (applyListEdit(event, listOutdentForTab)) return true;
       if (!planModeUiEnabled) return false;

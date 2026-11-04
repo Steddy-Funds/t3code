@@ -854,17 +854,21 @@ describe("MessagesTimeline replies", () => {
     expect(onReplyToMessage).toHaveBeenCalledWith({ kind: "quote", text: "Rename the flag" });
   });
 
-  it("narrows the reply to the Markdown section under the pointer while Cmd or Option is held", async () => {
+  it("narrows the reply to the Markdown section or list item under the pointer while Cmd is held", async () => {
     using _mac = vi.spyOn(navigator, "platform", "get").mockReturnValue("MacIntel");
     const onReplyToMessage = vi.fn((_reply: unknown) => true);
     await using screen = await renderTimeline(
       [
         message(
-          `First idea.\n\nSecond idea. ${serializeAssistantCitation(CITATION_REQUEST.citation)}`,
+          `First idea.\n\n3. first step\n4. second step\n\nSecond idea. ${serializeAssistantCitation(CITATION_REQUEST.citation)}`,
           {},
           "user-1",
         ),
-        message("# Plan\n\n- one\n- two\n\nDone.", { role: "assistant" }, "assistant-1"),
+        message(
+          "# Plan\n\n- one\n- two\n  - nested\n\nDone.",
+          { role: "assistant" },
+          "assistant-1",
+        ),
       ],
       { onReplyToMessage },
     );
@@ -880,49 +884,58 @@ describe("MessagesTimeline replies", () => {
         target.dispatchEvent(new PointerEvent("pointermove", { bubbles: true, ...modifier }));
       });
     };
-
-    const item = find("assistant-1", "ul")!.querySelector("li")!;
-    await hold("Meta", item);
-    expect(find("assistant-1", "ul")!.hasAttribute("data-swipe-reply-section")).toBe(true);
-    expect(find("assistant-1", "p")!.hasAttribute("data-swipe-reply-section")).toBe(false);
-
-    await swipe(item, swipeRight, { metaKey: true });
-    const reply = onReplyToMessage.mock.lastCall?.[0] as Extract<
-      MessageReply,
-      { kind: "citation" }
-    >;
-    expect(reply.citation).toMatchObject({
-      text: expect.stringMatching(/^one\s+two$/),
-      prefix: expect.stringMatching(/Plan\s+$/),
-    });
+    const highlighted = () => [...document.querySelectorAll("[data-swipe-reply-section]")];
     const source = screen.container.querySelector<HTMLElement>(
       '[data-assistant-citation-source="assistant-1"]',
     )!;
-    expect(resolveAssistantCitationRange(source, reply.citation)?.toString()).toMatch(
-      /^one\s+two$/,
-    );
-    expect(find("assistant-1", "ul")!.hasAttribute("data-swipe-reply-section")).toBe(false);
+    const words = (text: string | undefined) => text?.replace(/\s+/g, " ");
+    // Returns the cited text after checking the citation resolves to the same words.
+    const citeOnCmdSwipe = async (target: Element) => {
+      await pause();
+      await hold("Meta", target);
+      expect(highlighted()).toEqual([target]);
+      await swipe(target, swipeRight, { metaKey: true });
+      // Only the target springs back, not its list or the row.
+      const moved = screen.container.querySelectorAll("[data-swipe-reply-release]");
+      expect([...moved]).toEqual([target]);
+      const { citation } = onReplyToMessage.mock.lastCall![0] as Extract<
+        MessageReply,
+        { kind: "citation" }
+      >;
+      expect(words(resolveAssistantCitationRange(source, citation)?.toString())).toBe(
+        words(citation.text),
+      );
+      return words(citation.text);
+    };
+
+    const [one, two] = find("assistant-1", "ul")!.querySelectorAll(":scope > li");
+    const nested = two!.querySelector("li")!;
+    expect(await citeOnCmdSwipe(one!)).toBe("one");
+    expect(onReplyToMessage.mock.lastCall?.[0]).toMatchObject({
+      citation: { prefix: expect.stringMatching(/Plan\s+$/) },
+    });
+    expect(highlighted()).toEqual([]);
+    expect(await citeOnCmdSwipe(nested)).toBe("nested");
+    // The parent item's own text quotes it with its nested items.
+    expect(await citeOnCmdSwipe(two!)).toBe("two nested");
+    expect(await citeOnCmdSwipe(find("assistant-1", "p")!)).toBe("Done.");
 
     await pause();
-    await swipe(find("user-1", "p:last-child")!, swipeRight, { altKey: true });
+    const step = find("user-1", "ol")!.querySelectorAll("li")[1]!;
+    await swipe(step, swipeRight, { metaKey: true });
+    expect(onReplyToMessage).toHaveBeenLastCalledWith({ kind: "quote", text: "4. second step" });
+    await pause();
+    await swipe(find("user-1", "p:last-child")!, swipeRight, { metaKey: true });
     expect(onReplyToMessage).toHaveBeenLastCalledWith({ kind: "quote", text: "Second idea." });
 
-    // Option types characters in a field, so holding it there shows nothing.
-    const field = document.body.appendChild(document.createElement("textarea"));
-    using _field = { [Symbol.dispose]: () => field.remove() };
-    field.focus();
-    await hold("Alt", find("user-1", "p:last-child")!);
-    expect(document.querySelector("[data-swipe-reply-section]")).toBeNull();
-    field.blur();
-
+    // Option no longer narrows: it shows nothing and replies to the whole message.
     await pause();
-    const userRow = screen.container.querySelector('[data-message-id="user-1"]')!;
-    await hold("Alt", userRow);
-    expect(document.querySelector("[data-swipe-reply-section]")).toBeNull();
-    await swipe(userRow, swipeRight, { altKey: true });
+    await hold("Alt", step);
+    expect(highlighted()).toEqual([]);
+    await swipe(step, swipeRight, { altKey: true });
     expect(onReplyToMessage).toHaveBeenLastCalledWith({
       kind: "quote",
-      text: "First idea.\n\nSecond idea.",
+      text: "First idea.\n\n3. first step\n4. second step\n\nSecond idea.",
     });
   });
 });

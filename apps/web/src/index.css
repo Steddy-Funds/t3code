@@ -1916,11 +1916,18 @@ code {
 
 /* Chat markdown rendering */
 
-/* The section a Cmd or Alt swipe replies to (MessageSwipeReply). */
-.chat-markdown > [data-swipe-reply-section] {
+/* The section a Cmd swipe replies to (MessageSwipeReply). */
+.chat-markdown > [data-swipe-reply-section],
+.chat-markdown li[data-swipe-reply-section] {
   border-radius: 0.375rem;
   background-color: color-mix(in oklab, var(--primary) 12%, transparent);
   box-shadow: 0 0 0 0.25rem color-mix(in oklab, var(--primary) 12%, transparent);
+}
+
+/* Markers and task boxes sit in the list's gutter; pull it into the item without moving its text. */
+.chat-markdown li[data-swipe-reply-section] {
+  margin-inline-start: calc(-1 * var(--list-gutter, 1.25rem));
+  padding-inline-start: var(--list-gutter, 1.25rem);
 }
 
 .chat-markdown > :first-child {

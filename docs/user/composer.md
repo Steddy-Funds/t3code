@@ -143,9 +143,9 @@ its actions. An assistant response arrives as a citation and your own message as
 line at the caret. The composer takes focus without the pointer moving, so you can swipe, type, and
 swipe the next message.
 
-On macOS, hold Cmd or Option while you swipe to reply to one part of a message instead: the
-heading, paragraph, list, code block, quote, or table under the pointer. Holding Cmd highlights that
-part before you swipe; Option does too, unless you are typing in a field.
+On macOS, hold Cmd while you swipe to reply to one part of a message instead: the heading,
+paragraph, single list item, code block, quote, or table under the pointer. Holding Cmd highlights
+that part before you swipe.
 
 ## Recall a sent prompt
 

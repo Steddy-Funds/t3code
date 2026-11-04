@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import {
+  serializeRenderedMarkdownBlock,
   serializeRenderedMarkdownFragment,
   serializeTableElementToMarkdown,
 } from "./markdown-clipboard";
@@ -24,7 +25,10 @@ class FakeText {
 class FakeElement {
   readonly nodeType = ELEMENT_NODE;
   checked = false;
+  parentElement: FakeElement | null = null;
   readonly childNodes: Array<FakeElement | FakeText> = [];
+  readonly ownerDocument = { createDocumentFragment: () => new FakeElement("#document-fragment") };
+  private readonly attributes: Record<string, string>;
   readonly classList = {
     contains: (name: string) => this.classNames.includes(name),
   };
@@ -32,8 +36,10 @@ class FakeElement {
   constructor(
     readonly tagName: string,
     private readonly classNames: ReadonlyArray<string> = [],
-    private readonly attributes: Readonly<Record<string, string>> = {},
-  ) {}
+    attributes: Readonly<Record<string, string>> = {},
+  ) {
+    this.attributes = { ...attributes };
+  }
 
   get localName(): string {
     return this.tagName.toLowerCase();
@@ -48,8 +54,26 @@ class FakeElement {
   }
 
   append(...children: Array<FakeElement | FakeText>): this {
+    for (const child of children) {
+      if (child instanceof FakeElement) child.parentElement = this;
+    }
     this.childNodes.push(...children);
     return this;
+  }
+
+  cloneNode(deep = false): FakeElement {
+    const copy = new FakeElement(this.tagName, this.classNames, this.attributes);
+    copy.checked = this.checked;
+    if (!deep) return copy;
+    return copy.append(
+      ...this.childNodes.map((child) =>
+        child instanceof FakeElement ? child.cloneNode(true) : new FakeText(child.textContent),
+      ),
+    );
+  }
+
+  setAttribute(name: string, value: string): void {
+    this.attributes[name] = value;
   }
 
   getAttribute(name: string): string | null {
@@ -216,6 +240,85 @@ describe("serializeRenderedMarkdownFragment", () => {
     expect(serializeRenderedMarkdownFragment(asNode(container))).toBe(
       "printf '%s' 'TOKEN' | gh secret set CLOUDFLARE_API_TOKEN",
     );
+  });
+});
+
+function listItem(...children: Array<FakeElement | string>): FakeElement {
+  return new FakeElement("LI").append(
+    ...children.map((child) => (typeof child === "string" ? new FakeText(child) : child)),
+  );
+}
+
+function taskItem(checked: boolean, text: string): FakeElement {
+  const box = new FakeElement("INPUT", [], { type: "checkbox", disabled: "" });
+  box.checked = checked;
+  return listItem(box, text);
+}
+
+describe("serializeRenderedMarkdownBlock", () => {
+  beforeEach(() => {
+    vi.stubGlobal("Node", { TEXT_NODE, ELEMENT_NODE });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  // Each row builds a rendered block and returns the element under the pointer.
+  const pick = (list: FakeElement, index: number) => list.children[index]!;
+  // A tight item renders its text, then a newline, then its nested list.
+  const nested = () =>
+    listItem(
+      "parent",
+      "\n",
+      new FakeElement("UL").append(listItem("child a"), listItem("child b")),
+    );
+
+  it.each<[string, () => FakeElement, string]>([
+    [
+      "keeps a paragraph whole",
+      () =>
+        pick(new FakeElement("DIV").append(new FakeElement("P").append(new FakeText("Plain"))), 0),
+      "Plain",
+    ],
+    [
+      "quotes one bullet as a one-item list",
+      () => pick(new FakeElement("UL").append(listItem("one"), listItem("two")), 1),
+      "- two",
+    ],
+    [
+      "numbers an ordered item from the list's start",
+      () =>
+        pick(
+          new FakeElement("OL", [], { start: "3" }).append(listItem("first"), listItem("second")),
+          1,
+        ),
+      "4. second",
+    ],
+    [
+      "keeps a task item's box",
+      () =>
+        pick(new FakeElement("UL").append(taskItem(true, " done"), taskItem(false, " todo")), 0),
+      "- [x] done",
+    ],
+    [
+      "keeps an open task item's box",
+      () =>
+        pick(new FakeElement("UL").append(taskItem(true, " done"), taskItem(false, " todo")), 1),
+      "- [ ] todo",
+    ],
+    [
+      "carries a parent item's nested list under it",
+      () => pick(new FakeElement("OL").append(listItem("first"), nested()), 1),
+      "2. parent\n   - child a\n   - child b",
+    ],
+    [
+      "quotes a nested item on its own",
+      () => pick(pick(pick(new FakeElement("UL").append(nested()), 0), 0), 1),
+      "- child b",
+    ],
+  ])("%s", (_name, block, expected) => {
+    expect(serializeRenderedMarkdownBlock(block() as unknown as Element)).toBe(expected);
   });
 });
 

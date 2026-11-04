@@ -895,6 +895,9 @@ describe("MessagesTimeline replies", () => {
       await hold("Meta", target);
       expect(highlighted()).toEqual([target]);
       await swipe(target, swipeRight, { metaKey: true });
+      // Only the target springs back, not its list or the row.
+      const moved = screen.container.querySelectorAll("[data-swipe-reply-release]");
+      expect([...moved]).toEqual([target]);
       const { citation } = onReplyToMessage.mock.lastCall![0] as Extract<
         MessageReply,
         { kind: "citation" }

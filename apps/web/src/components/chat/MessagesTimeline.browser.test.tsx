@@ -745,6 +745,9 @@ describe("MessagesTimeline citations", () => {
   });
 });
 
+// Unresolved in tests, so it renders as its unavailable box, which carries the same Markdown.
+const SHOT = "/work/shots/phone-after.png";
+
 describe("MessagesTimeline replies", () => {
   async function swipe(
     target: Element,
@@ -869,6 +872,12 @@ describe("MessagesTimeline replies", () => {
           { role: "assistant" },
           "assistant-1",
         ),
+        message(`Shots: ![Phone, after](${SHOT}) ![Desktop](${SHOT})`, {}, "user-2"),
+        message(
+          `- Compare ![Before](${SHOT}) with ![After](${SHOT})`,
+          { role: "assistant" },
+          "assistant-2",
+        ),
       ],
       { onReplyToMessage },
     );
@@ -927,6 +936,28 @@ describe("MessagesTimeline replies", () => {
     await pause();
     await swipe(find("user-1", "p:last-child")!, swipeRight, { metaKey: true });
     expect(onReplyToMessage).toHaveBeenLastCalledWith({ kind: "quote", text: "Second idea." });
+
+    // An image is its own section: only it is highlighted and moves, and it quotes as its Markdown.
+    const imageOnCmdSwipe = async (id: string, alt: string) => {
+      const image = screen.container.querySelector(
+        `[data-message-id="${id}"] [data-markdown-copy^="![${alt}]"]`,
+      )!;
+      await pause();
+      await hold("Meta", image);
+      expect(highlighted()).toEqual([image]);
+      await swipe(image, swipeRight, { metaKey: true });
+      expect([...screen.container.querySelectorAll("[data-swipe-reply-release]")]).toEqual([image]);
+      return onReplyToMessage.mock.lastCall?.[0];
+    };
+    expect(await imageOnCmdSwipe("user-2", "Desktop")).toEqual({
+      kind: "quote",
+      text: `![Desktop](${SHOT})`,
+    });
+    // A citation cannot point at an image, so the provider gets its path and alt text.
+    expect(await imageOnCmdSwipe("assistant-2", "Before")).toEqual({
+      kind: "quote",
+      text: `![Before](${SHOT})`,
+    });
 
     // Option no longer narrows: it shows nothing and replies to the whole message.
     await pause();

@@ -72,6 +72,7 @@ import {
 } from "./timelineScrollAnchoring";
 import { AssistantSelectionToolbar } from "./AssistantSelectionToolbar";
 import { MessageSwipeReply } from "./MessageSwipeReply";
+import { MARKDOWN_IMAGE_SELECTOR } from "./messageSwipeReply.logic";
 import {
   captureAssistantMessageSelector,
   type AssistantCitationSourceAnchor,
@@ -1030,12 +1031,15 @@ const ConversationTimeline = memo(function ConversationTimeline({
       const source = timelineViewportElement?.querySelector<HTMLElement>(
         `[data-assistant-citation-source="${CSS.escape(messageId)}"]`,
       );
-      const selector = source
-        ? captureAssistantMessageSelector(
-            source,
-            section && source.contains(section) ? section : source,
-          )
-        : null;
+      // A citation anchors on text, which an image has none of; its Markdown keeps the path.
+      const image = section?.matches(MARKDOWN_IMAGE_SELECTOR) ?? false;
+      const selector =
+        source && !image
+          ? captureAssistantMessageSelector(
+              source,
+              section && source.contains(section) ? section : source,
+            )
+          : null;
       // A virtualized-away message, or one with no readable text such as a diagram, is quoted.
       onReplyToMessage(
         selector

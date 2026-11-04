@@ -1940,6 +1940,11 @@ code {
   pointer-events: none;
 }
 
+/* A ring outside the image's box, so it shows over an opaque image without moving it. */
+.chat-markdown [data-markdown-copy^="!["][data-swipe-reply-section] {
+  box-shadow: 0 0 0 0.25rem color-mix(in oklab, var(--primary) 40%, transparent);
+}
+
 .chat-markdown > :first-child {
   margin-top: 0;
 }

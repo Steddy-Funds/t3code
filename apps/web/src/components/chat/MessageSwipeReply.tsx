@@ -7,6 +7,7 @@ import { isMacPlatform } from "~/lib/utils";
 import {
   IDLE_SWIPE_REPLY,
   IGNORED_SWIPE_REPLY,
+  MARKDOWN_IMAGE_SELECTOR,
   stepSwipeReply,
   swipeReplyArmed,
   swipeReplyOffset,
@@ -29,11 +30,17 @@ const INDICATOR_GAP_PX = 8;
 /**
  * The top-level Markdown block (heading, paragraph, list, code, quote, table) under the pointer.
  * In a top-level list it is the innermost item under the pointer, with its nested items.
+ * An image is its own section, except in a table or quote, which stay whole.
  */
 function sectionAt(target: EventTarget | null, viewport: HTMLElement): HTMLElement | null {
   if (!(target instanceof Element) || !swipeRowAt(target, viewport)) return null;
   const root = target.closest(".chat-markdown");
   if (!root) return null;
+  const image = target.closest<HTMLElement>(MARKDOWN_IMAGE_SELECTOR);
+  // A transform cannot move a plain inline box, such as audio's wrapper; that stays with its block.
+  const movable =
+    image && (image.tagName === "IMG" || getComputedStyle(image).display !== "inline");
+  if (movable && root.contains(image) && !image.closest("table, blockquote")) return image;
   let section: Element | null = target;
   while (section && section.parentElement !== root) section = section.parentElement;
   if (!(section instanceof HTMLElement)) return null;

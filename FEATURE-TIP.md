@@ -13,6 +13,7 @@ upstream.
 | Cmd+swipe to one bullet, Cmd-only sections, composer blank-line fix | #41 | 44c451d |
 | A highlighted bullet keeps its marker in place                      | #42 | 727e87c |
 | Cmd+swipe replies to one image                                      | #43 | 3d319a8 |
+| Cmd+swipe a sidebar thread to mention it                            | #44 | 336207d |
 
 Held: #38 (pods notes in the t3-orchestration skill). It edits
 `.agents/skills/t3-orchestration/`, which exists only on

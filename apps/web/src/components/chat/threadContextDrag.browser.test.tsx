@@ -116,11 +116,11 @@ function SwipeMentionFixture({ received }: { received: Array<ThreadId> }) {
 
 describe("SidebarSwipeMention", () => {
   it.each([
-    ["Cmd swiping a thread past the threshold mentions it", "MacIntel", true, 8, true],
-    ["a short Cmd swipe leaves the composer alone", "MacIntel", true, 3, false],
-    ["a plain swipe leaves the composer alone", "MacIntel", false, 8, false],
-    ["Cmd swiping off macOS leaves the composer alone", "Linux x86_64", true, 8, false],
-  ] as const)("%s", async (_name, platform, metaKey, steps, mentions) => {
+    ["Cmd swiping a thread past the threshold mentions it", "MacIntel", true, 8, true, true],
+    ["a short Cmd swipe leaves the composer alone", "MacIntel", true, 3, true, false],
+    ["a plain swipe leaves the composer alone", "MacIntel", false, 8, false, false],
+    ["Cmd swiping off macOS leaves the composer alone", "Linux x86_64", true, 8, false, false],
+  ] as const)("%s", async (_name, platform, metaKey, steps, tracks, mentions) => {
     using _platform = vi.spyOn(navigator, "platform", "get").mockReturnValue(platform);
     const received: Array<ThreadId> = [];
     await using screen = await render(<SwipeMentionFixture received={received} />);
@@ -133,8 +133,9 @@ describe("SidebarSwipeMention", () => {
       }
     });
     const indicator = document.querySelector<HTMLElement>(".swipe-reply-indicator");
-    expect(indicator?.hidden === false).toBe(mentions);
-    if (mentions) {
+    expect(indicator?.hidden === false).toBe(tracks);
+    expect(indicator?.dataset.armed).toBe(String(mentions));
+    if (tracks) {
       expect(indicator!.querySelector(".lucide-quote")).not.toBeNull();
       expect(indicator!.querySelector(".lucide-reply")).toBeNull();
     }

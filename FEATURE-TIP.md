@@ -14,6 +14,7 @@ upstream.
 | A highlighted bullet keeps its marker in place                      | #42 | 727e87c |
 | Cmd+swipe replies to one image                                      | #43 | 3d319a8 |
 | Cmd+swipe a sidebar thread to mention it                            | #44 | 336207d |
+| A swipe replies to a section by default, with a setting             | #45 | 615ed49 |
 
 Held: #38 (pods notes in the t3-orchestration skill). It edits
 `.agents/skills/t3-orchestration/`, which exists only on

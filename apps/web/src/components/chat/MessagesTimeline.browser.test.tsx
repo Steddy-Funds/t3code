@@ -755,7 +755,7 @@ describe("MessagesTimeline replies", () => {
     __setClientSettingsForTests({ ...DEFAULT_CLIENT_SETTINGS, swipeReplyTarget });
     onTestFinished(() => __setClientSettingsForTests(DEFAULT_CLIENT_SETTINGS));
   }
-  type Modifiers = { ctrlKey?: boolean; metaKey?: boolean; altKey?: boolean };
+  type Modifiers = Pick<WheelEventInit, "ctrlKey" | "metaKey" | "altKey" | "clientY">;
   // Fingers still on the trackpad.
   const drag = (
     target: Element,
@@ -1053,10 +1053,14 @@ describe("MessagesTimeline replies", () => {
     expect(onReplyToMessage).toHaveBeenLastCalledWith(wholeMessage);
     expect(moved()).toEqual([screen.container.querySelector('[data-message-id="user-1"]')]);
 
-    // Outside any section, such as the row's padding, a plain swipe takes the whole message.
+    // Outside any section, such as the row's padding, a plain swipe takes the nearest one.
     await pause();
-    await swipe(screen.container.querySelector('[data-message-id="user-1"]')!, swipeRight);
-    expect(onReplyToMessage).toHaveBeenLastCalledWith(wholeMessage);
+    const row = screen.container.querySelector('[data-message-id="user-1"]')!;
+    await swipe(row, swipeRight, { clientY: row.getBoundingClientRect().bottom });
+    expect(onReplyToMessage).toHaveBeenLastCalledWith({ kind: "quote", text: "4. second step" });
+    await pause();
+    await swipe(row, swipeRight, { clientY: row.getBoundingClientRect().top });
+    expect(onReplyToMessage).toHaveBeenLastCalledWith({ kind: "quote", text: "First idea." });
   });
 
   it("off macOS, Meta does not turn a section swipe into a whole-message one", async () => {

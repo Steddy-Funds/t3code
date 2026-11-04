@@ -331,10 +331,25 @@ export function serializeRenderedMarkdownFragment(container: Node): string {
   return tidyMarkdown(serializeChildren(container));
 }
 
+/** A list item as a one-item list of its own kind, keeping its number. */
+function soleItemList(item: Element, list: Element): Element {
+  const start = Number.parseInt(list.getAttribute("start") ?? "1", 10) || 1;
+  const index = [...list.children].filter((child) => child.tagName === "LI").indexOf(item);
+  const copy = list.cloneNode(false) as Element;
+  copy.setAttribute("start", String(start + index));
+  copy.append(item.cloneNode(true));
+  return copy;
+}
+
 /** One rendered block as Markdown. Unlike a copied fragment, a lone code block keeps its fence. */
 export function serializeRenderedMarkdownBlock(block: Element): string {
+  const list = block.parentElement;
   const fragment = block.ownerDocument.createDocumentFragment();
-  fragment.append(block.cloneNode(true));
+  fragment.append(
+    block.tagName === "LI" && (list?.tagName === "UL" || list?.tagName === "OL")
+      ? soleItemList(block, list)
+      : block.cloneNode(true),
+  );
   return tidyMarkdown(serializeChildren(fragment));
 }
 

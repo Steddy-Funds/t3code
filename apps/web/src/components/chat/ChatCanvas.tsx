@@ -13,6 +13,7 @@ export function ChatCanvas({
   preview,
   composerOverlayElement,
   detailsCardTopInset = 0,
+  composerDockWidth = null,
   children,
   ...props
 }: Omit<ComponentProps<"div">, "className" | "style" | "ref"> & {
@@ -23,6 +24,8 @@ export function ChatCanvas({
   preview: ChatCanvasPreview | null;
   composerOverlayElement: HTMLElement | null;
   detailsCardTopInset?: number;
+  /** The docked composer width chosen this session; null keeps the default. */
+  composerDockWidth?: number | null;
 }) {
   const elementRef = useRef<HTMLDivElement | null>(null);
   const widthProbeRef = useRef<HTMLDivElement | null>(null);
@@ -104,6 +107,8 @@ export function ChatCanvas({
             "--chat-timeline-gutter": `${measurements.timelineGutter}px`,
             "--chat-lane-inset-start": `${layout.chat.insetStart}px`,
             "--chat-lane-inset-end": `${layout.chat.insetEnd}px`,
+            "--chat-composer-dock-size":
+              composerDockWidth === null ? undefined : `${composerDockWidth}px`,
           } as CSSProperties
         }
       >

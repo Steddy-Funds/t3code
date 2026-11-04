@@ -5,14 +5,18 @@ import {
   DRAFT_HERO_TRANSITION_EASING,
 } from "./draftHeroTransition";
 
+/**
+ * Slides the composer from its old spot whenever `layout` changes (hero, inline, docked).
+ * `durationFor` picks the slide length for a change; 0 skips it.
+ */
 export function useDraftHeroLayoutTransition(
-  isDraftHeroState: boolean,
-  animationsActive: boolean,
-  animationDurationMs: number,
+  layout: string,
+  durationFor: (from: string, to: string) => number,
 ) {
+  const durationForStable = useStableCallback(durationFor);
   const transitionGroupRef = useRef<HTMLDivElement | null>(null);
   const composerAnchorRef = useRef<HTMLDivElement | null>(null);
-  const previousStateRef = useRef(isDraftHeroState);
+  const previousStateRef = useRef(layout);
   const previousComposerRectRef = useRef<DOMRect | null>(null);
   const animationRef = useRef<Animation | null>(null);
   const captureComposerRect = useStableCallback(() => {
@@ -23,7 +27,10 @@ export function useDraftHeroLayoutTransition(
   useLayoutEffect(() => {
     const transitionGroup = transitionGroupRef.current;
     const nextComposerRect = composerAnchorRef.current?.getBoundingClientRect() ?? null;
-    const stateChanged = previousStateRef.current !== isDraftHeroState;
+    const stateChanged = previousStateRef.current !== layout;
+    const animationDurationMs = stateChanged
+      ? durationForStable(previousStateRef.current, layout)
+      : 0;
     const mobileComposerTransitionActive =
       typeof document !== "undefined" &&
       document.documentElement.dataset.mobileComposerRouteTransition === "true";
@@ -32,8 +39,7 @@ export function useDraftHeroLayoutTransition(
     animationRef.current = null;
     const previousComposerRect = previousComposerRectRef.current;
     if (
-      stateChanged &&
-      animationsActive &&
+      animationDurationMs > 0 &&
       !mobileComposerTransitionActive &&
       transitionGroup &&
       previousComposerRect &&
@@ -62,9 +68,9 @@ export function useDraftHeroLayoutTransition(
           });
       }
     }
-    previousStateRef.current = isDraftHeroState;
+    previousStateRef.current = layout;
     previousComposerRectRef.current = nextComposerRect;
-  }, [animationDurationMs, animationsActive, isDraftHeroState]);
+  }, [durationForStable, layout]);
 
   return { transitionGroupRef, composerAnchorRef, captureComposerRect } as const;
 }

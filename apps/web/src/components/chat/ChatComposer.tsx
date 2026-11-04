@@ -81,7 +81,10 @@ import {
   extendReplacementRangeForTrailingSpace,
   replaceTextRange,
 } from "../../composer-logic";
-import { DEFAULT_COMPOSER_PLACEHOLDER } from "../../composerPlaceholder";
+import {
+  DEFAULT_COMPOSER_PLACEHOLDER,
+  QUICK_COMPOSER_PLACEHOLDER,
+} from "../../composerPlaceholder";
 import {
   deriveComposerSendState,
   getAntigravitySendBlockReason,
@@ -107,6 +110,7 @@ import {
   composerDraftHasUserContent,
   composerTargetKey,
   useComposerDraftStore,
+  useComposerDraftModelState,
   useComposerThreadDraft,
 } from "../../composerDraftStore";
 import { ComposerStashBadge } from "./ComposerStashBadge";
@@ -280,6 +284,8 @@ import {
 } from "./preparingComposerImages";
 import { ComposerControlsBar } from "./ComposerControlsBar";
 import { composerCommandKeyHandler } from "./composerCommandKey";
+import { ComposerDockButton } from "./ComposerDockButton";
+import { isLongComposerPrompt } from "./composerDock.logic";
 
 function consumePasteAsTextShortcut(deadline: { current: number }): boolean {
   const armed = Date.now() <= deadline.current;
@@ -351,6 +357,10 @@ export interface ChatComposerHandle {
 
 export interface ChatComposerProps {
   composerDraftTarget: ScopedThreadRef | DraftId;
+  /** Where the model choice lives, when this composer shares it with another one. */
+  modelDraftTarget?: ScopedThreadRef | DraftId;
+  /** A side-question composer beside a docked long prompt. */
+  aside?: boolean;
   environmentId: EnvironmentId;
   canOperateThread: boolean;
   attachmentUploadsCapabilityKnown: boolean;
@@ -447,6 +457,10 @@ export interface ChatComposerProps {
   pullRequestRepository: string | null;
   threadPullRequests: ReadonlyArray<ThreadPullRequestLink> | undefined;
   onComposerOverlayHeightChange: (height: number) => void;
+  /** Docked: a full-height editor beside the timeline, for long prompts. */
+  composerDocked: boolean;
+  composerDockAvailable: boolean;
+  onComposerDockedChange: (docked: boolean) => void;
   /** The new-thread strip names the permissions, so the controls row hides its chip. */
   permissionsShownInStrip: boolean;
 
@@ -510,6 +524,8 @@ const NO_PROVIDER_SLASH_COMMANDS: ServerProvider["slashCommands"] = [];
 export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps) {
   const {
     composerDraftTarget,
+    modelDraftTarget = composerDraftTarget,
+    aside = false,
     environmentId,
     canOperateThread,
     attachmentUploadsCapabilityKnown,
@@ -572,6 +588,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     pullRequestRepository,
     threadPullRequests,
     onComposerOverlayHeightChange,
+    composerDocked,
+    composerDockAvailable,
+    onComposerDockedChange,
     promptRef,
     composerRef,
     composerImagesRef,
@@ -639,6 +658,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const isLiteralPendingAnswer = activePendingProgress?.activeQuestion?.initialAnswer !== undefined;
   const isEditingQueuedMessage = editingQueuedAttachments !== null;
   const composerDraft = useComposerThreadDraft(composerDraftTarget);
+  const modelDraftActiveProvider = useComposerDraftModelState(modelDraftTarget).activeProvider;
   const composerDraftTargetKeyRef = useRef("");
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- publishes the committed draft target key to a ref read by async handlers
   useLayoutEffect(() => {
@@ -890,12 +910,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     providerStatuses,
     settings,
     activeProjectId,
-    threadRef: composerDraftTarget,
+    threadRef: modelDraftTarget,
     threadModelSelection: activeThreadModelSelection,
     projectModelSelection: activeProjectDefaultModelSelection,
     promptInjectionState: getComposerPromptInjectionState(prompt),
     candidateInstanceIds: [
-      composerDraft.activeProvider ?? null,
+      modelDraftActiveProvider ?? null,
       activeThread?.runtime?.providerInstanceId,
       activeThreadModelSelection?.instanceId,
       activeProjectDefaultModelSelection?.instanceId,
@@ -2126,6 +2146,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     });
     setComposerSubmissionError(submission.validationMessage);
     if (!submission.didDispatch) return;
+    // Sending the long prompt ends the dock request, even while too narrow to show it docked.
+    onComposerDockedChange(false);
     onTypingGuardSend();
     if (shouldBlurMobileComposerOnSubmit()) {
       blurMobileComposerAfterSend();
@@ -2242,6 +2264,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       readComposerSnapshot,
       applyPromptReplacement,
       submitComposer,
+      composerDocked,
+      composerDockAvailable,
+      setComposerDocked: onComposerDockedChange,
     })(key, event, isTaskItem);
 
   const {
@@ -2903,7 +2928,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         if (!change) return;
         useComposerDraftStore
           .getState()
-          .setProviderModelOptions(composerDraftTarget, selectedProvider, change.modelOptions, {
+          .setProviderModelOptions(modelDraftTarget, selectedProvider, change.modelOptions, {
             instanceId: selectedInstanceId,
             model: selectedModel,
             persistSticky: true,
@@ -3447,7 +3472,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                               ? "Choose a project above to start a thread"
                               : showProviderUnavailable
                                 ? "Enable a provider in Settings to send a message"
-                                : DEFAULT_COMPOSER_PLACEHOLDER
+                                : aside
+                                  ? QUICK_COMPOSER_PLACEHOLDER
+                                  : DEFAULT_COMPOSER_PLACEHOLDER
                     }
                     disabled={
                       projectSelectionRequired ||
@@ -3463,6 +3490,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   >
                     <ComposerPrimaryActions
                       compact
+                      aside={aside}
                       canOperateThread={canOperateThread}
                       pendingAction={pendingPrimaryAction}
                       isRunning={false}
@@ -3518,8 +3546,18 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   >
                     {composerControls}
                   </div>
+                  {composerDockAvailable && (composerDocked || isLongComposerPrompt(prompt)) ? (
+                    <ComposerDockButton
+                      docked={composerDocked}
+                      onToggle={() => {
+                        onComposerDockedChange(!composerDocked);
+                        composerEditorRef.current?.focus();
+                      }}
+                    />
+                  ) : null}
                   <ComposerFooterPrimaryActions
                     compact={isComposerPrimaryActionsCompact}
+                    aside={aside}
                     canOperateThread={canOperateThread}
                     activeContextWindow={
                       settings.contextWindowMeterEnabled ? activeContextWindow : null

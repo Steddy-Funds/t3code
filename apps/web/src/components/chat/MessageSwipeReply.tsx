@@ -2,6 +2,7 @@ import { MessageId } from "@t3tools/contracts";
 import { ReplyIcon } from "lucide-react";
 import { useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
+import { useClientSettings } from "~/hooks/useSettings";
 import { isMomentumTail, MOMENTUM_SAMPLE_SIZE } from "~/lib/trackpadMomentum";
 import { isMacPlatform } from "~/lib/utils";
 import {
@@ -67,8 +68,8 @@ function swipeRowAt(target: EventTarget | null, viewport: HTMLElement): HTMLElem
 }
 
 /**
- * Two-finger swipe right on a message replies to it, like WhatsApp on macOS. Holding Cmd on macOS
- * narrows the swipe to the Markdown section under the pointer.
+ * Two-finger swipe right on a message replies to it, like WhatsApp on macOS. A plain swipe replies to
+ * the Markdown section under the pointer or the whole message, per the setting; Cmd on macOS swaps it.
  */
 export function MessageSwipeReply({
   viewport,
@@ -78,6 +79,7 @@ export function MessageSwipeReply({
   onReply: (messageId: MessageId, section: HTMLElement | null) => void;
 }) {
   const indicatorRef = useRef<HTMLDivElement>(null);
+  const plainSwipeTarget = useClientSettings((settings) => settings.swipeReplyTarget);
 
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- follows wheel gestures on the timeline viewport and moves the swiped row outside React
   useEffect(() => {
@@ -85,6 +87,10 @@ export function MessageSwipeReply({
     const mac = isMacPlatform(navigator.platform);
     // Elsewhere Meta is the Super key.
     const isSectionModifier = (event: { metaKey: boolean }) => mac && event.metaKey;
+    // Section by default: highlighted once the swipe tracks. Otherwise Cmd shows it on hover first.
+    const sectionByDefault = plainSwipeTarget === "section";
+    const swipesSection = (event: { metaKey: boolean }) =>
+      sectionByDefault !== isSectionModifier(event);
     let gesture: SwipeReplyGesture = IDLE_SWIPE_REPLY;
     let row: HTMLElement | null = null;
     let section: HTMLElement | null = null;
@@ -184,8 +190,8 @@ export function MessageSwipeReply({
       if (gesture.phase === "idle") {
         row = travel === null ? null : swipeRowAt(event.target, viewport);
         if (!row) gesture = IGNORED_SWIPE_REPLY;
-        section = row && isSectionModifier(event) ? sectionAt(event.target, viewport) : null;
-        if (section) highlight(section);
+        section = row && swipesSection(event) ? sectionAt(event.target, viewport) : null;
+        if (section && !sectionByDefault) highlight(section);
       }
       if (travel === null || !row) return;
       if (gesture.phase === "tracking") {
@@ -198,7 +204,10 @@ export function MessageSwipeReply({
       const wasTracking = gesture.phase === "tracking";
       gesture = stepSwipeReply(gesture, travel, event.deltaY, mac);
       if (gesture.phase !== "tracking") return;
-      if (!wasTracking) measure(section ?? row);
+      if (!wasTracking) {
+        measure(section ?? row);
+        if (sectionByDefault) highlight(section);
+      }
       follow(section ?? row);
     };
     const onPointerMove = (event: PointerEvent) => {
@@ -233,7 +242,7 @@ export function MessageSwipeReply({
     });
 
     viewport.addEventListener("wheel", onWheel, { passive: true });
-    if (mac) {
+    if (mac && !sectionByDefault) {
       viewport.addEventListener("pointermove", onPointerMove, { passive: true });
       viewport.addEventListener("pointerleave", onPointerLeave);
       window.addEventListener("keydown", onKeyDown, true);
@@ -257,7 +266,7 @@ export function MessageSwipeReply({
       for (const element of snapping.keys()) clearMoved(element);
       if (indicatorRef.current) indicatorRef.current.hidden = true;
     };
-  }, [onReply, viewport]);
+  }, [onReply, plainSwipeTarget, viewport]);
 
   return createPortal(
     <div

@@ -595,6 +595,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["enter return command ctrl multiline prompt new line composer"],
   },
   {
+    id: "swipe-reply-target",
+    title: "Swipe to reply",
+    to: "/settings/chat",
+    searchTerms: ["trackpad two finger gesture reply quote cite section whole message command"],
+  },
+  {
     id: "follow-up-behavior",
     title: "Follow-up behavior",
     to: "/settings/chat",

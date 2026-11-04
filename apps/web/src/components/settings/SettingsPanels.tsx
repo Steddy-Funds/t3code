@@ -525,6 +525,9 @@ export function useSettingsRestore(onRestored?: () => void) {
       ? ["Rich text composer"]
       : []),
     ...(settings.sendShortcut !== DEFAULT_UNIFIED_SETTINGS.sendShortcut ? ["Send shortcut"] : []),
+    ...(settings.swipeReplyTarget !== DEFAULT_UNIFIED_SETTINGS.swipeReplyTarget
+      ? ["Swipe to reply"]
+      : []),
     ...(settings.followUpBehavior !== DEFAULT_UNIFIED_SETTINGS.followUpBehavior
       ? ["Follow-up behavior"]
       : []),
@@ -641,6 +644,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       showSkillsInSlashMenu: DEFAULT_UNIFIED_SETTINGS.showSkillsInSlashMenu,
       composerRichTextEnabled: DEFAULT_UNIFIED_SETTINGS.composerRichTextEnabled,
       sendShortcut: DEFAULT_UNIFIED_SETTINGS.sendShortcut,
+      swipeReplyTarget: DEFAULT_UNIFIED_SETTINGS.swipeReplyTarget,
       followUpBehavior: DEFAULT_UNIFIED_SETTINGS.followUpBehavior,
       contextWindowMeterEnabled: DEFAULT_UNIFIED_SETTINGS.contextWindowMeterEnabled,
       environmentIdentificationMode: DEFAULT_UNIFIED_SETTINGS.environmentIdentificationMode,
@@ -1153,6 +1157,43 @@ export function ChatSettingsPanel() {
                     </span>
                   </SelectItem>
                 ))}
+              </SelectPopup>
+            </Select>
+          }
+        />
+        <SettingsRow
+          {...searchableSetting("swipe-reply-target")}
+          description={
+            "What a two-finger swipe right on a message replies to: the section under the pointer or the whole message." +
+            (modifierLabel === "⌘" ? " Hold ⌘ while you swipe for the other." : "")
+          }
+          resetAction={
+            settings.swipeReplyTarget !== DEFAULT_UNIFIED_SETTINGS.swipeReplyTarget ? (
+              <SettingResetButton
+                label="swipe to reply"
+                onClick={() =>
+                  updateSettings({ swipeReplyTarget: DEFAULT_UNIFIED_SETTINGS.swipeReplyTarget })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Select
+              value={settings.swipeReplyTarget}
+              onValueChange={(value) => {
+                if (value === "section" || value === "message") {
+                  updateSettings({ swipeReplyTarget: value });
+                }
+              }}
+            >
+              <SelectTrigger size="sm" className="w-auto min-w-0" aria-label="Swipe to reply">
+                <SelectValue>
+                  {settings.swipeReplyTarget === "section" ? "Section" : "Whole message"}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectPopup align="end" alignItemWithTrigger={false}>
+                <SelectItem value="section">Section</SelectItem>
+                <SelectItem value="message">Whole message</SelectItem>
               </SelectPopup>
             </Select>
           }

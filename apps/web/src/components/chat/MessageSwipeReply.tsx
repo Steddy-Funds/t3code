@@ -26,18 +26,20 @@ const SNAP_BACK_MS = 340;
 const INDICATOR_SIZE_PX = 28;
 const INDICATOR_GAP_PX = 8;
 
-const isEditable = (element: Element | null) =>
-  element instanceof HTMLElement &&
-  (element.isContentEditable || element.tagName === "INPUT" || element.tagName === "TEXTAREA");
-
-/** The top-level Markdown block (heading, paragraph, list, code, quote, table) under the pointer. */
+/**
+ * The top-level Markdown block (heading, paragraph, list, code, quote, table) under the pointer.
+ * In a top-level list it is the innermost item under the pointer, with its nested items.
+ */
 function sectionAt(target: EventTarget | null, viewport: HTMLElement): HTMLElement | null {
   if (!(target instanceof Element) || !swipeRowAt(target, viewport)) return null;
   const root = target.closest(".chat-markdown");
   if (!root) return null;
   let section: Element | null = target;
   while (section && section.parentElement !== root) section = section.parentElement;
-  return section instanceof HTMLElement ? section : null;
+  if (!(section instanceof HTMLElement)) return null;
+  if (section.tagName !== "UL" && section.tagName !== "OL") return section;
+  const item = target.closest<HTMLElement>("li");
+  return item && section.contains(item) ? item : section;
 }
 
 /** The message row a swipe moves, unless it has nothing to reply to or the content scrolls the same way. */
@@ -58,8 +60,8 @@ function swipeRowAt(target: EventTarget | null, viewport: HTMLElement): HTMLElem
 }
 
 /**
- * Two-finger swipe right on a message replies to it, like WhatsApp on macOS. Holding Cmd or Option
- * on macOS narrows the swipe to the Markdown section under the pointer.
+ * Two-finger swipe right on a message replies to it, like WhatsApp on macOS. Holding Cmd on macOS
+ * narrows the swipe to the Markdown section under the pointer.
  */
 export function MessageSwipeReply({
   viewport,
@@ -74,9 +76,8 @@ export function MessageSwipeReply({
   useEffect(() => {
     if (!viewport) return;
     const mac = isMacPlatform(navigator.platform);
-    // Elsewhere a lone Alt opens the window menu and Meta is the Super key.
-    const isSectionModifier = (event: { metaKey: boolean; altKey: boolean }) =>
-      mac && (event.metaKey || event.altKey);
+    // Elsewhere Meta is the Super key.
+    const isSectionModifier = (event: { metaKey: boolean }) => mac && event.metaKey;
     let gesture: SwipeReplyGesture = IDLE_SWIPE_REPLY;
     let row: HTMLElement | null = null;
     let section: HTMLElement | null = null;
@@ -205,9 +206,7 @@ export function MessageSwipeReply({
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.repeat && holding) return;
       stopHolding();
-      if (!isSectionModifier(event) || (event.key !== "Meta" && event.key !== "Alt")) return;
-      // Option types characters on many layouts; only Cmd shows sections while typing.
-      if (event.key === "Alt" && isEditable(document.activeElement)) return;
+      if (!isSectionModifier(event) || event.key !== "Meta") return;
       holdTimer = window.setTimeout(() => {
         holding = true;
         highlight(sectionUnderPointer());

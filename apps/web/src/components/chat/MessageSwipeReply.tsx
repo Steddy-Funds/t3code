@@ -16,6 +16,7 @@ import {
   SWIPE_REPLY_DESKTOP_RELEASE_FALLBACK_MS,
   SWIPE_REPLY_RELEASE_IDLE_MS,
   SWIPE_REPLY_ROW_SELECTOR,
+  SWIPE_REPLY_SECTION_HOLD_MS as SECTION_HOLD_MS,
   SWIPE_REPLY_THRESHOLD_PX,
   type SwipeReplyGesture,
 } from "./messageSwipeReply.logic";
@@ -24,6 +25,20 @@ import {
 const SNAP_BACK_MS = 340;
 const INDICATOR_SIZE_PX = 28;
 const INDICATOR_GAP_PX = 8;
+
+const isEditable = (element: Element | null) =>
+  element instanceof HTMLElement &&
+  (element.isContentEditable || element.tagName === "INPUT" || element.tagName === "TEXTAREA");
+
+/** The top-level Markdown block (heading, paragraph, list, code, quote, table) under the pointer. */
+function sectionAt(target: EventTarget | null, viewport: HTMLElement): HTMLElement | null {
+  if (!(target instanceof Element) || !swipeRowAt(target, viewport)) return null;
+  const root = target.closest(".chat-markdown");
+  if (!root) return null;
+  let section: Element | null = target;
+  while (section && section.parentElement !== root) section = section.parentElement;
+  return section instanceof HTMLElement ? section : null;
+}
 
 /** The message row a swipe moves, unless it has nothing to reply to or the content scrolls the same way. */
 function swipeRowAt(target: EventTarget | null, viewport: HTMLElement): HTMLElement | null {
@@ -42,30 +57,41 @@ function swipeRowAt(target: EventTarget | null, viewport: HTMLElement): HTMLElem
   return row;
 }
 
-/** Two-finger swipe right on a message replies to it, like WhatsApp on macOS. */
+/**
+ * Two-finger swipe right on a message replies to it, like WhatsApp on macOS. Holding Cmd or Option
+ * on macOS narrows the swipe to the Markdown section under the pointer.
+ */
 export function MessageSwipeReply({
   viewport,
   onReply,
 }: {
   viewport: HTMLElement | null;
-  onReply: (messageId: MessageId) => void;
+  onReply: (messageId: MessageId, section: HTMLElement | null) => void;
 }) {
   const indicatorRef = useRef<HTMLDivElement>(null);
 
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- follows wheel gestures on the timeline viewport and moves the swiped row outside React
   useEffect(() => {
     if (!viewport) return;
+    const mac = isMacPlatform(navigator.platform);
+    // Elsewhere a lone Alt opens the window menu and Meta is the Super key.
+    const isSectionModifier = (event: { metaKey: boolean; altKey: boolean }) =>
+      mac && (event.metaKey || event.altKey);
     let gesture: SwipeReplyGesture = IDLE_SWIPE_REPLY;
     let row: HTMLElement | null = null;
+    let section: HTMLElement | null = null;
     let quietTimer: number | undefined;
     const desktop = window.desktopBridge;
-    const mac = isMacPlatform(navigator.platform);
     const releaseIdleMs = desktop
       ? SWIPE_REPLY_DESKTOP_RELEASE_FALLBACK_MS
       : SWIPE_REPLY_RELEASE_IDLE_MS;
     let quietMs = releaseIdleMs;
     let deltas: number[] = [];
     let reach = 0;
+    let holdTimer: number | undefined;
+    let holding = false;
+    let pointer: { x: number; y: number } | null = null;
+    let highlighted: HTMLElement | null = null;
     const snapping = new Map<HTMLElement, number>();
 
     const clearMoved = (element: HTMLElement) => {
@@ -74,6 +100,19 @@ export function MessageSwipeReply({
       element.style.removeProperty("transform");
       delete element.dataset.swipeReplyRelease;
     };
+    const highlight = (next: HTMLElement | null) => {
+      if (next === highlighted) return;
+      highlighted?.removeAttribute("data-swipe-reply-section");
+      next?.setAttribute("data-swipe-reply-section", "");
+      highlighted = next;
+    };
+    const stopHolding = () => {
+      window.clearTimeout(holdTimer);
+      holding = false;
+      if (gesture.phase === "idle") highlight(null);
+    };
+    const sectionUnderPointer = () =>
+      pointer ? sectionAt(document.elementFromPoint(pointer.x, pointer.y), viewport) : null;
     // Laid out once per swipe; after that the row and indicator only move by transform.
     const measure = (element: HTMLElement) => {
       clearMoved(element);
@@ -111,15 +150,18 @@ export function MessageSwipeReply({
     };
     const release = () => {
       const moved = gesture.phase === "tracking" ? row : null;
+      const movedSection = section;
       const replied = swipeReplyArmed(gesture);
       row = null;
       deltas = [];
+      section = null;
       gesture = replied ? IGNORED_SWIPE_REPLY : IDLE_SWIPE_REPLY;
       quietMs = replied ? REPLY_COOLDOWN_MS : releaseIdleMs;
       quietTimer = replied ? window.setTimeout(release, REPLY_COOLDOWN_MS) : undefined;
+      highlight(null);
       if (!moved) return;
-      snapBack(moved);
-      if (replied) onReply(MessageId.make(moved.dataset.messageId!));
+      snapBack(movedSection ?? moved);
+      if (replied) onReply(MessageId.make(moved.dataset.messageId!), movedSection);
     };
     const lift = () => {
       window.clearTimeout(quietTimer);
@@ -134,6 +176,8 @@ export function MessageSwipeReply({
       if (gesture.phase === "idle") {
         row = travel === null ? null : swipeRowAt(event.target, viewport);
         if (!row) gesture = IGNORED_SWIPE_REPLY;
+        section = row && isSectionModifier(event) ? sectionAt(event.target, viewport) : null;
+        if (section) highlight(section);
       }
       if (travel === null || !row) return;
       if (gesture.phase === "tracking") {
@@ -146,8 +190,31 @@ export function MessageSwipeReply({
       const wasTracking = gesture.phase === "tracking";
       gesture = stepSwipeReply(gesture, travel, event.deltaY, mac);
       if (gesture.phase !== "tracking") return;
-      if (!wasTracking) measure(row);
-      follow(row);
+      if (!wasTracking) measure(section ?? row);
+      follow(section ?? row);
+    };
+    const onPointerMove = (event: PointerEvent) => {
+      pointer = { x: event.clientX, y: event.clientY };
+      if (gesture.phase !== "idle") return;
+      highlight(holding && isSectionModifier(event) ? sectionAt(event.target, viewport) : null);
+    };
+    const onPointerLeave = () => {
+      pointer = null;
+      if (gesture.phase === "idle") highlight(null);
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.repeat && holding) return;
+      stopHolding();
+      if (!isSectionModifier(event) || (event.key !== "Meta" && event.key !== "Alt")) return;
+      // Option types characters on many layouts; only Cmd shows sections while typing.
+      if (event.key === "Alt" && isEditable(document.activeElement)) return;
+      holdTimer = window.setTimeout(() => {
+        holding = true;
+        highlight(sectionUnderPointer());
+      }, SECTION_HOLD_MS);
+    };
+    const onKeyUp = (event: KeyboardEvent) => {
+      if (!isSectionModifier(event)) stopHolding();
     };
     // The desktop app reports when the fingers touch and lift, so resting fingers never reply.
     const unsubscribeBegin = desktop?.onTrackpadScrollBegin(() => {
@@ -160,11 +227,26 @@ export function MessageSwipeReply({
     });
 
     viewport.addEventListener("wheel", onWheel, { passive: true });
+    if (mac) {
+      viewport.addEventListener("pointermove", onPointerMove, { passive: true });
+      viewport.addEventListener("pointerleave", onPointerLeave);
+      window.addEventListener("keydown", onKeyDown, true);
+      window.addEventListener("keyup", onKeyUp, true);
+      window.addEventListener("blur", stopHolding);
+    }
     return () => {
       unsubscribeBegin?.();
       unsubscribeEnd?.();
       viewport.removeEventListener("wheel", onWheel);
+      viewport.removeEventListener("pointermove", onPointerMove);
+      viewport.removeEventListener("pointerleave", onPointerLeave);
+      window.removeEventListener("keydown", onKeyDown, true);
+      window.removeEventListener("keyup", onKeyUp, true);
+      window.removeEventListener("blur", stopHolding);
       window.clearTimeout(quietTimer);
+      window.clearTimeout(holdTimer);
+      highlight(null);
+      if (section) clearMoved(section);
       if (row) clearMoved(row);
       for (const element of snapping.keys()) clearMoved(element);
       if (indicatorRef.current) indicatorRef.current.hidden = true;

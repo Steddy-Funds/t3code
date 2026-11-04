@@ -52,7 +52,14 @@ import {
   decodeComposerContextFragment,
 } from "@t3tools/shared/composerContextClipboard";
 import { collectComposerContextReferences } from "@t3tools/shared/composerContextReferences";
-import { SWIPE_REPLY_COOLDOWN_MS, SWIPE_REPLY_RELEASE_IDLE_MS } from "./messageSwipeReply.logic";
+import { resolveAssistantCitationRange } from "~/lib/assistantTextSelection";
+import { type MessageReply } from "../../composer-logic";
+import {
+  SWIPE_REPLY_COOLDOWN_MS,
+  SWIPE_REPLY_RELEASE_IDLE_MS,
+  SWIPE_REPLY_SECTION_HOLD_MS,
+} from "./messageSwipeReply.logic";
+import { serializeAssistantCitation } from "@t3tools/shared/assistantCitations";
 
 const environmentQuery = vi.hoisted(() => ({
   error: "Pull request not found",
@@ -742,7 +749,7 @@ describe("MessagesTimeline replies", () => {
   async function swipe(
     target: Element,
     deltas: ReadonlyArray<readonly [number, number]>,
-    modifiers: { ctrlKey?: boolean } = {},
+    modifiers: { ctrlKey?: boolean; metaKey?: boolean; altKey?: boolean } = {},
   ) {
     await act(() => {
       for (const [deltaX, deltaY] of deltas) {
@@ -845,6 +852,78 @@ describe("MessagesTimeline replies", () => {
     expect(onReplyToMessage).not.toHaveBeenCalled();
     await act(() => lift.end());
     expect(onReplyToMessage).toHaveBeenCalledWith({ kind: "quote", text: "Rename the flag" });
+  });
+
+  it("narrows the reply to the Markdown section under the pointer while Cmd or Option is held", async () => {
+    using _mac = vi.spyOn(navigator, "platform", "get").mockReturnValue("MacIntel");
+    const onReplyToMessage = vi.fn((_reply: unknown) => true);
+    await using screen = await renderTimeline(
+      [
+        message(
+          `First idea.\n\nSecond idea. ${serializeAssistantCitation(CITATION_REQUEST.citation)}`,
+          {},
+          "user-1",
+        ),
+        message("# Plan\n\n- one\n- two\n\nDone.", { role: "assistant" }, "assistant-1"),
+      ],
+      { onReplyToMessage },
+    );
+    const find = (id: string, selector: string) =>
+      screen.container.querySelector(`[data-message-id="${id}"] .chat-markdown > ${selector}`);
+    await vi.waitFor(() => expect(find("assistant-1", "ul")).not.toBeNull());
+    using _timers = fakeTimers();
+    const hold = async (key: "Meta" | "Alt", target: Element) => {
+      const modifier = key === "Meta" ? { metaKey: true } : { altKey: true };
+      await act(() => {
+        window.dispatchEvent(new KeyboardEvent("keydown", { key, ...modifier }));
+        vi.advanceTimersByTime(SWIPE_REPLY_SECTION_HOLD_MS);
+        target.dispatchEvent(new PointerEvent("pointermove", { bubbles: true, ...modifier }));
+      });
+    };
+
+    const item = find("assistant-1", "ul")!.querySelector("li")!;
+    await hold("Meta", item);
+    expect(find("assistant-1", "ul")!.hasAttribute("data-swipe-reply-section")).toBe(true);
+    expect(find("assistant-1", "p")!.hasAttribute("data-swipe-reply-section")).toBe(false);
+
+    await swipe(item, swipeRight, { metaKey: true });
+    const reply = onReplyToMessage.mock.lastCall?.[0] as Extract<
+      MessageReply,
+      { kind: "citation" }
+    >;
+    expect(reply.citation).toMatchObject({
+      text: expect.stringMatching(/^one\s+two$/),
+      prefix: expect.stringMatching(/Plan\s+$/),
+    });
+    const source = screen.container.querySelector<HTMLElement>(
+      '[data-assistant-citation-source="assistant-1"]',
+    )!;
+    expect(resolveAssistantCitationRange(source, reply.citation)?.toString()).toMatch(
+      /^one\s+two$/,
+    );
+    expect(find("assistant-1", "ul")!.hasAttribute("data-swipe-reply-section")).toBe(false);
+
+    await pause();
+    await swipe(find("user-1", "p:last-child")!, swipeRight, { altKey: true });
+    expect(onReplyToMessage).toHaveBeenLastCalledWith({ kind: "quote", text: "Second idea." });
+
+    // Option types characters in a field, so holding it there shows nothing.
+    const field = document.body.appendChild(document.createElement("textarea"));
+    using _field = { [Symbol.dispose]: () => field.remove() };
+    field.focus();
+    await hold("Alt", find("user-1", "p:last-child")!);
+    expect(document.querySelector("[data-swipe-reply-section]")).toBeNull();
+    field.blur();
+
+    await pause();
+    const userRow = screen.container.querySelector('[data-message-id="user-1"]')!;
+    await hold("Alt", userRow);
+    expect(document.querySelector("[data-swipe-reply-section]")).toBeNull();
+    await swipe(userRow, swipeRight, { altKey: true });
+    expect(onReplyToMessage).toHaveBeenLastCalledWith({
+      kind: "quote",
+      text: "First idea.\n\nSecond idea.",
+    });
   });
 });
 

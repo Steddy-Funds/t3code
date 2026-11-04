@@ -76,8 +76,9 @@ import {
   captureAssistantMessageSelector,
   type AssistantCitationSourceAnchor,
 } from "~/lib/assistantTextSelection";
+import { serializeRenderedMarkdownBlock } from "../../markdown-clipboard";
 import { type MessageReply } from "../../composer-logic";
-import { userMessageReplyText } from "./TimelineUserMessageRow.logic";
+import { userMessageReplyText, withoutRepliedCitations } from "./TimelineUserMessageRow.logic";
 import { type AssistantCitationRequest } from "./AssistantCitationSource";
 import { useAssistantCitationTarget } from "./useAssistantCitationTarget";
 import { worktreeSetupAgentStarted } from "@t3tools/client-runtime/worktree-setup";
@@ -1008,30 +1009,44 @@ const ConversationTimeline = memo(function ConversationTimeline({
     };
   };
 
-  const replyToMessage = useStableCallback((messageId: MessageId) => {
-    if (!onReplyToMessage || !citationThreadRef) return;
-    const row = rows.find(
-      (candidate) => candidate.kind === "message" && candidate.message.id === messageId,
-    );
-    if (row?.kind !== "message") return;
-    if (row.message.role === "user") {
-      onReplyToMessage({ kind: "quote", text: userMessageReplyText(row.message) });
-      return;
-    }
-    const source = timelineViewportElement?.querySelector<HTMLElement>(
-      `[data-assistant-citation-source="${CSS.escape(messageId)}"]`,
-    );
-    const selector = source ? captureAssistantMessageSelector(source) : null;
-    // A virtualized-away message, or one with no readable text such as a diagram, is quoted.
-    onReplyToMessage(
-      selector
-        ? {
-            kind: "citation",
-            citation: { version: 1, ...citationThreadRef, messageId, ...selector },
-          }
-        : { kind: "quote", text: row.message.text },
-    );
-  });
+  // A section narrows the reply to one Markdown block; without one it covers the whole message.
+  const replyToMessage = useStableCallback(
+    (messageId: MessageId, section: HTMLElement | null = null) => {
+      if (!onReplyToMessage || !citationThreadRef) return;
+      const row = rows.find(
+        (candidate) => candidate.kind === "message" && candidate.message.id === messageId,
+      );
+      if (row?.kind !== "message") return;
+      const sectionMarkdown = section ? serializeRenderedMarkdownBlock(section) : null;
+      if (row.message.role === "user") {
+        onReplyToMessage({
+          kind: "quote",
+          text: sectionMarkdown
+            ? withoutRepliedCitations(sectionMarkdown)
+            : userMessageReplyText(row.message),
+        });
+        return;
+      }
+      const source = timelineViewportElement?.querySelector<HTMLElement>(
+        `[data-assistant-citation-source="${CSS.escape(messageId)}"]`,
+      );
+      const selector = source
+        ? captureAssistantMessageSelector(
+            source,
+            section && source.contains(section) ? section : source,
+          )
+        : null;
+      // A virtualized-away message, or one with no readable text such as a diagram, is quoted.
+      onReplyToMessage(
+        selector
+          ? {
+              kind: "citation",
+              citation: { version: 1, ...citationThreadRef, messageId, ...selector },
+            }
+          : { kind: "quote", text: sectionMarkdown ?? row.message.text },
+      );
+    },
+  );
   // Built from props after the last hook so the compiler can memoize the row context; a map
   // made before a hook would rebuild it, and re-render every row, on each streamed update.
   const pendingApprovalsByRequestId = new Map(

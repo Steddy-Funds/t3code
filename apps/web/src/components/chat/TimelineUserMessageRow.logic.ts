@@ -8,11 +8,8 @@ import {
 import { replaceComposerContextReferences } from "@t3tools/shared/composerContextReferences";
 import { asKnownContextRecord, resolveUserMessageContext } from "~/lib/composerContextRecords";
 
-/** The words a reply quotes: as the row shows them, without the citations they replied to. */
-export function userMessageReplyText(message: ChatMessage): string {
-  const presentation = resolveUserMessagePresentation(message);
-  const context = resolveUserMessageContext({ ...message, text: presentation.text });
-  const text = replaceComposerContextReferences(context.text, (reference) => reference.label);
+/** The user's own words, without the citations they replied to unless nothing else is left. */
+export function withoutRepliedCitations(text: string): string {
   let own = "";
   let cursor = 0;
   for (const match of collectAssistantCitations(text)) {
@@ -25,6 +22,15 @@ export function userMessageReplyText(message: ChatMessage): string {
 
 export function userMessageFileLabel(file: Pick<ChatFileAttachment, "name" | "source">) {
   return file.source?._tag === "pasted-text" ? "Pasted text" : file.name;
+}
+
+/** The words a reply quotes: as the row shows them, without the citations they replied to. */
+export function userMessageReplyText(message: ChatMessage): string {
+  const presentation = resolveUserMessagePresentation(message);
+  const context = resolveUserMessageContext({ ...message, text: presentation.text });
+  return withoutRepliedCitations(
+    replaceComposerContextReferences(context.text, (reference) => reference.label),
+  );
 }
 
 export function resolvePreviewAnnotationImage(input: {

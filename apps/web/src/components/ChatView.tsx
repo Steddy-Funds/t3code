@@ -128,7 +128,7 @@ import { AsyncResult } from "effect/reactivity";
 import { isElectron } from "../env";
 import { useDiffPanelStore } from "../diffPanelStore";
 import { useActiveThreadRef } from "../hooks/useActiveThreadRef";
-import { composerRequiresModifier } from "../composer-logic";
+import { composerRequiresModifier, type MessageReply } from "../composer-logic";
 import {
   derivePhase,
   deriveActiveWorkStartedAt,
@@ -619,21 +619,28 @@ export default function ChatView(props: ChatViewProps) {
   const composerFilesRef = useRef<ComposerFileAttachment[]>([]);
   const composerTerminalContextsRef = useRef<TerminalContextDraft[]>([]);
   const branchToolbarRef = useRef<BranchToolbarHandle>(null);
-  const citeAssistantText = (
-    citation: AssistantCitation,
-    sourceAnchor: AssistantCitationSourceAnchor,
-  ) => {
-    const inserted = composerRef.current?.citeAssistantText(citation, sourceAnchor) ?? false;
+  const warnComposerNotReady = (inserted: boolean, retry: string) => {
     if (!inserted) {
       toastManager.add({
         type: "warning",
         title: "The composer is not ready",
-        description: "Try citing the selection after the connection or pending input is resolved.",
+        description: `Try ${retry} after the connection or pending input is resolved.`,
       });
     }
     return inserted;
   };
+  const citeAssistantText = (
+    citation: AssistantCitation,
+    sourceAnchor: AssistantCitationSourceAnchor,
+  ) =>
+    warnComposerNotReady(
+      composerRef.current?.citeAssistantText(citation, sourceAnchor) ?? false,
+      "citing the selection",
+    );
   const citeAssistantTextStable = useStableCallback(citeAssistantText);
+  const replyToMessage = (reply: MessageReply) =>
+    warnComposerNotReady(composerRef.current?.replyToMessage(reply) ?? false, "replying");
+  const replyToMessageStable = useStableCallback(replyToMessage);
   const [isWorkspaceFileDragActive, setIsWorkspaceFileDragActive] = useState(false);
   const [optimisticBlobPreviews] = useState(createOptimisticBlobPreviews);
   const [heldOptimisticUserMessages, setHeldOptimisticUserMessages] = useState(() =>
@@ -3403,6 +3410,7 @@ export default function ChatView(props: ChatViewProps) {
                   citationRequest={citationRequest}
                   citationHistory={citationHistory}
                   onCiteAssistantText={citeAssistantTextStable}
+                  onReplyToMessage={replyToMessageStable}
                   {...(activeProject
                     ? { onRunShellCommand: parentPanel?.runShellCommand ?? runShellCommandStable }
                     : {})}

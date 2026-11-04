@@ -3,11 +3,12 @@ import { useEffect, useState } from "react";
 
 import { cn } from "../lib/utils";
 import { canNavigateHistory, navigateHistory, type HistoryDirection } from "../navigationHistory";
+import { isMomentumTail, MOMENTUM_SAMPLE_SIZE } from "../lib/trackpadMomentum";
+import { SWIPE_REPLY_ROW_SELECTOR } from "./chat/messageSwipeReply.logic";
 
 const SWIPE_TRIGGER_DISTANCE = 120;
 // Movement needed before the gesture picks an axis; first events are often diagonal.
 const SWIPE_AXIS_LOCK_DISTANCE = 8;
-const MOMENTUM_SAMPLE_SIZE = 5;
 
 type SwipeBounds = { left: number; top: number; width: number; height: number };
 type SwipeGesture =
@@ -62,6 +63,13 @@ function lockSwipeAxis(
   }
   if (canScrollHorizontally(path, sumX)) return { kind: "ignored" };
   const direction = sumX < 0 ? "back" : "forward";
+  // Swiping a message back replies to it.
+  if (
+    direction === "back" &&
+    path.some((node) => node instanceof Element && node.matches(SWIPE_REPLY_ROW_SELECTOR))
+  ) {
+    return { kind: "ignored" };
+  }
   if (!canNavigateHistory(direction)) return { kind: "ignored" };
   return {
     kind: "tracking",
@@ -71,21 +79,6 @@ function lockSwipeAxis(
     y: pending.y,
     bounds: readMainContentBounds(),
   };
-}
-
-/**
- * macOS momentum after the fingers lift decays by a near-constant ratio per
- * event; finger movement is noisier. Deltas are signed along the swipe.
- */
-export function isMomentumTail(deltas: readonly number[]): boolean {
-  if (deltas.length < MOMENTUM_SAMPLE_SIZE) return false;
-  const recent = deltas.slice(-MOMENTUM_SAMPLE_SIZE);
-  if (recent.some((delta) => delta <= 0)) return false;
-  const ratios = recent.slice(1).map((delta, index) => delta / recent[index]!);
-  return (
-    ratios.every((ratio) => ratio >= 0.7 && ratio < 1) &&
-    Math.max(...ratios) - Math.min(...ratios) < 0.1
-  );
 }
 
 /** Two-finger horizontal trackpad swipes go back and forward, like a browser. */

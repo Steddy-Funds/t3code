@@ -136,6 +136,13 @@ The quoted text and comment count toward the message limit.
 Mobile displays saved quotes and comments, but does not create citations or
 navigate to their sources.
 
+### Reply to a message
+
+To reply to a whole message, swipe it right with two fingers on a trackpad, or choose **Reply** in
+its actions. An assistant response arrives as a citation and your own message as a quote, on a new
+line at the caret. The composer takes focus without the pointer moving, so you can swipe, type, and
+swipe the next message.
+
 ## Recall a sent prompt
 
 Press `ArrowUp` in an empty composer to bring back the last prompt you sent in this thread. Press

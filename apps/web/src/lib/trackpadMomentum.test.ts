@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { isMomentumTail } from "./HistorySwipeNavigation";
+import { isMomentumTail } from "./trackpadMomentum";
 
 describe("isMomentumTail", () => {
   it.each([

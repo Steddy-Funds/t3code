@@ -1916,7 +1916,7 @@ code {
 
 /* Chat markdown rendering */
 
-/* The section a Cmd swipe replies to (MessageSwipeReply). */
+/* The section a swipe replies to (MessageSwipeReply). */
 .chat-markdown > [data-swipe-reply-section],
 .chat-markdown li[data-swipe-reply-section]::before {
   border-radius: 0.375rem;

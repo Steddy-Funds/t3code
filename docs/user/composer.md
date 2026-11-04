@@ -138,8 +138,8 @@ navigate to their sources.
 
 ### Reply to a message
 
-Swipe a message right with two fingers on a trackpad to reply to the part under the pointer: the
-heading, paragraph, single list item, image, code block, quote, or table. That part lights up and
+Swipe a message right with two fingers on a trackpad to reply to the part under the pointer, or
+the nearest one: the heading, paragraph, single list item, image, code block, quote, or table. That part lights up and
 moves as you swipe. To reply to the whole message, choose **Reply** in its actions, or on macOS hold
 Cmd while you swipe. An assistant response arrives as a citation and your own message as a quote, on
 a new line at the caret. The composer takes focus without the pointer moving, so you can swipe,

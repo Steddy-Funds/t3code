@@ -32,11 +32,18 @@ const INDICATOR_GAP_PX = 8;
  * The top-level Markdown block (heading, paragraph, list, code, quote, table) under the pointer.
  * In a top-level list it is the innermost item under the pointer, with its nested items.
  * An image is its own section, except in a table or quote, which stay whole.
+ * Between or beside sections it is the one nearest the pointer's height.
  */
-function sectionAt(target: EventTarget | null, viewport: HTMLElement): HTMLElement | null {
-  if (!(target instanceof Element) || !swipeRowAt(target, viewport)) return null;
+function sectionAt(
+  target: EventTarget | null,
+  viewport: HTMLElement,
+  y: number,
+): HTMLElement | null {
+  if (!(target instanceof Element)) return null;
+  const row = swipeRowAt(target, viewport);
+  if (!row) return null;
   const root = target.closest(".chat-markdown");
-  if (!root) return null;
+  if (!root || !row.contains(root)) return nearestSection(row, y);
   const image = target.closest<HTMLElement>(MARKDOWN_IMAGE_SELECTOR);
   // A transform cannot move a plain inline box, such as audio's wrapper; that stays with its block.
   const movable =
@@ -44,10 +51,40 @@ function sectionAt(target: EventTarget | null, viewport: HTMLElement): HTMLEleme
   if (movable && root.contains(image) && !image.closest("table, blockquote")) return image;
   let section: Element | null = target;
   while (section && section.parentElement !== root) section = section.parentElement;
-  if (!(section instanceof HTMLElement)) return null;
-  if (section.tagName !== "UL" && section.tagName !== "OL") return section;
+  if (!(section instanceof HTMLElement)) return nearestSection(row, y);
+  if (!isList(section)) return section;
   const item = target.closest<HTMLElement>("li");
-  return item && section.contains(item) ? item : section;
+  if (item && section.contains(item)) return item;
+  return nearestTo([...section.querySelectorAll<HTMLElement>("li")], y) ?? section;
+}
+
+const isList = (element: Element) => element.tagName === "UL" || element.tagName === "OL";
+
+function nearestSection(row: HTMLElement, y: number): HTMLElement | null {
+  const blocks = [...row.querySelectorAll<HTMLElement>(".chat-markdown > *")];
+  return nearestTo(
+    blocks.flatMap((block) =>
+      isList(block) ? [...block.querySelectorAll<HTMLElement>("li")] : [block],
+    ),
+    y,
+  );
+}
+
+/** The element nearest a height; of those that contain it, the shortest (a nested item). */
+function nearestTo(elements: ReadonlyArray<HTMLElement>, y: number): HTMLElement | null {
+  let nearest: HTMLElement | null = null;
+  let nearestDistance = Infinity;
+  let nearestHeight = Infinity;
+  for (const element of elements) {
+    const rect = element.getBoundingClientRect();
+    const distance = Math.max(rect.top - y, y - rect.bottom, 0);
+    if (distance > nearestDistance) continue;
+    if (distance === nearestDistance && rect.height >= nearestHeight) continue;
+    nearest = element;
+    nearestDistance = distance;
+    nearestHeight = rect.height;
+  }
+  return nearest;
 }
 
 /** The message row a swipe moves, unless it has nothing to reply to or the content scrolls the same way. */
@@ -126,7 +163,9 @@ export function MessageSwipeReply({
       if (gesture.phase === "idle") highlight(null);
     };
     const sectionUnderPointer = () =>
-      pointer ? sectionAt(document.elementFromPoint(pointer.x, pointer.y), viewport) : null;
+      pointer
+        ? sectionAt(document.elementFromPoint(pointer.x, pointer.y), viewport, pointer.y)
+        : null;
     // Laid out once per swipe; after that the row and indicator only move by transform.
     const measure = (element: HTMLElement) => {
       clearMoved(element);
@@ -190,7 +229,8 @@ export function MessageSwipeReply({
       if (gesture.phase === "idle") {
         row = travel === null ? null : swipeRowAt(event.target, viewport);
         if (!row) gesture = IGNORED_SWIPE_REPLY;
-        section = row && swipesSection(event) ? sectionAt(event.target, viewport) : null;
+        section =
+          row && swipesSection(event) ? sectionAt(event.target, viewport, event.clientY) : null;
         if (section && !sectionByDefault) highlight(section);
       }
       if (travel === null || !row) return;
@@ -213,7 +253,11 @@ export function MessageSwipeReply({
     const onPointerMove = (event: PointerEvent) => {
       pointer = { x: event.clientX, y: event.clientY };
       if (gesture.phase !== "idle") return;
-      highlight(holding && isSectionModifier(event) ? sectionAt(event.target, viewport) : null);
+      highlight(
+        holding && isSectionModifier(event)
+          ? sectionAt(event.target, viewport, event.clientY)
+          : null,
+      );
     };
     const onPointerLeave = () => {
       pointer = null;

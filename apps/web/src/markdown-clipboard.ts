@@ -135,9 +135,12 @@ function serializeListItem(
   ].join("\n");
 }
 
+const listStart = (list: Element) => Number.parseInt(list.getAttribute("start") ?? "1", 10) || 1;
+const listItems = (list: Element) => [...list.children].filter((child) => child.tagName === "LI");
+
 function serializeList(list: Element, ordered: boolean, inTableCell: boolean): string {
-  const start = Number.parseInt(list.getAttribute("start") ?? "1", 10) || 1;
-  const items = [...list.children].filter((child) => child.tagName === "LI");
+  const start = listStart(list);
+  const items = listItems(list);
   if (items.length === 0) return "";
   return `${items.map((item, index) => serializeListItem(item, ordered, start + index, inTableCell)).join("\n")}\n\n`;
 }
@@ -333,10 +336,8 @@ export function serializeRenderedMarkdownFragment(container: Node): string {
 
 /** A list item as a one-item list of its own kind, keeping its number. */
 function soleItemList(item: Element, list: Element): Element {
-  const start = Number.parseInt(list.getAttribute("start") ?? "1", 10) || 1;
-  const index = [...list.children].filter((child) => child.tagName === "LI").indexOf(item);
   const copy = list.cloneNode(false) as Element;
-  copy.setAttribute("start", String(start + index));
+  copy.setAttribute("start", String(listStart(list) + listItems(list).indexOf(item)));
   copy.append(item.cloneNode(true));
   return copy;
 }

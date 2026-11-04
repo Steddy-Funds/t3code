@@ -37,7 +37,10 @@ function sectionAt(target: EventTarget | null, viewport: HTMLElement): HTMLEleme
   const root = target.closest(".chat-markdown");
   if (!root) return null;
   const image = target.closest<HTMLElement>(MARKDOWN_IMAGE_SELECTOR);
-  if (image && root.contains(image) && !image.closest("table, blockquote")) return image;
+  // A transform cannot move a plain inline box, such as audio's wrapper; that stays with its block.
+  const movable =
+    image && (image.tagName === "IMG" || getComputedStyle(image).display !== "inline");
+  if (movable && root.contains(image) && !image.closest("table, blockquote")) return image;
   let section: Element | null = target;
   while (section && section.parentElement !== root) section = section.parentElement;
   if (!(section instanceof HTMLElement)) return null;

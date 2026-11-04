@@ -1,8 +1,7 @@
 export const SWIPE_REPLY_THRESHOLD_PX = 56;
-/** A message row with something to reply to; history swipes leave it to the reply gesture. */
 /** A rendered Markdown image, or its loading or unavailable box; each carries its `![alt](src)`. */
 export const MARKDOWN_IMAGE_SELECTOR = '[data-markdown-copy^="!["]';
-
+/** A message row with something to reply to; history swipes leave it to the reply gesture. */
 export const SWIPE_REPLY_ROW_SELECTOR = "[data-message-role]:has([data-swipe-reply-surface])";
 // Web wheel events have no end or phase; the fingers have lifted once they stop.
 export const SWIPE_REPLY_RELEASE_IDLE_MS = 140;

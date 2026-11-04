@@ -857,7 +857,19 @@ export function buildTiptapContent(
     });
     openQuote = null;
   };
-  for (const entry of entries) {
+  const proseLine = (entry: (typeof entries)[number] | undefined) =>
+    entry && "line" in entry && !entry.line.list ? entry.line : null;
+  for (const [index, entry] of entries.entries()) {
+    // The serializer writes one blank line between a quote and the prose after it; that line
+    // is the separator, not an empty paragraph, or each rebuild would add one.
+    if (
+      proseLine(entry)?.inline.length === 0 &&
+      "quote" in (entries[index - 1] ?? {}) &&
+      (proseLine(entries[index + 1])?.inline.length ?? 0) > 0
+    ) {
+      flushQuote();
+      continue;
+    }
     if ("quote" in entry) {
       flushLists();
       if (openQuote && openQuote.prefix !== entry.quote.prefix) flushQuote();

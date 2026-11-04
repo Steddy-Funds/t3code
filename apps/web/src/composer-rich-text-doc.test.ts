@@ -560,6 +560,14 @@ describe("composer rich text document model", () => {
       );
     });
 
+    it("reads that blank line back as the separator, not an empty paragraph", () => {
+      const blocks = (value: string) =>
+        buildDocJson(value, () => null).content.map((block) => block.type);
+      expect(blocks("> quoted\n\nComment to it")).toEqual(["blockquote", "paragraph"]);
+      // A blank line before another quote still keeps the two quotes apart.
+      expect(blocks("> a\n\n> b")).toEqual(["blockquote", "paragraph", "blockquote"]);
+    });
+
     it("settles on the blank line when a draft glued it to the quote", () => {
       const settled = "before\n> quoted\n\nafter";
       expect(roundTrip("before\n> quoted\nafter").value).toBe(settled);

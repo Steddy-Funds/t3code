@@ -1,7 +1,7 @@
 import { ArrowLeftIcon, ArrowRightIcon } from "lucide-react";
 import { useEffect, useState } from "react";
 
-import { cn } from "../lib/utils";
+import { cn, isMacPlatform } from "../lib/utils";
 import { canNavigateHistory, navigateHistory, type HistoryDirection } from "../navigationHistory";
 import { isMomentumTail, MOMENTUM_SAMPLE_SIZE } from "../lib/trackpadMomentum";
 import { SWIPE_REPLY_ROW_SELECTOR } from "./chat/messageSwipeReply.logic";
@@ -12,7 +12,14 @@ const SWIPE_AXIS_LOCK_DISTANCE = 8;
 
 type SwipeBounds = { left: number; top: number; width: number; height: number };
 type SwipeGesture =
-  | { kind: "pending"; path: EventTarget[]; y: number; sumX: number; sumY: number }
+  | {
+      kind: "pending";
+      path: EventTarget[];
+      y: number;
+      sumX: number;
+      sumY: number;
+      mentionModifier: boolean;
+    }
   | {
       kind: "tracking";
       direction: HistoryDirection;
@@ -70,6 +77,14 @@ function lockSwipeAxis(
   ) {
     return { kind: "ignored" };
   }
+  // Cmd swiping a sidebar thread back mentions it (SidebarSwipeMention).
+  if (
+    direction === "back" &&
+    pending.mentionModifier &&
+    path.some((node) => node instanceof Element && node.matches("[data-thread-item]"))
+  ) {
+    return { kind: "ignored" };
+  }
   if (!canNavigateHistory(direction)) return { kind: "ignored" };
   return {
     kind: "tracking",
@@ -88,6 +103,7 @@ export function HistorySwipeNavigation() {
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- window wheel and desktop gesture listeners track trackpad swipes
   useEffect(() => {
     let gesture: SwipeGesture | null = null;
+    const mac = isMacPlatform(navigator.platform);
     const hideIndicator = () =>
       setSwipe((current) => (current === null ? null : { ...current, tracking: false }));
     // The fingers lifted: navigate if the swipe went far enough, then ignore its momentum.
@@ -111,7 +127,14 @@ export function HistorySwipeNavigation() {
         gesture =
           event.ctrlKey || event.deltaMode !== WheelEvent.DOM_DELTA_PIXEL
             ? { kind: "ignored" }
-            : { kind: "pending", path: event.composedPath(), y: event.clientY, sumX: 0, sumY: 0 };
+            : {
+                kind: "pending",
+                path: event.composedPath(),
+                y: event.clientY,
+                sumX: 0,
+                sumY: 0,
+                mentionModifier: mac && event.metaKey,
+              };
       }
       if (gesture.kind === "ignored") return;
       if (gesture.kind === "pending") {

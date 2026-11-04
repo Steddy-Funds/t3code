@@ -263,6 +263,7 @@ import {
   type SidebarSweepAction,
 } from "./sidebar/SidebarThreadRow";
 import { SidebarDraftBlock } from "./sidebar/SidebarDraftBlock";
+import { SidebarSwipeMention } from "./sidebar/SidebarSwipeMention";
 import {
   SidebarProjectFolderHeader,
   sidebarFolderRowId,
@@ -1058,6 +1059,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   const [renamingTitle, setRenamingTitle] = useState("");
   const settlingThreadKeysRef = useRef(new Set<string>());
   const threadListRef = useRef<HTMLUListElement | null>(null);
+  const [swipeMentionList, setSwipeMentionList] = useState<HTMLUListElement | null>(null);
   const sidebarContentRef = useRef<HTMLDivElement | null>(null);
   const dragLabelOffsetRef = useRef(0);
   const listMotionRef = useRef<ReturnType<typeof createSidebarListMotion> | null>(null);
@@ -1718,7 +1720,9 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   const attachTreeRef = (node: HTMLUListElement) => {
     const detachMotion = attachListMotionRef(node);
     const detachTree = attachSidebarTree(node);
+    setSwipeMentionList(node);
     return () => {
+      setSwipeMentionList((current) => (current === node ? null : current));
       detachTree?.();
       detachMotion();
     };
@@ -3605,6 +3609,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                   </ul>
                 </SortableContext>
               </DndContext>
+              <SidebarSwipeMention list={swipeMentionList} />
             </TooltipProvider>
           ) : null}
           {!isSearchingThreads &&

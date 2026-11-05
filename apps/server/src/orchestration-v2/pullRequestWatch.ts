@@ -17,6 +17,13 @@ const SNIPPET_LENGTH = 200;
 export type PullRequestWatchChange =
   | { readonly kind: "checks-failed"; readonly failed: ReadonlyArray<PullRequestCheck> }
   | { readonly kind: "checks-passed"; readonly count: number; readonly required: boolean }
+  | {
+      readonly kind: "checks-not-run";
+      readonly count: number;
+      readonly required: boolean;
+      readonly skipped: number;
+      readonly neutral: number;
+    }
   | { readonly kind: "remarks"; readonly remarks: ReadonlyArray<PullRequestComment> }
   | { readonly kind: "no-checks"; readonly minutes: number }
   | { readonly kind: "conflicting" };
@@ -30,6 +37,27 @@ export interface PullRequestWatchReport {
 // action-required is a finished check needing human input.
 const isFailedCheck = (check: PullRequestCheck) =>
   check.status === "failure" || check.status === "cancelled" || check.status === "action-required";
+
+// Skipped and neutral checks finished without running anything (a workflow filtered out by base
+// or path): when every check counted is one, nothing ran, which is not a pass.
+const didNotRun = (check: PullRequestCheck) =>
+  check.status === "skipped" || check.status === "neutral";
+
+function settledChecks(
+  checks: ReadonlyArray<PullRequestCheck>,
+  required: boolean,
+): PullRequestWatchChange {
+  if (checks.length > 0 && checks.every(didNotRun)) {
+    return {
+      kind: "checks-not-run",
+      count: checks.length,
+      required,
+      skipped: checks.filter((check) => check.status === "skipped").length,
+      neutral: checks.filter((check) => check.status === "neutral").length,
+    };
+  }
+  return { kind: "checks-passed", count: checks.length, required };
+}
 
 export function evaluatePullRequestWatch(
   watch: ThreadPullRequestWatch,
@@ -75,7 +103,7 @@ export function evaluatePullRequestWatch(
       failed.length === 0 && detail.checks.every((check) => check.status !== "pending");
     owedChecks = owed;
     if (passedNow && (!passed || gateGrew)) {
-      changes.push({ kind: "checks-passed", count: gate.length, required: required.length > 0 });
+      changes.push(settledChecks(gate, required.length > 0));
       owedChecks =
         required.length > 0
           ? detail.checks
@@ -83,7 +111,7 @@ export function evaluatePullRequestWatch(
               .map((check) => check.name)
           : [];
     } else if (settled && owed.length > 0) {
-      changes.push({ kind: "checks-passed", count: detail.checks.length, required: false });
+      changes.push(settledChecks(detail.checks, false));
       owedChecks = [];
     }
     passed = passedNow;
@@ -194,6 +222,16 @@ function changeLines(
       return [
         `- All ${change.count} ${change.required ? "required " : ""}${change.count === 1 ? "check" : "checks"} passed${context.commit}.`,
       ];
+    case "checks-not-run": {
+      const how = [
+        change.skipped > 0 ? `${change.skipped} skipped` : null,
+        change.neutral > 0 ? `${change.neutral} neutral` : null,
+      ].filter((part) => part !== null);
+      const all = change.count === 1 ? "The" : `None of the ${change.count}`;
+      return [
+        `- ${all} ${change.required ? "required " : ""}${change.count === 1 ? "check" : "checks"} ${change.count === 1 ? "did not run" : "ran"}${context.commit} (${how.join(", ")}). This is not a pass: nothing was tested.`,
+      ];
+    }
     case "remarks":
       return [
         `- ${change.remarks.length} new ${change.remarks.length === 1 ? "comment" : "comments"}:`,
@@ -216,6 +254,7 @@ function changeLines(
 const SUMMARY: Record<PullRequestWatchChange["kind"], string> = {
   "checks-failed": "checks failed",
   "checks-passed": "checks passed",
+  "checks-not-run": "checks did not run",
   remarks: "new comments",
   "no-checks": "no checks reported",
   conflicting: "merge conflict",

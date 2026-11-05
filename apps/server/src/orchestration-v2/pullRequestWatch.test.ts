@@ -97,6 +97,43 @@ describe("evaluatePullRequestWatch", () => {
     assert.equal(evaluatePullRequestWatch(test.next, pushed, noRemarks).changes.length, 1);
   });
 
+  it("reports checks that all skipped as not run, never as passed", () => {
+    const skipped = detail({
+      checks: [check("lint", "skipped"), check("test", "skipped"), check("e2e", "neutral")],
+    });
+    const report = evaluatePullRequestWatch(watch(), skipped, noRemarks);
+    assert.deepEqual(report.changes, [
+      { kind: "checks-not-run", count: 3, required: false, skipped: 2, neutral: 1 },
+    ]);
+    assert.deepEqual(evaluatePullRequestWatch(report.next, skipped, noRemarks).changes, []);
+    const message = pullRequestWatchMessage({
+      number: 1009,
+      url: "https://github.com/o/r/pull/1009",
+      baseBranch: "feature",
+      headSha: "aaaaaaaaaa",
+      report,
+    });
+    assert.include(message.text, "None of the 3 checks ran on aaaaaaa (2 skipped, 1 neutral)");
+    assert.include(message.text, "This is not a pass");
+    assert.notInclude(message.text, "passed");
+    assert.equal(message.notification.outcome, "updated");
+    assert.equal(message.notification.summary, "#1009: checks did not run");
+
+    // Mixed results stay a pass: one check ran and passed.
+    const mixed = detail({ checks: [check("lint", "success"), check("test", "skipped")] });
+    assert.deepEqual(evaluatePullRequestWatch(watch(), mixed, noRemarks).changes, [
+      { kind: "checks-passed", count: 2, required: false },
+    ]);
+
+    // Required checks that all skipped did not run either, whatever the advisory ones did.
+    const required = detail({
+      checks: [{ ...check("test", "skipped"), required: true }, check("bot", "success")],
+    });
+    assert.deepEqual(evaluatePullRequestWatch(watch(), required, noRemarks).changes, [
+      { kind: "checks-not-run", count: 1, required: true, skipped: 1, neutral: 0 },
+    ]);
+  });
+
   it("reports passed once the required checks pass, whatever the others do", () => {
     const required = (name: string, status: PullRequestCheck["status"]) => ({
       ...check(name, status),

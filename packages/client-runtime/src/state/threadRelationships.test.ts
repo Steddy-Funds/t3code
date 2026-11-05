@@ -41,6 +41,36 @@ describe("thread relationships", () => {
     ).toBe(childStatus);
   });
 
+  it.each([
+    ["subagent", "awaiting_children"],
+    ["monitor", "completed"],
+  ])("labels a settled child holding a %s task %s", (kind, expected) => {
+    const parent = ThreadId.make("parent");
+    const child = ThreadId.make("child");
+    const graph = deriveThreadRelationshipGraph({
+      threads: [
+        { id: parent, status: "completed", lineage: { parentThreadId: null } },
+        {
+          id: child,
+          activityRunStatus: null,
+          latestRunId: "run-follow-up",
+          status: "completed",
+          pendingBackgroundTasks: [{ taskId: "grandchild", kind, awaited: true }],
+          lineage: { parentThreadId: parent, relationshipToParent: "subagent" },
+        },
+      ] as never,
+      // The parent's record still reads completed from the child's first task.
+      projection: {
+        thread: { id: parent },
+        subagents: [{ childThreadId: child, status: "completed" }],
+        contextTransfers: [],
+      } as never,
+    });
+    expect(
+      threadRelationshipRowStatus(graph, immediateThreadRelationships(graph, parent)[0]!),
+    ).toBe(expected);
+  });
+
   it("does not label a missing parent with its child's running status", () => {
     const parent = ThreadId.make("missing-parent");
     const child = ThreadId.make("child");

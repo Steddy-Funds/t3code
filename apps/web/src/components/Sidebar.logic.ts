@@ -21,6 +21,7 @@ import {
   type ContextMenuItem,
   type EnvironmentId,
   type ThreadId,
+  type ThreadPullRequestLink,
 } from "@t3tools/contracts";
 import type { SidebarProjectSortOrder, SidebarThreadSortOrder } from "@t3tools/contracts/settings";
 import type { AsyncResult } from "effect/reactivity";
@@ -169,9 +170,49 @@ export function useRetainedValue<T>(key: string | null, value: T | null): T | nu
 export const animateSidebarLayoutChanges: AnimateLayoutChanges = (args) =>
   args.isSorting ? defaultAnimateLayoutChanges(args) : false;
 
-// Snoozed rows cannot accept drops without a wake time. Working rows only drag out as chat context.
+// Snoozed rows cannot accept drops without a wake time. Working and review rows only drag out as
+// chat context.
 
-export type SidebarSection = "pinned" | "active" | "working" | "snoozed" | "settled";
+export type SidebarSection = "pinned" | "active" | "review" | "working" | "snoozed" | "settled";
+
+/** Shelves the app places threads on; a drop cannot move a thread onto or off of them. */
+export function isPlacedSidebarSection(
+  section: SidebarSection | null | undefined,
+): section is "review" | "working" {
+  return section === "review" || section === "working";
+}
+
+export type PullRequestShelfFilter = "all" | "draft" | "open";
+
+type PullRequestShelfThread = {
+  readonly pullRequests: ReadonlyArray<
+    Pick<ThreadPullRequestLink, "watch" | "source" | "snapshot">
+  >;
+};
+
+// Mirrors the watches that hold the thread open: a merged PR's watch ends without a wake.
+function watchedPullRequests(thread: PullRequestShelfThread) {
+  return thread.pullRequests.filter(
+    (link) =>
+      link.watch !== undefined &&
+      link.source !== "stack-dismissed" &&
+      link.snapshot?.state !== "merged",
+  );
+}
+
+export function threadWatchesPullRequest(thread: PullRequestShelfThread): boolean {
+  return watchedPullRequests(thread).length > 0;
+}
+
+export function pullRequestShelfMatches(
+  thread: PullRequestShelfThread,
+  filter: PullRequestShelfFilter,
+): boolean {
+  if (filter === "all") return true;
+  return watchedPullRequests(thread).some(
+    ({ snapshot }) => snapshot?.state === "open" && snapshot.isDraft === (filter === "draft"),
+  );
+}
 
 export function resolveSidebarThreadSection(input: {
   readonly snoozed: boolean;
@@ -191,6 +232,7 @@ export type SidebarListMarker =
   | "active-placeholder"
   | "settled-placeholder"
   | "pinned-divider"
+  | "review-header"
   | "working-header"
   | "snoozed-header"
   | "settled-header";
@@ -213,6 +255,7 @@ function sectionAtSidebarSlot(items: readonly SidebarListItem[], index: number):
     const item = items[i]!;
     if (item.kind !== "marker") continue;
     if (item.marker === "pinned-divider") section = "active";
+    else if (item.marker === "review-header") section = "review";
     else if (item.marker === "working-header") section = "working";
     else if (item.marker === "snoozed-header") section = "snoozed";
     else if (item.marker === "settled-header") section = "settled";
@@ -237,7 +280,7 @@ export function resolveSidebarDropTarget(
   const moved = items.filter((_, index) => index !== activeIndex);
   moved.splice(overIndex, 0, items[activeIndex]!);
   const section = sectionAtSidebarSlot(moved, overIndex);
-  if (section === "working" || section === "snoozed") return null;
+  if (isPlacedSidebarSection(section) || section === "snoozed") return null;
   const pinnedOrder: string[] = [];
   const activeOrder: string[] = [];
   let currentSection: SidebarSection = "pinned";
@@ -245,6 +288,7 @@ export function resolveSidebarDropTarget(
     if (item.kind === "marker") {
       if (item.marker === "pinned-divider") currentSection = "active";
       else if (
+        item.marker === "review-header" ||
         item.marker === "working-header" ||
         item.marker === "snoozed-header" ||
         item.marker === "settled-header"
@@ -285,7 +329,7 @@ export function resolveSidebarDropVerb(
   from: SidebarSection,
   to: SidebarSection | null,
 ): SidebarDropVerb | null {
-  if (to === null || to === from || to === "working" || to === "snoozed") return null;
+  if (to === null || to === from || isPlacedSidebarSection(to) || to === "snoozed") return null;
   if (to === "pinned") return "pin";
   if (to === "settled") return "settle";
   if (from === "pinned") return "unpin";
@@ -370,7 +414,7 @@ export function planSidebarThreadDrop(input: {
     activeKeysById,
     activeReorderableKeys,
   } = input;
-  if (activeSection === "working") return { kind: "none" };
+  if (isPlacedSidebarSection(activeSection)) return { kind: "none" };
   if (input.supportsSettlement === false && (target.section === "settled" || activeSettled)) {
     return { kind: "none" };
   }

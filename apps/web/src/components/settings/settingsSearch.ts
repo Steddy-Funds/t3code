@@ -454,6 +454,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["hide fold running monitoring threads inbox sidebar shelf"],
   },
   {
+    id: "pull-request-shelf",
+    title: "PR review section",
+    to: "/settings/general",
+    searchTerms: ["pull request watch draft open review sidebar shelf"],
+  },
+  {
     id: "boring-sidebar",
     title: "Boring sidebar (group by project)",
     to: "/settings/labs",

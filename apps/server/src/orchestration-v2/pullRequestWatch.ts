@@ -78,6 +78,7 @@ export function evaluatePullRequestWatch(
   let passed = headMoved ? false : watch.passed;
   let passedChecks = headMoved ? [] : watch.passedChecks;
   let owedChecks = headMoved ? [] : (watch.owedChecks ?? []);
+  let checksNotRun = headMoved ? false : (watch.checksNotRun ?? false);
   if (detail.checks.length > 0) {
     const failed = detail.checks.filter(isFailedCheck);
     const newlyFailed = failed.filter((check) => !failedChecks.includes(check.name));
@@ -102,8 +103,10 @@ export function evaluatePullRequestWatch(
     const settled =
       failed.length === 0 && detail.checks.every((check) => check.status !== "pending");
     owedChecks = owed;
+    const gateResult = settledChecks(gate, required.length > 0);
     if (passedNow && (!passed || gateGrew)) {
-      changes.push(settledChecks(gate, required.length > 0));
+      changes.push(gateResult);
+      checksNotRun = gateResult.kind === "checks-not-run";
       owedChecks =
         required.length > 0
           ? detail.checks
@@ -111,9 +114,16 @@ export function evaluatePullRequestWatch(
               .map((check) => check.name)
           : [];
     } else if (settled && owed.length > 0) {
-      changes.push(settledChecks(detail.checks, false));
+      const settledResult = settledChecks(detail.checks, false);
+      changes.push(settledResult);
+      checksNotRun = settledResult.kind === "checks-not-run";
       owedChecks = [];
+    } else if (passedNow && checksNotRun && gateResult.kind === "checks-passed") {
+      // The thread was told nothing ran; a check that has since run and passed is the pass.
+      changes.push(gateResult);
+      checksNotRun = false;
     }
+    if (!passedNow) checksNotRun = false;
     passed = passedNow;
     passedChecks = passedNow ? gateNames : [];
   }
@@ -176,6 +186,7 @@ export function evaluatePullRequestWatch(
       passed,
       passedChecks,
       owedChecks,
+      ...(checksNotRun && { checksNotRun }),
       remarksThrough,
       remarkIds,
       conflicting,

@@ -129,8 +129,47 @@ describe("evaluatePullRequestWatch", () => {
     const required = detail({
       checks: [{ ...check("test", "skipped"), required: true }, check("bot", "success")],
     });
-    assert.deepEqual(evaluatePullRequestWatch(watch(), required, noRemarks).changes, [
+    const notRun = evaluatePullRequestWatch(watch(), required, noRemarks);
+    assert.deepEqual(notRun.changes, [
       { kind: "checks-not-run", count: 1, required: true, skipped: 1, neutral: 0 },
+    ]);
+    const one = pullRequestWatchMessage({
+      number: 1009,
+      url: "https://github.com/o/r/pull/1009",
+      baseBranch: "feature",
+      headSha: "aaaaaaaaaa",
+      report: notRun,
+    });
+    assert.include(one.text, "The required check did not run on aaaaaaa (1 skipped)");
+
+    // Told nothing ran, a check that later runs and passes is the pass, even with no pending
+    // sweep between: the same required name, or a new one with no required checks.
+    const ranRequired = detail({
+      checks: [{ ...check("test", "success"), required: true }, check("bot", "success")],
+    });
+    const later = evaluatePullRequestWatch(notRun.next, ranRequired, noRemarks);
+    assert.deepEqual(later.changes, [{ kind: "checks-passed", count: 1, required: true }]);
+    assert.deepEqual(evaluatePullRequestWatch(later.next, ranRequired, noRemarks).changes, []);
+    const ranNew = detail({
+      checks: [check("lint", "skipped"), check("test", "skipped"), check("e2e", "success")],
+    });
+    assert.deepEqual(evaluatePullRequestWatch(report.next, ranNew, noRemarks).changes, [
+      { kind: "checks-passed", count: 3, required: false },
+    ]);
+  });
+
+  it("reports owed advisory checks that all skipped as not run", () => {
+    const owing = detail({
+      checks: [{ ...check("test", "success"), required: true }, check("bot", "pending")],
+    });
+    const first = evaluatePullRequestWatch(watch(), owing, noRemarks);
+    assert.deepEqual(first.changes, [{ kind: "checks-passed", count: 1, required: true }]);
+    const settled = detail({
+      checks: [{ ...check("test", "success"), required: true }, check("bot", "skipped")],
+    });
+    // One check ran and passed, so the settled set is a pass, not "not run".
+    assert.deepEqual(evaluatePullRequestWatch(first.next, settled, noRemarks).changes, [
+      { kind: "checks-passed", count: 2, required: false },
     ]);
   });
 

@@ -368,7 +368,7 @@ export function resolveThreadPanelPullRequestAction(
   }
   const checks = classifyPullRequestChecks(detail.checks);
   if (checks === "failing") return "fix";
-  if (checks === "pending" || checks === "not-run") return null;
+  if (checks === "pending") return null;
   return canPerformPullRequestAction(detail, "merge") &&
     allowedPullRequestMergeMethods(detail).length > 0
     ? "merge"

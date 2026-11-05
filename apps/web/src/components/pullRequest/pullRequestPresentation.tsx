@@ -551,5 +551,9 @@ export function summarizePullRequestChecks(checks: ReadonlyArray<PullRequestChec
     return `${otherActionRequired} ${otherActionRequired === 1 ? "check" : "checks"} awaiting action`;
   }
   if (pending > 0) return `${pending} of ${checks.length} running`;
+  // What is left skipped or was neutral: nothing ran, which is not a pass.
+  if (passed === 0 && checks.length > 0) {
+    return checks.length === 1 ? "The check did not run" : `None of ${checks.length} checks ran`;
+  }
   return passed === checks.length ? "All checks passed" : `${passed} of ${checks.length} passing`;
 }

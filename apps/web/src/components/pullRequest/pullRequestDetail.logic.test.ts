@@ -58,6 +58,7 @@ import {
   classifyPullRequestChecks,
   describePullRequestChecks,
 } from "./pullRequestDetail.logic";
+import { summarizePullRequestChecks } from "./pullRequestPresentation";
 import type { ReviewCommentContext } from "~/reviewCommentContext";
 
 describe("checks that did not run", () => {
@@ -73,12 +74,15 @@ describe("checks that did not run", () => {
     expect(classifyPullRequestChecks(skipped)).toBe("not-run");
     expect(describePullRequestChecks(skipped)).toBe("None of 3 checks ran");
     expect(describePullRequestChecks([check("lint", "skipped")])).toBe("The check did not run");
+    expect(summarizePullRequestChecks(skipped)).toBe("None of 3 checks ran");
+    expect(summarizePullRequestChecks([check("lint", "skipped")])).toBe("The check did not run");
   });
 
   it("keeps mixed results as they were", () => {
     const mixed = [check("lint", "success"), check("test", "skipped")];
     expect(classifyPullRequestChecks(mixed)).toBe("passing");
     expect(describePullRequestChecks(mixed)).toBe("1 of 2 passing");
+    expect(summarizePullRequestChecks(mixed)).toBe("1 of 2 passing");
     expect(classifyPullRequestChecks([check("lint", "skipped"), check("test", "pending")])).toBe(
       "pending",
     );
@@ -1258,6 +1262,12 @@ describe("the compact row's single action slot", () => {
     expect(
       resolveThreadPanelPullRequestAction(openDetail({ checks: [check("action-required")] })),
     ).toBeNull();
+  });
+
+  it("still offers a merge when every check skipped, as with no checks", () => {
+    expect(resolveThreadPanelPullRequestAction(openDetail({ checks: [check("skipped")] }))).toBe(
+      "merge",
+    );
   });
 
   it("ranks conflicts above everything, then draft, then failing checks", () => {

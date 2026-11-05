@@ -1,4 +1,5 @@
 import { CollapsibleSectionHeader } from "../ui/collapsible-section-header";
+import { Toggle, ToggleGroup } from "../ui/toggle-group";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { type ReactNode, useLayoutEffect } from "react";
@@ -6,6 +7,7 @@ import { cn } from "~/lib/utils";
 import {
   animateSidebarLayoutChanges,
   sidebarMarkerId,
+  type PullRequestShelfFilter,
   type SidebarListMarker,
 } from "../Sidebar.logic";
 import { SIDEBAR_SORTABLE_DRAG_DISABLED } from "./SidebarThreadRow";
@@ -139,6 +141,58 @@ export function SidebarSectionHeader(props: {
       >
         {props.label}
       </CollapsibleSectionHeader>
+    </SortableSidebarMarker>
+  );
+}
+
+const REVIEW_FILTERS: ReadonlyArray<{ value: PullRequestShelfFilter; label: string }> = [
+  { value: "all", label: "All" },
+  { value: "draft", label: "Draft" },
+  { value: "open", label: "Open" },
+];
+
+export function SidebarReviewShelfHeader(props: {
+  count: number;
+  className?: string;
+  expanded: boolean;
+  onToggle: () => void;
+  filter: PullRequestShelfFilter;
+  filterCounts: Readonly<Record<PullRequestShelfFilter, number>>;
+  onFilterChange: (filter: PullRequestShelfFilter) => void;
+}) {
+  return (
+    <SortableSidebarMarker
+      marker="review-header"
+      data-testid="sidebar-review-header"
+      className={cn("relative mx-0.5", props.className)}
+    >
+      <CollapsibleSectionHeader
+        data-sidebar-row="shelf:review"
+        onClick={props.onToggle}
+        expanded={props.expanded}
+        data-testid="sidebar-review-shelf-toggle"
+        accessory={<span className="font-normal tabular-nums">{props.count}</span>}
+      >
+        PR review
+      </CollapsibleSectionHeader>
+      {props.expanded ? (
+        <ToggleGroup
+          aria-label="Filter pull requests"
+          className="mx-2 mb-1"
+          value={[props.filter]}
+          onValueChange={(value) => {
+            const next = REVIEW_FILTERS.find((filter) => filter.value === value[0]);
+            if (next) props.onFilterChange(next.value);
+          }}
+        >
+          {REVIEW_FILTERS.map(({ value, label }) => (
+            <Toggle key={value} value={value}>
+              {label}
+              <span className="tabular-nums opacity-60">{props.filterCounts[value]}</span>
+            </Toggle>
+          ))}
+        </ToggleGroup>
+      ) : null}
     </SortableSidebarMarker>
   );
 }

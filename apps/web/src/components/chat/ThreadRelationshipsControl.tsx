@@ -15,12 +15,14 @@ import {
 import { formatSubagentDisplayTitle } from "@t3tools/client-runtime/state/subagent-display";
 import { deriveProviderSubagentStatus } from "@t3tools/client-runtime/state/thread-execution";
 import {
+  AWAITING_CHILDREN_STATUS,
   deriveThreadRelationshipGraph,
   immediateThreadRelationships,
   isParentThreadRelationship,
   threadRelationshipRowStatus,
   orderWebThreadLineageRows,
   resolveMergeBackTargetThreadId,
+  threadAwaitsChildren,
   type ThreadRelationshipEdge,
   type ThreadRelationshipWalkRow,
 } from "@t3tools/client-runtime/state/thread-relationships";
@@ -218,6 +220,10 @@ function currentSubagent<Agent extends RuntimeSubagent>(
   if (!agent || !childThread || isOrchestrationV2WorkActive(agent.status)) return agent;
   const liveStatus =
     childThread.activityRunStatus ?? (childThread.status === "queued" ? "queued" : null);
+  // Its task is done, but the child still waits on its own subagents.
+  if (!liveStatus && threadAwaitsChildren(childThread)) {
+    return { ...agent, status: "waiting", completedAt: null };
+  }
   const newerRun =
     childThread.latestRunRequestedAt &&
     DateTime.toEpochMillis(childThread.latestRunRequestedAt) >
@@ -556,7 +562,10 @@ export function ThreadRelationshipsPanel(props: {
   const runningCount =
     (projection?.subagents.filter(
       (agent) => agent.childThreadId === null && agent.status === "running",
-    ).length ?? 0) + active.filter(({ edge }) => edge.status === "running").length;
+    ).length ?? 0) +
+    active.filter(
+      ({ edge }) => edge.status === "running" || edge.status === AWAITING_CHILDREN_STATUS,
+    ).length;
 
   // A linked environment's agent may have delegated this thread from there.
   const delegatedFrom = currentThread?.delegatedFrom;
@@ -694,8 +703,10 @@ export function ThreadRelationshipsPanel(props: {
       projectedAgent === undefined ? undefined : workflowGroupsById.get(projectedAgent.id);
     const agent = workflowGroup ? projectedAgent : currentSubagent(projectedAgent, node?.thread);
     const failed = rowStatus === "failed" || rowStatus === "error";
+    const awaitingChildren = rowStatus === AWAITING_CHILDREN_STATUS;
     const canStop =
       agent &&
+      !awaitingChildren &&
       (agent.origin === "app_owned" ||
         (agent.origin === "provider_native" &&
           agent.driver === "claudeAgent" &&
@@ -745,6 +756,7 @@ export function ThreadRelationshipsPanel(props: {
         driver={providerDriver}
         elapsed={<AgentElapsed agent={agent} />}
         status={agent.status}
+        awaitingChildren={awaitingChildren}
         result={agent.result}
         progress={agent.progress}
         parentThread={currentThread ?? undefined}
@@ -772,7 +784,10 @@ export function ThreadRelationshipsPanel(props: {
         {agent ? null : (
           <ArrowRightIcon className="size-3 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
         )}
-        {agent && !failed && (deriveSubagentElapsedMs(agent, 0) !== null || canStopWorkflow) ? (
+        {agent &&
+        !failed &&
+        !awaitingChildren &&
+        (deriveSubagentElapsedMs(agent, 0) !== null || canStopWorkflow) ? (
           <span
             className={`shrink-0 text-2xs font-normal tabular-nums text-muted-foreground ${canStopWorkflow ? "min-w-6 text-end" : ""} ${trailingVisibilityClass}`}
           >

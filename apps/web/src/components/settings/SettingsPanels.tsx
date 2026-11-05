@@ -483,6 +483,10 @@ export function useSettingsRestore(onRestored?: () => void) {
     ...(settings.sidebarWorkingShelfEnabled !== DEFAULT_UNIFIED_SETTINGS.sidebarWorkingShelfEnabled
       ? ["Working section"]
       : []),
+    ...(settings.sidebarPullRequestShelfEnabled !==
+    DEFAULT_UNIFIED_SETTINGS.sidebarPullRequestShelfEnabled
+      ? ["PR review section"]
+      : []),
     ...(settings.sidebarAutoSettleAfterDays !== DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleAfterDays
       ? ["Auto-settle inactive threads"]
       : []),
@@ -656,6 +660,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       sidebarProjectGroupingMode: DEFAULT_UNIFIED_SETTINGS.sidebarProjectGroupingMode,
       sidebarProjectSortOrder: DEFAULT_UNIFIED_SETTINGS.sidebarProjectSortOrder,
       sidebarWorkingShelfEnabled: DEFAULT_UNIFIED_SETTINGS.sidebarWorkingShelfEnabled,
+      sidebarPullRequestShelfEnabled: DEFAULT_UNIFIED_SETTINGS.sidebarPullRequestShelfEnabled,
       sidebarAutoSettleAfterDays: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleAfterDays,
       sidebarAutoSettleKeepPullRequests: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleKeepPullRequests,
       sidebarAutoSettleOnMerge: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleOnMerge,
@@ -909,6 +914,33 @@ export function GeneralSettingsPanel() {
                 updateSettings({ sidebarWorkingShelfEnabled: Boolean(checked) })
               }
               aria-label="Working section"
+            />
+          }
+        />
+        <SettingsRow
+          {...searchableSetting("pull-request-shelf")}
+          description="Gather threads watching a pull request into a PR review section, filtered by All, Draft or Open, instead of the Working section."
+          resetAction={
+            settings.sidebarPullRequestShelfEnabled !==
+            DEFAULT_UNIFIED_SETTINGS.sidebarPullRequestShelfEnabled ? (
+              <SettingResetButton
+                label="PR review section"
+                onClick={() =>
+                  updateSettings({
+                    sidebarPullRequestShelfEnabled:
+                      DEFAULT_UNIFIED_SETTINGS.sidebarPullRequestShelfEnabled,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Switch
+              checked={settings.sidebarPullRequestShelfEnabled}
+              onCheckedChange={(checked) =>
+                updateSettings({ sidebarPullRequestShelfEnabled: Boolean(checked) })
+              }
+              aria-label="PR review section"
             />
           }
         />

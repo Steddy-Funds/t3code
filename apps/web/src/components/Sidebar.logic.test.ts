@@ -6,6 +6,8 @@ import { describe, expect, it } from "vite-plus/test";
 import * as Cause from "effect/Cause";
 import { AsyncResult } from "effect/reactivity";
 import {
+  pullRequestShelfMatches,
+  threadWatchesPullRequest,
   shouldCreateNewThreadInCurrentProject,
   deleteSelectedThreadEntries,
   getFallbackThreadIdAfterDelete,
@@ -211,6 +213,43 @@ describe("orderItemsByPreferredIds", () => {
       "physical-a",
       "physical-b",
     ]);
+  });
+});
+
+describe("PR review shelf", () => {
+  const link = (
+    snapshot: { state: "open" | "closed" | "merged"; isDraft: boolean } | null,
+    watched = true,
+    source = "agent",
+  ) => ({ snapshot, source, ...(watched ? { watch: {} } : {}) });
+
+  it.each([
+    ["an open draft", [link({ state: "open", isDraft: true })], [true, true, true, false]],
+    ["an open PR", [link({ state: "open", isDraft: false })], [true, true, false, true]],
+    ["a PR not synced yet", [link(null)], [true, true, false, false]],
+    ["a closed PR", [link({ state: "closed", isDraft: false })], [true, true, false, false]],
+    ["a merged PR", [link({ state: "merged", isDraft: false })], [false, true, false, false]],
+    [
+      "an unwatched PR",
+      [link({ state: "open", isDraft: false }, false)],
+      [false, true, false, false],
+    ],
+    [
+      "a dismissed stack layer",
+      [link({ state: "open", isDraft: false }, true, "stack-dismissed")],
+      [false, true, false, false],
+    ],
+    [
+      "a draft and an open PR",
+      [link({ state: "open", isDraft: true }), link({ state: "open", isDraft: false })],
+      [true, true, true, true],
+    ],
+  ])("places a thread watching %s", (_, pullRequests, [watches, all, draft, open]) => {
+    const thread = { pullRequests } as never;
+    expect(threadWatchesPullRequest(thread)).toBe(watches);
+    expect(pullRequestShelfMatches(thread, "all")).toBe(all);
+    expect(pullRequestShelfMatches(thread, "draft")).toBe(draft);
+    expect(pullRequestShelfMatches(thread, "open")).toBe(open);
   });
 });
 

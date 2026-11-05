@@ -8,6 +8,24 @@ import * as DateTime from "effect/DateTime";
 
 export type ThreadRelationshipKind = "parent" | "fork" | "subagent" | "transfer";
 
+/** A settled thread whose own subagents still run: a kind of working, not done. */
+export const AWAITING_CHILDREN_STATUS = "awaiting_children";
+
+type ThreadStatusSource = {
+  readonly activityRunStatus?: string | null | undefined;
+  readonly pendingBackgroundTasks?: ReadonlyArray<{ readonly kind: string }> | undefined;
+};
+
+export function threadAwaitsChildren(thread: ThreadStatusSource | null | undefined): boolean {
+  return thread?.pendingBackgroundTasks?.some((task) => task.kind === "subagent") === true;
+}
+
+function shellRelationshipStatus(thread: ThreadStatusSource, settled: string | null) {
+  return (
+    thread.activityRunStatus ?? (threadAwaitsChildren(thread) ? AWAITING_CHILDREN_STATUS : settled)
+  );
+}
+
 export interface ThreadRelationshipNode {
   readonly threadId: ThreadId;
   readonly thread: OrchestrationV2ThreadShell | null;
@@ -95,7 +113,7 @@ export function deriveThreadRelationshipGraph(input: {
       sourceThreadId: parentThreadId,
       targetThreadId: thread.id,
       kind: thread.lineage.relationshipToParent === "subagent" ? "subagent" : "fork",
-      status: thread.activityRunStatus ?? thread.status,
+      status: shellRelationshipStatus(thread, thread.status),
     });
   }
 
@@ -109,10 +127,14 @@ export function deriveThreadRelationshipGraph(input: {
         targetThreadId: subagent.childThreadId,
         kind: "subagent",
         status:
-          child?.activityRunStatus ??
-          (child?.latestRunId != null && !isOrchestrationV2WorkActive(subagent.status)
-            ? child.status
-            : subagent.status),
+          child === undefined
+            ? subagent.status
+            : shellRelationshipStatus(
+                child,
+                child.latestRunId != null && !isOrchestrationV2WorkActive(subagent.status)
+                  ? child.status
+                  : subagent.status,
+              ),
       });
     }
     for (const transfer of input.projection.contextTransfers) {
@@ -166,7 +188,7 @@ export function threadRelationshipRowStatus(
     return row.edge.status;
   }
   const thread = graph.nodes.get(row.threadId)?.thread;
-  return thread?.activityRunStatus ?? thread?.status ?? null;
+  return thread ? shellRelationshipStatus(thread, thread.status) : null;
 }
 
 function threadCreatedAtMillis(node: ThreadRelationshipNode | undefined): number | null {

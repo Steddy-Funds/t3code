@@ -176,14 +176,14 @@ example "Stressed: load 14.0 / 12.5 per core, 2 m". A dimmed icon means no readi
 or the machine is unreachable; an unreachable machine says when it was last seen.
 
 On web and desktop, hover or click the machine icon in the chat header, on a connection row,
-or on a thread's machine chip; on mobile, tap it on a connection row or use the machine button
+or on a machine you mention in a message; on mobile, tap it on a connection row or use the machine button
 in the thread header. Either way you see CPU, load, memory, and the top processes. The
 process list needs a connection with diagnostics access.
 
 To change a machine's limits on web and desktop, open its settings button in
 **Settings → Environments**, or in **Settings → Sharing & access** for the machine you are
 on. Limits are saved on that machine, so every client sees the same verdict. You get an alert
-when a connected machine goes from fine to stressed while desktop notifications or in-app alerts
+when a connected machine goes from fine to stressed while desktop or in-app notifications
 are on; turn off **Machine becomes stressed** in **Settings → General → Notifications** to stop
 it. Machines running an older T3 Code version keep the plain icon.
 

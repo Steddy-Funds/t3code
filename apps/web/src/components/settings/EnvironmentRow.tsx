@@ -112,7 +112,7 @@ export function EnvironmentRow({
     >
       {/* Dim only identity so switched-off controls remain readable and distinct from disabled controls. */}
       {machineCard && environmentId ? (
-        <MachineHoverTarget environmentId={environmentId}>
+        <MachineHoverTarget environmentId={environmentId} label={label}>
           <span className="inline-flex">{icon}</span>
         </MachineHoverTarget>
       ) : (

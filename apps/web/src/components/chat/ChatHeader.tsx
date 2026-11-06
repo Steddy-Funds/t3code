@@ -300,7 +300,11 @@ export const ChatHeader = memo(function ChatHeader({
         {environment ? (
           <>
             <WorkspaceBreadcrumbItem className="shrink text-muted-foreground">
-              <MachineHoverTarget environmentId={environment.environmentId} side="bottom">
+              <MachineHoverTarget
+                environmentId={environment.environmentId}
+                label={environment.label}
+                side="bottom"
+              >
                 <span className="inline-flex min-w-0 max-w-full items-center gap-1.5">
                   <EnvironmentMachineIcon
                     aria-hidden

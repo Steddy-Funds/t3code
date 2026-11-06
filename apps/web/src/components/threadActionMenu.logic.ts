@@ -17,6 +17,8 @@ export type ThreadActionMenuId =
   | "snooze"
   | `snooze:${string}`
   | "unsnooze"
+  | "background"
+  | "unbackground"
   | "rename"
   | "regenerate-title"
   | "mark-unread"
@@ -79,6 +81,8 @@ export interface ThreadActionMenuState {
   readonly isSettled: boolean;
   readonly autoSettleEnabled: boolean;
   readonly isSnoozed: boolean;
+  /** Undefined while the Background threads setting is off: the menu offers neither action. */
+  readonly isBackgrounded?: boolean | undefined;
   readonly canSnoozeNow: boolean;
   readonly isRegeneratingTitle: boolean;
   /** Archive rejects attached providers, so disable it while running. */
@@ -166,6 +170,13 @@ export function buildThreadActionMenuItems(
               },
         ]
       : []),
+    ...(state.isBackgrounded === undefined
+      ? []
+      : [
+          state.isBackgrounded
+            ? { id: "unbackground" as const, label: "Bring to foreground", icon: "sun" }
+            : { id: "background" as const, label: "Background", icon: "moon" },
+        ]),
     { id: "rename", label: "Rename thread", icon: "pencil", separatorBefore: true },
     ...(state.supports.titleRegeneration
       ? [

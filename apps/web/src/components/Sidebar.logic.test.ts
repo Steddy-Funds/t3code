@@ -1088,6 +1088,22 @@ describe("Working shelf (beta)", () => {
       expect(resolveSidebarDropVerb("active", "working")).toBeNull();
     });
 
+    it("never drops into the Backgrounded shelf, and keeps it out of the inbox order", () => {
+      const withBackgrounded: SidebarListItem[] = [
+        ...items.slice(0, -2),
+        marker("backgrounded-header"),
+        row("b1", "backgrounded"),
+        ...items.slice(-2),
+      ];
+      expect(resolveSidebarDropTarget(withBackgrounded, "a1", "b1")).toBeNull();
+      expect(resolveSidebarDropTarget(withBackgrounded, "p1", "a2")?.activeOrder).toEqual([
+        "a1",
+        "a2",
+        "p1",
+      ]);
+      expect(resolveSidebarDropVerb("active", "backgrounded")).toBeNull();
+    });
+
     it.each([
       ["pinned", "p1"],
       ["active", "a2"],

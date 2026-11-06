@@ -16,3 +16,12 @@ export type ThreadTag = typeof ThreadTag.Type;
 export const StoredThreadTags = Schema.Array(Schema.String).pipe(
   Schema.catchDecoding(() => Effect.succeedSome([])),
 );
+
+/** Threads with this tag run autonomous agents; clients that opt in list them in a Backgrounded shelf. */
+export const BACKGROUNDED_THREAD_TAG = "backgrounded";
+
+export function isBackgroundedThread(thread: {
+  readonly tags?: ReadonlyArray<string> | undefined;
+}): boolean {
+  return thread.tags?.includes(BACKGROUNDED_THREAD_TAG) === true;
+}

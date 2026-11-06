@@ -40,10 +40,12 @@ import {
   ClockIcon,
   GitBranchIcon,
   MessageCircleQuestionIcon,
+  MoonIcon,
   PinIcon,
   PinOffIcon,
   ShieldQuestionIcon,
   SquarePenIcon,
+  SunIcon,
   TerminalIcon,
   Undo2Icon,
   UserRoundIcon,
@@ -482,7 +484,7 @@ export function SortableThreadRow(
   // Keyed by variant so a card/slim switch remounts the row.
   return <SidebarThreadRow key={rowProps.variant} {...rowProps} thread={thread} sortable={bag} />;
 }
-export type SidebarSweepAction = "settle" | "unsettle" | "unsnooze";
+export type SidebarSweepAction = "settle" | "unsettle" | "unsnooze" | "unbackground";
 const dropVerbBadge: Record<SidebarDropVerb, ReactNode> = {
   pin: (
     <>
@@ -512,6 +514,12 @@ const dropVerbBadge: Record<SidebarDropVerb, ReactNode> = {
     <>
       <AlarmClockOffIcon aria-hidden className="size-3" />
       Wake
+    </>
+  ),
+  foreground: (
+    <>
+      <SunIcon aria-hidden className="size-3" />
+      Foreground
     </>
   ),
 };
@@ -583,6 +591,7 @@ type SidebarThreadRowProps = {
   onUnsettle: (threadRef: ScopedThreadRef) => void;
   onSnooze: (threadRef: ScopedThreadRef, preset: Pick<SnoozePreset, "snoozedUntil">) => void;
   onUnsnooze: (threadRef: ScopedThreadRef) => void;
+  onForeground: (threadRef: ScopedThreadRef) => void;
   onUnpin: (threadRef: ScopedThreadRef) => void;
   onAcknowledgeWoke: (threadRef: ScopedThreadRef, visitedAt: string) => void;
   onFileDropThreads?: ((threadRef: ScopedThreadRef, files: File[]) => void) | undefined;
@@ -646,6 +655,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     onThreadClick,
     onUnsettle,
     onUnsnooze,
+    onForeground,
     onUnpin,
     openPullRequestsInRightPanel,
     renamingTitle,
@@ -898,6 +908,11 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     event.stopPropagation();
     onUnsnooze(threadRef);
   };
+  const handleForegroundClick = (event: ReactMouseEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
+    onForeground(threadRef);
+  };
   const handleUnpinClick = (event: ReactMouseEvent) => {
     event.preventDefault();
     event.stopPropagation();
@@ -991,7 +1006,9 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     ? props.dropVerb
     : props.sweepAction === "unsnooze"
       ? "wake"
-      : props.sweepAction;
+      : props.sweepAction === "unbackground"
+        ? "foreground"
+        : props.sweepAction;
   const dragDestination =
     destinationVerb !== null ? (
       <span
@@ -1278,7 +1295,12 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                       !isWoke && "group-any-hover/sidebar-row:opacity-0",
                     )}
                   >
-                    {variantAction === "unsnooze" && props.snoozeWakeLabelText !== null ? (
+                    {variantAction === "unbackground" ? (
+                      <span className="inline-flex items-center gap-1 text-xs text-info-foreground tabular-nums">
+                        <MoonIcon aria-hidden className="size-3" />
+                        <RelativeTimeLabel timestamp={threadTimeTimestamp(thread)} />
+                      </span>
+                    ) : variantAction === "unsnooze" && props.snoozeWakeLabelText !== null ? (
                       <span className="inline-flex items-center gap-1 text-xs text-info-foreground tabular-nums">
                         {/* The clock tells a wake time from an age at a glance. */}
                         <AlarmClockIcon aria-hidden className="size-3" />
@@ -1324,7 +1346,17 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                       </span>
                     )}
                   </span>
-                  {variantAction === "unsnooze" ? (
+                  {variantAction === "unbackground" ? (
+                    <button
+                      type="button"
+                      aria-label="Bring thread to the foreground"
+                      onClick={handleForegroundClick}
+                      onPointerDown={handleActionPointerDown}
+                      className="pointer-events-none absolute inset-y-0 right-0 -mr-1 inline-flex cursor-pointer items-center gap-1 rounded-md bg-transparent px-1.5 text-xs text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:pointer-events-auto focus-visible:opacity-100 group-any-hover/sidebar-row:pointer-events-auto group-any-hover/sidebar-row:opacity-100"
+                    >
+                      <SunIcon className="mb-px size-3" />
+                    </button>
+                  ) : variantAction === "unsnooze" ? (
                     !props.snoozeSupported ? null : (
                       <button
                         type="button"

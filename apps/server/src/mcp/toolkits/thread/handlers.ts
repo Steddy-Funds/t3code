@@ -1,4 +1,5 @@
 import {
+  BACKGROUNDED_THREAD_TAG,
   type CommandId,
   type RuntimeRequestId,
   ThreadId,
@@ -358,6 +359,15 @@ export const layer = McpToolAccess.toLayer(ThreadToolkit, {
           break;
         case "mark_unread":
           command = { ...common, type: "thread.mark-unread" };
+          break;
+        case "background":
+        case "unbackground":
+          command = {
+            ...common,
+            type: "thread.tag.set",
+            tag: BACKGROUNDED_THREAD_TAG,
+            tagged: input.action === "background",
+          };
           break;
         default:
           command = { ...common, type: `thread.${input.action}` };

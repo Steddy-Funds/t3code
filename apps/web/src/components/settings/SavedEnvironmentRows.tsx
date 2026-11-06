@@ -29,6 +29,7 @@ import { SettingsRow } from "./settingsLayout";
 import { searchableSetting } from "./settingsSearch";
 import { EnvironmentIconMenu } from "./EnvironmentIconPicker";
 import { EnvironmentRoutesList } from "./EnvironmentRoutesList";
+import { MachineResourcesSection, MachineSettingsToggle } from "./MachineResourcesSection";
 import {
   ConnectionDiagnosisPanel,
   ConnectionDiagnosisSummary,
@@ -117,6 +118,7 @@ export function SavedBackendListRow({
   const [routesOpen, setRoutesOpen] = useState(false);
   const [permissionsOpen, setPermissionsOpen] = useState(false);
   const [diagnosisOpen, setDiagnosisOpen] = useState(false);
+  const [machineSettingsOpen, setMachineSettingsOpen] = useState(false);
   const environmentId = environment.environmentId;
   const unsupported = environment.connection.phase === "unsupported";
   const blocked = unsupported && !hasSavedBearerRoute(environment.entry);
@@ -209,6 +211,8 @@ export function SavedBackendListRow({
       (lastDescriptor === undefined ? null : { environment: lastDescriptor }),
   );
   const routeCount = connectionRoutes(environment.entry).length;
+  const hasMachineSettings =
+    environment.serverConfig?.environment.capabilities.machineResources === true;
   const subtitleText = [
     environmentTransportLabel(environment, connectedTarget),
     // The headline below names the failure in full.
@@ -352,6 +356,9 @@ export function SavedBackendListRow({
               />
             </div>
           )}
+          {hasMachineSettings && machineSettingsOpen ? (
+            <MachineResourcesSection environmentId={environmentId} />
+          ) : null}
         </>
       }
     >
@@ -394,6 +401,13 @@ export function SavedBackendListRow({
           {blocked ? "Client not supported" : enabled ? "Switch off" : "Switch on"}
         </TooltipPopup>
       </Tooltip>
+      {hasMachineSettings ? (
+        <MachineSettingsToggle
+          label={environment.label}
+          open={machineSettingsOpen}
+          onToggle={() => setMachineSettingsOpen((open) => !open)}
+        />
+      ) : null}
       <Menu>
         <MenuTrigger
           render={

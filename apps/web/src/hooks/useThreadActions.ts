@@ -9,6 +9,7 @@ import { canSnooze, threadWokeAt } from "@t3tools/client-runtime/state/thread-se
 import { threadRuntimeCanArchive } from "@t3tools/client-runtime/state/models";
 import {
   AuthOrchestrationOperateScope,
+  BACKGROUNDED_THREAD_TAG,
   AuthSourceControlWriteScope,
   EnvironmentAuthorizationError,
   EnvironmentId,
@@ -296,6 +297,9 @@ export function useThreadActions() {
     reportFailure: false,
   });
   const setThreadAutoSettleMutation = useOrchestrationCommand(threadEnvironment.setAutoSettle, {
+    reportFailure: false,
+  });
+  const setThreadTagMutation = useOrchestrationCommand(threadEnvironment.setTag, {
     reportFailure: false,
   });
   const reorderPinnedThreadMutation = useOrchestrationCommand(threadEnvironment.reorderPin, {
@@ -687,6 +691,12 @@ export function useThreadActions() {
     });
   };
 
+  const setThreadBackgrounded = (target: ScopedThreadRef, backgrounded: boolean) =>
+    setThreadTagMutation({
+      environmentId: target.environmentId,
+      input: { threadId: target.threadId, tag: BACKGROUNDED_THREAD_TAG, tagged: backgrounded },
+    });
+
   const pinThread = async (target: ScopedThreadRef, opts: { orderKey?: string } = {}) => {
     if (!readEnvironmentServerConfigLoaded(target.environmentId)) {
       return AsyncResult.failure(
@@ -965,6 +975,7 @@ export function useThreadActions() {
     reorderActiveThread,
     markThreadUnread,
     setThreadAutoSettle,
+    setThreadBackgrounded,
     turnThreadIntoProject: (target: ScopedThreadRef) =>
       createProjectFromThread({
         environmentId: target.environmentId,

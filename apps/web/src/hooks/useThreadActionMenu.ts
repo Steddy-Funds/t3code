@@ -10,6 +10,7 @@ import {
 import { canSnooze, effectiveSnoozed } from "@t3tools/client-runtime/state/thread-settled";
 import {
   AuthOrchestrationOperateScope,
+  isBackgroundedThread,
   type ScopedThreadRef,
   type ThreadId,
 } from "@t3tools/contracts";
@@ -83,6 +84,7 @@ export function useThreadActionMenu(input: {
     pinThread,
     confirmAndUnpinThread,
     setThreadAutoSettle,
+    setThreadBackgrounded,
     archiveThread,
     deleteThread,
     markThreadUnread,
@@ -95,6 +97,7 @@ export function useThreadActionMenu(input: {
   const confirmThreadDelete = useClientSettings((s) => s.confirmThreadDelete);
   const confirmThreadArchive = useClientSettings((s) => s.confirmThreadArchive);
   const timestampFormat = useClientSettings((s) => s.timestampFormat);
+  const backgroundedShelfEnabled = useClientSettings((s) => s.sidebarBackgroundedShelfEnabled);
   const { copyToClipboard: copyPathToClipboard } = useCopyToClipboard<{ path: string }>({
     onCopy: ({ path }) => {
       toastManager.add({ type: "success", title: "Path copied", description: path });
@@ -142,6 +145,7 @@ export function useThreadActionMenu(input: {
         isSettled: supports.settlement && thread.settledOverride === "settled",
         autoSettleEnabled: thread.autoSettleDisabledAt == null,
         isSnoozed: supports.snooze && effectiveSnoozed(thread, { now: now.toISOString() }),
+        isBackgrounded: backgroundedShelfEnabled ? isBackgroundedThread(thread.source) : undefined,
         canSnoozeNow: canSnooze(thread, { now: now.toISOString() }),
         isRegeneratingTitle,
         isRunning: !threadRuntimeCanArchive(thread.runtime),
@@ -233,6 +237,12 @@ export function useThreadActionMenu(input: {
           return;
         case "pin":
           await reportFailure("Failed to pin thread", () => pinThread(threadRef));
+          return;
+        case "background":
+        case "unbackground":
+          await reportFailure("Failed to update thread", () =>
+            setThreadBackgrounded(threadRef, action === "background"),
+          );
           return;
         case "unpin": {
           await reportFailure("Failed to unpin thread", () => confirmAndUnpinThread(threadRef));

@@ -1,4 +1,14 @@
 import { useAtomValue } from "@effect/atom-react";
+import {
+  formatGiB,
+  formatPercent,
+  formatPerCore,
+  formatProcessMemory,
+  machineVerdictText,
+  memoryUsedBytes,
+  memoryUsedPercent,
+  topProcessesByName,
+} from "@t3tools/client-runtime/state/machineFormat";
 import type { MachineIndicator } from "@t3tools/client-runtime/state/machineIndicator";
 import type { MachineProcessTable } from "@t3tools/client-runtime/state/machineProcessFrames";
 import type {
@@ -19,16 +29,6 @@ import { machineIndicator, machineResources } from "../../state/machineResources
 import { AppActivityIndicator } from "../ui/AppActivityIndicator";
 import { AppText as Text } from "../ui/AppText";
 import { Sheet } from "../ui/Sheet";
-import {
-  formatGiB,
-  formatPercent,
-  formatPerCore,
-  formatProcessMemory,
-  machineVerdictText,
-  memoryUsedBytes,
-  memoryUsedPercent,
-  topProcessesByName,
-} from "./format";
 
 const LIVE_SAMPLE_MS = 1000;
 const PROCESS_SAMPLE_MS = 2000;
@@ -250,6 +250,12 @@ function ProcessesSection(props: {
   }
   const table = Option.getOrNull(AsyncResult.value(props.result));
   if (table === null) return null;
+  // The T3 subtree always holds the server itself, so an empty table means no monitor.
+  if (table.rows.length === 0) {
+    return (
+      <Text className="text-sm text-foreground-muted">Process list needs the resource monitor</Text>
+    );
+  }
   const scope = table.source === "t3" ? " · T3" : "";
   return (
     <>

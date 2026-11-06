@@ -1,4 +1,5 @@
 import { useAtomValue } from "@effect/atom-react";
+import { formatGiB, type MachineIndicatorView } from "@t3tools/client-runtime/state/machineFormat";
 import type { MachineProcessTable } from "@t3tools/client-runtime/state/machineProcessFrames";
 import {
   AuthDiagnosticsReadScope,
@@ -18,7 +19,6 @@ import { serverEnvironment } from "~/state/server";
 import { useEnvironmentScope } from "~/state/session";
 
 import { EnvironmentMachineIcon } from "../EnvironmentMachineIcon";
-import { formatGiB, type MachineIndicatorView } from "./format";
 import { MachineCardBody, type MachineLimits, type MachineProcessList } from "./MachineCardBody";
 
 const LIVE_SAMPLES = { intervalMs: 1000 } as const;

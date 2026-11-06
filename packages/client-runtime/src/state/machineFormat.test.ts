@@ -1,3 +1,4 @@
+import type { MachineTotalsSummary, MachineVerdictReason } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
@@ -6,12 +7,10 @@ import {
   formatPerCore,
   formatProcessMemory,
   type MachineIndicatorView,
-  type MachineTotalsSummary,
-  type MachineVerdictReason,
   machineVerdictText,
   memoryUsedPercent,
   topProcessesByName,
-} from "./format";
+} from "./machineFormat.ts";
 
 const GIB = 1024 ** 3;
 const MIB = 1024 ** 2;

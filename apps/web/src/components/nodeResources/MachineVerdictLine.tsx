@@ -1,6 +1,9 @@
-import { cn } from "~/lib/utils";
+import {
+  type MachineIndicatorView,
+  machineVerdictText,
+} from "@t3tools/client-runtime/state/machineFormat";
 
-import { type MachineIndicatorView, machineVerdictText } from "./format";
+import { cn } from "~/lib/utils";
 
 /** One line of verdict text; renders nothing while the machine is ok. */
 export function MachineVerdictLine({

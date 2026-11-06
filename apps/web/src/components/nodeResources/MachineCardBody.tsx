@@ -1,8 +1,3 @@
-import type { ReactNode } from "react";
-
-import { Skeleton } from "~/components/ui/skeleton";
-import { cn } from "~/lib/utils";
-
 import {
   formatAge,
   formatGiB,
@@ -11,13 +6,17 @@ import {
   formatProcessMemory,
   type MachineIndicatorView,
   type MachineProcessSummary,
-  type MachineStatusSnapshot,
-  type MachineTotalsSummary,
   memoryUsedBytes,
   memoryUsedPercent,
   type TopProcess,
   topProcessesByName,
-} from "./format";
+} from "@t3tools/client-runtime/state/machineFormat";
+import type { MachineStatusSnapshot, MachineTotalsSummary } from "@t3tools/contracts";
+import type { ReactNode } from "react";
+
+import { Skeleton } from "~/components/ui/skeleton";
+import { cn } from "~/lib/utils";
+
 import { MachineVerdictLine } from "./MachineVerdictLine";
 
 export type MachineProcessList =

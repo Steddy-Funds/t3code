@@ -1,12 +1,7 @@
-import type { MachineIndicator } from "@t3tools/client-runtime/state/machineIndicator";
-import type { MachineProcessRow } from "@t3tools/client-runtime/state/machineProcessFrames";
-import type {
-  MachineStatusSnapshot,
-  MachineTotalsSummary,
-  MachineVerdictReason,
-} from "@t3tools/contracts";
+import type { MachineTotalsSummary, MachineVerdictReason } from "@t3tools/contracts";
 
-export type { MachineStatusSnapshot, MachineTotalsSummary, MachineVerdictReason };
+import type { MachineIndicator } from "./machineIndicator.ts";
+import type { MachineProcessRow } from "./machineProcessFrames.ts";
 
 /** What every machine surface reads: the derived indicator, minus `show`. */
 export type MachineIndicatorView = Omit<MachineIndicator, "show">;
@@ -107,8 +102,9 @@ export function topProcessesByName(
       byName.set(row.name, { count: 1, value: row[metric] });
     }
   }
+  // Hermes lacks toSorted; the spread already copies.
   return [...byName]
     .map(([name, entry]) => ({ name, ...entry }))
-    .toSorted((a, b) => b.value - a.value)
+    .sort((a, b) => b.value - a.value)
     .slice(0, limit);
 }

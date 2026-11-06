@@ -1,3 +1,4 @@
+import { formatAge, formatMachineReason } from "@t3tools/client-runtime/state/machineFormat";
 import type { MachineIndicator } from "@t3tools/client-runtime/state/machineIndicator";
 import type { EnvironmentId } from "@t3tools/contracts";
 
@@ -10,7 +11,6 @@ import {
   isAppInForeground,
   showBackgroundNotification,
 } from "../threadNotifications";
-import { formatAge, formatMachineReason } from "./nodeResources/format";
 import { toastManager } from "./ui/toast";
 
 function machineStressDescription(indicator: MachineIndicator): string {

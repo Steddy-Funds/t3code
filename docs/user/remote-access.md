@@ -165,8 +165,25 @@ that choice stable. Choose **Auto balance** again to check current resources, or
 a specific machine to override it. Choosing a branch or worktree also keeps the draft
 on that machine. Existing threads stay where they started. If resource checks are
 unavailable or all eligible machines are full or stressed, choose a machine manually to
-continue. A machine marked stressed is skipped until it recovers.
-Mobile keeps its manual environment selection.
+continue. A machine marked [stressed](#see-when-a-machine-is-stressed) is skipped until it
+recovers. Mobile keeps its manual environment selection.
+
+### See when a machine is stressed
+
+Machine icons stay plain while a machine is fine. When its load or memory stays over a
+limit for a while, its icon turns red and drips, and a thread's hover preview says why, for
+example "Stressed: load 14.0 / 12.5 per core, 2 m". A dimmed icon means no reading has arrived yet
+or the machine is unreachable; an unreachable machine says when it was last seen.
+
+Hover or click the icon on web and desktop, or tap it on mobile, to see CPU, load, memory,
+and the top processes. The process list needs a connection with diagnostics access.
+
+To change a machine's limits on web and desktop, open its settings button in
+**Settings → Environments**, or in **Settings → Sharing & access** for the machine you are
+on. Limits are saved on that machine, so every client sees the same verdict. Turn on
+**Machine becomes stressed** in **Settings → General → Notifications** to get an alert when a
+connected machine goes from fine to stressed. Machines running an older T3 Code version
+keep the plain icon.
 
 ### Tailscale HTTPS
 

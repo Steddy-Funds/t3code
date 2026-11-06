@@ -155,6 +155,10 @@
       "types": "./src/state/machineIndicator.ts",
       "default": "./src/state/machineIndicator.ts"
     },
+    "./state/machineFormat": {
+      "types": "./src/state/machineFormat.ts",
+      "default": "./src/state/machineFormat.ts"
+    },
     "./state/auth": {
       "types": "./src/state/auth.ts",
       "default": "./src/state/auth.ts"

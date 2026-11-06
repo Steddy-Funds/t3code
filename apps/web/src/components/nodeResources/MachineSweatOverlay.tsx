@@ -1,6 +1,5 @@
+import type { MachineIndicatorView } from "@t3tools/client-runtime/state/machineFormat";
 import type { AnimationEvent, ReactNode } from "react";
-
-import type { MachineIndicatorView } from "./format";
 
 export type MachineIconState =
   | "ok"

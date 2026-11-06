@@ -1,9 +1,11 @@
 import "~/index.css";
 
+import type { MachineIndicatorView } from "@t3tools/client-runtime/state/machineFormat";
+import type { MachineStatusSnapshot, MachineTotalsSummary } from "@t3tools/contracts";
+
 import { describe, expect, it } from "vite-plus/test";
 
 import { render } from "../../../test/render";
-import type { MachineIndicatorView, MachineStatusSnapshot, MachineTotalsSummary } from "./format";
 import { MachineCardBody, type MachineProcessList } from "./MachineCardBody";
 
 const GIB = 1024 ** 3;

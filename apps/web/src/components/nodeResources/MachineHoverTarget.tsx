@@ -20,9 +20,9 @@ export function MachineHoverTarget({
   readonly side?: ComponentProps<typeof PreviewCardPopup>["side"];
   readonly children: ReactElement;
 }) {
-  const capable = useAtomValue(machineIndicator.machineCapableAtom(environmentId));
+  const { show } = useAtomValue(machineIndicator.machineIndicatorAtom(environmentId));
   const [open, setOpen] = useState(false);
-  if (!capable) return children;
+  if (!show) return children;
   return (
     <PreviewCard open={open} onOpenChange={setOpen}>
       <PreviewCardTrigger

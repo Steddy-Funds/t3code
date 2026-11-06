@@ -143,6 +143,18 @@
       "types": "./src/relay/index.ts",
       "default": "./src/relay/index.ts"
     },
+    "./state/machineResources": {
+      "types": "./src/state/machineResources.ts",
+      "default": "./src/state/machineResources.ts"
+    },
+    "./state/machineProcessFrames": {
+      "types": "./src/state/machineProcessFrames.ts",
+      "default": "./src/state/machineProcessFrames.ts"
+    },
+    "./state/machineIndicator": {
+      "types": "./src/state/machineIndicator.ts",
+      "default": "./src/state/machineIndicator.ts"
+    },
     "./state/auth": {
       "types": "./src/state/auth.ts",
       "default": "./src/state/auth.ts"

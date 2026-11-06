@@ -289,6 +289,54 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
       }
     });
 
+    it("a loop that exits at once stops restarting", async () => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+      const before = spawned().length;
+      const reader = startDarwinPressureReader({ script: "exit 0" });
+      try {
+        for (let spawn = 1; spawn <= 3; spawn++) {
+          expect(spawned().length).toBe(before + spawn);
+          await exited(spawned().at(-1)!);
+          if (spawn < 3) vi.advanceTimersByTime(30_000);
+        }
+        expect(vi.getTimerCount()).toBe(0);
+        vi.advanceTimersByTime(120_000);
+        expect(spawned().length).toBe(before + 3);
+        expect(reader.latest()).toBeNull();
+        expect(reader.pid()).toBeUndefined();
+      } finally {
+        reader.stop();
+        vi.useRealTimers();
+      }
+    });
+
+    it("keeps restarting once a loop lives past the early-exit window", async () => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+      const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-pressure-"));
+      const fifo = NodePath.join(dir, "gate");
+      NodeChildProcess.execFileSync("mkfifo", [fifo]);
+      const before = spawned().length;
+      const reader = startDarwinPressureReader({ script: `read _ < ${fifo}` });
+      try {
+        // Early, early, one that lives 6 s, early, early: the long one resets the count.
+        for (const livesMs of [0, 0, 6_000, 0, 0]) {
+          const child = spawned().at(-1)!;
+          // No timer is pending while a child runs, so this only moves the faked Date.
+          vi.advanceTimersByTime(livesMs);
+          await NodeFS.promises.writeFile(fifo, "\n");
+          await exited(child);
+          expect(vi.getTimerCount()).toBe(1);
+          vi.advanceTimersByTime(30_000);
+        }
+        expect(spawned().length).toBe(before + 6);
+      } finally {
+        reader.stop();
+        await exited(spawned().at(-1)!);
+        vi.useRealTimers();
+        NodeFS.rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
     it("stop ends a running loop and clears pid", async () => {
       const reader = startDarwinPressureReader({ script: portableLoop("echo tick") });
       const child = spawned().at(-1)!;

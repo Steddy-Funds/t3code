@@ -269,6 +269,39 @@ describe("HostResources samples", () => {
     },
   );
 
+  it.effect("every snapshot after the first sample has `sample`", () => {
+    setup();
+    const { layer, tick } = makeLayer();
+    return Effect.gen(function* () {
+      const resources = yield* HostResources;
+      const sampled = yield* statusQueue(resources.subscribe({ intervalMs: 500 }));
+      const statusOnly = yield* statusQueue(resources.subscribe({}));
+      expect(yield* take(sampled)).not.toHaveProperty("sample");
+
+      yield* TestClock.adjust("500 millis");
+      expect(yield* take(sampled)).toMatchObject({ sequence: 0, sample: { perCore: [50] } });
+
+      yield* tick;
+      expect(yield* take(sampled)).toMatchObject({
+        sequence: 1,
+        verdict: "ok",
+        sample: { perCore: [50] },
+      });
+
+      // 60 samples from 1 s to 30.5 s, plus the heartbeat at 30 s.
+      yield* TestClock.adjust("30 seconds");
+      const later = yield* Effect.orDie(Queue.clear(sampled));
+      expect(later).toHaveLength(61);
+      for (const snapshot of later) {
+        expect(snapshot).toMatchObject({ sequence: 1, sample: { perCore: [50] } });
+      }
+
+      const statusSnapshots = yield* Effect.orDie(Queue.clear(statusOnly));
+      expect(statusSnapshots.map((snapshot) => snapshot.sequence)).toEqual([0, 1, 1]);
+      for (const snapshot of statusSnapshots) expect(snapshot).not.toHaveProperty("sample");
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
   it.effect("adds a sample to subscribe only when an interval is asked for", () => {
     setup();
     const { layer, tick } = makeLayer();

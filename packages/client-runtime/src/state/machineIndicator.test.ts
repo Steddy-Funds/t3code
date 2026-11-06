@@ -217,6 +217,7 @@ function setup() {
   return {
     registry,
     atoms,
+    catalog,
     mounted,
     flush,
     setStatus: (environmentId: EnvironmentId, snapshot: MachineStatusSnapshot) =>
@@ -326,6 +327,20 @@ describe("machineIndicatorAtom", () => {
     app.setCapable(ENVIRONMENT, false);
     expect(app.registry.get(app.atoms.machineIndicatorAtom(ENVIRONMENT)).show).toBe(false);
     expect(app.registry.get(app.atoms.machineCapableAtom(ENVIRONMENT))).toBe(false);
+  });
+
+  it("is plain for a capable machine whose saved connection is unsupported", () => {
+    using app = setup();
+    app.setStatus(OTHER, STRESSED);
+    app.registry.set(app.catalog, {
+      isReady: true,
+      entries: new Map([
+        ...app.registry.get(app.catalog).entries,
+        [OTHER, { ...entry(OTHER), unsupportedReason: "Server too old" }],
+      ]),
+    });
+    expect(app.registry.get(app.atoms.machineIndicatorAtom(OTHER)).show).toBe(false);
+    expect(app.registry.get(app.atoms.machineCapableAtom(OTHER))).toBe(false);
   });
 });
 

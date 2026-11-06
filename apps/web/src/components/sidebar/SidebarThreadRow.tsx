@@ -1177,6 +1177,23 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
         <EnvironmentMachineIcon aria-hidden kind={props.environmentMachine} className="size-3.5" />
       </span>
     ) : null;
+  const providerStack = details.model ? (
+    <SidebarProviderStack
+      thread={thread}
+      providerEntryByInstanceId={props.providerEntryByInstanceId}
+    />
+  ) : null;
+  // An empty group would still take a flex gap, leaving a blank cap beside the badges.
+  const trailingIcons = (machineIcon: ReactNode, className?: string) =>
+    machineIcon || providerStack ? (
+      <span
+        aria-hidden
+        className={cn("pointer-events-none inline-flex shrink-0 items-center gap-1", className)}
+      >
+        {machineIcon}
+        {providerStack}
+      </span>
+    ) : null;
   const branch = details.branch ? thread.branch : null;
   const diff = latestRunDiff(thread);
   // Only the trailing icons would remain, so the row moves them to the title line instead.
@@ -1221,60 +1238,44 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
           <span className="text-diff-deletion-foreground">−{formatDiffCount(diff.deletions)}</span>
         </span>
       ) : null}
-      <span
-        aria-hidden
-        className="pointer-events-none ml-auto inline-flex shrink-0 items-center gap-1"
-      >
-        {remoteMachineIcon}
-        {details.model ? (
-          <SidebarProviderStack
-            thread={thread}
-            providerEntryByInstanceId={props.providerEntryByInstanceId}
-          />
-        ) : null}
-      </span>
+      {trailingIcons(remoteMachineIcon, "ml-auto")}
     </div>
   );
-  const rowIcons = twoRow ? (
-    <span className="inline-flex shrink-0 items-center gap-1.5 text-secondary-label text-xs">
-      {terminalStatusIcon}
-      {agentBadge}
-      {prBadge}
-      {diff ? (
-        <span className="shrink-0 font-mono">
-          <span className="text-diff-addition-foreground">+{formatDiffCount(diff.insertions)}</span>{" "}
-          <span className="text-diff-deletion-foreground">−{formatDiffCount(diff.deletions)}</span>
-        </span>
-      ) : null}
-      <span aria-hidden className="pointer-events-none inline-flex shrink-0 items-center gap-1">
-        {showsScratchMachine ? (
-          <EnvironmentMachineIcon kind={props.environmentMachine} className="size-3.5" />
-        ) : (
-          remoteMachineIcon
-        )}
-        {details.model ? (
-          <SidebarProviderStack
-            thread={thread}
-            providerEntryByInstanceId={props.providerEntryByInstanceId}
-          />
+  const twoRowTrailingIcons = trailingIcons(
+    showsScratchMachine ? (
+      <EnvironmentMachineIcon kind={props.environmentMachine} className="size-3.5" />
+    ) : (
+      remoteMachineIcon
+    ),
+  );
+  const hasRowIcons =
+    runningTerminalIds.length > 0 ||
+    agentBadge !== null ||
+    prBadge !== null ||
+    diff !== null ||
+    twoRowTrailingIcons !== null;
+  const rowIcons =
+    twoRow && hasRowIcons ? (
+      <span className="inline-flex shrink-0 items-center gap-1.5 text-secondary-label text-xs">
+        {terminalStatusIcon}
+        {agentBadge}
+        {prBadge}
+        {diff ? (
+          <span className="shrink-0 font-mono">
+            <span className="text-diff-addition-foreground">
+              +{formatDiffCount(diff.insertions)}
+            </span>{" "}
+            <span className="text-diff-deletion-foreground">
+              −{formatDiffCount(diff.deletions)}
+            </span>
+          </span>
         ) : null}
-      </span>
-    </span>
-  ) : null;
-  const projectLabel = props.projectDisplayName;
-  const hoverBranch = twoRow ? thread.branch : null;
-  const titleLineIcons =
-    metaLineEmpty && !twoRow ? (
-      <span aria-hidden className="inline-flex shrink-0 items-center gap-1">
-        {remoteMachineIcon}
-        {details.model ? (
-          <SidebarProviderStack
-            thread={thread}
-            providerEntryByInstanceId={props.providerEntryByInstanceId}
-          />
-        ) : null}
+        {twoRowTrailingIcons}
       </span>
     ) : null;
+  const projectLabel = props.projectDisplayName;
+  const hoverBranch = twoRow ? thread.branch : null;
+  const titleLineIcons = metaLineEmpty && !twoRow ? trailingIcons(remoteMachineIcon) : null;
 
   if (variant !== "card") {
     const multiline = variant === "folder-multiline";

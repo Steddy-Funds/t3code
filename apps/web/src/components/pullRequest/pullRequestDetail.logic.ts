@@ -304,7 +304,7 @@ export function isPullRequestConflicting(
   return detail?.state === "open" && detail.mergeability === "conflicting";
 }
 
-export type PullRequestChecksState = "none" | "pending" | "failing" | "passing";
+export type PullRequestChecksState = "none" | "pending" | "failing" | "passing" | "not-run";
 
 export function classifyPullRequestChecks(
   checks: ReadonlyArray<PullRequestCheck>,
@@ -315,6 +315,10 @@ export function classifyPullRequestChecks(
   }
   if (checks.some((check) => check.status === "pending" || check.status === "action-required")) {
     return "pending";
+  }
+  // Every check skipped or neutral: nothing ran, which is not a pass.
+  if (checks.every((check) => check.status === "skipped" || check.status === "neutral")) {
+    return "not-run";
   }
   return "passing";
 }
@@ -332,6 +336,9 @@ export function describePullRequestChecks(checks: ReadonlyArray<PullRequestCheck
   if (actionRequired > 0) parts.push(`${actionRequired} of ${checks.length} awaiting action`);
   if (failed > 0) {
     parts.push(parts.length > 0 ? `${failed} failed` : `${failed} of ${checks.length} failing`);
+  }
+  if (parts.length === 0 && passed === 0) {
+    return checks.length === 1 ? "The check did not run" : `None of ${checks.length} checks ran`;
   }
   if (parts.length === 0) {
     return passed === checks.length ? "All checks passed" : `${passed} of ${checks.length} passing`;

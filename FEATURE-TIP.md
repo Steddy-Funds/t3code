@@ -27,6 +27,7 @@ upstream; a feature can, from its own branch, when Akiva decides.
 | Thread details: cost, tokens and activity for thread and lineage    | #56 | 1e9ea81 |
 | Lineage tree rows open their thread; card hover shows the branch    | #57 | 958cfe7 |
 | Sidebar machine toggle; machine in thread header; copy branch       | #58 | 796dfab |
+| Sidebar cards drop the empty icon group's gap                       | #59 | 3f45500 |
 
 Held: #38 (pods notes in the t3-orchestration skill). It edits
 `.agents/skills/t3-orchestration/`, which exists only on

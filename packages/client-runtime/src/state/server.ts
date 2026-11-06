@@ -1353,6 +1353,11 @@ export function createServerEnvironmentAtoms<R, E>(
           ),
         ),
     }),
+    threadUsage: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:server:thread-usage",
+      tag: WS_METHODS.serverGetThreadUsage,
+      staleTimeMs: 30_000,
+    }),
     resourceTelemetry: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
       label: "environment-data:server:resource-telemetry",
       tag: WS_METHODS.subscribeResourceTelemetry,

@@ -243,12 +243,20 @@ const make = Effect.fn("makeHostResources")(function* () {
   ) {
     if (input.intervalMs === undefined) return status;
     const live = yield* samples(input.intervalMs);
+    // Heartbeats and verdict changes keep the last sample, so an open view never loses per-core.
+    let lastSample: MachineStatusSample | undefined;
     const withSample = live.pipe(
-      Stream.mapEffect((sample) =>
-        currentSnapshot.pipe(Effect.map((snapshot) => ({ ...snapshot, sample }))),
+      Stream.mapEffect((sample) => {
+        lastSample = sample;
+        return currentSnapshot.pipe(Effect.map((snapshot) => ({ ...snapshot, sample })));
+      }),
+    );
+    const statusWithLastSample = status.pipe(
+      Stream.map((snapshot) =>
+        lastSample === undefined ? snapshot : { ...snapshot, sample: lastSample },
       ),
     );
-    return Stream.merge(status, withSample);
+    return Stream.merge(statusWithLastSample, withSample);
   });
 
   return HostResources.of({

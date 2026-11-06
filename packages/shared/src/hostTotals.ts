@@ -143,6 +143,9 @@ const DARWIN_BLOCK_END = "===";
 export const DARWIN_PRESSURE_LOOP = `while kill -0 $PPID 2>/dev/null; do { sysctl -n kern.memorystatus_vm_pressure_level vm.swapusage && vm_stat && echo ${DARWIN_BLOCK_END}; } || exit 0; sleep 5; done`;
 
 const DARWIN_RESTART_DELAY_MS = 30_000;
+// A loop that dies this soon after spawning (e.g. sysctl missing) will not recover by retrying.
+const DARWIN_EARLY_EXIT_MS = 5_000;
+const DARWIN_MAX_EARLY_EXITS = 3;
 
 export function startDarwinPressureReader(
   options: { readonly shell?: string; readonly script?: string } = {},
@@ -151,9 +154,11 @@ export function startDarwinPressureReader(
   let stopped = false;
   let restartTimer: ReturnType<typeof setTimeout> | undefined;
   let child: ReturnType<typeof spawn> | undefined;
+  let earlyExits = 0;
 
   const start = () => {
     let buffered = "";
+    const startedAt = Date.now();
     const current = spawn(
       options.shell ?? "/bin/sh",
       ["-c", options.script ?? DARWIN_PRESSURE_LOOP],
@@ -176,6 +181,12 @@ export function startDarwinPressureReader(
     current.on("exit", () => {
       if (child === current) child = undefined;
       if (stopped) return;
+      earlyExits = Date.now() - startedAt < DARWIN_EARLY_EXIT_MS ? earlyExits + 1 : 0;
+      if (earlyExits >= DARWIN_MAX_EARLY_EXITS) {
+        // No pressure from here on, so the verdict falls back to the load rule alone.
+        latest = null;
+        return;
+      }
       restartTimer = setTimeout(start, DARWIN_RESTART_DELAY_MS);
       restartTimer.unref?.();
     });

@@ -31,6 +31,7 @@ import {
   type SidebarListMarker,
   type SidebarSection,
   resolveSidebarDropVerb,
+  resolveSidebarThreadSection,
   groupSidebarThreadsByProject,
   resolveSidebarFolderDot,
   sidebarFolderExpansionKeys,
@@ -1102,6 +1103,10 @@ describe("Working shelf (beta)", () => {
         "p1",
       ]);
       expect(resolveSidebarDropVerb("active", "backgrounded")).toBeNull();
+      const shelf = { backgrounded: true, snoozed: false, settled: false, pinned: true };
+      expect(resolveSidebarThreadSection(shelf)).toBe("backgrounded");
+      expect(resolveSidebarThreadSection({ ...shelf, snoozed: true })).toBe("backgrounded");
+      expect(resolveSidebarThreadSection({ ...shelf, settled: true })).toBe("settled");
     });
 
     it.each([

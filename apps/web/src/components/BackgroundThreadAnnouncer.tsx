@@ -1,11 +1,12 @@
 import { scopeThreadRef, scopedThreadKey } from "@t3tools/client-runtime/environment";
 import { effectiveSnoozed } from "@t3tools/client-runtime/state/thread-settled";
-import { isListedThreadLineage } from "@t3tools/contracts";
+import { isBackgroundedThread, isListedThreadLineage } from "@t3tools/contracts";
 import type { AnyRouter } from "@tanstack/react-router";
 import type { AtomRegistry } from "effect/reactivity";
 
 import { useComposerDraftStore } from "../composerDraftStore";
 import { createLiveRegion } from "../hooks/useLiveRegion";
+import { getClientSettings } from "../hooks/useSettings";
 import { liveShellEnvironmentIdsAtom } from "../state/shell";
 import { environmentThreadShells } from "../state/threads";
 import { resolveActiveThreadRouteRef, resolveThreadRouteTarget } from "../threadRoutes";
@@ -41,11 +42,13 @@ export function startBackgroundThreadAnnouncements(
     const threads = registry.get(environmentThreadShells.quietThreadShellsAtom);
     const liveEnvironmentIds = registry.get(liveShellEnvironmentIdsAtom);
     const now = new Date().toISOString();
+    const backgroundedMuted = getClientSettings().sidebarBackgroundedShelfEnabled;
     const snapshots: BackgroundThreadSnapshot[] = [];
     for (const thread of threads) {
       // Subagents and side chats have no row of their own; their requests surface on the parent.
       if (thread.archivedAt !== null || !isListedThreadLineage(thread.lineage)) continue;
       if (!liveEnvironmentIds.has(thread.environmentId)) continue;
+      if (backgroundedMuted && isBackgroundedThread(thread.source)) continue;
       snapshots.push({
         key: scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
         title: thread.title,

@@ -170,7 +170,8 @@ export const animateSidebarLayoutChanges: AnimateLayoutChanges = (args) =>
   args.isSorting ? defaultAnimateLayoutChanges(args) : false;
 
 // Snoozed rows cannot accept drops without a wake time. Working rows only drag out as chat context.
-// Backgrounded rows move only through the thread menu or an agent.
+// Backgrounded rows move only through the thread menu or an agent. A settled one shelves as
+// settled, since the server sends only the newest settled threads.
 
 export type SidebarSection =
   | "pinned"
@@ -186,7 +187,7 @@ export function resolveSidebarThreadSection(input: {
   readonly settled: boolean;
   readonly pinned: boolean;
 }): SidebarSection {
-  if (input.backgrounded) return "backgrounded";
+  if (input.backgrounded && !input.settled) return "backgrounded";
   if (input.snoozed) return "snoozed";
   if (input.settled) return "settled";
   if (input.pinned) return "pinned";

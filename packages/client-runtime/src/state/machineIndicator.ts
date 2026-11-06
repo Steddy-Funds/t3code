@@ -233,8 +233,19 @@ export function createMachineIndicatorAtoms(input: {
       },
       { immediate: true },
     );
+    // A machine removed while offline never changes the targets, so forget by catalog membership.
+    const unsubscribeCatalog = registry.subscribe(
+      input.catalogValueAtom,
+      (catalog) => {
+        for (const environmentId of remembered.keys()) {
+          if (!catalog.entries.has(environmentId)) remembered.delete(environmentId);
+        }
+      },
+      { immediate: true },
+    );
     return () => {
       unsubscribe();
+      unsubscribeCatalog();
       for (const unmount of mounted.values()) unmount();
       mounted.clear();
     };

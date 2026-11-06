@@ -1,6 +1,7 @@
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
+  DEFAULT_MACHINE_THRESHOLDS,
   DEFAULT_SERVER_SETTINGS,
   globalIdleCompaction,
   type ManagedPolicyDocument,
@@ -16,12 +17,13 @@ import {
   UsageLimitSourceId,
 } from "@t3tools/contracts";
 import { createModelSelection } from "@t3tools/shared/model";
-import { assert, it } from "@effect/vitest";
+import { assert, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Logger from "effect/Logger";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
@@ -133,6 +135,65 @@ function strictSecretReferencePaths(
   if (SchemaAST.isSuspend(ast)) return strictSecretReferencePaths(ast.thunk(), path, seen);
   return [];
 }
+
+it.each([
+  ["no machineResources", { a: 1 }, { a: 1 }, []],
+  ["no thresholds", { machineResources: {} }, { machineResources: {} }, []],
+  [
+    "all thresholds valid",
+    { machineResources: { thresholds: { loadPerCore: 4, exitFactor: 1 } } },
+    { machineResources: { thresholds: { loadPerCore: 4, exitFactor: 1 } } },
+    [],
+  ],
+  [
+    "one key out of bounds",
+    { a: 1, machineResources: { thresholds: { loadPerCore: 0, enterHoldMs: 0 } } },
+    { a: 1, machineResources: { thresholds: { enterHoldMs: 0 } } },
+    ["machineResources.thresholds.loadPerCore"],
+  ],
+  [
+    "a wrong type, a fractional hold and a value past the hold cap",
+    {
+      machineResources: {
+        thresholds: {
+          memoryUsedPercent: "90",
+          exitHoldMs: 1.5,
+          windowsCpuHoldMs: 3_600_001,
+          exitFactor: 0.5,
+        },
+      },
+    },
+    { machineResources: { thresholds: { exitFactor: 0.5 } } },
+    [
+      "machineResources.thresholds.memoryUsedPercent",
+      "machineResources.thresholds.exitHoldMs",
+      "machineResources.thresholds.windowsCpuHoldMs",
+    ],
+  ],
+  [
+    "thresholds that are not an object",
+    { machineResources: { thresholds: [1], other: true } },
+    { machineResources: { other: true } },
+    ["machineResources.thresholds"],
+  ],
+  [
+    "machineResources that is not an object",
+    { a: 1, machineResources: "high" },
+    { a: 1 },
+    ["machineResources"],
+  ],
+  ["a file that is not an object", null, null, []],
+] as const)("dropInvalidMachineThresholds with %s", (_name, file, expected, dropped) => {
+  expect(ServerSettingsModule.dropInvalidMachineThresholds(file)).toEqual({
+    file: expected,
+    dropped,
+  });
+});
+
+it("keeps an unknown threshold key a newer server saved", () => {
+  const file = { machineResources: { thresholds: { gpuVramPercent: 90 } } };
+  expect(ServerSettingsModule.dropInvalidMachineThresholds(file)).toEqual({ file, dropped: [] });
+});
 
 it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("server settings", (it) => {
   it.effect("serializes concurrent model preference edits without cancelling duplicate adds", () =>
@@ -2084,6 +2145,75 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("server settings"
       assert.isTrue(persisted.projectSettingsFolded);
       assert.isUndefined(persisted.projectSettingsOverrides[legacyProject]);
     }).pipe(Effect.provide(layerServerSettings())),
+  );
+
+  it.effect(
+    "falls back per key for a hand-edited machine threshold and keeps other settings",
+    () => {
+      const warnings: Array<string> = [];
+      const logger = Logger.make(({ logLevel, message }) => {
+        if (logLevel === "Warn") warnings.push(JSON.stringify(message));
+      });
+      return Effect.gen(function* () {
+        const config = yield* ServerConfig.ServerConfig;
+        const fs = yield* FileSystem.FileSystem;
+        const service = yield* ServerSettingsModule.ServerSettingsService;
+        yield* fs.writeFileString(
+          config.settingsPath,
+          JSON.stringify({
+            continueThreadsAfterServerUpdate: true,
+            enableAgentBrowserAccess: false,
+            machineResources: { thresholds: { loadPerCore: 0, memoryUsedPercent: 80 } },
+          }),
+        );
+
+        const settings = yield* service.getSettings;
+        yield* service.getSettings;
+        assert.deepEqual(settings.machineResources.thresholds, {
+          ...DEFAULT_MACHINE_THRESHOLDS,
+          memoryUsedPercent: 80,
+        });
+        assert.isFalse(settings.enableAgentBrowserAccess);
+        assert.isTrue(settings.continueThreadsAfterServerUpdate);
+        const machineWarnings = warnings.filter((warning) =>
+          warning.includes("machine thresholds"),
+        );
+        assert.lengthOf(machineWarnings, 1);
+        assert.include(machineWarnings[0], "machineResources.thresholds.loadPerCore");
+        assert.isFalse(
+          warnings.some((warning) => warning.includes("failed to parse settings.json")),
+        );
+
+        const updated = yield* service.updateSettings({
+          machineResources: { thresholds: { enterHoldMs: 0 } },
+        });
+        assert.deepEqual(updated.machineResources.thresholds, {
+          ...DEFAULT_MACHINE_THRESHOLDS,
+          memoryUsedPercent: 80,
+          enterHoldMs: 0,
+        });
+        const reloaded = yield* decodeServerSettingsJson(
+          yield* fs.readFileString(config.settingsPath),
+        );
+        assert.deepEqual(reloaded.machineResources.thresholds, updated.machineResources.thresholds);
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            layerServerSettings(),
+            Logger.layer([logger], { mergeWithExisting: false }),
+          ),
+        ),
+      );
+    },
+  );
+
+  it.effect("rejects a zero load-per-core threshold in a settings patch", () =>
+    Effect.gen(function* () {
+      const error = yield* Effect.flip(
+        decodeServerSettingsPatch({ machineResources: { thresholds: { loadPerCore: 0 } } }),
+      );
+      assert.equal(error._tag, "SchemaError");
+    }),
   );
 
   it.effect("leaves an unreadable settings.json untouched instead of folding over it", () =>

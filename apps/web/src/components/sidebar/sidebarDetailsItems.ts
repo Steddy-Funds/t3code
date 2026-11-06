@@ -4,6 +4,7 @@ import type { ClientSettings } from "@t3tools/contracts";
 export const SIDEBAR_DETAILS_ITEMS = [
   { id: "branch", label: "Branch", defaultOn: true },
   { id: "model", label: "Model", defaultOn: true },
+  { id: "machine", label: "Machine", defaultOn: true },
   { id: "agentLineage", label: "Full agent lineage", defaultOn: false },
 ] as const;
 

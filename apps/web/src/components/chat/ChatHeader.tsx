@@ -1,5 +1,6 @@
 import {
   AuthOrchestrationOperateScope,
+  resolveEnvironmentMachineKind,
   type EnvironmentId,
   type ScopedThreadRef,
   type ThreadId,
@@ -30,7 +31,9 @@ import { canShareWithGuestAtom } from "./guestShareAvailability";
 import { useAtomValue } from "@effect/atom-react";
 import { useOrchestrationCommand } from "../../state/use-orchestration-command";
 import { readEnvironmentScope, useEnvironmentScope } from "../../state/session";
+import { EnvironmentMachineIcon } from "../EnvironmentMachineIcon";
 import { ProjectFavicon } from "../ProjectFavicon";
+import { useEnvironment } from "../../state/environments";
 import {
   WorkspaceBreadcrumb,
   WorkspaceBreadcrumbItem,
@@ -86,6 +89,7 @@ export const ChatHeader = memo(function ChatHeader({
 }: ChatHeaderProps) {
   const activeProjectName = activeProject?.isScratch ? "No project" : activeProject?.title;
   const activeProjectCwd = activeProject?.workspaceRoot ?? null;
+  const environment = useEnvironment(activeThreadEnvironmentId);
   const interfaceFont = useClientSettings((settings) => settings.fontFamilySans);
   const breadcrumbContainerRef = useRef<HTMLDivElement>(null);
   const [collapseParentTitle, setCollapseParentTitle] = useState(false);
@@ -292,6 +296,25 @@ export const ChatHeader = memo(function ChatHeader({
         ariaLabel="Thread breadcrumb"
         className="flex-1 overflow-clip [overflow-clip-margin:2px]"
       >
+        {environment ? (
+          <>
+            <WorkspaceBreadcrumbItem className="shrink text-muted-foreground">
+              <span className="inline-flex min-w-0 max-w-full items-center gap-1.5">
+                <EnvironmentMachineIcon
+                  aria-hidden
+                  kind={resolveEnvironmentMachineKind(environment.serverConfig)}
+                  className="size-3.5 shrink-0"
+                />
+                <WorkspaceBreadcrumbText className="max-w-32">
+                  {environment.label}
+                </WorkspaceBreadcrumbText>
+              </span>
+            </WorkspaceBreadcrumbItem>
+            <WorkspaceBreadcrumbSeparator>
+              <WorkspaceBreadcrumbText>/</WorkspaceBreadcrumbText>
+            </WorkspaceBreadcrumbSeparator>
+          </>
+        ) : null}
         {activeProject ? (
           <>
             <WorkspaceBreadcrumbItem className="shrink">

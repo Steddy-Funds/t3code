@@ -348,7 +348,7 @@ export const SETTINGS_SEARCH_ITEMS = [
     title: "Sidebar details",
     to: "/settings/appearance",
     searchTerms: [
-      "customize show hide sidebar thread card branch model provider two rows compact agents subagents lineage tree",
+      "customize show hide sidebar thread card branch model provider two rows compact agents subagents lineage tree machine environment remote",
     ],
   },
   {

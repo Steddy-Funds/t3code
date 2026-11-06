@@ -114,6 +114,7 @@ import { shouldShowInstanceBadge, type ProviderInstanceEntry } from "../../provi
 import { useThreadRunningTerminalIds } from "../../state/terminalSessions";
 import { useClientSettings } from "../../hooks/useSettings";
 import { resolveSidebarDetailsVisibility } from "./sidebarDetailsItems";
+import { SidebarBranchName } from "./SidebarBranchName";
 import { SidebarAgentBadge, showsAgentBadge } from "./SidebarAgentBadge";
 import { InlineButton } from "../ui/button";
 import { Kbd } from "../ui/kbd";
@@ -829,8 +830,9 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     : thread.modelSelection.model;
 
   const isRemote = thread.environmentId !== props.currentEnvironmentId;
-  const showsScratchMachine = !thread.branch && props.scratchMachineLabel !== null;
   const details = useClientSettings(resolveSidebarDetailsVisibility);
+  const showsScratchMachine =
+    details.machine && !thread.branch && props.scratchMachineLabel !== null;
 
   const detailsTooltip = (
     <SidebarThreadTooltip
@@ -1170,7 +1172,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
   ) : null;
 
   const remoteMachineIcon =
-    isRemote && !showsScratchMachine ? (
+    details.machine && isRemote && !showsScratchMachine ? (
       <span className="inline-flex shrink-0 items-center text-sidebar-muted-foreground/70">
         <EnvironmentMachineIcon aria-hidden kind={props.environmentMachine} className="size-3.5" />
       </span>
@@ -1195,7 +1197,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
         <>
           <ThreadWorktreeIndicator thread={thread} />
           <span className="flex min-w-0 flex-1">
-            <MiddleTruncate value={branch} showTitle={false} />
+            <SidebarBranchName branch={branch} />
           </span>
         </>
       ) : showsScratchMachine ? (
@@ -1681,7 +1683,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                     <span className="hidden min-w-0 flex-1 items-center gap-1 group-any-hover/sidebar-row:flex">
                       <GitBranchIcon aria-hidden className="size-3 shrink-0 text-icon-muted" />
                       <span className="flex min-w-0 flex-1">
-                        <MiddleTruncate value={hoverBranch} showTitle={false} />
+                        <SidebarBranchName branch={hoverBranch} />
                       </span>
                     </span>
                   ) : null}

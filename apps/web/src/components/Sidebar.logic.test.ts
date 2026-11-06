@@ -37,6 +37,7 @@ import {
   groupSidebarThreadsByProject,
   resolveSidebarFolderDot,
   sidebarFolderExpansionKeys,
+  shortProjectDisplayNames,
 } from "./Sidebar.logic";
 import { scopeThreadRef, scopedThreadKey } from "@t3tools/client-runtime/environment";
 import {
@@ -213,6 +214,24 @@ describe("orderItemsByPreferredIds", () => {
       "physical-c",
       "physical-a",
       "physical-b",
+    ]);
+  });
+});
+
+describe("shortProjectDisplayNames", () => {
+  it("names the owner only when forks share a repo name", () => {
+    expect([
+      ...shortProjectDisplayNames([
+        "Steddy-Funds/steddyfunds.ai",
+        "Steddy-Funds/t3code",
+        "pingdotgg/T3Code",
+        "server",
+      ]),
+    ]).toEqual([
+      ["Steddy-Funds/steddyfunds.ai", "steddyfunds.ai"],
+      ["Steddy-Funds/t3code", "Steddy-Funds/t3code"],
+      ["pingdotgg/T3Code", "pingdotgg/T3Code"],
+      ["server", "server"],
     ]);
   });
 });

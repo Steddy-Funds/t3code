@@ -26,6 +26,8 @@ import type {
   ThreadId,
 } from "@t3tools/contracts";
 import type { ThreadCheckpointSummary } from "@t3tools/client-runtime/state/thread-checkpoints";
+import type { AgentTree } from "@t3tools/client-runtime/state/thread-relationships";
+import type { AgentLineageNode, AgentTreeSummary } from "@t3tools/client-runtime/state/threads";
 import { Atom } from "effect/reactivity";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { environmentProjects } from "./projects";
@@ -172,8 +174,12 @@ export function useChildThreadInputs(ref: ScopedThreadRef | null) {
 }
 
 /** Agents working in a thread's tree, the thread itself included. */
-export function useLiveAgentCount(ref: ScopedThreadRef): number {
-  return useAtomValue(environmentThreadShells.liveAgentCountAtom(ref));
+export function useAgentTreeSummary(ref: ScopedThreadRef): AgentTreeSummary {
+  return useAtomValue(environmentThreadShells.agentTreeSummaryAtom(ref));
+}
+
+export function useAgentTree(ref: ScopedThreadRef): AgentTree<AgentLineageNode> | null {
+  return useAtomValue(environmentThreadShells.agentTreeAtom(ref));
 }
 
 export function useThreadProjection(ref: ScopedThreadRef | null): EnvironmentThread | null {

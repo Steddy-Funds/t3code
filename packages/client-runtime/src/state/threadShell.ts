@@ -17,7 +17,7 @@ import { Atom } from "effect/reactivity";
 import type { EnvironmentThreadShell, PendingSubagentRequest } from "./models.ts";
 import { presentThreadShell, threadRuntimeIsActive } from "./models.ts";
 import { hiddenThreadKeys, NO_HIDDEN_THREADS } from "./threadTagFilter.ts";
-import { countLiveAgents } from "./threadRelationships.ts";
+import { type AgentTree, buildAgentTree } from "./threadRelationships.ts";
 import { type EnvironmentCatalogState, enabledEnvironmentIds } from "./connections.ts";
 import {
   arrayElementsEqual,
@@ -37,6 +37,23 @@ const EMPTY_SIDE_CHATS_BY_PARENT: ReadonlyMap<
   ReadonlyArray<OrchestrationV2ThreadShell>
 > = new Map();
 const EMPTY_THREAD_SHELLS: ReadonlyArray<EnvironmentThreadShell> = Object.freeze([]);
+
+export interface AgentLineageNode {
+  readonly key: string;
+  readonly environmentId: EnvironmentId;
+  readonly thread: OrchestrationV2ThreadShell;
+}
+
+export interface AgentTreeSummary {
+  /** Live agents in the tree, the thread itself included. */
+  readonly live: number;
+  /** Every agent in the tree, the thread itself included. */
+  readonly size: number;
+  /** Live agents below the thread. */
+  readonly descendantsLive: number;
+}
+
+const EMPTY_AGENT_TREE_SUMMARY: AgentTreeSummary = { live: 0, size: 0, descendantsLive: 0 };
 const EMPTY_THREAD_REFS_BY_PROJECT: ReadonlyMap<
   ProjectId,
   ReadonlyArray<ScopedThreadRef>
@@ -506,22 +523,47 @@ export function createEnvironmentThreadShellAtoms(input: {
     }).pipe(Atom.withLabel(`environment-child-thread-inputs:${key}`));
   });
 
-  // A number, so a row re-renders only when its count changes.
-  const liveAgentCountAtomFamily = Atom.family((key: string) =>
-    Atom.make((get) => {
+  const agentTreeAtomFamily = Atom.family((key: string) =>
+    Atom.make((get): AgentTree<AgentLineageNode> | null => {
       const ref = parseThreadKey(key);
       const thread = get(environmentThreadIndexAtom(ref.environmentId)).get(ref.threadId);
-      if (thread === undefined) return 0;
+      if (thread === undefined) return null;
       const children = get(childThreadsByParentAtom);
       const node = (environmentId: EnvironmentId, child: OrchestrationV2ThreadShell) => ({
         key: threadKey({ environmentId, threadId: child.id }),
+        environmentId,
         thread: child,
       });
-      return countLiveAgents(node(ref.environmentId, thread), (parent) =>
+      return buildAgentTree(node(ref.environmentId, thread), (parent) =>
         (children.get(parent.key) ?? []).map((child) => node(child.environmentId, child.thread)),
       );
-    }).pipe(Atom.withLabel(`environment-live-agent-count:${key}`)),
+    }).pipe(Atom.withLabel(`environment-agent-tree:${key}`)),
   );
+
+  // Counts only, kept by identity while they hold, so a row re-renders only when one changes.
+  const agentTreeSummaryAtomFamily = Atom.family((key: string) => {
+    let previous: AgentTreeSummary = EMPTY_AGENT_TREE_SUMMARY;
+    return Atom.make((get) => {
+      const tree = get(agentTreeAtomFamily(key));
+      const next: AgentTreeSummary =
+        tree === null
+          ? EMPTY_AGENT_TREE_SUMMARY
+          : {
+              live: tree.live,
+              size: tree.size,
+              descendantsLive: tree.live - (tree.working ? 1 : 0),
+            };
+      if (
+        previous.live === next.live &&
+        previous.size === next.size &&
+        previous.descendantsLive === next.descendantsLive
+      ) {
+        return previous;
+      }
+      previous = next;
+      return next;
+    }).pipe(Atom.withLabel(`environment-agent-tree-summary:${key}`));
+  });
 
   // A parent's side chats. Rows read only ids, titles and whether one needs the user, so
   // streaming updates keep the old array.
@@ -758,7 +800,8 @@ export function createEnvironmentThreadShellAtoms(input: {
     threadShellAtom: (ref: ScopedThreadRef) => threadShellAtomFamily(threadKey(ref)),
     quietThreadShellAtom: (ref: ScopedThreadRef) => quietThreadShellAtomFamily(threadKey(ref)),
     childThreadInputsAtom: (ref: ScopedThreadRef) => childThreadInputsAtomFamily(threadKey(ref)),
-    liveAgentCountAtom: (ref: ScopedThreadRef) => liveAgentCountAtomFamily(threadKey(ref)),
+    agentTreeAtom: (ref: ScopedThreadRef) => agentTreeAtomFamily(threadKey(ref)),
+    agentTreeSummaryAtom: (ref: ScopedThreadRef) => agentTreeSummaryAtomFamily(threadKey(ref)),
     sideChatsAtom: (ref: ScopedThreadRef) => sideChatsAtomFamily(threadKey(ref)),
   };
 }

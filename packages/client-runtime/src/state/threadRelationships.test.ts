@@ -4,7 +4,7 @@ import * as DateTime from "effect/DateTime";
 
 import {
   type AgentTreeNode,
-  countLiveAgents,
+  buildAgentTree,
   deriveThreadRelationshipGraph,
   immediateThreadRelationships,
   orderWebThreadLineageRows,
@@ -117,7 +117,11 @@ describe("thread relationships", () => {
       ["lane", [scout]],
     ]);
     const childrenOf = (parent: AgentTreeNode) => children.get(parent.key) ?? [];
-    expect(countLiveAgents(slice, childrenOf)).toBe(1);
+    const sliceTree = buildAgentTree(slice, childrenOf);
+    expect(sliceTree).toMatchObject({ working: false, live: 1, size: 3 });
+    // The lane waits on its working scout, so only the scout counts.
+    expect(sliceTree.children[0]).toMatchObject({ working: false, live: 1, size: 2 });
+    expect(sliceTree.children[0]?.children[0]).toMatchObject({ working: true, live: 1 });
 
     // A working parent counts itself; a pending child not yet running counts once, and a
     // pending subagent with no thread of its own counts too.
@@ -131,14 +135,24 @@ describe("thread relationships", () => {
     });
     const starting = node("starting");
     children.set("busy", [starting, lane]);
-    expect(countLiveAgents(busy, childrenOf)).toBe(4);
+    const busyTree = buildAgentTree(busy, childrenOf);
+    expect(busyTree).toMatchObject({ working: true, live: 4, size: 5 });
+    expect(busyTree.children.map((child) => [child.node?.key ?? null, child.working])).toEqual([
+      [null, true],
+      ["starting", true],
+      ["lane", false],
+    ]);
+
+    // An idle child nobody waits on is lineage, not a live agent.
+    children.set("done", [node("finished")]);
+    expect(buildAgentTree(node("done"), childrenOf)).toMatchObject({ live: 0, size: 2 });
 
     // A thread blocked in t3_thread_wait is waiting, not working.
     expect(
-      countLiveAgents(
+      buildAgentTree(
         node("waits", { activityRunStatus: "running", blockedOnThreadWait: true }),
         childrenOf,
-      ),
+      ).live,
     ).toBe(0);
   });
 

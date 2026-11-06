@@ -1417,3 +1417,24 @@ export function sortScopedProjectsForSidebar<
       left.id.localeCompare(right.id),
   );
 }
+
+/**
+ * Drops the owner from "owner/repo" names unless another project shares the repo name,
+ * so the owner shows only to tell forks apart.
+ */
+export function shortProjectDisplayNames(
+  names: ReadonlyArray<string>,
+): ReadonlyMap<string, string> {
+  const repoName = (name: string) => name.slice(name.lastIndexOf("/") + 1);
+  const counts = new Map<string, number>();
+  for (const name of new Set(names)) {
+    const repo = repoName(name).toLowerCase();
+    counts.set(repo, (counts.get(repo) ?? 0) + 1);
+  }
+  return new Map(
+    names.map((name) => {
+      const repo = repoName(name);
+      return [name, (counts.get(repo.toLowerCase()) ?? 0) > 1 ? name : repo] as const;
+    }),
+  );
+}

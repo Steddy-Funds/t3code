@@ -24,13 +24,14 @@ import { searchableSetting } from "./settingsSearch";
 
 export function SidebarDetailsItemsRow() {
   const visibility = useClientSettings(resolveSidebarDetailsVisibility);
+  const isDefault = SIDEBAR_DETAILS_ITEMS.every((item) => visibility[item.id] === item.defaultOn);
   const enabled = SIDEBAR_DETAILS_ITEMS.filter((item) => visibility[item.id]).length;
   return (
     <SettingsRow
       {...searchableSetting("sidebar-details-items")}
-      description="Choose what each sidebar thread card shows. Without the branch, cards fit in two rows."
+      description="Choose what each sidebar thread card shows. Without the branch, cards fit in two rows. Full agent lineage counts idle agents too."
       resetAction={
-        enabled === SIDEBAR_DETAILS_ITEMS.length ? null : (
+        isDefault ? null : (
           <SettingResetButton
             label="sidebar details"
             onClick={() => updateClientSettings({ sidebarDetailsItems: {} })}
@@ -63,7 +64,7 @@ export function SidebarDetailsItemsRow() {
                     updateClientSettings({
                       sidebarDetailsItems: setSidebarDetailsItem(
                         getClientSettings(),
-                        item,
+                        item.id,
                         checked,
                       ),
                     })

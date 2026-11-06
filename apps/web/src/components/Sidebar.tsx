@@ -201,6 +201,7 @@ import {
   searchSidebarThreads,
   shouldCreateNewThreadInCurrentProject,
   shouldNavigateAfterThreadPark,
+  shortProjectDisplayNames,
   sidebarListItemId,
   sidebarThreadKeyAtY,
   sortInboxThreadsByReturn,
@@ -893,10 +894,15 @@ function useSidebarLookups() {
   const projectByKey = new Map(
     projects.map((project) => [`${project.environmentId}:${project.id}`, project] as const),
   );
+  const shortNames = shortProjectDisplayNames(projectGroups.map((group) => group.displayName));
   const projectDisplayNameByKey = new Map(
     projectGroups.flatMap((group) =>
       group.memberProjects.map(
-        (project) => [`${project.environmentId}:${project.id}`, group.displayName] as const,
+        (project) =>
+          [
+            `${project.environmentId}:${project.id}`,
+            shortNames.get(group.displayName) ?? group.displayName,
+          ] as const,
       ),
     ),
   );

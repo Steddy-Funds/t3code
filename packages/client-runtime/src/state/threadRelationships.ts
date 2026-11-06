@@ -59,45 +59,62 @@ export interface AgentTreeNode {
   };
 }
 
+export interface AgentTree<Node> {
+  /** Null for a pending subagent whose thread is not known yet. */
+  readonly node: Node | null;
+  /** Counts as a live agent itself. */
+  readonly working: boolean;
+  /** Live agents in this subtree. */
+  readonly live: number;
+  /** Agents in this subtree, idle ones included. */
+  readonly size: number;
+  readonly children: ReadonlyArray<AgentTree<Node>>;
+}
+
 /**
- * Agents working in a thread's tree: the thread while its run works, plus every live agent
- * below it, grandchildren included. A pending subagent with no known thread counts as one.
+ * A thread's agent lineage, grandchildren included. A thread works while its run does,
+ * unless it only waits on its children. A child its parent still waits on works even
+ * between its runs, and a pending subagent with no known thread works as one agent.
  */
-export function countLiveAgents<Node extends AgentTreeNode>(
+export function buildAgentTree<Node extends AgentTreeNode>(
   root: Node,
   childrenOf: (node: Node) => ReadonlyArray<Node>,
-): number {
-  const seen = new Set<string>();
-  const count = (node: Node): number => {
-    if (seen.has(node.key)) return 0;
-    seen.add(node.key);
+): AgentTree<Node> {
+  const seen = new Set<string>([root.key]);
+  const build = (node: Node, awaited: boolean): AgentTree<Node> => {
     const { thread } = node;
-    const children = childrenOf(node);
+    const children = childrenOf(node).filter((child) => !seen.has(child.key));
+    for (const child of children) seen.add(child.key);
     const childIds = new Set(children.map((child) => child.thread.id));
-    const pendingChildIds = new Set<string>();
-    let total =
-      thread.blockedOnThreadWait !== true &&
-      (thread.activityRunStatus === "preparing" ||
-        thread.activityRunStatus === "starting" ||
-        thread.activityRunStatus === "running")
-        ? 1
-        : 0;
+    const awaitedChildIds = new Set<string>();
+    const subtrees: AgentTree<Node>[] = [];
     for (const task of thread.pendingBackgroundTasks ?? []) {
       if (task.kind !== "subagent") continue;
       if (task.childThreadId !== undefined && childIds.has(task.childThreadId)) {
-        pendingChildIds.add(task.childThreadId);
+        awaitedChildIds.add(task.childThreadId);
       } else {
-        total += 1;
+        subtrees.push({ node: null, working: true, live: 1, size: 1, children: [] });
       }
     }
     for (const child of children) {
-      const below = count(child);
-      // The parent still waits on it, so it counts even between its runs.
-      total += pendingChildIds.has(child.thread.id) ? Math.max(1, below) : below;
+      subtrees.push(build(child, awaitedChildIds.has(child.thread.id)));
     }
-    return total;
+    const below = subtrees.reduce((sum, subtree) => sum + subtree.live, 0);
+    const running =
+      thread.blockedOnThreadWait !== true &&
+      (thread.activityRunStatus === "preparing" ||
+        thread.activityRunStatus === "starting" ||
+        thread.activityRunStatus === "running");
+    const working = running || (awaited && below === 0);
+    return {
+      node,
+      working,
+      live: below + (working ? 1 : 0),
+      size: 1 + subtrees.reduce((sum, subtree) => sum + subtree.size, 0),
+      children: subtrees,
+    };
   };
-  return count(root);
+  return build(root, false);
 }
 
 function shellRelationshipStatus(thread: ThreadStatusSource, settled: string | null) {

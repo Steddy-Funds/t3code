@@ -3,6 +3,8 @@ import { ThreadId } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 
 import {
+  type AgentTreeNode,
+  countLiveAgents,
   deriveThreadRelationshipGraph,
   immediateThreadRelationships,
   orderWebThreadLineageRows,
@@ -97,6 +99,47 @@ describe("thread relationships", () => {
     expect(
       resolveThreadWait({ pendingBackgroundTasks: tasks, blockedOnThreadWait: blocked }),
     ).toEqual({ reason, label });
+  });
+
+  it("counts live agents across the whole tree, grandchildren included", () => {
+    const node = (id: string, thread: Omit<AgentTreeNode["thread"], "id"> = {}): AgentTreeNode => ({
+      key: id,
+      thread: { id, ...thread },
+    });
+    // The slice's own run is done and its lane is between runs, but the lane's scout still works.
+    const slice = node("slice");
+    const lane = node("lane", {
+      pendingBackgroundTasks: [{ kind: "subagent", childThreadId: "scout" }],
+    });
+    const scout = node("scout", { activityRunStatus: "running" });
+    const children = new Map([
+      ["slice", [lane]],
+      ["lane", [scout]],
+    ]);
+    const childrenOf = (parent: AgentTreeNode) => children.get(parent.key) ?? [];
+    expect(countLiveAgents(slice, childrenOf)).toBe(1);
+
+    // A working parent counts itself; a pending child not yet running counts once, and a
+    // pending subagent with no thread of its own counts too.
+    const busy = node("busy", {
+      activityRunStatus: "running",
+      pendingBackgroundTasks: [
+        { kind: "subagent", childThreadId: "starting" },
+        { kind: "subagent" },
+        { kind: "command" },
+      ],
+    });
+    const starting = node("starting");
+    children.set("busy", [starting, lane]);
+    expect(countLiveAgents(busy, childrenOf)).toBe(4);
+
+    // A thread blocked in t3_thread_wait is waiting, not working.
+    expect(
+      countLiveAgents(
+        node("waits", { activityRunStatus: "running", blockedOnThreadWait: true }),
+        childrenOf,
+      ),
+    ).toBe(0);
   });
 
   it("does not label a missing parent with its child's running status", () => {

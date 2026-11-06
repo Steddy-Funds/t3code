@@ -47,6 +47,59 @@ export function resolveThreadWait(thread: {
   return { reason: "background", label: "Waiting" };
 }
 
+export interface AgentTreeNode {
+  readonly key: string;
+  readonly thread: {
+    readonly id: string;
+    readonly activityRunStatus?: string | null | undefined;
+    readonly blockedOnThreadWait?: boolean | undefined;
+    readonly pendingBackgroundTasks?:
+      | ReadonlyArray<{ readonly kind: string; readonly childThreadId?: string | undefined }>
+      | undefined;
+  };
+}
+
+/**
+ * Agents working in a thread's tree: the thread while its run works, plus every live agent
+ * below it, grandchildren included. A pending subagent with no known thread counts as one.
+ */
+export function countLiveAgents<Node extends AgentTreeNode>(
+  root: Node,
+  childrenOf: (node: Node) => ReadonlyArray<Node>,
+): number {
+  const seen = new Set<string>();
+  const count = (node: Node): number => {
+    if (seen.has(node.key)) return 0;
+    seen.add(node.key);
+    const { thread } = node;
+    const children = childrenOf(node);
+    const childIds = new Set(children.map((child) => child.thread.id));
+    const pendingChildIds = new Set<string>();
+    let total =
+      thread.blockedOnThreadWait !== true &&
+      (thread.activityRunStatus === "preparing" ||
+        thread.activityRunStatus === "starting" ||
+        thread.activityRunStatus === "running")
+        ? 1
+        : 0;
+    for (const task of thread.pendingBackgroundTasks ?? []) {
+      if (task.kind !== "subagent") continue;
+      if (task.childThreadId !== undefined && childIds.has(task.childThreadId)) {
+        pendingChildIds.add(task.childThreadId);
+      } else {
+        total += 1;
+      }
+    }
+    for (const child of children) {
+      const below = count(child);
+      // The parent still waits on it, so it counts even between its runs.
+      total += pendingChildIds.has(child.thread.id) ? Math.max(1, below) : below;
+    }
+    return total;
+  };
+  return count(root);
+}
+
 function shellRelationshipStatus(thread: ThreadStatusSource, settled: string | null) {
   return (
     thread.activityRunStatus ?? (threadAwaitsChildren(thread) ? AWAITING_CHILDREN_STATUS : settled)

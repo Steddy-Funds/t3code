@@ -1,8 +1,8 @@
 # Feature tip
 
 `akiva/feature-tip` is the fork's `main` plus the features Akiva wants to keep.
-`main` stays a plain mirror of pingdotgg/t3code. Nothing on this branch goes
-upstream.
+`main` stays a plain mirror of pingdotgg/t3code. The tip itself never goes
+upstream; a feature can, from its own branch, when Akiva decides.
 
 ## Included
 
@@ -19,6 +19,8 @@ upstream.
 | Cmd+Shift+Enter docks the composer as a full-height editor          | #47 | 0940962 |
 | PR review sidebar section; Awaiting children in lineage             | #49 | 7bf63d6 |
 | Sidebar names what a waiting thread waits on (agents, PR)           | #50 | 627adaf |
+| Background threads: Backgrounded section, thread menu and MCP       | #51 | b610ba6 |
+| Appearance > Sidebar details: hide branch, model, change count      | #52 | fd65dd9 |
 
 Held: #38 (pods notes in the t3-orchestration skill). It edits
 `.agents/skills/t3-orchestration/`, which exists only on
@@ -26,7 +28,8 @@ Held: #38 (pods notes in the t3-orchestration skill). It edits
 
 ## Adding a feature
 
-1. Branch from `akiva/feature-tip`, or from `main` if the feature is independent.
+1. Branch from `main`, so the feature stays separate. Branch from
+   `akiva/feature-tip` only when it builds on a tip feature.
 2. Open the PR against `akiva/feature-tip`. Never against upstream.
 3. Merge it with a merge commit (not a squash), so each feature stays one
    traceable merge. Add a row to the table above.

@@ -348,7 +348,7 @@ export const SETTINGS_SEARCH_ITEMS = [
     title: "Sidebar details",
     to: "/settings/appearance",
     searchTerms: [
-      "customize show hide sidebar thread card branch model provider diff change count lines",
+      "customize show hide sidebar thread card branch model provider repository owner org fork two rows compact",
     ],
   },
   {

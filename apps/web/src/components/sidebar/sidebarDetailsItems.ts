@@ -4,7 +4,7 @@ import type { ClientSettings } from "@t3tools/contracts";
 export const SIDEBAR_DETAILS_ITEMS = [
   { id: "branch", label: "Branch" },
   { id: "model", label: "Model" },
-  { id: "changes", label: "Change count" },
+  { id: "repoOwner", label: "Repository owner" },
 ] as const;
 
 type SidebarDetailsItem = (typeof SIDEBAR_DETAILS_ITEMS)[number];

@@ -2,6 +2,7 @@ import type { EnvironmentServerConfig } from "@t3tools/client-runtime/connection
 import { scopeThreadRef, scopedThreadKey } from "@t3tools/client-runtime/environment";
 import { resolveThreadWorkingStartedAt } from "@t3tools/client-runtime/state/models";
 import { isShownUnderParent } from "@t3tools/client-runtime/state/threads";
+import { resolveThreadWait } from "@t3tools/client-runtime/state/thread-relationships";
 import { backgroundWorkHoldsCompletion } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import { threadPullRequestSearchTerms } from "@t3tools/shared/threadPullRequests";
 import * as React from "react";
@@ -683,16 +684,7 @@ export function buildBulkUnpinContextMenuItem(input: {
 }
 
 export interface ThreadStatusPill {
-  label:
-    | "Working"
-    | "Connecting"
-    | "Completed"
-    | "Failed"
-    | "Pending Approval"
-    | "Awaiting Input"
-    | "Guest Request"
-    | "Waiting"
-    | "Plan Ready";
+  label: string;
   colorClass: string;
   dotClass: string;
   pulse: boolean;
@@ -1193,12 +1185,20 @@ export function resolveThreadStatusPill(input: {
     (thread.runtime?.status === "running" && thread.blockedOnThreadWait === true) ||
     backgroundWorkHoldsCompletion(thread.pendingBackgroundTasks ?? [])
   ) {
-    return {
-      label: "Waiting",
-      colorClass: "text-sidebar-muted-foreground",
-      dotClass: "bg-sidebar-muted-foreground",
-      pulse: false,
-    };
+    const wait = resolveThreadWait(thread);
+    return wait.reason === "agents"
+      ? {
+          label: wait.label,
+          colorClass: "text-sky-600 dark:text-sky-300/80",
+          dotClass: "bg-sky-500 dark:bg-sky-300/80",
+          pulse: false,
+        }
+      : {
+          label: wait.label,
+          colorClass: "text-sidebar-muted-foreground",
+          dotClass: "bg-sidebar-muted-foreground",
+          pulse: false,
+        };
   }
 
   if (hasUnseenFailure(thread)) {

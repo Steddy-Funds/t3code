@@ -1,5 +1,6 @@
 import { ThreadHoverCard, ThreadHoverCardPopup } from "../ThreadHoverCard";
 import { ThreadTerminalStatusButton } from "../ThreadStatusIndicators";
+import { PullRequestGlyph } from "../pullRequest/pullRequestIcons";
 import { discardComposerDraft } from "../../lib/discardComposerDraft";
 import { requestCustomSnooze } from "../CustomSnoozeDialog";
 import { useSupportsMultiplePullRequests } from "~/hooks/useSupportsMultiplePullRequests";
@@ -13,6 +14,7 @@ import {
   QUEUED_TURN_START_GRACE_MS,
 } from "@t3tools/client-runtime/state/thread-settled";
 import { formatDiffCount } from "@t3tools/client-runtime/diff-count";
+import { resolveThreadWait } from "@t3tools/client-runtime/state/thread-relationships";
 import { resolveSettledThreadTimestamp } from "@t3tools/client-runtime/state/thread-sort";
 import { type EnvironmentThreadSearchMatch } from "@t3tools/client-runtime/state/thread-search";
 import {
@@ -32,6 +34,7 @@ import {
   AlarmClockIcon,
   AlarmClockOffIcon,
   ArrowRightLeftIcon,
+  BotIcon,
   CheckIcon,
   CircleAlertIcon,
   CircleCheckIcon,
@@ -519,6 +522,8 @@ const dropVerbBadge: Record<SidebarDropVerb, ReactNode> = {
 const TOP_STATUS_ICONS = {
   working: CircleDashedIcon,
   waiting: CircleDotDashedIcon,
+  agents: BotIcon,
+  pull_request: PullRequestGlyph.pullRequest,
   input: MessageCircleQuestionIcon,
   request: UserRoundIcon,
   approval: ShieldQuestionIcon,
@@ -526,6 +531,15 @@ const TOP_STATUS_ICONS = {
   done: CircleCheckIcon,
   woke: AlarmClockIcon,
 } as const;
+
+function waitingTopStatus(wait: ReturnType<typeof resolveThreadWait>) {
+  return {
+    label: wait.label,
+    icon: wait.reason === "background" ? ("waiting" as const) : wait.reason,
+    // Its agents are still working, so it reads as working rather than idle.
+    className: wait.reason === "agents" ? "text-info-foreground" : "text-muted-foreground",
+  };
+}
 
 function TopStatusIcon(props: { icon: keyof typeof TOP_STATUS_ICONS; className: string }) {
   const Icon = TOP_STATUS_ICONS[props.icon];
@@ -734,11 +748,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
           className: "text-info-foreground",
         }
       : status === "waiting"
-        ? {
-            label: "Waiting",
-            icon: "waiting" as const,
-            className: "text-muted-foreground",
-          }
+        ? waitingTopStatus(resolveThreadWait(thread))
         : status === "approval"
           ? {
               label: "Approval",

@@ -458,7 +458,7 @@ describe("resolveThreadStatusPill", () => {
     const blocked = { ...baseThread, blockedOnThreadWait: true };
     expect(resolveSidebarThreadStatus(blocked)).toBe("waiting");
     expect(resolveThreadStatusPill({ thread: blocked })).toMatchObject({
-      label: "Waiting",
+      label: "Agents",
       pulse: false,
     });
 

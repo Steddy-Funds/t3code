@@ -165,6 +165,36 @@ describe("MachineHoverTarget", () => {
     await vi.waitFor(() => expect(liveKeys()).toEqual([]));
   });
 
+  it("a labelled plain trigger is a tab stop that opens on Enter and Space", async () => {
+    setup();
+    await using screen = await render(
+      <RegistryContext value={AtomRegistry.make()}>
+        <MachineHoverTarget environmentId={environmentId} label="Studio">
+          <span>icon</span>
+        </MachineHoverTarget>
+      </RegistryContext>,
+      { router: false }, // the card has no links
+    );
+    const trigger = screen.getByRole("button", { name: "Studio machine resources" });
+    await expect.element(trigger).toBeVisible();
+
+    await userEvent.tab();
+    await expect.element(trigger).toHaveFocus();
+
+    await userEvent.keyboard("{Enter}");
+    await expect.element(card()).toBeVisible();
+    expect(liveKeys()).toEqual([LIVE_MACHINE, TOP_PROCESSES]);
+
+    await userEvent.keyboard("{Escape}");
+    await expect.element(card()).not.toBeInTheDocument();
+    await vi.waitFor(() => expect(liveKeys()).toEqual([]));
+
+    trigger.element().focus();
+    await userEvent.keyboard(" ");
+    await expect.element(card()).toBeVisible();
+    expect(liveKeys()).toEqual([LIVE_MACHINE, TOP_PROCESSES]);
+  });
+
   it("gives a machine that doesn't serve the verdict no card and no subscription", async () => {
     setup({ indicator: { show: false } });
     await using screen = await renderTarget();

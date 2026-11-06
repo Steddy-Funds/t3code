@@ -345,6 +345,10 @@ describe("machineIndicatorAtom", () => {
 });
 
 describe("startMachineStatus", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("mounts the stream for each enabled, capable, connected machine and follows changes", () => {
     using app = setup();
     app.setPhase(OTHER, "connecting");
@@ -370,5 +374,45 @@ describe("startMachineStatus", () => {
     stop();
     app.flush();
     expect(app.mounted.size).toBe(0);
+  });
+
+  it("forgets a removed machine's last verdict, so re-adding it under the same id shows no last seen", () => {
+    vi.useFakeTimers({ now: 0 });
+    using app = setup();
+    const stop = app.atoms.startMachineStatus(app.registry);
+    const indicator = (environmentId: EnvironmentId) => {
+      const value = app.registry.get(app.atoms.machineIndicatorAtom(environmentId));
+      app.flush();
+      return value;
+    };
+    const setEntries = (environmentIds: ReadonlyArray<EnvironmentId>) =>
+      app.registry.set(app.catalog, {
+        isReady: true,
+        entries: new Map(
+          environmentIds.map((environmentId) => [environmentId, entry(environmentId)]),
+        ),
+      });
+    app.setStatus(ENVIRONMENT, STRESSED);
+    app.setStatus(OTHER, STRESSED);
+    expect(indicator(ENVIRONMENT).verdict).toBe("stressed");
+    expect(indicator(OTHER).verdict).toBe("stressed");
+    app.setPhase(ENVIRONMENT, "offline");
+    app.setPhase(OTHER, "offline");
+
+    // Control: removing another machine keeps this one's last verdict.
+    setEntries([ENVIRONMENT]);
+    app.flush();
+    expect(indicator(ENVIRONMENT).lastSeen).toEqual({ verdict: "stressed", ageMs: 0 });
+
+    setEntries([]);
+    app.flush();
+    setEntries([ENVIRONMENT]);
+    app.flush();
+    expect(indicator(ENVIRONMENT)).toMatchObject({
+      verdict: "unknown",
+      unreachable: true,
+      lastSeen: null,
+    });
+    stop();
   });
 });

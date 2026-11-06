@@ -24,6 +24,7 @@ upstream; a feature can, from its own branch, when Akiva decides.
 | Sidebar counts every live agent in a thread's tree, badge at 2+     | #53 | 36a450e |
 | Sidebar cards fit in two rows without the branch                    | #54 | ab7770f |
 | Agent badge hover shows the lineage tree; owner only for forks      | #55 | 699d8da |
+| Thread details: cost, tokens and activity for thread and lineage    | #56 | 1e9ea81 |
 
 Held: #38 (pods notes in the t3-orchestration skill). It edits
 `.agents/skills/t3-orchestration/`, which exists only on

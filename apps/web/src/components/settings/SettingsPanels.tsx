@@ -487,6 +487,10 @@ export function useSettingsRestore(onRestored?: () => void) {
     DEFAULT_UNIFIED_SETTINGS.sidebarPullRequestShelfEnabled
       ? ["PR review section"]
       : []),
+    ...(settings.sidebarBackgroundedShelfEnabled !==
+    DEFAULT_UNIFIED_SETTINGS.sidebarBackgroundedShelfEnabled
+      ? ["Background threads"]
+      : []),
     ...(settings.sidebarAutoSettleAfterDays !== DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleAfterDays
       ? ["Auto-settle inactive threads"]
       : []),
@@ -661,6 +665,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       sidebarProjectSortOrder: DEFAULT_UNIFIED_SETTINGS.sidebarProjectSortOrder,
       sidebarWorkingShelfEnabled: DEFAULT_UNIFIED_SETTINGS.sidebarWorkingShelfEnabled,
       sidebarPullRequestShelfEnabled: DEFAULT_UNIFIED_SETTINGS.sidebarPullRequestShelfEnabled,
+      sidebarBackgroundedShelfEnabled: DEFAULT_UNIFIED_SETTINGS.sidebarBackgroundedShelfEnabled,
       sidebarAutoSettleAfterDays: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleAfterDays,
       sidebarAutoSettleKeepPullRequests: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleKeepPullRequests,
       sidebarAutoSettleOnMerge: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleOnMerge,
@@ -941,6 +946,33 @@ export function GeneralSettingsPanel() {
                 updateSettings({ sidebarPullRequestShelfEnabled: Boolean(checked) })
               }
               aria-label="PR review section"
+            />
+          }
+        />
+        <SettingsRow
+          {...searchableSetting("backgrounded-shelf")}
+          description="Add Background to the thread menu. Backgrounded threads leave the inbox for a collapsed Backgrounded section and send no notifications. Agents can background threads too."
+          resetAction={
+            settings.sidebarBackgroundedShelfEnabled !==
+            DEFAULT_UNIFIED_SETTINGS.sidebarBackgroundedShelfEnabled ? (
+              <SettingResetButton
+                label="background threads"
+                onClick={() =>
+                  updateSettings({
+                    sidebarBackgroundedShelfEnabled:
+                      DEFAULT_UNIFIED_SETTINGS.sidebarBackgroundedShelfEnabled,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Switch
+              checked={settings.sidebarBackgroundedShelfEnabled}
+              onCheckedChange={(checked) =>
+                updateSettings({ sidebarBackgroundedShelfEnabled: Boolean(checked) })
+              }
+              aria-label="Background threads"
             />
           }
         />

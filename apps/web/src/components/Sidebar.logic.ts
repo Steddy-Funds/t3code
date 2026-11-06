@@ -172,9 +172,17 @@ export const animateSidebarLayoutChanges: AnimateLayoutChanges = (args) =>
   args.isSorting ? defaultAnimateLayoutChanges(args) : false;
 
 // Snoozed rows cannot accept drops without a wake time. Working and review rows only drag out as
-// chat context.
+// chat context. Backgrounded rows move only through the thread menu or an agent. A settled one
+// shelves as settled, since the server sends only the newest settled threads.
 
-export type SidebarSection = "pinned" | "active" | "review" | "working" | "snoozed" | "settled";
+export type SidebarSection =
+  | "pinned"
+  | "active"
+  | "review"
+  | "working"
+  | "snoozed"
+  | "backgrounded"
+  | "settled";
 
 /** Shelves the app places threads on; a drop cannot move a thread onto or off of them. */
 export function isPlacedSidebarSection(
@@ -216,10 +224,12 @@ export function pullRequestShelfMatches(
 }
 
 export function resolveSidebarThreadSection(input: {
+  readonly backgrounded: boolean;
   readonly snoozed: boolean;
   readonly settled: boolean;
   readonly pinned: boolean;
 }): SidebarSection {
+  if (input.backgrounded && !input.settled) return "backgrounded";
   if (input.snoozed) return "snoozed";
   if (input.settled) return "settled";
   if (input.pinned) return "pinned";
@@ -236,6 +246,7 @@ export type SidebarListMarker =
   | "review-header"
   | "working-header"
   | "snoozed-header"
+  | "backgrounded-header"
   | "settled-header";
 
 export function sidebarMarkerId(marker: SidebarListMarker): string {
@@ -259,6 +270,7 @@ function sectionAtSidebarSlot(items: readonly SidebarListItem[], index: number):
     else if (item.marker === "review-header") section = "review";
     else if (item.marker === "working-header") section = "working";
     else if (item.marker === "snoozed-header") section = "snoozed";
+    else if (item.marker === "backgrounded-header") section = "backgrounded";
     else if (item.marker === "settled-header") section = "settled";
   }
   return section;
@@ -281,7 +293,8 @@ export function resolveSidebarDropTarget(
   const moved = items.filter((_, index) => index !== activeIndex);
   moved.splice(overIndex, 0, items[activeIndex]!);
   const section = sectionAtSidebarSlot(moved, overIndex);
-  if (isPlacedSidebarSection(section) || section === "snoozed") return null;
+  if (isPlacedSidebarSection(section) || section === "snoozed" || section === "backgrounded")
+    return null;
   const pinnedOrder: string[] = [];
   const activeOrder: string[] = [];
   let currentSection: SidebarSection = "pinned";
@@ -292,6 +305,7 @@ export function resolveSidebarDropTarget(
         item.marker === "review-header" ||
         item.marker === "working-header" ||
         item.marker === "snoozed-header" ||
+        item.marker === "backgrounded-header" ||
         item.marker === "settled-header"
       )
         break;
@@ -324,13 +338,21 @@ type SidebarThreadDropPlan =
     }
   | { readonly kind: "settle" };
 
-export type SidebarDropVerb = "pin" | "unpin" | "settle" | "unsettle" | "wake";
+/** "foreground" only labels a sweep across backgrounded rows; no drop resolves to it. */
+export type SidebarDropVerb = "pin" | "unpin" | "settle" | "unsettle" | "wake" | "foreground";
 
 export function resolveSidebarDropVerb(
   from: SidebarSection,
   to: SidebarSection | null,
 ): SidebarDropVerb | null {
-  if (to === null || to === from || isPlacedSidebarSection(to) || to === "snoozed") return null;
+  if (
+    to === null ||
+    to === from ||
+    isPlacedSidebarSection(to) ||
+    to === "snoozed" ||
+    to === "backgrounded"
+  )
+    return null;
   if (to === "pinned") return "pin";
   if (to === "settled") return "settle";
   if (from === "pinned") return "unpin";

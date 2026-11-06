@@ -33,6 +33,7 @@ import {
   type SidebarListMarker,
   type SidebarSection,
   resolveSidebarDropVerb,
+  resolveSidebarThreadSection,
   groupSidebarThreadsByProject,
   resolveSidebarFolderDot,
   sidebarFolderExpansionKeys,
@@ -1125,6 +1126,26 @@ describe("Working shelf (beta)", () => {
         activeOrder: ["a1", "a2", "p1"],
       });
       expect(resolveSidebarDropVerb("active", "working")).toBeNull();
+    });
+
+    it("never drops into the Backgrounded shelf, and keeps it out of the inbox order", () => {
+      const withBackgrounded: SidebarListItem[] = [
+        ...items.slice(0, -2),
+        marker("backgrounded-header"),
+        row("b1", "backgrounded"),
+        ...items.slice(-2),
+      ];
+      expect(resolveSidebarDropTarget(withBackgrounded, "a1", "b1")).toBeNull();
+      expect(resolveSidebarDropTarget(withBackgrounded, "p1", "a2")?.activeOrder).toEqual([
+        "a1",
+        "a2",
+        "p1",
+      ]);
+      expect(resolveSidebarDropVerb("active", "backgrounded")).toBeNull();
+      const shelf = { backgrounded: true, snoozed: false, settled: false, pinned: true };
+      expect(resolveSidebarThreadSection(shelf)).toBe("backgrounded");
+      expect(resolveSidebarThreadSection({ ...shelf, snoozed: true })).toBe("backgrounded");
+      expect(resolveSidebarThreadSection({ ...shelf, settled: true })).toBe("settled");
     });
 
     it.each([

@@ -19,6 +19,7 @@ const isShelfHeader = (item: SidebarListItem | undefined) =>
   (item.marker === "review-header" ||
     item.marker === "working-header" ||
     item.marker === "snoozed-header" ||
+    item.marker === "backgrounded-header" ||
     item.marker === "settled-header");
 
 export function restrictBelowSidebarLabel(
@@ -58,7 +59,9 @@ export function createSidebarCollisionDetection(
       if (pointer.x >= boundary.left && pointer.x <= boundary.right) {
         if (pointer.y < previousY && pointer.y <= boundary.bottom) boundarySection = "pinned";
         else if (pointer.y > previousY && pointer.y >= boundary.top) boundarySection = "active";
-        const nextHeader = (["working-header", "snoozed-header", "settled-header"] as const)
+        const nextHeader = (
+          ["working-header", "snoozed-header", "backgrounded-header", "settled-header"] as const
+        )
           .map((marker) =>
             args.droppableContainers.find((container) => container.id === sidebarMarkerId(marker)),
           )
@@ -122,6 +125,7 @@ export function createSidebarSortingStrategy(input: {
       review: [],
       working: [],
       snoozed: [],
+      backgrounded: [],
       settled: [],
     };
     let cardHeight = input.cardHeight;
@@ -199,6 +203,11 @@ export function createSidebarSortingStrategy(input: {
     ) {
       marker("snoozed-header");
       projected.push(...groups.snoozed);
+    }
+    // Backgrounded rows never drag, so the shelf only keeps its place.
+    if (items.some((item) => item.kind === "marker" && item.marker === "backgrounded-header")) {
+      marker("backgrounded-header");
+      projected.push(...groups.backgrounded);
     }
     marker("settled-header");
     section("settled");

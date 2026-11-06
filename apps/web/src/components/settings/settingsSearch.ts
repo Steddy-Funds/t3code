@@ -460,6 +460,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["pull request watch draft open review sidebar shelf"],
   },
   {
+    id: "backgrounded-shelf",
+    title: "Background threads",
+    to: "/settings/general",
+    searchTerms: ["backgrounded autonomous long running agents hide sidebar shelf"],
+  },
+  {
     id: "boring-sidebar",
     title: "Boring sidebar (group by project)",
     to: "/settings/labs",

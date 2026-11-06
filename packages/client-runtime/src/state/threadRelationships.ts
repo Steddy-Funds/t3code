@@ -4,6 +4,7 @@ import {
   type OrchestrationV2ThreadShell,
   type ThreadId,
 } from "@t3tools/contracts";
+import { isPullRequestWatchTask } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import * as DateTime from "effect/DateTime";
 
 export type ThreadRelationshipKind = "parent" | "fork" | "subagent" | "transfer";
@@ -18,6 +19,32 @@ type ThreadStatusSource = {
 
 export function threadAwaitsChildren(thread: ThreadStatusSource | null | undefined): boolean {
   return thread?.pendingBackgroundTasks?.some((task) => task.kind === "subagent") === true;
+}
+
+export type ThreadWaitReason = "agents" | "pull_request" | "background";
+
+function countLabel(count: number, noun: string, unknown: string) {
+  return count === 0 ? unknown : `${count} ${noun}${count === 1 ? "" : "s"}`;
+}
+
+/** What a waiting thread waits on, so a list row can say more than "Waiting". */
+export function resolveThreadWait(thread: {
+  readonly blockedOnThreadWait?: boolean | undefined;
+  readonly pendingBackgroundTasks?:
+    | ReadonlyArray<{ readonly kind: string; readonly taskId: string }>
+    | undefined;
+}): { readonly reason: ThreadWaitReason; readonly label: string } {
+  const tasks = thread.pendingBackgroundTasks ?? [];
+  const agents = tasks.filter((task) => task.kind === "subagent").length;
+  // A blocking delegate or t3_thread_wait holds an active run, which lists no tasks.
+  if (agents > 0 || thread.blockedOnThreadWait === true) {
+    return { reason: "agents", label: countLabel(agents, "agent", "Agents") };
+  }
+  const pullRequests = tasks.filter(isPullRequestWatchTask).length;
+  if (pullRequests > 0) {
+    return { reason: "pull_request", label: pullRequests === 1 ? "PR" : `${pullRequests} PRs` };
+  }
+  return { reason: "background", label: "Waiting" };
 }
 
 function shellRelationshipStatus(thread: ThreadStatusSource, settled: string | null) {

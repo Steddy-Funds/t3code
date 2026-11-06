@@ -7,6 +7,7 @@ import {
   immediateThreadRelationships,
   orderWebThreadLineageRows,
   resolveMergeBackTargetThreadId,
+  resolveThreadWait,
   threadRelationshipRowStatus,
 } from "./threadRelationships.ts";
 
@@ -69,6 +70,33 @@ describe("thread relationships", () => {
     expect(
       threadRelationshipRowStatus(graph, immediateThreadRelationships(graph, parent)[0]!),
     ).toBe(expected);
+  });
+
+  const prWatch = { taskId: "pull-request-watch:github.com/o/r#1", kind: "monitor" };
+  it.each([
+    [[{ taskId: "a", kind: "subagent" }, prWatch], false, "agents", "1 agent"],
+    [
+      [
+        { taskId: "a", kind: "subagent" },
+        { taskId: "b", kind: "subagent" },
+      ],
+      false,
+      "agents",
+      "2 agents",
+    ],
+    [[], true, "agents", "Agents"],
+    [[prWatch], false, "pull_request", "PR"],
+    [
+      [prWatch, { ...prWatch, taskId: "pull-request-watch:github.com/o/r#2" }],
+      false,
+      "pull_request",
+      "2 PRs",
+    ],
+    [[{ taskId: "c", kind: "command" }], false, "background", "Waiting"],
+  ])("names what a waiting thread waits on: %j blocked=%s", (tasks, blocked, reason, label) => {
+    expect(
+      resolveThreadWait({ pendingBackgroundTasks: tasks, blockedOnThreadWait: blocked }),
+    ).toEqual({ reason, label });
   });
 
   it("does not label a missing parent with its child's running status", () => {

@@ -1282,6 +1282,9 @@ const threadWorktreePathsIncludeArchivedOnRequest = Effect.gen(function* () {
       [ThreadId.make("thread:archived")]: "Title for thread:archived",
     },
   );
+  assert.equal(yield* store.getLineageUsageRecords(deleted.id), null);
+  const archivedUsage = yield* store.getLineageUsageRecords(ThreadId.make("thread:archived"));
+  assert.deepEqual(archivedUsage?.threadIds, [ThreadId.make("thread:archived")]);
 });
 
 const commandReadsSkipSettledLeafNodes = Effect.gen(function* () {

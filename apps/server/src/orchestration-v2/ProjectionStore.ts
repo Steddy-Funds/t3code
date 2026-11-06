@@ -73,6 +73,7 @@ import {
   CheckpointId,
   ThreadId,
   TurnItemId,
+  TurnTokenUsage,
   NodeId,
   ProjectId,
   ProviderInstanceId,
@@ -89,6 +90,7 @@ import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 import type * as Statement from "effect/sql/Statement";
@@ -383,6 +385,21 @@ const inheritsForkConversation = ({
   );
 };
 
+export interface ProjectionLineageUsageTurn {
+  readonly threadId: ThreadId;
+  readonly startedAt: string | null;
+  readonly completedAt: string | null;
+  readonly usage: TurnTokenUsage | null;
+}
+
+export interface ProjectionLineageUsageRecords {
+  readonly threadIds: ReadonlyArray<ThreadId>;
+  /** Each thread's selected model, for turns recorded before usage carried model ids. */
+  readonly threadModels: ReadonlyMap<ThreadId, string>;
+  readonly providerTurns: ReadonlyArray<ProjectionLineageUsageTurn>;
+  readonly toolCalls: ReadonlyMap<ThreadId, number>;
+}
+
 export type ProjectionRecordField = Exclude<
   keyof OrchestrationV2ThreadProjection,
   "thread" | "updatedAt" | "visibleTurnItems"
@@ -559,6 +576,10 @@ export interface ProjectionStoreV2Shape {
   readonly getThreadsWithPullRequests: (
     threadId?: ThreadId,
   ) => Effect.Effect<ReadonlyArray<ProjectionThreadPullRequests>, ProjectionStoreV2Error>;
+  /** Usage inputs for every live thread sharing the thread's lineage root; null when it is missing. */
+  readonly getLineageUsageRecords: (
+    threadId: ThreadId,
+  ) => Effect.Effect<ProjectionLineageUsageRecords | null, ProjectionStoreV2Error>;
   /** Titles of the given threads that exist, archived ones included. */
   readonly getThreadTitles: (
     threadIds: ReadonlyArray<ThreadId>,
@@ -1200,6 +1221,7 @@ const decodeMessagePayload = Schema.decodeUnknownEffect(
 const decodePlanJson = Schema.decodeUnknownEffect(
   Schema.fromJsonString(OrchestrationV2PlanArtifactSchema),
 );
+const decodeTurnTokenUsageJson = Schema.decodeUnknownOption(Schema.fromJsonString(TurnTokenUsage));
 const decodeTurnItemPayload = Schema.decodeUnknownEffect(
   Schema.fromJsonString(OrchestrationV2TurnItemJsonSchema),
 );
@@ -7248,6 +7270,62 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       return Object.fromEntries(rows.map((row) => [row.thread_id, row.title]));
     }, Effect.mapError(shellSnapshotReadError));
 
+    const getLineageUsageRecords = Effect.fn("ProjectionStore.getLineageUsageRecords")(function* (
+      threadId: ThreadId,
+    ) {
+      const threadRows = yield* sql<{ readonly thread_id: string; readonly model: string | null }>`
+        SELECT thread_id, json_extract(payload_json, '$.modelSelection.model') AS model
+        FROM orchestration_v2_projection_threads
+        WHERE deleted_at IS NULL AND json_extract(payload_json, '$.lineage.rootThreadId') = (
+          SELECT json_extract(payload_json, '$.lineage.rootThreadId')
+          FROM orchestration_v2_projection_threads
+          WHERE thread_id = ${threadId} AND deleted_at IS NULL
+        )
+      `;
+      if (threadRows.length === 0) return null;
+      const threadIds = threadRows.map((row) => ThreadId.make(row.thread_id));
+      const [turnRows, toolRows] = yield* Effect.all([
+        sql<{
+          readonly thread_id: string;
+          readonly started_at: string | null;
+          readonly completed_at: string | null;
+          readonly usage_json: string | null;
+        }>`
+          SELECT thread_id, started_at, completed_at,
+            json_extract(payload_json, '$.turnTokenUsage') AS usage_json
+          FROM orchestration_v2_projection_provider_turns
+          WHERE thread_id IN ${sql.in(threadIds)}
+        `,
+        sql<{ readonly thread_id: string; readonly count: number }>`
+          SELECT thread_id, COUNT(*) AS count
+          FROM orchestration_v2_projection_turn_items
+          WHERE thread_id IN ${sql.in(threadIds)}
+            AND type IN ('command_execution', 'dynamic_tool', 'file_change', 'file_search', 'web_search')
+          GROUP BY thread_id
+        `,
+      ]);
+      return {
+        threadIds,
+        threadModels: new Map(
+          threadRows.flatMap((row) =>
+            typeof row.model === "string" && row.model.trim().length > 0
+              ? [[ThreadId.make(row.thread_id), row.model.trim()] as const]
+              : [],
+          ),
+        ),
+        providerTurns: turnRows.map((row) => ({
+          threadId: ThreadId.make(row.thread_id),
+          startedAt: row.started_at,
+          completedAt: row.completed_at,
+          usage:
+            row.usage_json === null
+              ? null
+              : Option.getOrNull(decodeTurnTokenUsageJson(row.usage_json)),
+        })),
+        toolCalls: new Map(toolRows.map((row) => [ThreadId.make(row.thread_id), row.count])),
+      } satisfies ProjectionLineageUsageRecords;
+    }, Effect.mapError(shellSnapshotReadError));
+
     const findGuestShareThreadId = Effect.fn("ProjectionStore.findGuestShareThreadId")(function* (
       shareId: GuestShareId,
     ) {
@@ -7414,6 +7492,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       getThread: readOnReader(getThread),
       getSettlementCandidates: readOnReader(getSettlementCandidates),
       getThreadsWithPullRequests: readOnReader(getThreadsWithPullRequests),
+      getLineageUsageRecords: readOnReader(getLineageUsageRecords),
       getThreadTitles: readOnReader(getThreadTitles),
       getThreadWorktreePaths: readOnReader(getThreadWorktreePaths),
       getOpenRemoteDelegatedTasks: getOpenRemoteDelegatedTasks.pipe(NodeSqliteClient.readOnly),

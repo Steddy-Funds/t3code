@@ -1,9 +1,13 @@
 import type {
+  EnvironmentId,
   ProviderInstanceId,
   ServerProvider,
   ServerProviderUsageWindow,
+  ThreadId,
+  ThreadUsageScope,
   UsageLimitSourceSnapshots,
 } from "@t3tools/contracts";
+import { formatCount, formatTokens, formatUsd } from "@t3tools/shared/usageFormat";
 import {
   collectProviderUsageLimits,
   formatDuration,
@@ -12,14 +16,17 @@ import {
   paceOf,
   remainingPercent,
 } from "@t3tools/shared/usageLimits";
-import type { ReactNode } from "react";
+import { useEffect, type ReactNode } from "react";
 
 import { usePrimarySettings } from "../../hooks/useSettings";
 import { useNowMinute } from "../../hooks/useNowMinute";
 import type { ContextWindowSnapshot } from "@t3tools/client-runtime/state/context-window";
 import { formatContextWindowTokens } from "../../lib/contextWindow";
 import { cn } from "../../lib/utils";
-import { formatUpcomingTimestamp } from "../../timestampFormat";
+import { useQuietThreadShell } from "../../state/entities";
+import { useEnvironmentQuery } from "../../state/query";
+import { serverEnvironment } from "../../state/server";
+import { formatRelativeTimeLabel, formatUpcomingTimestamp } from "../../timestampFormat";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { formatContextWindowCompactionMessage } from "./ContextWindowMeter.logic";
 import { ThreadDetailsSection } from "./ThreadDetailsSection";
@@ -135,6 +142,189 @@ export function ThreadDetailsContext({ usage }: { readonly usage: ContextWindowS
         />
       </div>
     </ThreadDetailsSection>
+  );
+}
+
+/** List-price cost, tokens, and activity for the thread and, when it has relatives, its lineage. */
+export function ThreadDetailsCost({
+  environmentId,
+  threadId,
+}: {
+  readonly environmentId: EnvironmentId;
+  readonly threadId: ThreadId;
+}) {
+  const query = useEnvironmentQuery(
+    serverEnvironment.threadUsage({ environmentId, input: { threadId } }),
+  );
+  const completedAt = useQuietThreadShell({ environmentId, threadId })?.latestRun?.completedAt;
+  const { refresh } = query;
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- refetch server totals when a run settles
+  useEffect(() => {
+    if (completedAt) refresh();
+  }, [completedAt, refresh]);
+  const nowMinute = useNowMinute();
+  const now = Date.parse(`${nowMinute}:00Z`);
+  const usage = query.data;
+  if (!usage || usage.thread.providerTurns === 0) return null;
+  const pricingKnown = usage.pricing.status !== "unavailable";
+  const showLineage = usage.lineage.threads > 1;
+
+  return (
+    <ThreadDetailsSection
+      headingId="thread-details-cost-heading"
+      title="Cost and activity"
+      showHeading={false}
+    >
+      <div className="grid grid-cols-[auto_minmax(3rem,1fr)_auto] gap-x-3 text-xs">
+        <CostRow label="Thread cost" scope={usage.thread} pricingKnown={pricingKnown} />
+        {showLineage ? (
+          <CostRow
+            label={`Lineage · ${usage.lineage.threads}`}
+            scope={usage.lineage}
+            pricingKnown={pricingKnown}
+          />
+        ) : null}
+        <UsageRow
+          label="Tokens"
+          fill={null}
+          tone={null}
+          value={`${formatTokens(inputTokens(usage.thread))} in · ${formatTokens(usage.thread.totals.outputTokens)} out`}
+          tooltip={<TokenBreakdown scope={usage.thread} title="This thread" />}
+        />
+        <UsageRow
+          label="Activity"
+          fill={null}
+          tone={null}
+          value={`${formatCount(usage.thread.providerTurns)} turns · ${formatActive(usage.thread.activeMs)}`}
+          tooltip={
+            <>
+              <ActivityLines scope={usage.thread} now={now} title="This thread" />
+              {showLineage ? (
+                <ActivityLines scope={usage.lineage} now={now} title="Lineage" />
+              ) : null}
+            </>
+          }
+        />
+      </div>
+    </ThreadDetailsSection>
+  );
+}
+
+const inputTokens = (scope: ThreadUsageScope) =>
+  scope.totals.uncachedInputTokens +
+  scope.totals.cachedInputTokens +
+  scope.totals.cacheCreationTokens;
+
+function formatActive(ms: number) {
+  return ms < 60_000 ? `${Math.round(ms / 1000)}s active` : `${formatDuration(ms)} active`;
+}
+
+function CostRow({
+  label,
+  scope,
+  pricingKnown,
+}: {
+  readonly label: string;
+  readonly scope: ThreadUsageScope;
+  readonly pricingKnown: boolean;
+}) {
+  const measured = scope.providerTurns - scope.unmeasuredTurns;
+  const priced = pricingKnown && measured > scope.unpricedTurns;
+  return (
+    <UsageRow
+      label={label}
+      fill={null}
+      tone={null}
+      value={priced ? `~${formatUsd(scope.costUsd)}` : "Unpriced"}
+      ariaValue={priced ? `about ${formatUsd(scope.costUsd)}` : "no price available"}
+      tooltip={
+        <>
+          <span className="text-foreground">
+            {priced ? `About ${formatUsd(scope.costUsd)} at API list prices` : "No price available"}
+          </span>
+          {scope.threads > 1 ? (
+            <span className="text-muted-foreground">
+              {formatCount(scope.threads)} threads: forks, side chats, and delegated tasks
+            </span>
+          ) : null}
+          {scope.models.map((model) => (
+            <span key={model.model} className="text-muted-foreground tabular-nums">
+              {model.model}: {model.costUsd === null ? "unpriced" : formatUsd(model.costUsd)}
+            </span>
+          ))}
+          {scope.unpricedTurns > 0 ? (
+            <span className="text-muted-foreground">
+              {formatCount(scope.unpricedTurns)} turns from unpriced models are not counted
+            </span>
+          ) : null}
+          {scope.unmeasuredTurns > 0 ? (
+            <span className="text-muted-foreground">
+              {formatCount(scope.unmeasuredTurns)} turns reported no token counts
+            </span>
+          ) : null}
+          <span className="text-muted-foreground">
+            Subscriptions bill differently; this is what the tokens would cost on the API.
+          </span>
+        </>
+      }
+    />
+  );
+}
+
+function TokenBreakdown({
+  scope,
+  title,
+}: {
+  readonly scope: ThreadUsageScope;
+  readonly title: string;
+}) {
+  const { totals } = scope;
+  return (
+    <>
+      <span className="text-foreground">
+        {title}: {formatTokens(inputTokens(scope) + totals.outputTokens)} tokens
+      </span>
+      <span className="text-muted-foreground tabular-nums">
+        Input {formatCount(totals.uncachedInputTokens)}
+      </span>
+      <span className="text-muted-foreground tabular-nums">
+        Cache read {formatCount(totals.cachedInputTokens)}
+      </span>
+      <span className="text-muted-foreground tabular-nums">
+        Cache write {formatCount(totals.cacheCreationTokens)}
+      </span>
+      <span className="text-muted-foreground tabular-nums">
+        Output {formatCount(totals.outputTokens)}
+        {totals.reasoningTokens > 0 ? ` (${formatCount(totals.reasoningTokens)} reasoning)` : ""}
+      </span>
+    </>
+  );
+}
+
+function ActivityLines({
+  scope,
+  now,
+  title,
+}: {
+  readonly scope: ThreadUsageScope;
+  readonly now: number;
+  readonly title: string;
+}) {
+  return (
+    <>
+      <span className="text-foreground">
+        {title}: {formatCount(scope.providerTurns)} turns, {formatCount(scope.toolCalls)} tool calls
+      </span>
+      <span className="text-muted-foreground">{formatActive(scope.activeMs)} in total</span>
+      {scope.firstActivityAt ? (
+        <span className="text-muted-foreground">
+          First turn {formatRelativeTimeLabel(scope.firstActivityAt, now)}
+          {scope.lastActivityAt
+            ? `, last ${formatRelativeTimeLabel(scope.lastActivityAt, now)}`
+            : ""}
+        </span>
+      ) : null}
+    </>
   );
 }
 

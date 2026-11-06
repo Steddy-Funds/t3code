@@ -162,6 +162,7 @@ function ProjectGroupLabel(props: {
       {props.environmentLabel ? (
         <View className="max-w-[42%] flex-row items-center gap-1">
           <EnvironmentMachineSymbol
+            environmentId={props.project.environmentId}
             kind={props.environmentMachine}
             size={10}
             tintColorClassName="accent-foreground-tertiary"

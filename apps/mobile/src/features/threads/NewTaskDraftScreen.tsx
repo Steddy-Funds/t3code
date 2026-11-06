@@ -717,6 +717,7 @@ export function NewTaskDraftScreen(props: {
 
   const environmentControl = (
     <DraftEnvironmentControl
+      environmentId={selectedProject.environmentId}
       connectionState={connectionState}
       label={selectedEnvironmentLabel}
       machineKind={resolveEnvironmentMachineKind(selectedEnvironmentServerConfig)}

@@ -846,6 +846,7 @@ function TaskForm({
             value={environmentLabel}
             valueIcon={
               <EnvironmentMachineSymbol
+                environmentId={environmentId}
                 kind={resolveEnvironmentMachineKind(config)}
                 size={18}
                 tintColorClassName="accent-foreground-muted"
@@ -1432,6 +1433,7 @@ function EnvironmentTasks({
       title={environment.label}
       titleIcon={
         <EnvironmentMachineSymbol
+          environmentId={environmentId}
           kind={resolveEnvironmentMachineKind(environment.serverConfig)}
           size={16}
           tintColorClassName={

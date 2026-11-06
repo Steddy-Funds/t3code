@@ -33,6 +33,19 @@ Held: #38 (pods notes in the t3-orchestration skill). It edits
 `.agents/skills/t3-orchestration/`, which exists only on
 `orchestration-extension`. It comes in with that skill, if the skill is ported.
 
+## Server tip
+
+`akiva/server-tip` is `main` plus only the features above that change the
+server, so the servers (orch-t3 on the Linux host) run fewer, steadier changes.
+The Mac runs this tip, which already has them all.
+
+- #51 Background threads (MCP tools)
+- #56 Thread usage RPC (`server.getThreadUsage`)
+
+A feature that changes `apps/server`, or a contract the server reads, is
+merged there too: its branch head with `--no-ff`, never this tip.
+Client-settings fields are frontend.
+
 ## Adding a feature
 
 1. Branch from `main`, so the feature stays separate. Branch from
@@ -40,11 +53,12 @@ Held: #38 (pods notes in the t3-orchestration skill). It edits
 2. Open the PR against `akiva/feature-tip`. Never against upstream.
 3. Merge it with a merge commit (not a squash), so each feature stays one
    traceable merge. Add a row to the table above.
+4. A server feature also merges into `akiva/server-tip` (Server tip).
 
 ## Syncing with upstream
 
 1. Sync the fork's `main` from pingdotgg/t3code (fast-forward only).
-2. Merge `main` into `akiva/feature-tip` and fix any conflicts in the merge
-   commit. If a feature has landed upstream, revert its merge here and drop
+2. Merge `main` into `akiva/feature-tip` and `akiva/server-tip`, and fix any
+   conflicts in the merge commit. If a feature has landed upstream, revert its merge here and drop
    its row.
 3. Run typecheck and the web unit tests before pushing the tip.

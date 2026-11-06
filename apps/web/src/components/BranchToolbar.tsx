@@ -236,6 +236,7 @@ const RunContextSelector = memo(function RunContextSelector({
         ) : (
           <EnvironmentMachineIcon
             kind={activeEnvironment?.machine ?? "server"}
+            environmentId={activeEnvironment?.environmentId}
             // Wide machine glyphs need a little more box to match the square row icons.
             className={
               isPanel ? cn(THREAD_DETAILS_PANEL_ICON_CLASS, "-mx-px size-4.5") : "size-3 shrink-0"
@@ -358,7 +359,11 @@ const RunContextSelector = memo(function RunContextSelector({
                     closeOnClick
                   >
                     <span className="flex min-w-0 items-center gap-1.5">
-                      <EnvironmentMachineIcon kind={env.machine} className="size-3" />
+                      <EnvironmentMachineIcon
+                        kind={env.machine}
+                        environmentId={env.environmentId}
+                        className="size-3"
+                      />
                       <span className="min-w-0 truncate">{env.label}</span>
                     </span>
                   </MenuRadioItem>
@@ -379,7 +384,11 @@ const RunContextSelector = memo(function RunContextSelector({
                         onClick={() => onAddToMachine(target.environmentId)}
                       >
                         <span className="flex min-w-0 items-center gap-1.5">
-                          <EnvironmentMachineIcon kind={target.machine} className="size-3" />
+                          <EnvironmentMachineIcon
+                            kind={target.machine}
+                            environmentId={target.environmentId}
+                            className="size-3"
+                          />
                           <span className="min-w-0 truncate">{target.label}</span>
                         </span>
                       </MenuItem>

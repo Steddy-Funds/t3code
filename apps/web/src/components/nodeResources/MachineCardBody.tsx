@@ -10,7 +10,7 @@ import {
   formatPerCore,
   formatProcessMemory,
   type MachineIndicatorView,
-  type MachineProcessRow,
+  type MachineProcessSummary,
   type MachineStatusSnapshot,
   type MachineTotalsSummary,
   memoryUsedBytes,
@@ -25,7 +25,7 @@ export type MachineProcessList =
   | {
       readonly status: "ready";
       readonly source: "t3" | "host";
-      readonly rows: ReadonlyArray<MachineProcessRow>;
+      readonly rows: ReadonlyArray<MachineProcessSummary>;
     }
   | { readonly status: "needs-monitor" }
   | { readonly status: "needs-scope" }
@@ -271,7 +271,7 @@ function ProcessesSection({ processes }: { readonly processes: MachineProcessLis
             />
             <TopColumn
               title={`Top by memory${scope}`}
-              rows={topProcessesByName(processes.rows, "rssBytes", TOP_ROWS).map((top) => ({
+              rows={topProcessesByName(processes.rows, "rss", TOP_ROWS).map((top) => ({
                 top,
                 value: formatProcessMemory(top.value),
               }))}

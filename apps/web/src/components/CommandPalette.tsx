@@ -1137,7 +1137,13 @@ function OpenCommandPaletteDialog(props: {
         : option.environmentId
       : option.status,
     disabled: !option.isConnected,
-    icon: <EnvironmentMachineIcon kind={option.machine} className={ITEM_ICON_CLASS} />,
+    icon: (
+      <EnvironmentMachineIcon
+        kind={option.machine}
+        environmentId={option.environmentId}
+        className={ITEM_ICON_CLASS}
+      />
+    ),
     keepOpen: true,
     run: async () => {
       run(option.environmentId);

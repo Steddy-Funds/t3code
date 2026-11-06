@@ -4,7 +4,11 @@ import {
   connectionRouteLabel,
   connectionRoutes,
 } from "@t3tools/client-runtime/connection";
-import type { DesktopSshEnvironmentTarget, EnvironmentMachineKind } from "@t3tools/contracts";
+import type {
+  DesktopSshEnvironmentTarget,
+  EnvironmentId,
+  EnvironmentMachineKind,
+} from "@t3tools/contracts";
 import * as Option from "effect/Option";
 import type { ReactNode } from "react";
 
@@ -13,6 +17,7 @@ import type { EnvironmentPresentation } from "~/state/environments";
 import { usePreparedConnection } from "~/state/session";
 import { isDesktopLocalConnectionTarget } from "~/connection/desktopLocal";
 import { EnvironmentMachineIcon } from "../EnvironmentMachineIcon";
+import { MachineHoverTarget } from "../nodeResources/MachineHoverTarget";
 
 export function formatDesktopSshTarget(target: DesktopSshEnvironmentTarget): string {
   const authority = target.username ? `${target.username}@${target.hostname}` : target.hostname;
@@ -67,6 +72,8 @@ export function EnvironmentTransportLabel(props: {
 
 export function EnvironmentRow({
   kind,
+  environmentId,
+  machineCard = false,
   label,
   subtitle,
   below,
@@ -76,6 +83,10 @@ export function EnvironmentRow({
   children,
 }: {
   readonly kind: EnvironmentMachineKind;
+  /** Draws the machine's verdict on the icon. */
+  readonly environmentId?: EnvironmentId | undefined;
+  /** Opens the machine card from the icon. */
+  readonly machineCard?: boolean;
   readonly label: string;
   readonly subtitle: ReactNode;
   readonly below?: ReactNode;
@@ -84,6 +95,14 @@ export function EnvironmentRow({
   readonly className?: string;
   readonly children?: ReactNode;
 }) {
+  const icon = (
+    <EnvironmentMachineIcon
+      aria-hidden
+      kind={kind}
+      environmentId={environmentId}
+      className={cn("size-4 text-muted-foreground", dimmed && "opacity-60")}
+    />
+  );
   return (
     <div
       className={cn(
@@ -92,11 +111,13 @@ export function EnvironmentRow({
       )}
     >
       {/* Dim only identity so switched-off controls remain readable and distinct from disabled controls. */}
-      <EnvironmentMachineIcon
-        aria-hidden
-        kind={kind}
-        className={cn("size-4 text-muted-foreground", dimmed && "opacity-60")}
-      />
+      {machineCard && environmentId ? (
+        <MachineHoverTarget environmentId={environmentId}>
+          <span className="inline-flex">{icon}</span>
+        </MachineHoverTarget>
+      ) : (
+        icon
+      )}
       <div className={cn("min-w-0", dimmed && "opacity-60")}>
         <p className="truncate text-sm font-medium text-foreground">{label}</p>
         <div className="truncate text-xs text-muted-foreground">{subtitle}</div>

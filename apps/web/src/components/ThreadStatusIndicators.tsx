@@ -801,6 +801,7 @@ export function ThreadRowTrailingStatus({ thread }: { thread: SidebarThreadSumma
           >
             <EnvironmentMachineIcon
               kind={remoteMachine}
+              environmentId={thread.environmentId}
               className="size-3 text-muted-foreground/60"
             />
           </TooltipTrigger>

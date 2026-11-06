@@ -39,9 +39,9 @@ const READY: MachineProcessList = {
   status: "ready",
   source: "host",
   rows: [
-    { name: "claude", cpu: 40, rssBytes: 2 * GIB },
-    { name: "claude", cpu: 30, rssBytes: GIB },
-    { name: "node", cpu: 50, rssBytes: 500 * 1024 ** 2 },
+    { name: "claude", cpu: 40, rss: 2 * GIB },
+    { name: "claude", cpu: 30, rss: GIB },
+    { name: "node", cpu: 50, rss: 500 * 1024 ** 2 },
   ],
 };
 

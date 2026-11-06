@@ -494,6 +494,7 @@ function MachinePicker(props: {
             <Radio value={machine.environmentId} />
             <EnvironmentMachineIcon
               kind={machine.machine}
+              environmentId={machine.environmentId}
               className="size-4 shrink-0 text-muted-foreground"
             />
             <span className="min-w-0 flex-1 truncate font-medium">{machine.label}</span>

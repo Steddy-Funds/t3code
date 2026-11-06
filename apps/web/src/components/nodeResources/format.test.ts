@@ -173,11 +173,11 @@ describe("memoryUsedPercent", () => {
 
 describe("topProcessesByName", () => {
   const rows = [
-    { name: "claude", cpu: 10, rssBytes: 300 },
-    { name: "node", cpu: 25, rssBytes: 100 },
-    { name: "claude", cpu: 20, rssBytes: 400 },
-    { name: "vite", cpu: 5, rssBytes: 900 },
-    { name: "git", cpu: 1, rssBytes: 50 },
+    { name: "claude", cpu: 10, rss: 300 },
+    { name: "node", cpu: 25, rss: 100 },
+    { name: "claude", cpu: 20, rss: 400 },
+    { name: "vite", cpu: 5, rss: 900 },
+    { name: "git", cpu: 1, rss: 50 },
   ];
 
   it("sums and counts rows sharing a name, sorted by the metric", () => {
@@ -190,7 +190,7 @@ describe("topProcessesByName", () => {
   });
 
   it("ranks by memory and keeps only the limit", () => {
-    expect(topProcessesByName(rows, "rssBytes", 2)).toEqual([
+    expect(topProcessesByName(rows, "rss", 2)).toEqual([
       { name: "vite", count: 1, value: 900 },
       { name: "claude", count: 2, value: 700 },
     ]);

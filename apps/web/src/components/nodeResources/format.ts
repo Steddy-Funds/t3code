@@ -1,56 +1,18 @@
-// Local copies of the b3 wire shapes until packages/contracts/src/machineResources.ts lands.
-export type MachineVerdict = "ok" | "stressed" | "unknown";
+import type { MachineIndicator } from "@t3tools/client-runtime/state/machineIndicator";
+import type { MachineProcessRow } from "@t3tools/client-runtime/state/machineProcessFrames";
+import type {
+  MachineStatusSnapshot,
+  MachineTotalsSummary,
+  MachineVerdictReason,
+} from "@t3tools/contracts";
 
-export interface MachineVerdictReason {
-  readonly rule: "load" | "memory" | "memoryPressure" | "cpu" | "gpuVram" | "gpuUtil";
-  readonly value: number;
-  readonly threshold: number;
-  readonly heldForMs: number;
-  readonly deviceId?: string;
-  readonly deviceName?: string;
-}
+export type { MachineStatusSnapshot, MachineTotalsSummary, MachineVerdictReason };
 
-export interface MachineTotalsSummary {
-  readonly cpuUtilization: number | null;
-  readonly cpuCount: number;
-  readonly load: { readonly one: number; readonly five: number; readonly fifteen: number } | null;
-  readonly memoryTotalBytes: number;
-  readonly memoryAvailableBytes: number;
-  readonly swapTotalBytes: number;
-  readonly swapUsedBytes: number;
-  readonly memoryPressure: "normal" | "warn" | "critical" | null;
-}
+/** What every machine surface reads: the derived indicator, minus `show`. */
+export type MachineIndicatorView = Omit<MachineIndicator, "show">;
 
-export interface MachineStatusSnapshot {
-  readonly sequence: number;
-  readonly verdict: MachineVerdict;
-  readonly verdictAgeMs: number;
-  readonly reason: MachineVerdictReason | null;
-  readonly sampleAgeMs: number;
-  readonly totals: MachineTotalsSummary | null;
-  readonly sample?: { readonly perCore: ReadonlyArray<number> };
-}
-
-export interface MachineLastSeen {
-  readonly verdict: MachineVerdict;
-  readonly ageMs: number;
-}
-
-/** What every machine surface reads: `resolveMachineIndicator`'s fields, minus `show`. */
-export interface MachineIndicatorView {
-  readonly verdict: MachineVerdict;
-  readonly unreachable: boolean;
-  readonly reason: MachineVerdictReason | null;
-  readonly lastSeen: MachineLastSeen | null;
-}
-
-/** One live process row, already folded from `MachineProcessFrame`s. */
-export interface MachineProcessRow {
-  readonly name: string;
-  /** Percent of one core. */
-  readonly cpu: number;
-  readonly rssBytes: number;
-}
+/** The fields of a folded process row the card ranks by. */
+export type MachineProcessSummary = Pick<MachineProcessRow, "name" | "cpu" | "rss">;
 
 export interface TopProcess {
   readonly name: string;
@@ -131,8 +93,8 @@ export function machineVerdictText(view: MachineIndicatorView): string | null {
 
 /** Sums rows sharing a name ("claude ×6") and returns the top `limit` by the metric. */
 export function topProcessesByName(
-  rows: ReadonlyArray<MachineProcessRow>,
-  metric: "cpu" | "rssBytes",
+  rows: ReadonlyArray<MachineProcessSummary>,
+  metric: "cpu" | "rss",
   limit: number,
 ): TopProcess[] {
   const byName = new Map<string, { count: number; value: number }>();

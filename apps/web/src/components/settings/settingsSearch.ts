@@ -344,6 +344,14 @@ export const SETTINGS_SEARCH_ITEMS = [
     ],
   },
   {
+    id: "sidebar-details-items",
+    title: "Sidebar details",
+    to: "/settings/appearance",
+    searchTerms: [
+      "customize show hide sidebar thread card branch model provider diff change count lines",
+    ],
+  },
+  {
     id: "effort-display",
     title: "Effort display",
     to: "/settings/appearance",

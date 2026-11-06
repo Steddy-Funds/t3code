@@ -34,7 +34,6 @@ import {
   AlarmClockIcon,
   AlarmClockOffIcon,
   ArrowRightLeftIcon,
-  FolderGit2Icon,
   CheckIcon,
   CircleAlertIcon,
   CircleCheckIcon,
@@ -114,7 +113,6 @@ import { getTriggerDisplayModelName } from "../chat/providerIconUtils";
 import { shouldShowInstanceBadge, type ProviderInstanceEntry } from "../../providerInstances";
 import { useThreadRunningTerminalIds } from "../../state/terminalSessions";
 import { useClientSettings } from "../../hooks/useSettings";
-import { formatWorktreePathForDisplay } from "../../worktreeCleanup";
 import { resolveSidebarDetailsVisibility } from "./sidebarDetailsItems";
 import { SidebarAgentBadge, showsAgentBadge } from "./SidebarAgentBadge";
 import { InlineButton } from "../ui/button";
@@ -1105,7 +1103,12 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
       />
     ) : null;
   const agentBadge = showsAgentBadge(agents, details.agentLineage) ? (
-    <SidebarAgentBadge threadRef={threadRef} agents={agents} fullLineage={details.agentLineage} />
+    <SidebarAgentBadge
+      threadRef={threadRef}
+      agents={agents}
+      fullLineage={details.agentLineage}
+      onThreadActivate={onThreadActivate}
+    />
   ) : null;
   const terminalStatusIcon = (
     <ThreadTerminalStatusButton
@@ -1257,8 +1260,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     </span>
   ) : null;
   const projectLabel = props.projectDisplayName;
-  const worktreeName =
-    twoRow && thread.worktreePath ? formatWorktreePathForDisplay(thread.worktreePath) : null;
+  const hoverBranch = twoRow ? thread.branch : null;
   const titleLineIcons =
     metaLineEmpty && !twoRow ? (
       <span aria-hidden className="inline-flex shrink-0 items-center gap-1">
@@ -1669,16 +1671,18 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                   <span
                     className={cn(
                       "min-w-0 truncate",
-                      worktreeName && "group-any-hover/sidebar-row:hidden",
+                      hoverBranch && "group-any-hover/sidebar-row:hidden",
                     )}
                   >
                     {projectLabel}
                   </span>
-                  {/* The branch line is hidden, so hover names the worktree in its place. */}
-                  {worktreeName ? (
-                    <span className="hidden min-w-0 items-center gap-1 group-any-hover/sidebar-row:flex">
-                      <FolderGit2Icon aria-hidden className="size-3 shrink-0 text-icon-muted" />
-                      <span className="truncate">{worktreeName}</span>
+                  {/* The branch line is hidden, so hover shows the branch in its place. */}
+                  {hoverBranch ? (
+                    <span className="hidden min-w-0 flex-1 items-center gap-1 group-any-hover/sidebar-row:flex">
+                      <GitBranchIcon aria-hidden className="size-3 shrink-0 text-icon-muted" />
+                      <span className="flex min-w-0 flex-1">
+                        <MiddleTruncate value={hoverBranch} showTitle={false} />
+                      </span>
                     </span>
                   ) : null}
                 </span>

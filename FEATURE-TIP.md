@@ -21,6 +21,8 @@ upstream; a feature can, from its own branch, when Akiva decides.
 | Sidebar names what a waiting thread waits on (agents, PR)           | #50 | 627adaf |
 | Background threads: Backgrounded section, thread menu and MCP       | #51 | b610ba6 |
 | Appearance > Sidebar details: hide branch, model, change count      | #52 | fd65dd9 |
+| Sidebar counts every live agent in a thread's tree, badge at 2+     | #53 | 36a450e |
+| Sidebar cards fit in two rows without the branch; repo owner toggle | #54 | ab7770f |
 
 Held: #38 (pods notes in the t3-orchestration skill). It edits
 `.agents/skills/t3-orchestration/`, which exists only on

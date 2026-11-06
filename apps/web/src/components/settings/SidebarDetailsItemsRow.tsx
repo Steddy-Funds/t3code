@@ -28,7 +28,7 @@ export function SidebarDetailsItemsRow() {
   return (
     <SettingsRow
       {...searchableSetting("sidebar-details-items")}
-      description="Choose what each sidebar thread card shows under its title."
+      description="Choose what each sidebar thread card shows. Without the branch, cards fit in two rows."
       resetAction={
         enabled === SIDEBAR_DETAILS_ITEMS.length ? null : (
           <SettingResetButton

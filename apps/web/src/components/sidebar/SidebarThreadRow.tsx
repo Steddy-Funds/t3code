@@ -105,7 +105,7 @@ import {
   ThreadSearchPullRequestNumber,
 } from "../ThreadStatusIndicators";
 import { pickSnoozePreset, resolveSnoozePresets, type SnoozePreset } from "../Sidebar.snooze";
-import { useThreadShell } from "../../state/entities";
+import { useLiveAgentCount, useThreadShell } from "../../state/entities";
 import { ProjectFavicon, type ProjectFaviconProject } from "../ProjectFavicon";
 import { ThreadSearchMatchExcerpt } from "../ThreadSearchMatch";
 import { makeWorkspaceFileDropHandlers } from "../chat/workspaceFileDrop";
@@ -542,12 +542,16 @@ const TOP_STATUS_ICONS = {
   woke: AlarmClockIcon,
 } as const;
 
-function waitingTopStatus(wait: ReturnType<typeof resolveThreadWait>) {
+function waitingTopStatus(wait: ReturnType<typeof resolveThreadWait>, liveAgents: number) {
+  // Its agents are still working, so it reads as working rather than idle. The count sits
+  // on the meta line, beside the pull requests.
+  if (wait.reason === "agents" || liveAgents > 0) {
+    return { label: "Agents", icon: "agents" as const, className: "text-info-foreground" };
+  }
   return {
     label: wait.label,
     icon: wait.reason === "background" ? ("waiting" as const) : wait.reason,
-    // Its agents are still working, so it reads as working rather than idle.
-    className: wait.reason === "agents" ? "text-info-foreground" : "text-muted-foreground",
+    className: "text-muted-foreground",
   };
 }
 
@@ -733,7 +737,10 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     : null;
 
   const isUnread = hasUnseenCompletion({ ...thread, lastVisitedAt });
-  const status = resolveSidebarThreadStatus(thread);
+  const liveAgents = useLiveAgentCount(threadRef);
+  const ownStatus = resolveSidebarThreadStatus(thread);
+  // A finished thread whose agents, or their agents, still work is not done yet.
+  const status = ownStatus === "ready" && liveAgents > 0 ? "waiting" : ownStatus;
   const lastVisitedDate = lastVisitedAt === undefined ? null : parseTimestampDate(lastVisitedAt);
   const wokeAtDate = props.wokeAt === null ? null : parseTimestampDate(props.wokeAt);
   const isWoke =
@@ -760,7 +767,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
           className: "text-info-foreground",
         }
       : status === "waiting"
-        ? waitingTopStatus(resolveThreadWait(thread))
+        ? waitingTopStatus(resolveThreadWait(thread), liveAgents)
         : status === "approval"
           ? {
               label: "Approval",
@@ -1100,6 +1107,14 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
         onOpenPullRequest={handlePrClick}
       />
     ) : null;
+  const agentBadge =
+    liveAgents >= 2 ? (
+      <span className="inline-flex shrink-0 items-center gap-0.5 tabular-nums">
+        <BotIcon aria-hidden className="size-3" />
+        {liveAgents}
+        <span className="sr-only"> agents working</span>
+      </span>
+    ) : null;
   const terminalStatusIcon = (
     <ThreadTerminalStatusButton
       threadRef={threadRef}
@@ -1172,6 +1187,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     !branch &&
     !showsScratchMachine &&
     prBadge === null &&
+    agentBadge === null &&
     diff === null &&
     runningTerminalIds.length === 0;
   const metaLine = metaLineEmpty ? null : (
@@ -1196,6 +1212,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
         <span className="flex-1" />
       )}
       {terminalStatusIcon}
+      {agentBadge}
       {prBadge}
       {diff ? (
         <span className="shrink-0 font-mono">

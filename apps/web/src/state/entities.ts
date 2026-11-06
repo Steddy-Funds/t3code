@@ -171,6 +171,11 @@ export function useChildThreadInputs(ref: ScopedThreadRef | null) {
   );
 }
 
+/** Agents working in a thread's tree, the thread itself included. */
+export function useLiveAgentCount(ref: ScopedThreadRef): number {
+  return useAtomValue(environmentThreadShells.liveAgentCountAtom(ref));
+}
+
 export function useThreadProjection(ref: ScopedThreadRef | null): EnvironmentThread | null {
   return useAtomValue(
     ref === null ? EMPTY_THREAD_PROJECTION_ATOM : environmentThreadDetails.threadAtom(ref),

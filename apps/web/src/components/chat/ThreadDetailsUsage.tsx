@@ -175,27 +175,30 @@ export function ThreadDetailsCost({
       title="Cost and activity"
       showHeading={false}
     >
-      <div className="grid grid-cols-[auto_minmax(3rem,1fr)_auto] gap-x-3 text-xs">
-        <CostRow label="Thread cost" scope={usage.thread} pricingKnown={pricingKnown} />
+      <div className="flex min-h-6 flex-wrap items-center px-1 text-xs font-medium text-muted-foreground tabular-nums">
+        <CostSegment label="Thread cost" scope={usage.thread} pricingKnown={pricingKnown} />
         {showLineage ? (
-          <CostRow
-            label={`Lineage · ${usage.lineage.threads}`}
-            scope={usage.lineage}
-            pricingKnown={pricingKnown}
-          />
+          <>
+            <Separator />
+            <CostSegment
+              label={`Lineage, ${formatCount(usage.lineage.threads)} threads`}
+              scope={usage.lineage}
+              pricingKnown={pricingKnown}
+            />
+          </>
         ) : null}
-        <UsageRow
+        <Separator />
+        <Segment
           label="Tokens"
-          fill={null}
-          tone={null}
-          value={`${formatTokens(inputTokens(usage.thread))} in · ${formatTokens(usage.thread.totals.outputTokens)} out`}
+          value={formatTokens(inputTokens(usage.thread) + usage.thread.totals.outputTokens)}
+          ariaValue={`${formatTokens(inputTokens(usage.thread) + usage.thread.totals.outputTokens)} tokens`}
           tooltip={<TokenBreakdown scope={usage.thread} title="This thread" />}
         />
-        <UsageRow
+        <Separator />
+        <Segment
           label="Activity"
-          fill={null}
-          tone={null}
-          value={`${formatCount(usage.thread.providerTurns)} turns · ${formatActive(usage.thread.activeMs)}`}
+          value={`${formatCount(usage.thread.providerTurns)} turns, ${formatActive(usage.thread.activeMs)}`}
+          ariaValue={`${formatCount(usage.thread.providerTurns)} turns, ${formatActive(usage.thread.activeMs)} active`}
           tooltip={
             <>
               <ActivityLines scope={usage.thread} now={now} title="This thread" />
@@ -216,10 +219,10 @@ const inputTokens = (scope: ThreadUsageScope) =>
   scope.totals.cacheCreationTokens;
 
 function formatActive(ms: number) {
-  return ms < 60_000 ? `${Math.round(ms / 1000)}s active` : `${formatDuration(ms)} active`;
+  return ms < 60_000 ? `${Math.round(ms / 1000)}s` : formatDuration(ms);
 }
 
-function CostRow({
+function CostSegment({
   label,
   scope,
   pricingKnown,
@@ -231,16 +234,14 @@ function CostRow({
   const measured = scope.providerTurns - scope.unmeasuredTurns;
   const priced = pricingKnown && measured > scope.unpricedTurns;
   return (
-    <UsageRow
+    <Segment
       label={label}
-      fill={null}
-      tone={null}
       value={priced ? `~${formatUsd(scope.costUsd)}` : "Unpriced"}
       ariaValue={priced ? `about ${formatUsd(scope.costUsd)}` : "no price available"}
       tooltip={
         <>
           <span className="text-foreground">
-            {priced ? `About ${formatUsd(scope.costUsd)} at API list prices` : "No price available"}
+            {label}: {priced ? `about ${formatUsd(scope.costUsd)} at API list prices` : "no price"}
           </span>
           {scope.threads > 1 ? (
             <span className="text-muted-foreground">
@@ -268,6 +269,46 @@ function CostRow({
         </>
       }
     />
+  );
+}
+
+/** One hoverable value in the single-line cost strip; its label lives in the tooltip. */
+function Segment({
+  label,
+  value,
+  ariaValue = value,
+  tooltip,
+}: {
+  readonly label: string;
+  readonly value: string;
+  readonly ariaValue?: string;
+  readonly tooltip: ReactNode;
+}) {
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <span
+            tabIndex={0}
+            aria-label={`${label}: ${ariaValue}`}
+            className="flex h-6 cursor-default items-center whitespace-nowrap rounded-lg px-1.5 outline-none hover:bg-black/[0.035] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring data-popup-open:bg-black/[0.035] dark:hover:bg-white/[0.08] dark:data-popup-open:bg-white/[0.08]"
+          />
+        }
+      >
+        {value}
+      </TooltipTrigger>
+      <TooltipPopup side="top">
+        <div className="flex flex-col gap-0.5">{tooltip}</div>
+      </TooltipPopup>
+    </Tooltip>
+  );
+}
+
+function Separator() {
+  return (
+    <span aria-hidden className="text-muted-foreground/50">
+      ·
+    </span>
   );
 }
 
@@ -315,7 +356,7 @@ function ActivityLines({
       <span className="text-foreground">
         {title}: {formatCount(scope.providerTurns)} turns, {formatCount(scope.toolCalls)} tool calls
       </span>
-      <span className="text-muted-foreground">{formatActive(scope.activeMs)} in total</span>
+      <span className="text-muted-foreground">{formatActive(scope.activeMs)} active in total</span>
       {scope.firstActivityAt ? (
         <span className="text-muted-foreground">
           First turn {formatRelativeTimeLabel(scope.firstActivityAt, now)}

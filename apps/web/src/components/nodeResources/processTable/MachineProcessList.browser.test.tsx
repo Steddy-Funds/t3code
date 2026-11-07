@@ -45,7 +45,7 @@ vi.mock(import("./useProcessSignal"), () => ({
   }),
 }));
 
-import { MachineProcessList } from "./MachineProcessList";
+import { MachineProcessList, useMachineProcessListState } from "./MachineProcessList";
 
 const process = (pid: number, gpu?: { gpuUtil: number | null; vram: number | null }) =>
   ({
@@ -73,16 +73,30 @@ function setup(rows: ReadonlyArray<MachineProcessRow>) {
   };
 }
 
-const renderList = (hasGpu: boolean) =>
+function List({
+  hasGpu,
+  unavailable,
+}: {
+  readonly hasGpu: boolean | null;
+  readonly unavailable: string | null;
+}) {
+  return (
+    <MachineProcessList
+      environmentId={EnvironmentId.make("machine-a")}
+      tick={1000}
+      hasGpu={hasGpu}
+      unavailable={unavailable}
+      state={useMachineProcessListState()}
+      viewMode="raw"
+      onViewModeChange={() => {}}
+    />
+  );
+}
+
+const renderList = (hasGpu: boolean | null, unavailable: string | null = null) =>
   render(
     <RegistryContext value={AtomRegistry.make()}>
-      <MachineProcessList
-        environmentId={EnvironmentId.make("machine-a")}
-        tick={1000}
-        hasGpu={hasGpu}
-        viewMode="raw"
-        onViewModeChange={() => {}}
-      />
+      <List hasGpu={hasGpu} unavailable={unavailable} />
     </RegistryContext>,
     { router: false }, // no links
   );
@@ -135,5 +149,20 @@ describe("MachineProcessList", () => {
     await expect.element(menuItem("Memory")).toBeVisible();
     expect(menuItem("GPU").query()).toBeNull();
     expect(menuItem("VRAM").query()).toBeNull();
+  });
+
+  it("opens no process stream until the GPU flag is known", async () => {
+    setup([process(2)]);
+    await using screen = await renderList(null);
+    await expect.element(screen.getByText("Loading processes…")).toBeVisible();
+    expect(state.requests).toEqual([]);
+  });
+
+  it("says why instead of waiting when the GPU flag won't arrive", async () => {
+    setup([process(2)]);
+    await using screen = await renderList(null, "Machine unreachable");
+    await expect.element(screen.getByRole("alert")).toHaveTextContent("Machine unreachable");
+    expect(screen.getByText("Loading processes…").query()).toBeNull();
+    expect(state.requests).toEqual([]);
   });
 });

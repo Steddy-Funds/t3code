@@ -26,6 +26,10 @@ const state = vi.hoisted(() => ({
   /** Live machine streams mounted, by "machine:<intervalMs>:<historyMs>". */
   mounted: new Set<string>(),
   requested: new Set<string>(),
+  /** A failure the machine stream returns instead of the snapshot. */
+  machineError: null as Error | null,
+  /** Every GPU flag and unavailable reason the lists were rendered with, in order. */
+  lists: [] as Array<{ hasGpu: boolean | null; unavailable: string | null }>,
 }));
 
 vi.mock(import("~/state/environments"), async (original) => ({
@@ -35,6 +39,7 @@ vi.mock(import("~/state/environments"), async (original) => ({
 }));
 vi.mock(import("~/state/machineResources"), async () => {
   const { Atom, AsyncResult } = await import("effect/reactivity");
+  const Cause = await import("effect/Cause");
   const indicator = Atom.make(() => state.indicator);
   const capable = Atom.make(() => state.capable);
   const atoms = new Map<string, Atom.Atom<unknown>>();
@@ -52,7 +57,9 @@ vi.mock(import("~/state/machineResources"), async () => {
           atom = Atom.make((get) => {
             state.mounted.add(key);
             get.addFinalizer(() => state.mounted.delete(key));
-            return AsyncResult.success(state.snapshot);
+            return state.machineError
+              ? AsyncResult.failure(Cause.fail(state.machineError))
+              : AsyncResult.success(state.snapshot);
           });
           atoms.set(key, atom);
         }
@@ -78,9 +85,18 @@ vi.mock(import("~/state/terminalSessions"), async (original) => ({
   ...(await original()),
   useKnownTerminalSessions: (() => state.sessions) as never,
 }));
-// The process and thread lists have their own tests; the overview is what's under test here.
+// The process and thread lists have their own tests; here only the GPU flag they get matters.
 vi.mock(import("./taskManager/TaskManagerLists"), () => ({
-  TaskManagerLists: (() => null) as never,
+  TaskManagerLists: (({
+    hasGpu,
+    processesUnavailable,
+  }: {
+    hasGpu: boolean | null;
+    processesUnavailable: string | null;
+  }) => {
+    state.lists.push({ hasGpu, unavailable: processesUnavailable });
+    return null;
+  }) as never,
 }));
 vi.mock(import("../ThreadTerminalDrawer"), () => ({
   TerminalViewport: ((props: {
@@ -137,6 +153,11 @@ const snapshot = (gpus?: ReadonlyArray<GpuDeviceSample>): MachineStatusSnapshot 
   sample: { perCore: [10, 20, 30, 40], ...(gpus ? { gpus } : {}) },
 });
 
+const unsampled = (): MachineStatusSnapshot => {
+  const { sample: _sample, ...rest } = snapshot();
+  return rest;
+};
+
 const config = ({ os, homeDirectory }: { os: string; homeDirectory: string | undefined }) => ({
   cwd: "/srv/t3",
   ...(homeDirectory === undefined ? {} : { homeDirectory }),
@@ -187,6 +208,8 @@ function setup({
   state.sessions = sessions;
   state.mounted.clear();
   state.requested.clear();
+  state.machineError = null;
+  state.lists.length = 0;
   localStorage.removeItem(PREFERENCES_KEY);
   return { [Symbol.dispose]: () => localStorage.removeItem(PREFERENCES_KEY) };
 }
@@ -210,6 +233,7 @@ async function renderView() {
   });
 }
 
+const gpuFlags = () => state.lists.map((lists) => lists.hasGpu);
 const live = () => [...state.mounted].toSorted();
 const reason = (rule: MachineVerdictReason["rule"]): MachineVerdictReason => ({
   rule,
@@ -298,6 +322,51 @@ describe("TaskManagerView", () => {
     await vi.waitFor(() => expect(live()).toEqual(["machine:5000:3600000"]));
   });
 
+  it("holds the GPU flag across tick and range re-keys whose fresh streams have no sample", async () => {
+    using _setup = setup({ gpus: [GPU] });
+    await using screen = await renderView();
+    await vi.waitFor(() => expect(gpuFlags()).toContain(true));
+
+    // A re-keyed stream starts without a sample; the flag must not fall back to unknown.
+    state.snapshot = unsampled();
+    await screen.getByRole("button", { name: "1 h" }).click();
+    await vi.waitFor(() => expect(live()).toEqual(["machine:1000:3600000"]));
+    await screen.getByRole("button", { name: "5 s" }).click();
+    await vi.waitFor(() => expect(live()).toEqual(["machine:5000:3600000"]));
+
+    // Unknown until the first sample, then known for good: the process stream opens once.
+    const flags = gpuFlags();
+    const first = flags.indexOf(true);
+    expect(flags.slice(0, first).every((hasGpu) => hasGpu === null)).toBe(true);
+    expect(flags.slice(first).every((hasGpu) => hasGpu === true)).toBe(true);
+    expect(state.lists.every((lists) => lists.unavailable === null)).toBe(true);
+  });
+
+  it.each<[string, () => void, { hasGpu: boolean | null; unavailable: string | null }]>([
+    [
+      "waits without a reason before the first sample",
+      () => (state.snapshot = unsampled()),
+      { hasGpu: null, unavailable: null },
+    ],
+    [
+      "passes false for a sample without a readable GPU",
+      () => (state.snapshot = snapshot([{ ...GPU, status: "unavailable" }])),
+      { hasGpu: false, unavailable: null },
+    ],
+    [
+      "passes the stream's error when it fails before any sample",
+      () => (state.machineError = new Error("stream closed")),
+      { hasGpu: null, unavailable: "stream closed" },
+    ],
+  ])("%s", async (_name, arrange, expected) => {
+    using _setup = setup();
+    arrange();
+    await using screen = await renderView();
+    await expect.element(screen.getByRole("heading", { name: "Studio" })).toBeVisible();
+    await vi.waitFor(() => expect(state.lists.at(-1)).toEqual(expected));
+    expect(gpuFlags()).not.toContain(true);
+  });
+
   it("opens no stream for an unreachable machine", async () => {
     using _setup = setup({
       indicator: { verdict: "unknown", unreachable: true, lastSeen: { verdict: "ok", ageMs: 1 } },
@@ -307,6 +376,7 @@ describe("TaskManagerView", () => {
     await expect.element(screen.getByRole("heading", { name: "Studio" })).toBeVisible();
     expect(state.requested.size).toBe(0);
     expect(screen.sections()).toEqual([]);
+    expect(state.lists.at(-1)).toEqual({ hasGpu: null, unavailable: "Machine unreachable" });
   });
 
   describe("terminal", () => {

@@ -1,7 +1,7 @@
 import "~/index.css";
 
 import { RegistryContext } from "@effect/atom-react";
-import { EnvironmentId, type ServerProcessSignal } from "@t3tools/contracts";
+import { EnvironmentId } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
@@ -126,8 +126,7 @@ function renderHarness({
 
 const dialog = () => page.getByRole("alertdialog");
 const killButton = () => dialog().getByRole("button", { name: "Kill", exact: true });
-const signalButton = (signal: ServerProcessSignal) =>
-  dialog().getByRole("button", { name: signal });
+const forceKillButton = () => dialog().getByRole("button", { name: "Force kill" });
 
 async function openDialog(screen: Awaited<ReturnType<typeof renderHarness>>) {
   await screen.getByRole("button", { name: "Request kill" }).click();
@@ -148,14 +147,14 @@ describe("useProcessSignal", () => {
   });
 
   it.each([
-    { label: "SIGTERM-capable servers", config: undefined, signal: "SIGTERM", choices: true },
+    { label: "SIGTERM-capable servers", config: undefined, signal: "SIGTERM", force: true },
     {
       label: "older servers",
       config: {
         environment: { platform: { os: "linux" }, capabilities: { processSigterm: false } },
       },
       signal: "SIGINT",
-      choices: true,
+      force: true,
     },
     {
       label: "Windows",
@@ -163,16 +162,16 @@ describe("useProcessSignal", () => {
         environment: { platform: { os: "windows" }, capabilities: { processSigterm: true } },
       },
       signal: "SIGKILL",
-      choices: false,
+      force: false,
     },
-    { label: "an unknown platform", config: null, signal: "SIGINT", choices: true },
-  ] as const)("defaults to the first choice on $label", async ({ config, signal, choices }) => {
+    { label: "an unknown platform", config: null, signal: "SIGINT", force: true },
+  ] as const)("Kill sends the first choice on $label", async ({ config, signal, force }) => {
     const harness = setup(config === undefined ? {} : { config });
     const { send, respond } = harness;
     await using screen = await renderHarness(harness);
     await openDialog(screen);
-    if (choices) await expect.element(signalButton(signal)).toHaveAttribute("aria-pressed", "true");
-    else expect(dialog().getByRole("group", { name: "Signal" }).query()).toBeNull();
+    if (force) await expect.element(forceKillButton()).toBeEnabled();
+    else expect(forceKillButton().query()).toBeNull();
 
     await killButton().click();
 
@@ -183,15 +182,13 @@ describe("useProcessSignal", () => {
     await respond({ signaled: true, message: null });
   });
 
-  it("sends the signal the user switched to", async () => {
+  it("Force kill sends SIGKILL", async () => {
     const harness = setup();
     const { send, respond } = harness;
     await using screen = await renderHarness(harness);
     await openDialog(screen);
 
-    await signalButton("SIGKILL").click();
-    await expect.element(dialog().getByText("SIGKILL can't be caught")).toBeVisible();
-    await killButton().click();
+    await forceKillButton().click();
 
     expect(send).toHaveBeenCalledExactlyOnceWith({
       environmentId,

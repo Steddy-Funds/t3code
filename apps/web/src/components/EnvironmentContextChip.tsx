@@ -38,5 +38,10 @@ export function EnvironmentContextChip(props: {
       </Tooltip>
     );
   }
-  return <MachineHoverTarget environmentId={props.record.environmentId}>{chip}</MachineHoverTarget>;
+  // The chip sits in the composer and in sent messages; a click must not leave the draft.
+  return (
+    <MachineHoverTarget environmentId={props.record.environmentId} navigateOnClick={false}>
+      {chip}
+    </MachineHoverTarget>
+  );
 }

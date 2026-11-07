@@ -30,7 +30,7 @@ export function TimeSeriesCanvas({
 }: {
   readonly ring: SeriesRing;
   readonly lines: ReadonlyArray<TimeSeriesLine>;
-  /** The top of the scale; omitted, a nice scale over the visible values. */
+  /** The top of the scale; omitted, a nice scale over the visible values and the threshold. */
   readonly max?: number;
   /** Drawn as a dashed limit line in the stress colour. */
   readonly threshold?: number;
@@ -41,7 +41,12 @@ export function TimeSeriesCanvas({
   readonly className?: string;
 }) {
   const canvasRef = useChartCanvas(ring, (frame) => {
-    const top = max ?? autoMax(ring, lines);
+    // A limit above the data stays visible below the top edge instead of pinning to it.
+    const top =
+      max ??
+      (threshold === undefined
+        ? autoMax(ring, lines)
+        : Math.max(autoMax(ring, lines), niceScale(threshold * 1.1, SCALE_TICKS).max));
     if (tripped) fillBackground(frame, STRESS_COLOR, 0.08);
     const filled = lines.find((line) => !line.dashed);
     if (filled) fillArea(frame, ring, filled, top);

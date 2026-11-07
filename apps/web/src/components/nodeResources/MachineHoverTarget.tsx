@@ -15,19 +15,20 @@ import { PreviewCard, PreviewCardPopup, PreviewCardTrigger } from "../ui/preview
 import { MachineHoverCard } from "./MachineHoverCard";
 
 /**
- * Opens the machine card on hover; a click, Enter or Space opens the machine's task manager. The
- * card, and its live streams, mount only while open. Machines that don't serve the verdict get no
- * card. Pass `label` when the child is not already a focusable control: the trigger then becomes a
- * tab stop named "<label> machine resources".
+ * The machine card on hover (mounted only while open); a click, Enter or Space opens the task
+ * manager unless `navigateOnClick` is false, as for chips in a draft. `label` makes a child that
+ * isn't focusable a tab stop named "<label> machine resources".
  */
 export function MachineHoverTarget({
   environmentId,
   side,
   label,
+  navigateOnClick = true,
   children,
 }: {
   readonly environmentId: EnvironmentId;
   readonly label?: string;
+  readonly navigateOnClick?: boolean;
   readonly side?: ComponentProps<typeof PreviewCardPopup>["side"];
   readonly children: ReactElement;
 }) {
@@ -60,14 +61,18 @@ export function MachineHoverTarget({
         render={children}
         delay={350}
         closeDelay={120}
-        onClick={openTaskManager}
-        onKeyDown={openOnKey}
-        onPointerLeave={() => {
-          suppressedRef.current = false;
-        }}
-        onBlur={() => {
-          suppressedRef.current = false;
-        }}
+        {...(navigateOnClick
+          ? {
+              onClick: openTaskManager,
+              onKeyDown: openOnKey,
+              onPointerLeave: () => {
+                suppressedRef.current = false;
+              },
+              onBlur: () => {
+                suppressedRef.current = false;
+              },
+            }
+          : {})}
         {...(label === undefined
           ? {}
           : { role: "button", tabIndex: 0, "aria-label": `${label} machine resources` })}

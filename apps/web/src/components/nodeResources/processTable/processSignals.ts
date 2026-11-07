@@ -18,7 +18,8 @@ export function processSignalChoices(input: {
 }
 
 // The server rechecks pid plus start time right before signalling and refuses with one of these.
-const PROCESS_CHANGED = /no longer matches|not a live descendant|stale identity/;
+// "stale identity" is left out: it means the recheck itself failed, not that the pid moved on.
+const PROCESS_CHANGED = /no longer matches|not a live descendant/;
 
 /** Whether a refusal means the pid no longer names the process the user picked. */
 export function isProcessChangedRefusal(message: string | null): boolean {

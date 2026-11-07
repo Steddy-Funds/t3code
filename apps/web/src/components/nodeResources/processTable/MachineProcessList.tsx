@@ -224,9 +224,10 @@ export function MachineProcessList({
           {table.truncated ? (
             <MachineSectionMessage>Showing the busiest processes only</MachineSectionMessage>
           ) : null}
-          {signal.dialog}
         </>
       )}
+      {/* Outside the states above, so a confirm open when the table goes away closes with it. */}
+      {signal.dialog}
     </MachineSection>
   );
 }

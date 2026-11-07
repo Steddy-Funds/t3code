@@ -19,7 +19,8 @@ describe("processSignalChoices", () => {
 describe("isProcessChangedRefusal", () => {
   it.each([
     ["Process 42 no longer matches the requested identity.", true],
-    ["Refusing to signal a stale identity", true],
+    // The recheck itself failed; the pid may still be the same process.
+    ["Refusing to signal a stale identity", false],
     ["Process 42 is not a live descendant of the server.", true],
     [null, false],
     ["Operation not permitted", false],

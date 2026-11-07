@@ -134,6 +134,43 @@ describe("TimeSeriesCanvas", () => {
     await expect.element(image).toHaveAttribute("aria-label", "CPU 40, over threshold");
   });
 
+  it.each([
+    { label: "no max lifts the scale over a threshold above the data", peak: 20, max: undefined },
+    { label: "a max of 100 holds with data below it", peak: 20, max: 100 },
+    { label: "a max of 100 holds with data above it", peak: 150, max: 100 },
+  ])("$label", async ({ peak, max }) => {
+    const ring = SeriesRing.create();
+    ring.push([peak], 1000);
+    using moveTo = vi.spyOn(CanvasRenderingContext2D.prototype, "moveTo");
+    using lineDash = vi.spyOn(CanvasRenderingContext2D.prototype, "setLineDash");
+    await using chart = await renderProfiled(() => (
+      <TimeSeriesCanvas
+        ring={ring}
+        lines={[{ column: 0 }]}
+        {...(max === undefined ? {} : { max })}
+        threshold={80}
+        label={() => `Load ${ring.latest()}`}
+      />
+    ));
+    await expect
+      .element(chart.screen.getByRole("img"))
+      .toHaveAttribute("aria-label", `Load ${peak}`);
+    await vi.waitFor(() =>
+      expect(lineDash.mock.calls.some(([dash]) => [...dash].join() === "2,3")).toBe(true),
+    );
+
+    // The threshold is the moveTo just before its [2, 3] dash.
+    const dashOrder = lineDash.mock.invocationCallOrder.findLast(
+      (_order, index) => [...(lineDash.mock.calls[index]?.[0] ?? [])].join() === "2,3",
+    )!;
+    const moveIndex = moveTo.mock.invocationCallOrder.findLastIndex((order) => order < dashOrder);
+    const y = moveTo.mock.calls[moveIndex]![1] - 0.5;
+    const height = chart.canvas.clientHeight;
+    const yFor = (top: number) => Math.round(height - (80 / top) * height);
+    if (max === undefined) expect(y).toBeGreaterThanOrEqual(yFor(88));
+    else expect(y).toBe(yFor(100));
+  });
+
   it("draws a dashed secondary and missing samples without throwing", async () => {
     const ring = SeriesRing.create({ columns: 2 });
     ring.seed(

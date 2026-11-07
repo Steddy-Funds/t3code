@@ -73,6 +73,7 @@ vi.mock(import("~/state/session"), async (original) => ({
     scope === "diagnostics:read" ? state.canReadDiagnostics : true) as never,
 }));
 
+import { EnvironmentContextChip } from "../EnvironmentContextChip";
 import { MachineHoverTarget } from "./MachineHoverTarget";
 
 const SNAPSHOT: MachineStatusSnapshot = {
@@ -141,10 +142,13 @@ function setup({
   state.requested.clear();
 }
 
-function renderTarget() {
+function renderTarget({ navigateOnClick }: { navigateOnClick?: boolean } = {}) {
   return render(
     <RegistryContext value={AtomRegistry.make()}>
-      <MachineHoverTarget environmentId={environmentId}>
+      <MachineHoverTarget
+        environmentId={environmentId}
+        {...(navigateOnClick === undefined ? {} : { navigateOnClick })}
+      >
         <button type="button">Open</button>
       </MachineHoverTarget>
     </RegistryContext>,
@@ -251,6 +255,55 @@ describe("MachineHoverTarget", () => {
       await expect.element(card()).toBeVisible();
     },
   );
+
+  it.each([
+    { name: "click", act: (trigger: HTMLElement) => userEvent.click(trigger) },
+    {
+      name: "Enter",
+      act: (trigger: HTMLElement) => {
+        trigger.focus();
+        return userEvent.keyboard("{Enter}");
+      },
+    },
+    {
+      name: "Space",
+      act: (trigger: HTMLElement) => {
+        trigger.focus();
+        return userEvent.keyboard(" ");
+      },
+    },
+  ])(
+    "with navigateOnClick off, a $name stays put and hover still opens the card",
+    async ({ act }) => {
+      setup();
+      await using screen = await renderTarget({ navigateOnClick: false });
+      const trigger = screen.getByRole("button", { name: "Open" });
+
+      await act(trigger.element() as HTMLElement);
+      await userEvent.hover(trigger);
+
+      await expect.element(card()).toBeVisible();
+      expect(screen.router?.state.location.pathname).toBe("/");
+    },
+  );
+
+  it("a machine chip in a draft keeps the current route on click", async () => {
+    setup();
+    await using screen = await render(
+      <RegistryContext value={AtomRegistry.make()}>
+        <EnvironmentContextChip record={{ environmentId, label: "Studio" }} />
+      </RegistryContext>,
+      { router: "/" },
+    );
+    const chip = screen.getByLabelText("Machine, Studio");
+
+    await userEvent.click(chip);
+    await userEvent.hover(chip);
+
+    // The card, not the chip's own label.
+    await expect.element(page.getByText("0 T3 threads running", { exact: true })).toBeVisible();
+    expect(screen.router?.state.location.pathname).toBe("/");
+  });
 
   it("other keys neither navigate nor open the card", async () => {
     setup();

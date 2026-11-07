@@ -270,6 +270,12 @@ describe("useProcessSignal", () => {
       signaled: true,
     },
     {
+      label: "a stale-identity refusal",
+      value: { signaled: false, message: "Refusing to signal a stale identity" },
+      description: "Refusing to signal a stale identity",
+      signaled: true,
+    },
+    {
       label: "a refusal without a message",
       value: { signaled: false, message: null },
       description: "Failed to send SIGTERM to process 42.",

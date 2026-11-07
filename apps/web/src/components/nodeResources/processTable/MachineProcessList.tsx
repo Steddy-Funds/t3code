@@ -18,7 +18,13 @@ import { MachineSection, MachineSectionMessage } from "../primitives/MachineSect
 import { type ProcessViewMode, ProcessViewToggle } from "../primitives/ProcessViewToggle";
 import type { TaskManagerTick } from "../taskManagerPreferences";
 import { machineProcessGroupOf } from "./machineProcessGroups";
-import { type ProcessColumn, ProcessTable, type ProcessTableSort } from "./ProcessTable";
+import {
+  type ProcessColumn,
+  ProcessTable,
+  type ProcessTableSort,
+  type ProcessTableState,
+  useProcessTableState,
+} from "./ProcessTable";
 import { useProcessSignal } from "./useProcessSignal";
 
 type ProcessesResult = AsyncResult.AsyncResult<MachineProcessTable, unknown>;
@@ -99,6 +105,19 @@ const HOST_COLUMNS: ReadonlySet<ColumnId> = new Set(["user"]);
 const DEFAULT_HIDDEN: ReadonlySet<ColumnId> = new Set(["ppid"]);
 const DEFAULT_SORT: ProcessTableSort = { columnId: "cpu", descending: true };
 
+export interface MachineProcessListState {
+  readonly table: ProcessTableState;
+  readonly hidden: ReadonlySet<ColumnId>;
+  readonly setHidden: (hidden: ReadonlySet<ColumnId>) => void;
+}
+
+/** Sort, expansion and hidden columns, held above the tabs so they survive a switch to Threads. */
+export function useMachineProcessListState(): MachineProcessListState {
+  const table = useProcessTableState(DEFAULT_SORT);
+  const [hidden, setHidden] = useState<ReadonlySet<ColumnId>>(DEFAULT_HIDDEN);
+  return { table, hidden, setHidden };
+}
+
 /**
  * The task manager's process list: the whole table (or the T3 subtree on servers without the host
  * walk), streamed at the page's tick. The server never sends faster than once a second and only
@@ -108,22 +127,30 @@ export function MachineProcessList({
   environmentId,
   tick,
   hasGpu,
+  unavailable = null,
+  state,
   viewMode,
   onViewModeChange,
 }: {
   readonly environmentId: EnvironmentId;
   readonly tick: TaskManagerTick;
-  /** Per-process GPU columns are offered, and requested, only on a machine with a readable GPU. */
-  readonly hasGpu: boolean;
+  /**
+   * Per-process GPU columns are offered, and requested, only on a machine with a readable GPU.
+   * Null until the first sample says; the stream waits so it opens once with the right input.
+   */
+  readonly hasGpu: boolean | null;
+  /** Shown instead of waiting when the GPU flag will not arrive, such as an unreachable machine. */
+  readonly unavailable?: string | null;
+  readonly state: MachineProcessListState;
   readonly viewMode: ProcessViewMode;
   readonly onViewModeChange: (mode: ProcessViewMode) => void;
 }) {
   const canReadDiagnostics = useEnvironmentScope(environmentId, AuthDiagnosticsReadScope);
-  const [hidden, setHidden] = useState<ReadonlySet<ColumnId>>(DEFAULT_HIDDEN);
+  const { hidden, setHidden } = state;
   // Per-process GPU columns cost the host a DRM fdinfo or NVML walk, so ask only while shown.
-  const gpuProcesses = hasGpu && [...GPU_COLUMNS].some((column) => !hidden.has(column));
+  const gpuProcesses = hasGpu === true && [...GPU_COLUMNS].some((column) => !hidden.has(column));
   const result = useAtomValue(
-    canReadDiagnostics
+    canReadDiagnostics && hasGpu !== null
       ? machineResources.machineProcesses(environmentId, {
           intervalMs: Math.max(tick, 1000),
           ...(gpuProcesses ? { gpuProcesses: true } : {}),
@@ -135,7 +162,7 @@ export function MachineProcessList({
   const rows = table?.rows ?? [];
   const available = COLUMNS.filter(
     (column) =>
-      (hasGpu || !GPU_COLUMNS.has(column.id)) &&
+      (hasGpu === true || !GPU_COLUMNS.has(column.id)) &&
       (table?.source === "host" || !HOST_COLUMNS.has(column.id)),
   );
   const columns = available.filter((column) => !hidden.has(column.id));
@@ -164,7 +191,9 @@ export function MachineProcessList({
       {!canReadDiagnostics ? (
         <MachineSectionMessage>Process list needs diagnostics access</MachineSectionMessage>
       ) : table === null ? (
-        AsyncResult.isFailure(result) ? (
+        hasGpu === null && unavailable !== null ? (
+          <MachineSectionMessage tone="error">{unavailable}</MachineSectionMessage>
+        ) : AsyncResult.isFailure(result) ? (
           <MachineSectionMessage tone="error">{errorMessage(result.cause)}</MachineSectionMessage>
         ) : (
           <MachineSectionMessage>Loading processes…</MachineSectionMessage>
@@ -180,6 +209,7 @@ export function MachineProcessList({
             mode={viewMode}
             groupOf={viewMode === "grouped" ? machineProcessGroupOf(rows) : undefined}
             defaultSort={DEFAULT_SORT}
+            state={state.table}
             kill={
               signal.canSignal
                 ? {

@@ -3,7 +3,7 @@ import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
-import type { EnvironmentId } from "@t3tools/contracts";
+import type { EnvironmentId, ServerProcessSignal } from "@t3tools/contracts";
 import * as Option from "effect/Option";
 import { type ReactNode, useContext, useRef, useState } from "react";
 
@@ -62,12 +62,12 @@ export function useProcessSignal(
 
   const requestKill = (target: ProcessSignalTarget) => {
     if (!canSignal || signalingRef.current.has(processIdentityKey(target))) return;
-    setRequest({ target, signal: choices[0]!, phase: "confirm" });
+    setRequest({ target, phase: "confirm" });
   };
 
-  const confirm = () => {
+  const confirm = (signal: ServerProcessSignal) => {
     if (request === null || request.phase !== "confirm" || environmentId === null) return;
-    const { target, signal } = request;
+    const { target } = request;
     const key = processIdentityKey(target);
     if (signalingRef.current.has(key) || !registry.get(permissionAtom(environmentId))) {
       setRequest(null);
@@ -113,9 +113,6 @@ export function useProcessSignal(
       <ProcessKillDialog
         request={request}
         choices={choices}
-        onSignalChange={(signal) =>
-          setRequest((current) => (current === null ? null : { ...current, signal }))
-        }
         onConfirm={confirm}
         onClose={() => {
           if (request?.phase !== "sending") setRequest(null);

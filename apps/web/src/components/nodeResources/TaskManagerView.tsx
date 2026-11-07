@@ -5,6 +5,7 @@ import {
   type MachineStatusSnapshot,
 } from "@t3tools/contracts";
 import { Link } from "@tanstack/react-router";
+import * as Cause from "effect/Cause";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/reactivity";
 import { useState } from "react";
@@ -104,9 +105,33 @@ function TaskManagerOverview({
     ? NO_SNAPSHOT
     : machineResources.machine(environmentId, { intervalMs: tick, historyMs: range });
   const series = useMachineSeries(source, tick, range);
-  const snapshot = Option.getOrNull(AsyncResult.value(useAtomValue(source)));
+  const machine = useAtomValue(source);
+  const snapshot = Option.getOrNull(AsyncResult.value(machine));
   const config = useAtomValue(serverEnvironment.configValueAtom(environmentId));
   const rule = view.unreachable ? null : (view.reason?.rule ?? null);
+  // Remembered across tick and range re-keys, whose fresh streams start empty, so the process
+  // stream isn't reopened without and then with GPU columns.
+  const sampledGpu = snapshot?.sample ? hasReadableGpu(snapshot) : null;
+  const [knownGpu, setKnownGpu] = useState<{
+    readonly environmentId: EnvironmentId;
+    readonly hasGpu: boolean;
+  } | null>(null);
+  if (
+    sampledGpu !== null &&
+    (knownGpu?.environmentId !== environmentId || knownGpu.hasGpu !== sampledGpu)
+  ) {
+    setKnownGpu({ environmentId, hasGpu: sampledGpu });
+  }
+  const hasGpu = knownGpu?.environmentId === environmentId ? knownGpu.hasGpu : null;
+  // Without a GPU flag the process list waits for one; say why when no sample is coming.
+  const processesUnavailable =
+    hasGpu !== null
+      ? null
+      : view.unreachable
+        ? "Machine unreachable"
+        : AsyncResult.isFailure(machine)
+          ? errorMessage(machine.cause)
+          : null;
 
   const canOperateTerminal = useEnvironmentScope(environmentId, AuthTerminalOperateScope);
   const terminalSessions = useKnownTerminalSessions({
@@ -155,10 +180,16 @@ function TaskManagerOverview({
       <TaskManagerLists
         environmentId={environmentId}
         tick={tick}
-        hasGpu={hasReadableGpu(snapshot)}
+        hasGpu={hasGpu}
+        processesUnavailable={processesUnavailable}
         viewMode={viewMode}
         onViewModeChange={onViewModeChange}
       />
     </>
   );
+}
+
+function errorMessage(cause: Cause.Cause<unknown>): string {
+  const error = Cause.squash(cause);
+  return error instanceof Error && error.message ? error.message : "Process list unavailable";
 }

@@ -10,7 +10,6 @@ import {
   AlertDialogTitle,
 } from "~/components/ui/alert-dialog";
 import { Button } from "~/components/ui/button";
-import { ToggleGroup, ToggleGroupItem } from "~/components/ui/toggle-group";
 
 export interface ProcessSignalTarget {
   readonly pid: number;
@@ -26,28 +25,25 @@ type ProcessKillPhase = "confirm" | "sending" | "changed";
 
 export interface ProcessKillRequest {
   readonly target: ProcessSignalTarget;
-  readonly signal: ServerProcessSignal;
   readonly phase: ProcessKillPhase;
 }
 
-const SIGNAL_HINTS: Partial<Record<ServerProcessSignal, string>> = {
-  SIGKILL: "SIGKILL can't be caught",
-};
-
-/** Confirms a kill, with the signal switch; after a refused recheck, says nothing was sent. */
+/**
+ * Confirms a kill: "Kill" sends the polite signal (the first choice), "Force kill" sends SIGKILL
+ * when it is a separate choice. After a refused recheck, says nothing was sent.
+ */
 export function ProcessKillDialog({
   request,
   choices,
-  onSignalChange,
   onConfirm,
   onClose,
 }: {
   readonly request: ProcessKillRequest | null;
   readonly choices: ReadonlyArray<ServerProcessSignal>;
-  readonly onSignalChange: (signal: ServerProcessSignal) => void;
-  readonly onConfirm: () => void;
+  readonly onConfirm: (signal: ServerProcessSignal) => void;
   readonly onClose: () => void;
 }) {
+  const [kill, forceKill] = choices;
   const target = request?.target;
   return (
     <AlertDialog
@@ -84,38 +80,26 @@ export function ProcessKillDialog({
               <span className="truncate font-mono text-muted-foreground">{target.command}</span>
               {target.summary ? <span className="tabular-nums">{target.summary}</span> : null}
             </div>
-            {choices.length > 1 ? (
-              <div className="flex flex-wrap items-center gap-2 text-xs">
-                <span className="text-muted-foreground">Signal</span>
-                <ToggleGroup
-                  aria-label="Signal"
-                  variant="segmented"
-                  value={[request.signal]}
-                  onValueChange={(next) => {
-                    const picked = choices.find((signal) => signal === next[0]);
-                    if (picked) onSignalChange(picked);
-                  }}
-                >
-                  {choices.map((signal) => (
-                    <ToggleGroupItem key={signal} value={signal}>
-                      {signal}
-                    </ToggleGroupItem>
-                  ))}
-                </ToggleGroup>
-                {SIGNAL_HINTS[request.signal] ? (
-                  <span className="text-muted-foreground">{SIGNAL_HINTS[request.signal]}</span>
-                ) : null}
-              </div>
-            ) : null}
             <AlertDialogFooter>
               <AlertDialogClose render={<Button variant="outline" />}>Cancel</AlertDialogClose>
-              <Button
-                variant="destructive"
-                disabled={request.phase === "sending"}
-                onClick={onConfirm}
-              >
-                Kill
-              </Button>
+              {forceKill ? (
+                <Button
+                  variant="destructive-outline"
+                  disabled={request.phase === "sending"}
+                  onClick={() => onConfirm(forceKill)}
+                >
+                  Force kill
+                </Button>
+              ) : null}
+              {kill ? (
+                <Button
+                  variant="destructive"
+                  disabled={request.phase === "sending"}
+                  onClick={() => onConfirm(kill)}
+                >
+                  Kill
+                </Button>
+              ) : null}
             </AlertDialogFooter>
           </>
         )}

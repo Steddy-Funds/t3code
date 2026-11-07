@@ -1,6 +1,14 @@
 import { LegendList } from "@legendapp/list/react";
 import { ArrowDownIcon, ArrowUpIcon, XIcon } from "lucide-react";
-import { memo, type ReactNode, useLayoutEffect, useRef, useState } from "react";
+import {
+  type Dispatch,
+  memo,
+  type ReactNode,
+  type SetStateAction,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 
 import { Button } from "~/components/ui/button";
 import { cn } from "~/lib/utils";
@@ -38,6 +46,21 @@ interface ProcessTableKill<Row> {
   readonly onKill: (row: Row) => void;
 }
 
+export interface ProcessTableState {
+  readonly sort: ProcessTableSort;
+  readonly setSort: Dispatch<SetStateAction<ProcessTableSort>>;
+  /** Collapsed tree rows and opened groups. */
+  readonly toggled: ReadonlySet<string>;
+  readonly setToggled: Dispatch<SetStateAction<ReadonlySet<string>>>;
+}
+
+/** Sort and expansion, held by a parent when they must outlive the table (such as across tabs). */
+export function useProcessTableState(defaultSort: ProcessTableSort): ProcessTableState {
+  const [sort, setSort] = useState(defaultSort);
+  const [toggled, setToggled] = useState<ReadonlySet<string>>(() => new Set());
+  return { sort, setSort, toggled, setToggled };
+}
+
 const NAME_COLUMN_ID = "name";
 const NAME_TRACK = "minmax(12rem, 2fr)";
 const KILL_TRACK = "2rem";
@@ -54,6 +77,7 @@ export function ProcessTable<Row extends ProcessTableRow>({
   mode,
   groupOf,
   defaultSort,
+  state,
   kill,
   empty,
   className,
@@ -64,14 +88,16 @@ export function ProcessTable<Row extends ProcessTableRow>({
   readonly mode: ProcessTableMode;
   readonly groupOf?: ((row: Row) => ProcessGroup) | undefined;
   readonly defaultSort: ProcessTableSort;
+  /** A parent's state; without it the table keeps its own. */
+  readonly state?: ProcessTableState | undefined;
   readonly kill?: ProcessTableKill<Row> | undefined;
   /** Shown instead of the list when there are no rows. */
   readonly empty: ReactNode;
   /** Sets the table's height; the list scrolls inside it. */
   readonly className?: string;
 }) {
-  const [sort, setSort] = useState(defaultSort);
-  const [toggled, setToggled] = useState<ReadonlySet<string>>(() => new Set());
+  const ownState = useProcessTableState(defaultSort);
+  const { sort, setSort, toggled, setToggled } = state ?? ownState;
   // Rows keep a stable kill handler, so a frame that only changes the caller's closures (such as
   // a child count) doesn't repaint every row.
   const killRef = useRef(kill);

@@ -201,6 +201,9 @@ describe("processNameFromCommand", () => {
   it.each([
     ["/usr/bin/node server.js", "node"],
     ['"C:\\Git\\git.exe" status', "git.exe"],
+    ['"C:\\Program Files\\App\\x.exe" --a b', "x.exe"],
+    ["'/opt/my app/run' -x", "run"],
+    ["C:\\Windows\\cmd.exe /c dir", "cmd.exe"],
     ["  zsh -l", "zsh"],
     ["/opt/app/", "app"],
   ])("%s → %s", (command, name) => {

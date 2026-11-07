@@ -176,6 +176,7 @@ import * as ServerSelfUpdate from "./cloud/selfUpdate.ts";
 import * as DesktopAppUpdate from "./desktopUpdate/DesktopAppUpdate.ts";
 import * as ServiceLauncherClient from "./cloud/serviceLauncherClient.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
+import * as HostProcesses from "./resourceTelemetry/HostProcesses.ts";
 import * as HostResources from "./resourceTelemetry/HostResources.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
@@ -216,6 +217,7 @@ import {
   readTailscaleStatus,
 } from "@t3tools/tailscale";
 import * as ServerActivation from "./serverActivation.ts";
+import * as Scheduler from "./scheduling/Scheduler.ts";
 
 // Escaped MCP handoff provenance can exceed find-my-way's 100-character segment default.
 const HTTP_ROUTER_CONFIG = {
@@ -306,7 +308,8 @@ const layerThreadUsage = ThreadUsageService.layer.pipe(
 );
 
 const layerResourceDiagnostics = Layer.mergeAll(
-  HostResources.layer,
+  HostResources.layer.pipe(Layer.provide(layerServerSettings)),
+  HostProcesses.layer.pipe(Layer.provide(layerResourceTelemetry)),
   layerResourceTelemetry,
   ProcessDiagnostics.layer.pipe(Layer.provide(layerResourceTelemetry)),
   ProcessResourceMonitor.layer.pipe(Layer.provide(layerResourceTelemetry)),
@@ -752,6 +755,8 @@ const layerRuntimeDependencies = layerRuntimeCoreDependencies.pipe(
   Layer.provideMerge(RemoteOpenTargets.layer),
   Layer.provideMerge(DirectEndpoints.layer),
   Layer.provideMerge(ServerLifecycleEvents.layer),
+  // One Scheduler wakes every source (orchestration workers, HostResources) on one 5 s tick.
+  Layer.provideMerge(Scheduler.layer),
   Layer.provide(NetService.layer),
 );
 

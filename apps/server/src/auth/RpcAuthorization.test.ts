@@ -68,6 +68,13 @@ describe("RPC authorization scopes", () => {
     }
   });
 
+  it("lets any reader see the machine verdict but keeps process tables behind diagnostics", () => {
+    expect(requiredScopeForRpcMethod(WS_METHODS.subscribeMachine)).toBe(AuthOrchestrationReadScope);
+    expect(requiredScopeForRpcMethod(WS_METHODS.subscribeMachineProcesses)).toBe(
+      AuthDiagnosticsReadScope,
+    );
+  });
+
   it("rejects unknown RPC method names", () => {
     for (const method of ["server.notRegistered", "toString", "constructor"]) {
       expect(() => requiredScopeForRpcMethod(method)).toThrow(

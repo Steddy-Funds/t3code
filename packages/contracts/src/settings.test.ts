@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 import * as Schema from "effect/Schema";
 
 import { type CommandId, ProjectId } from "./baseSchemas.ts";
+import { DEFAULT_MACHINE_THRESHOLDS, MACHINE_HOLD_MAX_MS } from "./machineResources.ts";
 import {
   ProviderDriverKind,
   ProviderInstanceEnvironment,
@@ -308,6 +309,68 @@ describe("ClientSettings notifications", () => {
     expect(decodeClientSettings({}).inAppNotificationsEnabled).toBe(false);
     expect(decodeClientSettingsPatch({})).not.toHaveProperty("inAppNotificationsEnabled");
     expect(decodeClientSettingsPatch({})).not.toHaveProperty("notificationMode");
+  });
+
+  it("notifies on a stressed machine unless the user turned it off", () => {
+    expect(decodeClientSettings({}).notifyOnMachineStressed).toBe(true);
+    expect(decodeClientSettings({ notifyOnMachineStressed: false }).notifyOnMachineStressed).toBe(
+      false,
+    );
+    expect(decodeClientSettingsPatch({})).not.toHaveProperty("notifyOnMachineStressed");
+  });
+});
+
+describe("ServerSettings machine resource thresholds", () => {
+  const patchThresholds = (thresholds: Record<string, unknown>) =>
+    decodeServerSettingsPatch({ machineResources: { thresholds } });
+
+  it.each([
+    ["loadPerCore", [0.001, 1_000], [0, -1]],
+    ["memoryUsedPercent", [0.001, 100], [0, 100.001]],
+    ["windowsCpuPercent", [0.001, 100], [0, 100.001]],
+    ["windowsCpuHoldMs", [0, MACHINE_HOLD_MAX_MS], [-1, MACHINE_HOLD_MAX_MS + 1, 1.5]],
+    ["enterHoldMs", [0, MACHINE_HOLD_MAX_MS], [-1, MACHINE_HOLD_MAX_MS + 1, 1.5]],
+    ["exitHoldMs", [0, MACHINE_HOLD_MAX_MS], [-1, MACHINE_HOLD_MAX_MS + 1, 1.5]],
+    ["exitFactor", [0.001, 1], [0, 1.001]],
+  ] as const)("bounds %s at both edges", (key, accepted, rejected) => {
+    for (const value of accepted) {
+      expect(patchThresholds({ [key]: value }).machineResources?.thresholds).toEqual({
+        [key]: value,
+      });
+      expect(
+        decodeServerSettings({ machineResources: { thresholds: { [key]: value } } })
+          .machineResources.thresholds,
+      ).toEqual({ ...DEFAULT_MACHINE_THRESHOLDS, [key]: value });
+    }
+    for (const value of rejected) {
+      expect(() => patchThresholds({ [key]: value })).toThrow();
+    }
+  });
+
+  it("defaults the thresholds when stored settings predate them", () => {
+    expect(decodeServerSettings({}).machineResources.thresholds).toEqual(
+      DEFAULT_MACHINE_THRESHOLDS,
+    );
+    expect(decodeServerSettings({ machineResources: {} }).machineResources.thresholds).toEqual(
+      DEFAULT_MACHINE_THRESHOLDS,
+    );
+    expect(DEFAULT_SERVER_SETTINGS.machineResources.thresholds).toEqual(DEFAULT_MACHINE_THRESHOLDS);
+    expect(DEFAULT_MACHINE_THRESHOLDS).toEqual({
+      loadPerCore: 12.5,
+      memoryUsedPercent: 92.5,
+      windowsCpuPercent: 95,
+      windowsCpuHoldMs: 300_000,
+      enterHoldMs: 10_000,
+      exitHoldMs: 60_000,
+      exitFactor: 0.85,
+    });
+  });
+
+  it("patches only the thresholds it names", () => {
+    expect(decodeServerSettingsPatch({ machineResources: {} })).toEqual({ machineResources: {} });
+    expect(patchThresholds({ enterHoldMs: 0, exitFactor: 0.5 })).toEqual({
+      machineResources: { thresholds: { enterHoldMs: 0, exitFactor: 0.5 } },
+    });
   });
 });
 

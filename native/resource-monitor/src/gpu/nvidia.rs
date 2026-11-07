@@ -343,3 +343,296 @@ mod real {
         }
     }
 }
+
+#[cfg(all(test, unix))]
+mod tests {
+    use std::cell::{Cell, RefCell};
+    use std::rc::Rc;
+
+    use super::super::tests::Tree;
+    use super::super::{Backend, GpuStatus, GpuVendor};
+    use super::{Nvidia, NvidiaProcess, NvidiaReading, NvmlApi, NvmlLoader};
+
+    const DGPU: &str = "0000:01:00.0";
+    const DGPU2: &str = "0000:02:00.0";
+
+    #[derive(Default)]
+    struct State {
+        loads: Cell<u32>,
+        device_calls: RefCell<Vec<String>>,
+        process_calls: RefCell<Vec<String>>,
+        fail_device: Cell<bool>,
+        fail_processes: Cell<bool>,
+    }
+
+    struct FakeNvml(Rc<State>);
+
+    impl NvmlApi for FakeNvml {
+        fn addresses(&self) -> Result<Vec<String>, String> {
+            Ok(vec![DGPU.to_owned()])
+        }
+
+        fn device(&self, address: &str) -> Result<NvidiaReading, String> {
+            self.0.device_calls.borrow_mut().push(address.to_owned());
+            if self.0.fail_device.get() {
+                return Err("NVML: GPU is lost".to_owned());
+            }
+            Ok(NvidiaReading {
+                name: format!("RTX {address}"),
+                util_percent: Some(42.0),
+                vram_total_bytes: Some(8 << 30),
+                vram_used_bytes: Some(1 << 30),
+            })
+        }
+
+        fn processes(&mut self, address: &str) -> Result<Vec<NvidiaProcess>, String> {
+            self.0.process_calls.borrow_mut().push(address.to_owned());
+            if self.0.fail_processes.get() {
+                return Err("NVML: unknown error".to_owned());
+            }
+            Ok(vec![NvidiaProcess {
+                pid: 100,
+                util_percent: Some(5.0),
+                vram_bytes: Some(256 << 20),
+            }])
+        }
+    }
+
+    fn loader(state: &Rc<State>, loads: bool) -> NvmlLoader {
+        let state = state.clone();
+        Box::new(move || {
+            state.loads.set(state.loads.get() + 1);
+            if loads {
+                Ok(Box::new(FakeNvml(state.clone())) as Box<dyn NvmlApi>)
+            } else {
+                Err("NVML init: libnvidia-ml.so.1: cannot open shared object file".to_owned())
+            }
+        })
+    }
+
+    fn nvidia_gpu(tree: &Tree, address: &str, runtime_status: &str) {
+        tree.pci(
+            address,
+            "0x10de",
+            "0x030000",
+            Some("nvidia"),
+            Some(runtime_status),
+        );
+    }
+
+    fn nvidia(tree: &Tree, state: &Rc<State>, loads: bool) -> Nvidia {
+        Nvidia::new(tree.root(), loader(state, loads))
+    }
+
+    #[test]
+    fn suspended_dgpu_is_reported_without_loading_nvml() {
+        let tree = Tree::new();
+        nvidia_gpu(&tree, DGPU, "suspended");
+        let state = Rc::new(State::default());
+        let mut backend = nvidia(&tree, &state, true);
+        for _ in 0..3 {
+            let devices = backend.devices().expect("ok");
+            assert_eq!(devices.len(), 1);
+            let device = &devices[0];
+            assert_eq!(device.id, DGPU);
+            assert_eq!(device.vendor, GpuVendor::Nvidia);
+            assert_eq!(device.status, GpuStatus::Suspended);
+            assert_eq!(device.util_percent, Some(0.0));
+            assert_eq!(device.name, "NVIDIA GPU");
+            assert_eq!(device.vram_used_bytes, None);
+            assert!(!device.shared_memory);
+            assert!(backend.processes().expect("ok").is_empty());
+        }
+        assert_eq!(state.loads.get(), 0);
+    }
+
+    #[test]
+    fn missing_runtime_status_is_treated_as_asleep() {
+        let tree = Tree::new();
+        tree.pci(DGPU, "0x10de", "0x030000", Some("nvidia"), None);
+        let state = Rc::new(State::default());
+        let mut backend = nvidia(&tree, &state, true);
+        assert_eq!(
+            backend.devices().expect("ok")[0].status,
+            GpuStatus::Suspended
+        );
+        assert_eq!(state.loads.get(), 0);
+    }
+
+    #[test]
+    fn awake_dgpu_loads_nvml_once_and_reports_values() {
+        let tree = Tree::new();
+        nvidia_gpu(&tree, DGPU, "active");
+        let state = Rc::new(State::default());
+        let mut backend = nvidia(&tree, &state, true);
+        for _ in 0..4 {
+            let devices = backend.devices().expect("ok");
+            let device = &devices[0];
+            assert_eq!(device.status, GpuStatus::Active);
+            assert_eq!(device.name, format!("RTX {DGPU}"));
+            assert_eq!(device.util_percent, Some(42.0));
+            assert_eq!(device.vram_total_bytes, Some(8 << 30));
+            assert_eq!(device.vram_used_bytes, Some(1 << 30));
+            backend.processes().expect("ok");
+        }
+        assert_eq!(state.loads.get(), 1);
+    }
+
+    #[test]
+    fn runtime_pm_unsupported_counts_as_awake() {
+        let tree = Tree::new();
+        nvidia_gpu(&tree, DGPU, "unsupported");
+        let state = Rc::new(State::default());
+        let mut backend = nvidia(&tree, &state, true);
+        assert_eq!(backend.devices().expect("ok")[0].status, GpuStatus::Active);
+        assert_eq!(*state.device_calls.borrow(), [DGPU]);
+    }
+
+    #[test]
+    fn missing_nvml_is_unavailable_and_never_retried() {
+        let tree = Tree::new();
+        nvidia_gpu(&tree, DGPU, "active");
+        let state = Rc::new(State::default());
+        let mut backend = nvidia(&tree, &state, false);
+        for _ in 0..3 {
+            let devices = backend
+                .devices()
+                .expect("a missing library is not an error");
+            assert_eq!(devices[0].status, GpuStatus::Unavailable);
+            assert_eq!(devices[0].util_percent, None);
+            assert!(backend.processes().expect("ok").is_empty());
+        }
+        assert_eq!(state.loads.get(), 1);
+    }
+
+    #[test]
+    fn device_query_error_is_an_error() {
+        let tree = Tree::new();
+        nvidia_gpu(&tree, DGPU, "active");
+        let state = Rc::new(State::default());
+        state.fail_device.set(true);
+        let mut backend = nvidia(&tree, &state, true);
+        assert!(backend.devices().is_err());
+        state.fail_device.set(false);
+        assert_eq!(
+            backend.devices().expect("recovers")[0].status,
+            GpuStatus::Active
+        );
+    }
+
+    #[test]
+    fn process_query_error_is_an_error() {
+        let tree = Tree::new();
+        nvidia_gpu(&tree, DGPU, "active");
+        let state = Rc::new(State::default());
+        state.fail_processes.set(true);
+        let mut backend = nvidia(&tree, &state, true);
+        assert!(backend.processes().is_err());
+    }
+
+    #[test]
+    fn name_learned_while_awake_is_kept_while_suspended() {
+        let tree = Tree::new();
+        nvidia_gpu(&tree, DGPU, "active");
+        let state = Rc::new(State::default());
+        let mut backend = nvidia(&tree, &state, true);
+        backend.devices().expect("ok");
+        tree.set_runtime_status(DGPU, "suspended");
+        let device = &backend.devices().expect("ok")[0];
+        assert_eq!(device.status, GpuStatus::Suspended);
+        assert_eq!(device.name, format!("RTX {DGPU}"));
+        assert_eq!(state.device_calls.borrow().len(), 1);
+    }
+
+    #[test]
+    fn only_nvidia_driver_display_functions_are_listed() {
+        let tree = Tree::new();
+        tree.pci(
+            "0000:01:00.0",
+            "0x10de",
+            "0x030000",
+            Some("nouveau"),
+            Some("active"),
+        );
+        tree.pci(
+            "0000:01:00.1",
+            "0x10de",
+            "0x040300",
+            Some("snd_hda_intel"),
+            Some("active"),
+        );
+        tree.pci(
+            "0000:03:00.0",
+            "0x10de",
+            "0x0c0330",
+            Some("nvidia"),
+            Some("active"),
+        );
+        tree.pci("0000:04:00.0", "0x10de", "0x030000", None, Some("active"));
+        tree.pci(
+            "0000:00:02.0",
+            "0x8086",
+            "0x030000",
+            Some("i915"),
+            Some("active"),
+        );
+        tree.pci(
+            "0000:05:00.0",
+            "0x10de",
+            "0x030200",
+            Some("nvidia"),
+            Some("active"),
+        );
+        let state = Rc::new(State::default());
+        let mut backend = nvidia(&tree, &state, true);
+        let ids: Vec<String> = backend
+            .devices()
+            .expect("ok")
+            .into_iter()
+            .map(|device| device.id)
+            .collect();
+        assert_eq!(ids, ["0000:05:00.0"]);
+    }
+
+    #[test]
+    fn devices_are_sorted_by_address() {
+        let tree = Tree::new();
+        nvidia_gpu(&tree, DGPU2, "active");
+        nvidia_gpu(&tree, DGPU, "suspended");
+        let state = Rc::new(State::default());
+        let mut backend = nvidia(&tree, &state, true);
+        let devices = backend.devices().expect("ok");
+        let ids: Vec<&str> = devices.iter().map(|device| device.id.as_str()).collect();
+        assert_eq!(ids, [DGPU, DGPU2]);
+        assert_eq!(devices[0].status, GpuStatus::Suspended);
+        assert_eq!(devices[1].status, GpuStatus::Active);
+        assert_eq!(*state.device_calls.borrow(), [DGPU2]);
+    }
+
+    #[test]
+    fn processes_query_only_awake_devices() {
+        let tree = Tree::new();
+        nvidia_gpu(&tree, DGPU, "suspended");
+        nvidia_gpu(&tree, DGPU2, "active");
+        let state = Rc::new(State::default());
+        let mut backend = nvidia(&tree, &state, true);
+        let rows = backend.processes().expect("ok");
+        assert_eq!(*state.process_calls.borrow(), [DGPU2]);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].pid, 100);
+        assert_eq!(rows[0].device_id, DGPU2);
+        assert_eq!(rows[0].start_time_ms, 0);
+        assert_eq!(rows[0].util_percent, Some(5.0));
+        assert_eq!(rows[0].vram_bytes, Some(256 << 20));
+    }
+
+    #[test]
+    fn no_sysfs_tree_is_no_devices_and_no_load() {
+        let tree = Tree::new();
+        let state = Rc::new(State::default());
+        let mut backend = nvidia(&tree, &state, true);
+        assert!(backend.devices().expect("ok").is_empty());
+        assert!(backend.processes().expect("ok").is_empty());
+        assert_eq!(state.loads.get(), 0);
+    }
+}

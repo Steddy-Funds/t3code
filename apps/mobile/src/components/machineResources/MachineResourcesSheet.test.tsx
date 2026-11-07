@@ -1,7 +1,11 @@
 import { RegistryContext } from "@effect/atom-react";
 import type { MachineIndicator } from "@t3tools/client-runtime/state/machineIndicator";
 import type { MachineProcessTable } from "@t3tools/client-runtime/state/machineProcessFrames";
-import { EnvironmentId, type MachineStatusSnapshot } from "@t3tools/contracts";
+import {
+  EnvironmentId,
+  type GpuDeviceSample,
+  type MachineStatusSnapshot,
+} from "@t3tools/contracts";
 import { type Atom, AtomRegistry } from "effect/reactivity";
 import type { ReactNode } from "react";
 import { act } from "react";
@@ -11,6 +15,8 @@ import { describe, expect, it, vi } from "vite-plus/test";
 const harness = vi.hoisted(() => ({
   indicator: null as unknown as MachineIndicator,
   processes: null as unknown as MachineProcessTable,
+  snapshot: null as unknown as MachineStatusSnapshot,
+  canReadDiagnostics: true,
   /** Live atoms currently mounted, by "machine:<intervalMs|verdict>" or "processes:<intervalMs>:<top>". */
   mounted: new Set<string>(),
   /** Every subscription key ever requested, mounted or not. */
@@ -69,6 +75,10 @@ vi.mock("../../state/server", async () => {
   const config = Atom.make(null);
   return { serverEnvironment: { configValueAtom: () => config } };
 });
+vi.mock("../../state/session", () => ({
+  useEnvironmentScope: (_id: string, scope: string) =>
+    scope === "diagnostics:read" && harness.canReadDiagnostics,
+}));
 vi.mock("../../state/machineResources", async () => {
   const { Atom, AsyncResult } = await import("effect/reactivity");
   const indicator = Atom.make(() => harness.indicator);
@@ -90,7 +100,7 @@ vi.mock("../../state/machineResources", async () => {
     machineIndicator: { machineIndicatorAtom: () => indicator },
     machineResources: {
       machine: (_id: string, input?: { intervalMs: number }) =>
-        tracked(`machine:${input?.intervalMs ?? "verdict"}`, () => SNAPSHOT),
+        tracked(`machine:${input?.intervalMs ?? "verdict"}`, () => harness.snapshot),
       machineProcesses: (_id: string, input: { intervalMs: number; top?: number }) =>
         tracked(`processes:${input.intervalMs}:${input.top}`, () => harness.processes),
     },
@@ -107,6 +117,26 @@ const SNAPSHOT: MachineStatusSnapshot = {
   reason: null,
   sampleAgeMs: 0,
   totals: null,
+};
+const TOTALS: NonNullable<MachineStatusSnapshot["totals"]> = {
+  cpuUtilization: 0.2,
+  cpuCount: 8,
+  load: { one: 1, five: 1, fifteen: 1 },
+  memoryTotalBytes: 16 * 1024 ** 3,
+  memoryAvailableBytes: 8 * 1024 ** 3,
+  swapTotalBytes: 0,
+  swapUsedBytes: 0,
+  memoryPressure: null,
+};
+const GPU: GpuDeviceSample = {
+  id: "gpu-0",
+  name: "RTX 4090",
+  vendor: "nvidia",
+  status: "active",
+  sharedMemory: false,
+  utilPercent: 37,
+  vramTotalBytes: 24 * 1024 ** 3,
+  vramUsedBytes: 6 * 1024 ** 3,
 };
 const environmentId = EnvironmentId.make("machine-a");
 const LIVE_KEYS = ["machine:1000", "machine:verdict", "processes:2000:5"];
@@ -133,7 +163,13 @@ const T3_SERVER = table([
   },
 ]);
 
-function setup(indicator: Partial<MachineIndicator> = {}, processes = T3_SERVER) {
+function setup(
+  indicator: Partial<MachineIndicator> = {},
+  processes = T3_SERVER,
+  { snapshot = SNAPSHOT, canReadDiagnostics = true } = {},
+) {
+  harness.snapshot = snapshot;
+  harness.canReadDiagnostics = canReadDiagnostics;
   harness.indicator = {
     show: true,
     verdict: "ok",
@@ -244,6 +280,28 @@ describe.each(Object.keys(SURFACES) as Surface[])("%s", (surface) => {
     expect(screen.sheet()?.textContent).toContain("Process list needs the resource monitor");
   });
 
+  it("opens no process stream without diagnostics access", async () => {
+    setup({}, T3_SERVER, { canReadDiagnostics: false });
+    await using screen = await renderSurface(surface);
+
+    await screen.tap(OPEN);
+
+    expect(screen.sheet()).not.toBeNull();
+    expect([...harness.requested].filter((key) => key.startsWith("processes:"))).toEqual([]);
+    expect(liveKeys()).toEqual(["machine:1000", "machine:verdict"]);
+    expect(screen.sheet()?.textContent).not.toContain("t3-server");
+    expect(screen.sheet()?.textContent).not.toContain("resource monitor");
+  });
+
+  it("lists the top processes with diagnostics access", async () => {
+    setup();
+    await using screen = await renderSurface(surface);
+
+    await screen.tap(OPEN);
+
+    expect(screen.sheet()?.textContent).toContain("t3-server");
+  });
+
   it("opens no live stream for an unreachable machine", async () => {
     setup({ verdict: "unknown", unreachable: true, lastSeen: { verdict: "ok", ageMs: 60_000 } });
     await using screen = await renderSurface(surface);
@@ -264,5 +322,42 @@ describe("the thread header action", () => {
     await using screen = await renderSurface("the thread header action");
 
     expect(screen.button(OPEN)?.getAttribute("data-tint")).toBe(tint);
+  });
+});
+
+describe("the machine sheet GPU section", () => {
+  const withTotals = (sample?: MachineStatusSnapshot["sample"]): MachineStatusSnapshot => ({
+    ...SNAPSHOT,
+    totals: TOTALS,
+    ...(sample ? { sample } : {}),
+  });
+
+  it.each<[string, ReadonlyArray<GpuDeviceSample>, string]>([
+    ["one device", [GPU], "GPU"],
+    ["two devices", [GPU, { ...GPU, id: "gpu-1", name: "RTX 3060" }], "GPUs"],
+  ])("renders with %s", async (_name, gpus, title) => {
+    setup({}, T3_SERVER, { snapshot: withTotals({ perCore: [10], gpus }) });
+    await using screen = await renderSurface("the machine symbol button");
+
+    await screen.tap(OPEN);
+
+    const text = screen.sheet()?.textContent ?? "";
+    expect(text).toContain(title);
+    for (const gpu of gpus) expect(text).toContain(gpu.name);
+    expect(text).toContain("6.0 / 24.0 GiB");
+    expect(text).toContain("37%");
+  });
+
+  it.each([
+    ["an empty device list", withTotals({ perCore: [10], gpus: [] })],
+    ["no gpus field", withTotals({ perCore: [10] })],
+    ["no sample", withTotals()],
+  ])("is absent with %s", async (_name, snapshot) => {
+    setup({}, T3_SERVER, { snapshot });
+    await using screen = await renderSurface("the machine symbol button");
+
+    await screen.tap(OPEN);
+
+    expect(screen.sheet()?.textContent).not.toMatch(/GPU|RTX/);
   });
 });

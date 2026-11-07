@@ -175,7 +175,9 @@ describe("TimeSeriesCanvas", () => {
       mobile: false,
     });
     await using _restore = {
-      [Symbol.asyncDispose]: () => session.send("Emulation.clearDeviceMetricsOverride"),
+      [Symbol.asyncDispose]: async () => {
+        await session.send("Emulation.clearDeviceMetricsOverride");
+      },
     };
 
     await vi.waitFor(() => expect(chart.canvas.width).toBe(240 * ratio));

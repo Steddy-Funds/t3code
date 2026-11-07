@@ -107,28 +107,32 @@ const DEFAULT_SORT: ProcessTableSort = { columnId: "cpu", descending: true };
 export function MachineProcessList({
   environmentId,
   tick,
+  hasGpu,
   viewMode,
   onViewModeChange,
 }: {
   readonly environmentId: EnvironmentId;
   readonly tick: TaskManagerTick;
+  /** Per-process GPU columns are offered, and requested, only on a machine with a readable GPU. */
+  readonly hasGpu: boolean;
   readonly viewMode: ProcessViewMode;
   readonly onViewModeChange: (mode: ProcessViewMode) => void;
 }) {
   const canReadDiagnostics = useEnvironmentScope(environmentId, AuthDiagnosticsReadScope);
+  const [hidden, setHidden] = useState<ReadonlySet<ColumnId>>(DEFAULT_HIDDEN);
+  // Per-process GPU columns cost the host a DRM fdinfo or NVML walk, so ask only while shown.
+  const gpuProcesses = hasGpu && [...GPU_COLUMNS].some((column) => !hidden.has(column));
   const result = useAtomValue(
     canReadDiagnostics
       ? machineResources.machineProcesses(environmentId, {
           intervalMs: Math.max(tick, 1000),
-          gpuProcesses: true,
+          ...(gpuProcesses ? { gpuProcesses: true } : {}),
         })
       : NO_PROCESSES,
   );
-  const [hidden, setHidden] = useState<ReadonlySet<ColumnId>>(DEFAULT_HIDDEN);
   const signal = useProcessSignal(environmentId);
   const table = Option.getOrNull(AsyncResult.value(result));
   const rows = table?.rows ?? [];
-  const hasGpu = rows.some((row) => row.gpuUtil !== undefined);
   const available = COLUMNS.filter(
     (column) =>
       (hasGpu || !GPU_COLUMNS.has(column.id)) &&

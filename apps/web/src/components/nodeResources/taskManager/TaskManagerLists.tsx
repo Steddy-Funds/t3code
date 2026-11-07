@@ -22,11 +22,14 @@ function isTaskManagerList(value: unknown): value is TaskManagerList {
 export function TaskManagerLists({
   environmentId,
   tick,
+  hasGpu,
   viewMode,
   onViewModeChange,
 }: {
   readonly environmentId: EnvironmentId;
   readonly tick: TaskManagerTick;
+  /** The machine has a GPU that can be read; per-process GPU columns are offered only then. */
+  readonly hasGpu: boolean;
   readonly viewMode: ProcessViewMode;
   readonly onViewModeChange: (mode: ProcessViewMode) => void;
 }) {
@@ -52,6 +55,7 @@ export function TaskManagerLists({
         <MachineProcessList
           environmentId={environmentId}
           tick={tick}
+          hasGpu={hasGpu}
           viewMode={viewMode}
           onViewModeChange={onViewModeChange}
         />

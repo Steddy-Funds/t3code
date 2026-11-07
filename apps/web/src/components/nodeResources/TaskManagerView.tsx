@@ -17,10 +17,12 @@ import { useEnvironmentScope } from "~/state/session";
 import { useKnownTerminalSessions } from "~/state/terminalSessions";
 
 import { MachineSectionMessage } from "./primitives/MachineSection";
+import type { ProcessViewMode } from "./primitives/ProcessViewToggle";
 import { TaskManagerGraphs } from "./taskManager/TaskManagerGraphs";
 import { TaskManagerGrids } from "./taskManager/TaskManagerGrids";
 import { TaskManagerHeader } from "./taskManager/TaskManagerHeader";
 import { TaskManagerLists } from "./taskManager/TaskManagerLists";
+import { hasReadableGpu } from "./taskManager/machineSeries";
 import { MACHINE_TERMINAL_THREAD_ID, TaskManagerTerminal } from "./taskManager/TaskManagerTerminal";
 import { useMachineSeries } from "./taskManager/useMachineSeries";
 import {
@@ -69,10 +71,6 @@ export function TaskManagerView({ environmentId }: { readonly environmentId: Env
         onTickChange={preferences.setTick}
         range={preferences.rangeMs}
         onRangeChange={preferences.setRange}
-      />
-      <TaskManagerLists
-        environmentId={environmentId}
-        tick={preferences.tick}
         viewMode={preferences.viewMode}
         onViewModeChange={preferences.setViewMode}
       />
@@ -88,6 +86,8 @@ function TaskManagerOverview({
   onTickChange,
   range,
   onRangeChange,
+  viewMode,
+  onViewModeChange,
 }: {
   readonly environmentId: EnvironmentId;
   readonly label: string;
@@ -95,6 +95,8 @@ function TaskManagerOverview({
   readonly onTickChange: (tick: TaskManagerTick) => void;
   readonly range: TaskManagerRange;
   readonly onRangeChange: (range: TaskManagerRange) => void;
+  readonly viewMode: ProcessViewMode;
+  readonly onViewModeChange: (mode: ProcessViewMode) => void;
 }) {
   const view = useAtomValue(machineIndicator.machineIndicatorAtom(environmentId));
   // An unreachable machine is never subscribed; the rings keep what was last drawn.
@@ -149,6 +151,14 @@ function TaskManagerOverview({
           <TaskManagerGrids series={series} snapshot={snapshot} rule={rule} />
         </>
       )}
+      {/* Rendered here for the snapshot's GPU flag; its props stay equal across ticks. */}
+      <TaskManagerLists
+        environmentId={environmentId}
+        tick={tick}
+        hasGpu={hasReadableGpu(snapshot)}
+        viewMode={viewMode}
+        onViewModeChange={onViewModeChange}
+      />
     </>
   );
 }

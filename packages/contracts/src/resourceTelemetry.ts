@@ -3,6 +3,7 @@ import * as Schema from "effect/Schema";
 import { NonNegativeInt, PositiveInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import { HostPowerSnapshot } from "./background.ts";
 import { DesktopUpdateChannelSchema, DesktopUpdateStateSchema } from "./ipc.ts";
+import { GpuDeviceSample } from "./machineResources.ts";
 
 export const RESOURCE_MONITOR_PROTOCOL_VERSION = 4 as const;
 /** A monitor built before v4 still speaks this; the server then uses only v3 messages. */
@@ -294,26 +295,6 @@ export const ResourceMonitorErrorEvent = Schema.Struct({
   recoverable: Schema.Boolean,
 });
 export type ResourceMonitorErrorEvent = typeof ResourceMonitorErrorEvent.Type;
-
-export const GpuVendor = Schema.Literals(["nvidia", "intel"]);
-export type GpuVendor = typeof GpuVendor.Type;
-
-export const GpuStatus = Schema.Literals(["active", "suspended", "unavailable"]);
-export type GpuStatus = typeof GpuStatus.Type;
-
-export const GpuDeviceSample = Schema.Struct({
-  id: Schema.String,
-  vendor: GpuVendor,
-  name: Schema.String,
-  /** A suspended device is never woken to be measured. */
-  status: GpuStatus,
-  utilPercent: Schema.NullOr(Schema.Number),
-  vramTotalBytes: Schema.NullOr(NonNegativeInt),
-  vramUsedBytes: Schema.NullOr(NonNegativeInt),
-  /** Integrated GPUs use system RAM, so VRAM fields describe a share of it. */
-  sharedMemory: Schema.Boolean,
-});
-export type GpuDeviceSample = typeof GpuDeviceSample.Type;
 
 export const GpuProcessSample = Schema.Struct({
   pid: PositiveInt,

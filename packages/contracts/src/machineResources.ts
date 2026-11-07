@@ -2,7 +2,26 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
 import { NonNegativeInt, PositiveInt } from "./baseSchemas.ts";
-import { GpuDeviceSample } from "./resourceTelemetry.ts";
+
+export const GpuVendor = Schema.Literals(["nvidia", "intel"]);
+export type GpuVendor = typeof GpuVendor.Type;
+
+export const GpuStatus = Schema.Literals(["active", "suspended", "unavailable"]);
+export type GpuStatus = typeof GpuStatus.Type;
+
+export const GpuDeviceSample = Schema.Struct({
+  id: Schema.String,
+  vendor: GpuVendor,
+  name: Schema.String,
+  /** A suspended device is never woken to be measured. */
+  status: GpuStatus,
+  utilPercent: Schema.NullOr(Schema.Number),
+  vramTotalBytes: Schema.NullOr(NonNegativeInt),
+  vramUsedBytes: Schema.NullOr(NonNegativeInt),
+  /** Integrated GPUs use system RAM, so VRAM fields describe a share of it. */
+  sharedMemory: Schema.Boolean,
+});
+export type GpuDeviceSample = typeof GpuDeviceSample.Type;
 
 export const MACHINE_HOLD_MAX_MS = 3_600_000;
 export const MACHINE_SAMPLE_MIN_INTERVAL_MS = 500;

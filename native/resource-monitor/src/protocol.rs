@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::gpu::{GpuDeviceSample, GpuProcessSample};
+use crate::gpu::{GpuDeviceSample, GpuError, GpuProcessSample};
 
 pub(crate) const PROTOCOL_VERSION: u32 = 4;
 
@@ -335,6 +335,28 @@ pub(crate) struct GpuTotalsEvent<'a> {
     /// None when this one query failed.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) gpus: Option<Vec<GpuDeviceSample>>,
+}
+
+impl<'a> GpuTotalsEvent<'a> {
+    /// The reply to `gpuTotals`, plus the `gpu-unavailable` message to send after it, if any.
+    /// A failed query omits `gpus`; disabled GPUs answer empty once and say why.
+    pub(crate) fn reply(
+        request_id: &'a str,
+        result: Result<Vec<GpuDeviceSample>, GpuError>,
+    ) -> (Self, Option<String>) {
+        let (gpus, disabled) = match result {
+            Ok(devices) => (Some(devices), None),
+            Err(GpuError::Failed(_)) => (None, None),
+            Err(GpuError::Disabled(message)) => (Some(Vec::new()), Some(message)),
+        };
+        let event = GpuTotalsEvent {
+            version: PROTOCOL_VERSION,
+            event_type: "gpuTotals",
+            request_id,
+            gpus,
+        };
+        (event, disabled)
+    }
 }
 
 #[derive(Debug, Serialize)]

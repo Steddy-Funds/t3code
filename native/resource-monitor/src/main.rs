@@ -5,31 +5,24 @@ mod host;
 mod io;
 mod protocol;
 
-use std::collections::HashMap;
 use std::io::{BufWriter, Write};
 use std::sync::mpsc::RecvTimeoutError;
 use std::time::{Duration, Instant};
 
-use crate::collector::{Collector, CollectorConfig, unix_time_ms};
-use crate::gpu::{GpuError, Gpus};
+use crate::collector::{
+    Collector, CollectorConfig, claimed_identities, identity_map, unix_time_ms,
+};
+use crate::gpu::Gpus;
 use crate::history::HistoryRecorder;
 use crate::host::{HOST_TOTALS_SUPPORTED, HostCollector, HostSampleOutcome, host_totals};
 use crate::io::{Input, spawn_input_reader, write_error, write_event, write_history};
 use crate::protocol::{
-    Capabilities, Command, ExternalProcess, GpuTotalsEvent, HelloEvent, HostTotalsEvent,
-    PROTOCOL_VERSION, ProcessTableEvent,
+    Capabilities, Command, GpuTotalsEvent, HelloEvent, HostTotalsEvent, PROTOCOL_VERSION,
+    ProcessTableEvent,
 };
 
 const MIN_SAMPLE_INTERVAL_MS: u64 = 250;
 const MAX_SAMPLE_INTERVAL_MS: u64 = 60_000;
-const MAX_CLAIMED_PROCESSES: usize = 256;
-
-fn identity_map(processes: Vec<ExternalProcess>) -> HashMap<u32, Option<u64>> {
-    processes
-        .into_iter()
-        .map(|process| (process.pid, process.start_time_ms))
-        .collect()
-}
 
 fn write_host_sample(writer: &mut impl Write, outcome: HostSampleOutcome) -> std::io::Result<()> {
     write_event(writer, &outcome.event)?;
@@ -224,10 +217,9 @@ fn main() -> std::io::Result<()> {
                         };
                         write_event(&mut writer, &event)?;
                     }
-                    Command::SetClaimedProcesses { mut processes, .. } => {
+                    Command::SetClaimedProcesses { processes, .. } => {
                         if let Some(current) = config.as_mut() {
-                            processes.truncate(MAX_CLAIMED_PROCESSES);
-                            current.claimed_processes = identity_map(processes);
+                            current.claimed_processes = claimed_identities(processes);
                         } else {
                             write_error(
                                 &mut writer,
@@ -269,20 +261,8 @@ fn main() -> std::io::Result<()> {
                         )?;
                     }
                     Command::GpuTotals { request_id, .. } => {
-                        let (devices, disabled) = match gpus.totals() {
-                            Ok(devices) => (Some(devices), None),
-                            Err(GpuError::Failed(_)) => (None, None),
-                            Err(GpuError::Disabled(message)) => (Some(Vec::new()), Some(message)),
-                        };
-                        write_event(
-                            &mut writer,
-                            &GpuTotalsEvent {
-                                version: PROTOCOL_VERSION,
-                                event_type: "gpuTotals",
-                                request_id: &request_id,
-                                gpus: devices,
-                            },
-                        )?;
+                        let (event, disabled) = GpuTotalsEvent::reply(&request_id, gpus.totals());
+                        write_event(&mut writer, &event)?;
                         if let Some(message) = disabled {
                             write_error(&mut writer, "gpu-unavailable", message, true)?;
                         }

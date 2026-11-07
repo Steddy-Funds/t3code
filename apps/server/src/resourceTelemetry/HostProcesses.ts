@@ -380,7 +380,7 @@ export function nextHostFrames(
       removed: last ? removed : [],
       rows: current.rows,
       ...(last && input.gpuProcesses && sample.gpus ? { gpus: sample.gpus } : {}),
-      ...(truncated > 0 ? { truncated } : {}),
+      ...(last && truncated > 0 ? { truncated } : {}),
     };
   });
   return [

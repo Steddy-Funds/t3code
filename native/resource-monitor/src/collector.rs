@@ -23,6 +23,23 @@ pub(crate) struct CollectorConfig {
     pub(crate) claimed_processes: HashMap<u32, Option<u64>>,
 }
 
+/// Claims past this many are dropped, so a runaway claimer cannot grow every sample's walk.
+pub(crate) const MAX_CLAIMED_PROCESSES: usize = 256;
+
+/// Process identities keyed by pid; a later duplicate pid wins.
+pub(crate) fn identity_map(processes: Vec<ExternalProcess>) -> HashMap<u32, Option<u64>> {
+    processes
+        .into_iter()
+        .map(|process| (process.pid, process.start_time_ms))
+        .collect()
+}
+
+/// The claimed set from a `setClaimedProcesses` command: the first 256, in the order sent.
+pub(crate) fn claimed_identities(mut processes: Vec<ExternalProcess>) -> HashMap<u32, Option<u64>> {
+    processes.truncate(MAX_CLAIMED_PROCESSES);
+    identity_map(processes)
+}
+
 pub(crate) struct Collector {
     system: System,
     sequence: u64,

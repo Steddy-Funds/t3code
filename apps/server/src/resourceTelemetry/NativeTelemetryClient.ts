@@ -314,7 +314,8 @@ export function combineHostSampleDemand(
   for (const demand of demands) {
     const intervalMs = Math.max(MIN_HOST_SAMPLE_INTERVAL_MS, Math.round(demand.intervalMs));
     combined = {
-      intervalMs: combined.intervalMs === 0 ? intervalMs : Math.min(combined.intervalMs, intervalMs),
+      intervalMs:
+        combined.intervalMs === 0 ? intervalMs : Math.min(combined.intervalMs, intervalMs),
       processes: combined.processes || demand.processes,
       gpus: combined.gpus || (gpusAllowed && demand.gpus),
       gpuProcesses: combined.gpuProcesses || (gpusAllowed && demand.gpuProcesses),
@@ -792,7 +793,9 @@ export const make = Effect.fn("resourceTelemetry.nativeTelemetryClient.make")(fu
         if (event.code === "gpu-unavailable") {
           // The monitor turned its GPUs off; the rest of it is healthy.
           return Ref.update(gpuState, (current) => ({ ...current, off: true })).pipe(
-            Effect.andThen(Effect.logWarning("Resource monitor turned GPUs off", { message: event.message })),
+            Effect.andThen(
+              Effect.logWarning("Resource monitor turned GPUs off", { message: event.message }),
+            ),
             Effect.andThen(applyHostDemand),
           );
         }
@@ -885,7 +888,12 @@ export const make = Effect.fn("resourceTelemetry.nativeTelemetryClient.make")(fu
       );
       yield* handle.stderr.pipe(Stream.runDrain, Effect.ignore, Effect.forkScoped);
 
-      const hello = yield* Deferred.await(helloDeferred).pipe(
+      // A reader that fails before hello (protocol mismatch, bad JSON) explains the failure;
+      // waiting on hello alone would report it as a handshake timeout.
+      const decoderEffect = Fiber.join(eventFiber).pipe(
+        Effect.andThen(Effect.fail(new NativeTelemetryStreamClosed())),
+      );
+      const hello = yield* Effect.raceFirst(Deferred.await(helloDeferred), decoderEffect).pipe(
         Effect.timeoutOption(HANDSHAKE_TIMEOUT),
         Effect.flatMap(
           Option.match({
@@ -955,9 +963,6 @@ export const make = Effect.fn("resourceTelemetry.nativeTelemetryClient.make")(fu
         Effect.flatMap((exitCode) =>
           Effect.fail(new NativeTelemetryExited({ exitCode: Number(exitCode) })),
         ),
-      );
-      const decoderEffect = Fiber.join(eventFiber).pipe(
-        Effect.andThen(Effect.fail(new NativeTelemetryStreamClosed())),
       );
       return yield* Effect.raceFirst(exitEffect, decoderEffect);
     }),

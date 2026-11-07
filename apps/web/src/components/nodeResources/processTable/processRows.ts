@@ -43,9 +43,13 @@ export function processIdentityKey(process: Pick<ProcessTableRow, "pid" | "start
 
 /** The executable's file name, for rows the host reports without a name. */
 export function processNameFromCommand(command: string): string {
-  const firstToken = command.trim().split(/\s+/)[0] ?? command;
-  const normalized = firstToken.replace(/^['"]|['"]$/g, "");
-  return normalized.split(/[\\/]/).findLast((segment) => segment.length > 0) ?? normalized;
+  const trimmed = command.trim();
+  // A quoted executable may contain spaces: "C:\Program Files\App\app.exe" --flag.
+  const quoted = /^(["'])(.*?)\1/.exec(trimmed);
+  const executable = quoted
+    ? quoted[2]!
+    : (trimmed.split(/\s+/)[0] ?? trimmed).replace(/^['"]|['"]$/g, "");
+  return executable.split(/[\\/]/).findLast((segment) => segment.length > 0) ?? executable;
 }
 
 function compareBy<Row>(sort: ProcessSort<Row> | null) {

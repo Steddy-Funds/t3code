@@ -155,6 +155,8 @@ export function ProcessTable<Row extends ProcessTableRow>({
             getItemType={(item) => item.kind}
             estimatedItemSize={ROW_HEIGHT}
             drawDistance={ROW_HEIGHT * 10}
+            // Kill state isn't in `items`, so a new signalling set or permission must redraw rows too.
+            extraData={kill}
             className="min-h-0 flex-1 overscroll-y-contain"
             renderItem={({ item }) =>
               item.kind === "group" ? (

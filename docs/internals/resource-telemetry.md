@@ -20,6 +20,22 @@ stays bounded as agents come and go. History therefore covers only time with a l
 subscriber, plus on-demand and export samples. Consuming host power for background scheduling must not retain
 live diagnostics. There is no telemetry database or recurring shell-probe fallback.
 
+## Machine verdict
+
+The machine verdict (ok, stressed, unknown) is always on, so it must stay cheap.
+[`HostResources`](../../apps/server/src/resourceTelemetry/HostResources.ts) reads host totals
+on the shared 5 s `Scheduler` tick: CPU counters, load average, memory and swap, never the
+process table. [`stepVerdict`](../../packages/shared/src/nodeVerdict.ts) folds each tick
+with hysteresis, and the server pushes a snapshot only when the verdict or its rule changes,
+plus a 30 s heartbeat. Clients judge staleness by their own receipt time, so the heartbeat
+must stay well inside the client's 75 s expiry. Per-core samples run on their own fiber only
+while a view subscribes with an interval.
+
+On macOS the RAM rule needs the memory-pressure level, which Node cannot read. Until the
+native monitor reports host totals, one long-lived `sh` loop runs `sysctl` and `vm_stat`
+every 5 s into a pipe the server owns. It is the one exception to "no recurring shell
+probe": it exits when its parent dies or a write to the pipe fails.
+
 History has independent bounds for age, snapshot count, process rows, and retained
 bytes. A count limit alone cannot bound memory when command lines vary in size.
 Large process trees therefore shorten the available history window. Linux task

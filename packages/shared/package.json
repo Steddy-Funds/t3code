@@ -347,6 +347,14 @@
       "types": "./src/HostProcess.ts",
       "import": "./src/HostProcess.ts"
     },
+    "./hostTotals": {
+      "types": "./src/hostTotals.ts",
+      "import": "./src/hostTotals.ts"
+    },
+    "./nodeVerdict": {
+      "types": "./src/nodeVerdict.ts",
+      "import": "./src/nodeVerdict.ts"
+    },
     "./testing/longTempDir": {
       "types": "./src/testing/longTempDir.ts",
       "import": "./src/testing/longTempDir.ts"

@@ -1,5 +1,6 @@
 import {
   DEFAULT_SERVER_SETTINGS,
+  MachineThresholds,
   ModelSelection,
   ProjectId,
   ProjectScript,
@@ -379,6 +380,46 @@ const PersistedServerSettings = Schema.Struct({
 // Parse first and decode second, so a managed policy can fill its defaults in between.
 const decodeSettingsFileJsonExit = Schema.decodeUnknownExit(fromLenientJson(Schema.Unknown));
 const decodePersistedServerSettingsExit = Schema.decodeUnknownExit(PersistedServerSettings);
+const decodeMachineThresholdsExit = Schema.decodeUnknownExit(MachineThresholds);
+
+const isPlainRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+/**
+ * A hand-edited threshold out of bounds must not reset every other setting, so invalid
+ * `machineResources.thresholds` keys are dropped (back to their defaults) before decoding.
+ */
+export function dropInvalidMachineThresholds(file: unknown): {
+  readonly file: unknown;
+  readonly dropped: ReadonlyArray<string>;
+} {
+  if (!isPlainRecord(file) || file.machineResources === undefined) return { file, dropped: [] };
+  const machineResources = file.machineResources;
+  if (!isPlainRecord(machineResources)) {
+    const { machineResources: _invalid, ...rest } = file;
+    return { file: rest, dropped: ["machineResources"] };
+  }
+  const thresholds = machineResources.thresholds;
+  if (thresholds === undefined) return { file, dropped: [] };
+  if (!isPlainRecord(thresholds)) {
+    const { thresholds: _invalid, ...restResources } = machineResources;
+    return {
+      file: { ...file, machineResources: restResources },
+      dropped: ["machineResources.thresholds"],
+    };
+  }
+  const kept: Record<string, unknown> = {};
+  const dropped: Array<string> = [];
+  for (const [key, value] of Object.entries(thresholds)) {
+    if (Exit.isSuccess(decodeMachineThresholdsExit({ [key]: value }))) kept[key] = value;
+    else dropped.push(`machineResources.thresholds.${key}`);
+  }
+  if (dropped.length === 0) return { file, dropped };
+  return {
+    file: { ...file, machineResources: { ...machineResources, thresholds: kept } },
+    dropped,
+  };
+}
 const LegacyProviderSettingsJson = fromLenientJson(
   Schema.Struct({
     providers: Schema.optionalKey(Schema.Record(Schema.String, Schema.Unknown)),
@@ -791,9 +832,16 @@ const make = Effect.gen(function* () {
     if (yield* readConfigExists) {
       const raw = yield* readRawConfig;
       const parsed = decodeSettingsFileJsonExit(raw);
+      const sanitized = dropInvalidMachineThresholds(Exit.isSuccess(parsed) ? parsed.value : null);
+      if (sanitized.dropped.length > 0) {
+        yield* Effect.logWarning("ignoring invalid machine thresholds in settings.json", {
+          path: settingsPath,
+          keys: sanitized.dropped,
+        });
+      }
       const decoded = Exit.isFailure(parsed)
         ? parsed
-        : decodePersistedServerSettingsExit(managed.withDefaults(parsed.value));
+        : decodePersistedServerSettingsExit(managed.withDefaults(sanitized.file));
       const legacySettings = decodeLegacyProviderSettingsJsonExit(raw);
       if (legacySettings._tag === "Success") {
         legacyProviders = legacySettings.value.providers;

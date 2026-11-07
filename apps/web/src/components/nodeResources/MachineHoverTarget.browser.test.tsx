@@ -9,7 +9,7 @@ import { type Atom, AtomRegistry } from "effect/reactivity";
 import { describe, expect, it, vi } from "vite-plus/test";
 import { page, userEvent } from "vite-plus/test/browser";
 
-import { render } from "../../../test/render";
+import { fakeTimers, render } from "../../../test/render";
 
 const state = vi.hoisted(() => ({
   indicator: null as unknown as MachineIndicator,
@@ -194,6 +194,43 @@ describe("MachineHoverTarget", () => {
 
       await expectPath(screen, TASK_MANAGER_PATH);
       expect(card().query()).toBeNull();
+    },
+  );
+
+  it.each([
+    { name: "click", act: (trigger: HTMLElement) => userEvent.click(trigger) },
+    {
+      name: "Enter",
+      act: (trigger: HTMLElement) => {
+        trigger.focus();
+        return userEvent.keyboard("{Enter}");
+      },
+    },
+    {
+      name: "Space",
+      act: (trigger: HTMLElement) => {
+        trigger.focus();
+        return userEvent.keyboard(" ");
+      },
+    },
+  ])(
+    "a $name during the hover delay keeps the card shut until the pointer leaves",
+    async ({ act }) => {
+      setup();
+      await using screen = await renderTarget();
+      using _timers = fakeTimers();
+      const trigger = screen.getByRole("button", { name: "Open" });
+
+      await userEvent.hover(trigger);
+      await act(trigger.element() as HTMLElement);
+      await expectPath(screen, TASK_MANAGER_PATH);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(card().query()).toBeNull();
+
+      await userEvent.unhover(trigger);
+      await userEvent.hover(trigger);
+      await vi.advanceTimersByTimeAsync(400);
+      await expect.element(card()).toBeVisible();
     },
   );
 

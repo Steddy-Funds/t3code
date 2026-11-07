@@ -124,6 +124,45 @@ describe("createMachineProcessFrameApplier", () => {
     expect(apply(frame({ sequence: 0, added: [added(0)], values: [[0, 1]] }))).toBeNull();
   });
 
+  it("keeps GPU values through diffs that carry no GPU columns", () => {
+    const { apply } = createMachineProcessFrameApplier();
+    const gpu = (table: ReturnType<typeof apply>) =>
+      table?.rows.map((row) => [row.key, row.gpuUtil, row.vram]);
+    const first = full(0, [0, 1]);
+    const withGpu = apply({
+      ...first,
+      rows: { ...first.rows, gpuUtil: [40, null], vram: [2048, null] },
+    });
+    expect(gpu(withGpu)).toEqual([
+      [0, 40, 2048],
+      [1, null, null],
+    ]);
+
+    // The host sends GPU columns less often than CPU; the last measured values stay.
+    const cpuOnly = apply(frame({ sequence: 1, values: [[0, 9]] }));
+    expect(view(cpuOnly)).toEqual([
+      [0, 9, 90],
+      [1, 2, 20],
+    ]);
+    expect(gpu(cpuOnly)).toEqual([
+      [0, 40, 2048],
+      [1, null, null],
+    ]);
+
+    const next = frame({ sequence: 2, values: [[1, 3]] });
+    expect(gpu(apply({ ...next, rows: { ...next.rows, gpuUtil: [75], vram: [512] } }))).toEqual([
+      [0, 40, 2048],
+      [1, 75, 512],
+    ]);
+  });
+
+  it("leaves GPU fields off rows when the stream never carries them", () => {
+    const { apply } = createMachineProcessFrameApplier();
+    const table = apply(full(0, [0]));
+    expect(table?.rows[0]).not.toHaveProperty("gpuUtil");
+    expect(table?.rows[0]).not.toHaveProperty("vram");
+  });
+
   it("starts a new generation from its full frame", () => {
     const { apply } = createMachineProcessFrameApplier();
     apply(full(4, [0, 1]));

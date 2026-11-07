@@ -1,9 +1,12 @@
+import type { EnvironmentId } from "@t3tools/contracts";
 import { useState } from "react";
 
 import { ToggleGroup, ToggleGroupItem } from "~/components/ui/toggle-group";
 
 import { MachineSection } from "../primitives/MachineSection";
-import { type ProcessViewMode, ProcessViewToggle } from "../primitives/ProcessViewToggle";
+import type { ProcessViewMode } from "../primitives/ProcessViewToggle";
+import { MachineProcessList } from "../processTable/MachineProcessList";
+import type { TaskManagerTick } from "../taskManagerPreferences";
 
 const LISTS = [
   { value: "processes", label: "Processes" },
@@ -17,9 +20,13 @@ function isTaskManagerList(value: unknown): value is TaskManagerList {
 
 /** Tabs for the lists only, so the graphs and grids above stay in view while sorting. */
 export function TaskManagerLists({
+  environmentId,
+  tick,
   viewMode,
   onViewModeChange,
 }: {
+  readonly environmentId: EnvironmentId;
+  readonly tick: TaskManagerTick;
   readonly viewMode: ProcessViewMode;
   readonly onViewModeChange: (mode: ProcessViewMode) => void;
 }) {
@@ -42,12 +49,12 @@ export function TaskManagerLists({
         ))}
       </ToggleGroup>
       {list === "processes" ? (
-        <MachineSection
-          title="Processes"
-          actions={<ProcessViewToggle value={viewMode} onValueChange={onViewModeChange} />}
-        >
-          {null}
-        </MachineSection>
+        <MachineProcessList
+          environmentId={environmentId}
+          tick={tick}
+          viewMode={viewMode}
+          onViewModeChange={onViewModeChange}
+        />
       ) : (
         <MachineSection title="Threads on this machine">{null}</MachineSection>
       )}

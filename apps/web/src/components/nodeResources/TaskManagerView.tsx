@@ -52,6 +52,8 @@ export function TaskManagerView({ environmentId }: { readonly environmentId: Env
       <TaskManagerGraphs />
       <TaskManagerGrids />
       <TaskManagerLists
+        environmentId={environmentId}
+        tick={preferences.tick}
         viewMode={preferences.viewMode}
         onViewModeChange={preferences.setViewMode}
       />

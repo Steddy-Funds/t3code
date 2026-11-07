@@ -1,7 +1,13 @@
 import { useAtomValue } from "@effect/atom-react";
 import type { EnvironmentId } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
-import { type ComponentProps, type KeyboardEvent, type ReactElement, useState } from "react";
+import {
+  type ComponentProps,
+  type KeyboardEvent,
+  type ReactElement,
+  useRef,
+  useState,
+} from "react";
 
 import { machineIndicator } from "~/state/machineResources";
 
@@ -27,9 +33,13 @@ export function MachineHoverTarget({
 }) {
   const { show } = useAtomValue(machineIndicator.machineIndicatorAtom(environmentId));
   const [open, setOpen] = useState(false);
+  // Set by a navigating click or key until the pointer leaves or focus moves, so the hover delay
+  // started before the click can't open the card over the task manager.
+  const suppressedRef = useRef(false);
   const navigate = useNavigate();
   if (!show) return children;
   const openTaskManager = () => {
+    suppressedRef.current = true;
     setOpen(false);
     void navigate({ to: "/machines/$environmentId", params: { environmentId } });
   };
@@ -39,13 +49,25 @@ export function MachineHoverTarget({
     openTaskManager();
   };
   return (
-    <PreviewCard open={open} onOpenChange={setOpen}>
+    <PreviewCard
+      open={open}
+      onOpenChange={(next) => {
+        if (next && suppressedRef.current) return;
+        setOpen(next);
+      }}
+    >
       <PreviewCardTrigger
         render={children}
         delay={350}
         closeDelay={120}
         onClick={openTaskManager}
         onKeyDown={openOnKey}
+        onPointerLeave={() => {
+          suppressedRef.current = false;
+        }}
+        onBlur={() => {
+          suppressedRef.current = false;
+        }}
         {...(label === undefined
           ? {}
           : { role: "button", tabIndex: 0, "aria-label": `${label} machine resources` })}

@@ -8,6 +8,7 @@ import {
   unlockNotificationAudio,
 } from "../../threadNotifications";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
+import { Switch } from "../ui/switch";
 import { SettingsRow } from "./settingsLayout";
 import { searchableSetting } from "./settingsSearch";
 import { useScopedSettings, useUpdateScopedSettings } from "./useScopedSettings";
@@ -76,6 +77,34 @@ export function NotificationSettings() {
             ))}
           </SelectPopup>
         </Select>
+      }
+    />
+  );
+}
+
+export function MachineStressedNotificationSetting() {
+  const mode = useScopedSettings((settings) => settings.notificationMode);
+  const inAppEnabled = useScopedSettings((settings) => settings.inAppNotificationsEnabled);
+  const enabled = useScopedSettings((settings) => settings.notifyOnMachineStressed);
+  const updateSettings = useUpdateScopedSettings();
+  // Mirrors the stress notifier: it fires only through desktop or in-app notifications.
+  const reachable = hasDesktopNotifications(mode) || inAppEnabled;
+
+  return (
+    <SettingsRow
+      {...searchableSetting("machine-stressed-notifications")}
+      description={
+        reachable
+          ? "Notify when a connected machine goes from ok to stressed."
+          : "Turn on desktop or in-app notifications to get this alert."
+      }
+      control={
+        <Switch
+          checked={enabled}
+          disabled={!reachable}
+          onCheckedChange={(checked) => updateSettings({ notifyOnMachineStressed: checked })}
+          aria-label="Machine becomes stressed"
+        />
       }
     />
   );

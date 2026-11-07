@@ -44,6 +44,7 @@ import { observeResize } from "~/lib/observeResize";
 import { cn } from "~/lib/utils";
 import { textDirection } from "~/textDirection";
 import { useClientSettings } from "../../hooks/useSettings";
+import { MachineHoverTarget } from "../nodeResources/MachineHoverTarget";
 import { GuestShareIndicator } from "./GuestShareControls";
 
 interface ChatHeaderProps {
@@ -299,16 +300,23 @@ export const ChatHeader = memo(function ChatHeader({
         {environment ? (
           <>
             <WorkspaceBreadcrumbItem className="shrink text-muted-foreground">
-              <span className="inline-flex min-w-0 max-w-full items-center gap-1.5">
-                <EnvironmentMachineIcon
-                  aria-hidden
-                  kind={resolveEnvironmentMachineKind(environment.serverConfig)}
-                  className="size-3.5 shrink-0"
-                />
-                <WorkspaceBreadcrumbText className="max-w-32">
-                  {environment.label}
-                </WorkspaceBreadcrumbText>
-              </span>
+              <MachineHoverTarget
+                environmentId={environment.environmentId}
+                label={environment.label}
+                side="bottom"
+              >
+                <span className="inline-flex min-w-0 max-w-full items-center gap-1.5">
+                  <EnvironmentMachineIcon
+                    aria-hidden
+                    kind={resolveEnvironmentMachineKind(environment.serverConfig)}
+                    environmentId={environment.environmentId}
+                    className="size-3.5 shrink-0"
+                  />
+                  <WorkspaceBreadcrumbText className="max-w-32">
+                    {environment.label}
+                  </WorkspaceBreadcrumbText>
+                </span>
+              </MachineHoverTarget>
             </WorkspaceBreadcrumbItem>
             <WorkspaceBreadcrumbSeparator>
               <WorkspaceBreadcrumbText>/</WorkspaceBreadcrumbText>

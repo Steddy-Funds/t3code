@@ -7,6 +7,7 @@ import { useDeviceType } from "../../native/native-layout-metrics";
 import { useNativeWorkspaceColumnsSupported } from "../../native/NativeWorkspaceColumns";
 import { useAdaptiveWorkspaceLayout } from "../layout/AdaptiveWorkspaceLayout";
 import { withNativeGlassHeaderItem } from "../layout/native-glass-header-items";
+import type { MachineHeaderAction } from "../../components/machineResources/useMachineHeaderAction";
 import {
   ThreadGitControls,
   useThreadGitCenterHeaderItems,
@@ -23,6 +24,7 @@ export function useThreadHeaderOptions(props: {
   readonly gitControls: Parameters<typeof ThreadGitControls>[0];
   readonly onReturnToThread?: () => void;
   readonly draft?: boolean;
+  readonly machineAction?: MachineHeaderAction | null;
 }) {
   const usesNativeWorkspaceColumns = useNativeWorkspaceColumnsSupported();
   const deviceType = useDeviceType();
@@ -30,8 +32,25 @@ export function useThreadHeaderOptions(props: {
   const navigation = useNavigation();
   const { layout, startNewTask } = useAdaptiveWorkspaceLayout();
   const sidebarHeaderItem = useWorkspaceSidebarHeaderItem();
-  const threadCenterHeaderItems = useThreadGitCenterHeaderItems(props.gitControls);
-  const compactRightHeaderItems = useThreadGitRightHeaderItems(props.gitControls);
+  const gitCenterHeaderItems = useThreadGitCenterHeaderItems(props.gitControls);
+  const gitRightHeaderItems = useThreadGitRightHeaderItems(props.gitControls);
+  const machineHeaderItems: NativeHeaderItems = props.machineAction
+    ? [
+        {
+          accessibilityLabel: props.machineAction.accessibilityLabel,
+          icon: { name: props.machineAction.icon, type: "sfSymbol" as const },
+          identifier: "thread-right-machine",
+          label: "Machine",
+          onPress: props.machineAction.onPress,
+          sharesBackground: true,
+          tintColor: props.machineAction.tintColor,
+          type: "button" as const,
+          variant: "plain" as const,
+        },
+      ]
+    : [];
+  const compactRightHeaderItems = [...machineHeaderItems, ...gitRightHeaderItems];
+  const threadCenterHeaderItems = [...gitCenterHeaderItems, ...machineHeaderItems];
   const splitLeftHeaderItems: NativeHeaderItems = [
     ...(!usesDuoHeader
       ? [
@@ -108,6 +127,9 @@ export function useThreadHeaderOptions(props: {
       gitStatus?.isDefaultRef,
       gitStatus?.refName,
       gitStatus?.pr?.url,
+      props.machineAction?.icon,
+      props.machineAction?.tintColor,
+      props.machineAction?.accessibilityLabel,
     ],
     fallback:
       !layout.usesSplitView && !props.usesNativeHeaderGlass ? (

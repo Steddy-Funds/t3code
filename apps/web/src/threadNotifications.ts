@@ -20,6 +20,46 @@ export function hasDesktopNotifications(mode: NotificationMode) {
   return mode === "notifications" || mode === "notifications-and-sound";
 }
 
+/** While the user is looking at this window, alerts go in-app instead of to the OS. */
+export function isAppInForeground(): boolean {
+  return document.visibilityState === "visible" && document.hasFocus();
+}
+
+/** A silent OS notification while the app is in the background; a click brings the app forward. */
+export function showBackgroundNotification(options: {
+  readonly title: string;
+  readonly body: string;
+  readonly tag: string;
+  readonly requireInteraction?: boolean;
+  readonly onClick?: () => void;
+}): Notification | null {
+  if (
+    isAppInForeground() ||
+    typeof Notification === "undefined" ||
+    Notification.permission !== "granted"
+  ) {
+    return null;
+  }
+  try {
+    const notification = new Notification(options.title, {
+      body: options.body,
+      tag: options.tag,
+      silent: true,
+      requireInteraction: options.requireInteraction ?? false,
+    });
+    notification.addEventListener("click", () => {
+      notification.close();
+      window.focus();
+      void window.desktopBridge?.revealWindow().catch(() => undefined);
+      options.onClick?.();
+    });
+    return notification;
+  } catch {
+    // Some browsers expose Notification but reject desktop presentation.
+    return null;
+  }
+}
+
 const TAG_HASH_OFFSET_BASIS = 0xcbf29ce484222325n;
 const TAG_HASH_PRIME = 0x100000001b3n;
 const TAG_HASH_MASK = 0xffffffffffffffffn;

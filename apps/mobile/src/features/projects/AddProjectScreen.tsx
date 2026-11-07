@@ -573,6 +573,7 @@ export function AddProjectSourceScreen(props: { readonly environmentId?: string 
                 }
                 icon={
                   <EnvironmentMachineSymbol
+                    environmentId={environment.environmentId}
                     kind={environment.machine}
                     size={Platform.OS === "android" ? 24 : 17}
                     tintColorClassName="accent-icon"
@@ -1080,6 +1081,7 @@ export function AddProjectNewScreen(props: { readonly environmentId?: string | s
             title={option.label}
             icon={
               <EnvironmentMachineSymbol
+                environmentId={option.environmentId}
                 kind={option.machine}
                 size={Platform.OS === "android" ? 24 : 17}
                 tintColorClassName="accent-icon"

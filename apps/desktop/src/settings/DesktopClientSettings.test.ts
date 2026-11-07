@@ -21,6 +21,7 @@ const clientSettings: ClientSettings = {
   ...DEFAULT_CLIENT_SETTINGS,
   notificationMode: "notifications-and-sound",
   inAppNotificationsEnabled: true,
+  notifyOnMachineStressed: false,
   appearanceContrast: 100,
   browserDefaultViewport: { _tag: "preset", width: 1024, height: 600, presetId: "nest-hub" },
   browserDefaultZoomFactor: 1.25,
@@ -238,6 +239,8 @@ describe("DesktopClientSettings", () => {
         assert.isTrue(Option.isSome(persisted));
         if (Option.isSome(persisted)) {
           assert.equal(persisted.value.timestampFormat, "24-hour");
+          // Files saved before the machine-stressed toggle existed keep it on.
+          assert.isTrue(persisted.value.notifyOnMachineStressed);
         }
       }),
     ),

@@ -1,3 +1,4 @@
+import { useAtomValue } from "@effect/atom-react";
 import { ThreadHoverCard, ThreadHoverCardPopup } from "../ThreadHoverCard";
 import { ThreadTerminalStatusButton } from "../ThreadStatusIndicators";
 import { PullRequestGlyph } from "../pullRequest/pullRequestIcons";
@@ -77,7 +78,9 @@ import type { SidebarThreadSummary } from "../../types";
 import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
 import { cn } from "~/lib/utils";
 import { textDirection } from "~/textDirection";
-import { EnvironmentMachineIcon } from "../EnvironmentMachineIcon";
+import { EnvironmentMachineIcon, useMachineIconState } from "../EnvironmentMachineIcon";
+import { MachineVerdictLine } from "../nodeResources/MachineVerdictLine";
+import { machineIndicator } from "../../state/machineResources";
 import {
   animateSidebarLayoutChanges,
   hasUnseenCompletion,
@@ -267,6 +270,7 @@ function SidebarThreadTooltip({
   terminalStatus: TerminalStatusIndicator | null;
   terminalProcessCount: number;
 }) {
+  const machine = useAtomValue(machineIndicator.machineIndicatorAtom(thread.environmentId));
   const driverKind = providerEntry?.driverKind ?? null;
   const previousProviderNames = thread.providerInstanceHistory
     .filter((instanceId) => instanceId !== modelInstanceId)
@@ -294,9 +298,11 @@ function SidebarThreadTooltip({
           <div className="flex min-w-0 items-center gap-2">
             <EnvironmentMachineIcon
               kind={environmentMachine}
+              environmentId={thread.environmentId}
               className="size-3 shrink-0 stroke-muted-foreground"
             />
             <div className="min-w-0 truncate text-foreground/75">{environmentLabel}</div>
+            {machine.show ? <MachineVerdictLine view={machine} className="min-w-0" /> : null}
           </div>
         ) : null}
         {thread.branch ? (
@@ -830,6 +836,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     : thread.modelSelection.model;
 
   const isRemote = thread.environmentId !== props.currentEnvironmentId;
+  const machineState = useMachineIconState(thread.environmentId);
   const details = useClientSettings(resolveSidebarDetailsVisibility);
   const showsScratchMachine =
     details.machine && !thread.branch && props.scratchMachineLabel !== null;
@@ -1172,9 +1179,17 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
   ) : null;
 
   const remoteMachineIcon =
-    details.machine && isRemote && !showsScratchMachine ? (
+    // This machine stays iconless while it is fine; it shows up only to say it is stressed.
+    details.machine &&
+    (isRemote || machineState === "stressed" || machineState === "unreachable-stressed") &&
+    !showsScratchMachine ? (
       <span className="inline-flex shrink-0 items-center text-sidebar-muted-foreground/70">
-        <EnvironmentMachineIcon aria-hidden kind={props.environmentMachine} className="size-3.5" />
+        <EnvironmentMachineIcon
+          aria-hidden
+          kind={props.environmentMachine}
+          environmentId={thread.environmentId}
+          className="size-3.5"
+        />
       </span>
     ) : null;
   const providerStack = details.model ? (
@@ -1222,6 +1237,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
           <EnvironmentMachineIcon
             aria-hidden
             kind={props.environmentMachine}
+            environmentId={thread.environmentId}
             className="size-3 shrink-0"
           />
           <span className="min-w-0 flex-1 truncate">{props.scratchMachineLabel}</span>
@@ -1243,7 +1259,11 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
   );
   const twoRowTrailingIcons = trailingIcons(
     showsScratchMachine ? (
-      <EnvironmentMachineIcon kind={props.environmentMachine} className="size-3.5" />
+      <EnvironmentMachineIcon
+        kind={props.environmentMachine}
+        environmentId={thread.environmentId}
+        className="size-3.5"
+      />
     ) : (
       remoteMachineIcon
     ),

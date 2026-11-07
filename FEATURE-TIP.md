@@ -29,6 +29,7 @@ upstream; a feature can, from its own branch, when Akiva decides.
 | Sidebar machine toggle; machine in thread header; copy branch       | #58 | 796dfab |
 | Sidebar cards drop the empty icon group's gap                       | #59 | 3f45500 |
 | Thread cost and activity on one line, labels on hover | #60 | 4f50cad |
+| Machines show stress: sweating icon, hover card, mobile sheet (node resources 1/5) | #61 | 6612446 |
 
 Held: #38 (pods notes in the t3-orchestration skill). It edits
 `.agents/skills/t3-orchestration/`, which exists only on
@@ -42,6 +43,7 @@ The Mac runs this tip, which already has them all.
 
 - #51 Background threads (MCP tools)
 - #56 Thread usage RPC (`server.getThreadUsage`)
+- #61 Machine verdict (`subscribeMachine`, `subscribeMachineProcesses`): server half only, since the branch stacks on this tip
 
 A feature that changes `apps/server`, or a contract the server reads, is
 merged there too: its branch head with `--no-ff`, never this tip.

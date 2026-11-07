@@ -6,7 +6,6 @@ import { CellPool } from "../charts/CellPool";
 import { SeriesRing } from "../charts/SeriesRing";
 import { resampleSeries, vramTotal } from "../crossMachine/crossMachineModel";
 
-export const GRAPH_HISTORY_MS = 900_000;
 /** The core grid draws the last W points of every core, so 64 cores stay cheap at a fast tick. */
 const CORE_SAMPLES = 120;
 const POOL_MAX_CELLS = 128;
@@ -19,6 +18,7 @@ export const GPU_COLUMN = { util: 0, vram: 1 } as const;
 /** Everything the overview draws, kept outside React; fed from the stream, never from render. */
 export interface MachineSeries {
   readonly tickMs: number;
+  readonly rangeMs: number;
   readonly cpu: SeriesRing;
   readonly memory: SeriesRing;
   readonly load: SeriesRing;
@@ -28,10 +28,12 @@ export interface MachineSeries {
   readonly vramPool: CellPool;
 }
 
-export function createMachineSeries(tickMs: number, cores: number): MachineSeries {
-  const capacity = Math.round(GRAPH_HISTORY_MS / tickMs);
+/** Graph rings hold `rangeMs / tickMs` points, so the graphs span the chosen range at any tick. */
+export function createMachineSeries(tickMs: number, rangeMs: number, cores: number): MachineSeries {
+  const capacity = Math.round(rangeMs / tickMs);
   return {
     tickMs,
+    rangeMs,
     cpu: SeriesRing.create({ capacity }),
     memory: SeriesRing.create({ columns: 2, capacity }),
     load: SeriesRing.create({ capacity }),

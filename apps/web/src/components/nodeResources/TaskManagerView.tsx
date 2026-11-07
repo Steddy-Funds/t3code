@@ -17,14 +17,17 @@ import { useEnvironmentScope } from "~/state/session";
 import { useKnownTerminalSessions } from "~/state/terminalSessions";
 
 import { MachineSectionMessage } from "./primitives/MachineSection";
-import { GRAPH_HISTORY_MS } from "./taskManager/machineSeries";
 import { TaskManagerGraphs } from "./taskManager/TaskManagerGraphs";
 import { TaskManagerGrids } from "./taskManager/TaskManagerGrids";
 import { TaskManagerHeader } from "./taskManager/TaskManagerHeader";
 import { TaskManagerLists } from "./taskManager/TaskManagerLists";
 import { MACHINE_TERMINAL_THREAD_ID, TaskManagerTerminal } from "./taskManager/TaskManagerTerminal";
 import { useMachineSeries } from "./taskManager/useMachineSeries";
-import { type TaskManagerTick, useTaskManagerPreferences } from "./taskManagerPreferences";
+import {
+  type TaskManagerRange,
+  type TaskManagerTick,
+  useTaskManagerPreferences,
+} from "./taskManagerPreferences";
 
 type SnapshotResult = AsyncResult.AsyncResult<MachineStatusSnapshot, unknown>;
 const NO_SNAPSHOT: Atom.Atom<SnapshotResult> = Atom.make(AsyncResult.initial());
@@ -64,6 +67,8 @@ export function TaskManagerView({ environmentId }: { readonly environmentId: Env
         label={label}
         tick={preferences.tick}
         onTickChange={preferences.setTick}
+        range={preferences.rangeMs}
+        onRangeChange={preferences.setRange}
       />
       <TaskManagerLists
         environmentId={environmentId}
@@ -81,18 +86,22 @@ function TaskManagerOverview({
   label,
   tick,
   onTickChange,
+  range,
+  onRangeChange,
 }: {
   readonly environmentId: EnvironmentId;
   readonly label: string;
   readonly tick: TaskManagerTick;
   readonly onTickChange: (tick: TaskManagerTick) => void;
+  readonly range: TaskManagerRange;
+  readonly onRangeChange: (range: TaskManagerRange) => void;
 }) {
   const view = useAtomValue(machineIndicator.machineIndicatorAtom(environmentId));
   // An unreachable machine is never subscribed; the rings keep what was last drawn.
   const source = view.unreachable
     ? NO_SNAPSHOT
-    : machineResources.machine(environmentId, { intervalMs: tick, historyMs: GRAPH_HISTORY_MS });
-  const series = useMachineSeries(source, tick);
+    : machineResources.machine(environmentId, { intervalMs: tick, historyMs: range });
+  const series = useMachineSeries(source, tick, range);
   const snapshot = Option.getOrNull(AsyncResult.value(useAtomValue(source)));
   const config = useAtomValue(serverEnvironment.configValueAtom(environmentId));
   const rule = view.unreachable ? null : (view.reason?.rule ?? null);
@@ -116,6 +125,8 @@ function TaskManagerOverview({
         label={label}
         tick={tick}
         onTickChange={onTickChange}
+        range={range}
+        onRangeChange={onRangeChange}
         {...(canOperateTerminal && !terminalOpen
           ? { onOpenTerminal: () => setTerminalChoice(true) }
           : {})}

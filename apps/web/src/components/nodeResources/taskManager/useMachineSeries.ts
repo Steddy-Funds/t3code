@@ -21,6 +21,7 @@ type SnapshotResult = AsyncResult.AsyncResult<MachineStatusSnapshot, unknown>;
 export function useMachineSeries(
   source: Atom.Atom<SnapshotResult>,
   tickMs: number,
+  rangeMs: number,
 ): MachineSeries | null {
   const seriesRef = useRef<MachineSeries | null>(null);
   const [series, setSeries] = useState<MachineSeries | null>(null);
@@ -29,8 +30,13 @@ export function useMachineSeries(
     const snapshot = result.value;
     const cores = Math.max(1, snapshotCores(snapshot));
     let target = seriesRef.current;
-    if (target === null || target.tickMs !== tickMs || target.cores.columns !== cores) {
-      target = createMachineSeries(tickMs, cores);
+    if (
+      target === null ||
+      target.tickMs !== tickMs ||
+      target.rangeMs !== rangeMs ||
+      target.cores.columns !== cores
+    ) {
+      target = createMachineSeries(tickMs, rangeMs, cores);
       seriesRef.current = target;
       setSeries(target);
     }

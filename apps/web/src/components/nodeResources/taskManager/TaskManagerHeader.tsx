@@ -10,22 +10,34 @@ import { useEnvironmentMachines } from "~/state/environments";
 import { machineIndicator } from "~/state/machineResources";
 
 import { MachineVerdictLine } from "../MachineVerdictLine";
-import { TASK_MANAGER_TICKS, type TaskManagerTick } from "../taskManagerPreferences";
+import {
+  TASK_MANAGER_RANGES,
+  TASK_MANAGER_TICKS,
+  type TaskManagerRange,
+  type TaskManagerTick,
+} from "../taskManagerPreferences";
 
 const tickLabel = (tick: TaskManagerTick) => `${tick / 1000} s`;
+const rangeLabel = (range: TaskManagerRange) =>
+  range >= 3_600_000 ? `${range / 3_600_000} h` : `${range / 60_000} min`;
 
-/** Identity, verdict (nothing while ok), tick picker, Open terminal and the settings gear. */
+/** Identity, verdict (nothing while ok), range and tick pickers, Open terminal and the settings gear. */
 export function TaskManagerHeader({
   environmentId,
   label,
   tick,
   onTickChange,
+  range,
+  onRangeChange,
   onOpenTerminal,
 }: {
   readonly environmentId: EnvironmentId;
   readonly label: string;
   readonly tick: TaskManagerTick;
   readonly onTickChange: (tick: TaskManagerTick) => void;
+  /** How far back the graphs reach. */
+  readonly range: TaskManagerRange;
+  readonly onRangeChange: (range: TaskManagerRange) => void;
   /** Omitted while the terminal can't open here; the button is hidden. */
   readonly onOpenTerminal?: () => void;
 }) {
@@ -43,6 +55,21 @@ export function TaskManagerHeader({
       </div>
       <MachineVerdictLine view={view} className="min-w-0 text-xs" />
       <div className="ms-auto flex shrink-0 items-center gap-2">
+        <ToggleGroup
+          aria-label="History"
+          variant="segmented"
+          value={[String(range)]}
+          onValueChange={(next) => {
+            const picked = TASK_MANAGER_RANGES.find((value) => String(value) === next[0]);
+            if (picked !== undefined) onRangeChange(picked);
+          }}
+        >
+          {TASK_MANAGER_RANGES.map((value) => (
+            <ToggleGroupItem key={value} value={String(value)}>
+              {rangeLabel(value)}
+            </ToggleGroupItem>
+          ))}
+        </ToggleGroup>
         <span className="text-xs text-muted-foreground" aria-hidden>
           Tick
         </span>

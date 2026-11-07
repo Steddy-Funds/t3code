@@ -564,6 +564,7 @@ function ScheduledTaskEnvironmentList({
           <div key={environment.environmentId} className="divide-y divide-border/50">
             <EnvironmentRow
               kind={resolveEnvironmentMachineKind(environment.serverConfig)}
+              environmentId={environment.environmentId}
               label={primary}
               subtitle={
                 <ScheduledTaskEnvironmentSubtitle environment={environment} secondary={secondary} />
@@ -673,6 +674,7 @@ function ScheduledTaskEnvironmentSection({
       icon={
         <EnvironmentMachineIcon
           kind={resolveEnvironmentMachineKind(environment.serverConfig)}
+          environmentId={environment.environmentId}
           className="size-3.5"
         />
       }
@@ -1420,6 +1422,7 @@ function ScheduledTaskEditorForm({
                   <span className="flex items-center gap-2">
                     <EnvironmentMachineIcon
                       kind={resolveEnvironmentMachineKind(environment?.serverConfig ?? null)}
+                      environmentId={environment?.environmentId}
                       className="size-4"
                     />
                     {environment?.label ?? "Unavailable environment"}
@@ -1441,6 +1444,7 @@ function ScheduledTaskEditorForm({
                       <span className="flex min-w-0 items-center gap-2">
                         <EnvironmentMachineIcon
                           kind={resolveEnvironmentMachineKind(entry.serverConfig)}
+                          environmentId={entry.environmentId}
                           className="size-4"
                         />
                         <span className="min-w-0">

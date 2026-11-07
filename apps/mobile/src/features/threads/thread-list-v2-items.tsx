@@ -532,6 +532,7 @@ export const ThreadListV2PendingRow = memo(function ThreadListV2PendingRow(props
         <View className="mt-1 flex-row items-center gap-1" style={{ paddingLeft: titleTextInset }}>
           {props.environmentLabel && props.environmentMachine ? (
             <EnvironmentMachineSymbol
+              environmentId={pendingTask.environmentId}
               kind={props.environmentMachine}
               size={machineIconSize}
               tintColorClassName={
@@ -1298,6 +1299,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
           <View className="min-w-0 flex-1 flex-row items-center gap-1">
             {props.environmentMachine ? (
               <EnvironmentMachineSymbol
+                environmentId={thread.environmentId}
                 kind={props.environmentMachine}
                 size={machineIconSize}
                 tintColorClassName={

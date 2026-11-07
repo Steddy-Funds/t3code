@@ -202,6 +202,15 @@ describe("searchSettings", () => {
     ] as const) {
       expect(searchSettings(title)[0]?.id, title).toBe(id);
     }
+    expect(searchSettings("machine stressed")[0]).toMatchObject({
+      id: "machine-stressed-notifications",
+      to: "/settings/general",
+    });
+    expect(searchSettings("stress thresholds")[0]).toMatchObject({
+      id: "machine-stress-thresholds",
+      to: "/settings/access",
+      targetId: "connections-environment",
+    });
   });
 
   it("keeps catalog result ids unique", () => {

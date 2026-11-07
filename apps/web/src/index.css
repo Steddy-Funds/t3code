@@ -225,6 +225,9 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
      compositor updates discrete frames instead of every vsync. */
   --animate-status-pulse: status-pulse 2s infinite;
   --animate-status-ping: status-ping 2s infinite;
+  /* Machine stress: the same 2 s stepped cycle as status-pulse, so they share a phase. */
+  --animate-machine-pulse: machine-pulse 2s infinite;
+  --animate-machine-drip: machine-drip 2s infinite;
   /* Stash pulses hold a highlight for 1.2s; the row then eases back over 200ms, the count snaps.
      The row alternates two identical keyframes so each stash restarts it without a remount. */
   --animate-stash-pulse-row: stash-pulse-row 1400ms;
@@ -359,6 +362,71 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
       scale: 2;
     }
   }
+  @keyframes machine-pulse {
+    /* The light-red glyph copy fades fully out to the gray icon beneath it. */
+    0%,
+    40% {
+      opacity: 1;
+      animation-timing-function: steps(6);
+    }
+    50%,
+    90% {
+      opacity: 0;
+      animation-timing-function: steps(6);
+    }
+    100% {
+      opacity: 1;
+    }
+  }
+  @keyframes machine-drip {
+    /* A drop forms, runs down beside the icon and fades. With no animation
+       (reduced motion) it rests formed, at its untransformed pose. */
+    0% {
+      transform: translateY(-20%) scale(0.3);
+      opacity: 0;
+      animation-timing-function: steps(3);
+    }
+    22% {
+      transform: translateY(0) scale(1);
+      opacity: 1;
+      animation-timing-function: steps(8);
+    }
+    72% {
+      transform: translateY(var(--machine-drip-run, 190%)) scale(0.85);
+      opacity: 0.9;
+      animation-timing-function: steps(3);
+    }
+    88%,
+    100% {
+      transform: translateY(var(--machine-drip-end, 240%)) scale(0.7);
+      opacity: 0;
+    }
+  }
+}
+
+/* Machine indicator state lives on the icon's own <svg> (data-machine-icon) and
+   its sweat group, so it wins over whatever text-* colour the caller passes. */
+svg[data-machine-icon] {
+  overflow: visible;
+}
+svg[data-machine-icon="unknown"],
+svg[data-machine-icon="unreachable"],
+svg[data-machine-icon="unreachable-stressed"] {
+  opacity: 0.42;
+}
+[data-machine-sweat="stressed"] {
+  color: var(--machine-stress);
+}
+[data-machine-sweat] [data-machine-drop] {
+  transform-box: fill-box;
+  transform-origin: center;
+}
+[data-machine-sweat][data-machine-size="12"] {
+  --machine-drip-run: 130%;
+  --machine-drip-end: 160%;
+}
+[data-machine-sweat][data-machine-size="12"] [data-machine-drops] {
+  opacity: 0.8;
 }
 
 @utility surface-glass {
@@ -1164,6 +1232,8 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   --warning: var(--color-amber-500);
   --warning-foreground: var(--color-amber-700);
   --warning-surface: color-mix(in srgb, var(--warning) 8%, transparent);
+  /* Light red, reserved for the stressed machine verdict. */
+  --machine-stress: var(--color-red-400);
   --update: var(--primary);
   --update-foreground: var(--primary);
   /* Keep every sidebar primitive on the same light surface hierarchy, including
@@ -1216,6 +1286,7 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
     --success-foreground: var(--color-emerald-400);
     --warning-foreground: var(--color-amber-400);
     --warning-surface: color-mix(in srgb, var(--warning) 16%, transparent);
+    --machine-stress: var(--color-red-300);
     --update-foreground: var(--color-blue-400);
     --sidebar: var(--card);
     --sidebar-control-surface: var(--muted);

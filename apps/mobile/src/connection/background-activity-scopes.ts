@@ -37,8 +37,16 @@ function stableScopeKey(environmentId: EnvironmentId, scope: BackgroundScope): s
 function scopeForSubscription(
   observation: EnvironmentRpcSubscriptionObservation,
 ): BackgroundScope | null {
-  if (observation.method === WS_METHODS.subscribeResourceTelemetry) {
+  if (
+    observation.method === WS_METHODS.subscribeResourceTelemetry ||
+    observation.method === WS_METHODS.subscribeMachineProcesses
+  ) {
     return { type: "diagnostics" };
+  }
+  // The always-on verdict creates no demand; only live samples for an open view lease.
+  if (observation.method === WS_METHODS.subscribeMachine) {
+    const input = observation.input as { readonly intervalMs?: unknown };
+    return input.intervalMs === undefined ? null : { type: "diagnostics" };
   }
   if (observation.method !== WS_METHODS.subscribeVcsStatus) {
     return null;

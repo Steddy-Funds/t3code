@@ -38,6 +38,7 @@ import { settingsScopeEnvironmentLabel } from "./settingsScopeAxis";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
 import { ManagedByOrganization } from "../ManagedPolicy";
 import { LocalEnvironmentSetting } from "./LocalEnvironmentSetting";
+import { MachineResourcesSection, MachineSettingsToggle } from "./MachineResourcesSection";
 import { searchableSetting } from "./settingsSearch";
 import { EnvironmentIconMenu } from "./EnvironmentIconPicker";
 import { FoldedSettingsSection } from "./FoldedSettingsSection";
@@ -165,6 +166,31 @@ export function ConnectionsSettings({ view }: { readonly view: "environments" | 
   );
 }
 
+/** A second backend this app spawned (such as WSL), which has no saved row of its own. */
+function DesktopLocalMachineRow({
+  environmentId,
+  label,
+}: {
+  readonly environmentId: EnvironmentId;
+  readonly label: string;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <SettingsRow
+      title={label}
+      control={
+        <MachineSettingsToggle
+          label={label}
+          open={open}
+          onToggle={() => setOpen((value) => !value)}
+        />
+      }
+    >
+      {open ? <MachineResourcesSection environmentId={environmentId} /> : null}
+    </SettingsRow>
+  );
+}
+
 function AccessSettings() {
   const { environments } = useEnvironments();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
@@ -213,6 +239,7 @@ function AccessSettings() {
                   <EnvironmentMachineIcon
                     aria-hidden
                     kind={resolveEnvironmentMachineKind(environment.serverConfig)}
+                    environmentId={environment.environmentId}
                     className="size-3.5 shrink-0"
                   />
                   <span className="min-w-0 truncate">
@@ -272,6 +299,19 @@ function ConnectionsSettingsContent({
   const listedEnvironments = savedEnvironments.filter(
     (environment) => !isDesktopLocalConnectionTarget(environment.entry.target),
   );
+  // Machines without a saved row get their threshold editor in the primary section instead.
+  const accessHasMachineSettings =
+    accessEnvironment?.serverConfig?.environment.capabilities.machineResources === true &&
+    !listedEnvironments.some((environment) => environment.environmentId === accessEnvironmentId);
+  const desktopLocalMachines = isPrimaryAccess
+    ? environments.filter(
+        (environment) =>
+          isDesktopLocalConnectionTarget(environment.entry.target) &&
+          environment.environmentId !== primaryEnvironmentId &&
+          environment.serverConfig?.environment.capabilities.machineResources === true,
+      )
+    : [];
+  const [machineSettingsOpen, setMachineSettingsOpen] = useState(false);
   const savedUpdateStates = useAtomValue(
     environmentUpdateStatesAtom(
       environmentIdsKey(savedEnvironments.map(({ environmentId }) => environmentId)),
@@ -1151,34 +1191,47 @@ function ConnectionsSettingsContent({
                 kind={
                   accessServerConfig ? resolveEnvironmentMachineKind(accessServerConfig) : "desktop"
                 }
+                environmentId={accessEnvironmentId}
                 className="size-4"
               />
             }
             headerAction={
               accessEnvironmentId !== null ? (
-                <Menu>
-                  <MenuTrigger
-                    render={
-                      <Button
-                        type="button"
-                        variant="ghost-muted"
-                        size="icon-xs"
-                        aria-label="More actions for this machine"
-                      />
-                    }
-                  >
-                    <EllipsisIcon className="size-3.5" />
-                  </MenuTrigger>
-                  <MenuPopup align="end">
-                    <EnvironmentIconMenu
-                      environmentId={accessEnvironmentId}
-                      serverConfig={accessServerConfig}
+                <div className="flex items-center gap-1">
+                  {accessHasMachineSettings ? (
+                    <MachineSettingsToggle
+                      label={accessEnvironment?.label ?? "this machine"}
+                      open={machineSettingsOpen}
+                      onToggle={() => setMachineSettingsOpen((open) => !open)}
                     />
-                  </MenuPopup>
-                </Menu>
+                  ) : null}
+                  <Menu>
+                    <MenuTrigger
+                      render={
+                        <Button
+                          type="button"
+                          variant="ghost-muted"
+                          size="icon-xs"
+                          aria-label="More actions for this machine"
+                        />
+                      }
+                    >
+                      <EllipsisIcon className="size-3.5" />
+                    </MenuTrigger>
+                    <MenuPopup align="end">
+                      <EnvironmentIconMenu
+                        environmentId={accessEnvironmentId}
+                        serverConfig={accessServerConfig}
+                      />
+                    </MenuPopup>
+                  </Menu>
+                </div>
               ) : null
             }
           >
+            {accessHasMachineSettings && machineSettingsOpen ? (
+              <MachineResourcesSection environmentId={accessEnvironmentId} />
+            ) : null}
             {accessServerConfig?.managedPolicy ? (
               <div className="px-3 py-2 sm:px-4">
                 <ManagedByOrganization policy={accessServerConfig.managedPolicy} />
@@ -1233,6 +1286,13 @@ function ConnectionsSettingsContent({
                 {renderEndpointRows()}
                 {renderTailscaleRow()}
                 {renderWslRow()}
+                {desktopLocalMachines.map((environment) => (
+                  <DesktopLocalMachineRow
+                    key={environment.environmentId}
+                    environmentId={environment.environmentId}
+                    label={environment.label}
+                  />
+                ))}
               </>
             ) : canManageLocalBackend ? (
               renderDisabledNetworkAccessRow()

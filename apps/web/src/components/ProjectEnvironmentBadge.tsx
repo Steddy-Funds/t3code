@@ -35,6 +35,7 @@ export function ProjectEnvironmentBadge(props: {
         <EnvironmentMachineIcon
           aria-hidden
           kind={props.machineByEnvironmentId.get(first.environmentId) ?? "server"}
+          environmentId={first.environmentId}
           className="size-3.5"
         />
       </TooltipTrigger>

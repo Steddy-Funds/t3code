@@ -560,6 +560,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["notification toast popup completion input approval failure"],
   },
   {
+    id: "machine-stressed-notifications",
+    title: "Machine becomes stressed",
+    to: "/settings/general",
+    searchTerms: ["notification alert machine stressed overloaded load memory cpu resources"],
+  },
+  {
     id: "time-format",
     title: "Time format",
     to: "/settings/general",
@@ -1187,6 +1193,15 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/connections",
     searchTerms: [
       "automatic machine environment resources cpu memory capacity preference weight shared projects",
+    ],
+  },
+  {
+    id: "machine-stress-thresholds",
+    title: "Stress thresholds",
+    to: "/settings/access",
+    targetId: "connections-environment",
+    searchTerms: [
+      "machine resources stressed load per core memory ram cpu pressure hold clear hysteresis limit",
     ],
   },
   {

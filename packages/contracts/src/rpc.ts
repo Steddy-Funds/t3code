@@ -347,6 +347,12 @@ import {
   ResourceTelemetrySnapshot,
 } from "./resourceTelemetry.ts";
 import {
+  MachineProcessFrame,
+  MachineStatusSnapshot,
+  SubscribeMachineInput,
+  SubscribeMachineProcessesInput,
+} from "./machineResources.ts";
+import {
   UsageLimitSourceError,
   ProviderConsumeResetCreditInput,
   ProviderConsumeResetCreditResult,
@@ -620,6 +626,8 @@ export const WS_METHODS = {
   subscribeServerLifecycle: "subscribeServerLifecycle",
   subscribeAuthAccess: "subscribeAuthAccess",
   subscribeResourceTelemetry: "subscribeResourceTelemetry",
+  subscribeMachine: "subscribeMachine",
+  subscribeMachineProcesses: "subscribeMachineProcesses",
 } as const;
 
 const WsServerUpsertKeybindingRpc = Rpc.make(WS_METHODS.serverUpsertKeybinding, {
@@ -2002,6 +2010,20 @@ const WsSubscribeResourceTelemetryRpc = Rpc.make(WS_METHODS.subscribeResourceTel
   stream: true,
 });
 
+const WsSubscribeMachineRpc = Rpc.make(WS_METHODS.subscribeMachine, {
+  payload: SubscribeMachineInput,
+  success: MachineStatusSnapshot,
+  error: EnvironmentAuthorizationError,
+  stream: true,
+});
+
+const WsSubscribeMachineProcessesRpc = Rpc.make(WS_METHODS.subscribeMachineProcesses, {
+  payload: SubscribeMachineProcessesInput,
+  success: MachineProcessFrame,
+  error: EnvironmentAuthorizationError,
+  stream: true,
+});
+
 export class RpcScopeAuthorization extends RpcMiddleware.Service<RpcScopeAuthorization>()(
   "t3/contracts/RpcScopeAuthorization",
   { error: EnvironmentAuthorizationError },
@@ -2199,6 +2221,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsSubscribeServerLifecycleRpc,
   WsSubscribeAuthAccessRpc,
   WsSubscribeResourceTelemetryRpc,
+  WsSubscribeMachineRpc,
+  WsSubscribeMachineProcessesRpc,
   WsOrchestrationV2DispatchCommandRpc,
   WsOrchestrationV2GetWorkflowScriptRpc,
   WsOrchestrationV2GetNativeChildWorkRpc,

@@ -38,6 +38,37 @@ describe("mobile background activity", () => {
     }),
   );
 
+  it.effect("leases diagnostics for machine views only while they sample", () =>
+    Effect.gen(function* () {
+      const environmentId = EnvironmentId.make("machine-lease-environment");
+      const releaseVerdict = yield* observeMobileBackgroundActivitySubscription({
+        environmentId,
+        method: WS_METHODS.subscribeMachine,
+        input: {},
+      });
+      expect(retainedMobileBackgroundScopes(environmentId)).toEqual([]);
+
+      const releaseSamples = yield* observeMobileBackgroundActivitySubscription({
+        environmentId,
+        method: WS_METHODS.subscribeMachine,
+        input: { intervalMs: 1_000 },
+      });
+      expect(retainedMobileBackgroundScopes(environmentId)).toEqual([{ type: "diagnostics" }]);
+      const releaseProcesses = yield* observeMobileBackgroundActivitySubscription({
+        environmentId,
+        method: WS_METHODS.subscribeMachineProcesses,
+        input: { intervalMs: 2_000 },
+      });
+      expect(retainedMobileBackgroundScopes(environmentId)).toEqual([{ type: "diagnostics" }]);
+
+      yield* releaseSamples;
+      expect(retainedMobileBackgroundScopes(environmentId)).toEqual([{ type: "diagnostics" }]);
+      yield* releaseProcesses;
+      expect(retainedMobileBackgroundScopes(environmentId)).toEqual([]);
+      yield* releaseVerdict;
+    }),
+  );
+
   it.effect("keeps delimiter-containing environment and scope values distinct", () =>
     Effect.gen(function* () {
       const firstEnvironmentId = EnvironmentId.make("a");

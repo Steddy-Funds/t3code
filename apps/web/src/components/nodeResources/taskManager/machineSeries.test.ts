@@ -176,12 +176,14 @@ describe("receiveMachineSnapshot", () => {
 
   it("appends one row per later snapshot at its sample time", () => {
     const series = createMachineSeries(1_000, 900_000, 2);
-    receiveMachineSnapshot(series, snapshot({ history: history(3) }), T);
+    const seed = history(3);
+    receiveMachineSnapshot(series, snapshot({ history: seed }), T);
     const seeded = series.cpu.length;
 
+    // A shared stream repeats the same history object on every snapshot; it seeds only once.
     receiveMachineSnapshot(
       series,
-      snapshot({ sampleAgeMs: 400, sample: { perCore: [70, 80], gpus: [gpu()] } }),
+      snapshot({ history: seed, sampleAgeMs: 400, sample: { perCore: [70, 80], gpus: [gpu()] } }),
       T + 1_400,
     );
 
@@ -194,6 +196,23 @@ describe("receiveMachineSnapshot", () => {
     expect(newest(series.load)).toEqual([0.5]);
     expect(newest(series.gpu)).toEqual([40, 25]);
     expect(newest(series.cores)).toEqual([70, 80]);
+  });
+
+  it("reseeds from a new history object, as a reopened stream sends", () => {
+    const series = createMachineSeries(1_000, 900_000, 2);
+    receiveMachineSnapshot(series, snapshot({ history: history(3) }), T);
+    receiveMachineSnapshot(series, snapshot(), T + 1_000);
+    expect(series.cpu.length).toBe(12);
+
+    const reopened = history(5);
+    receiveMachineSnapshot(series, snapshot({ history: reopened }), T + 60_000);
+
+    expect(series.seededFrom).toBe(reopened);
+    for (const ring of [series.cpu, series.memory, series.load, series.gpu]) {
+      expect(ring.length).toBe(21);
+      expect(ring.timeAt(0)).toBe(T + 40_000);
+      expect(ring.timeAt(ring.length - 1)).toBe(T + 60_000);
+    }
   });
 
   it("adds nothing for a heartbeat repeating the last sample time", () => {

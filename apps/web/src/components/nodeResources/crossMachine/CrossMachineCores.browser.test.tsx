@@ -99,7 +99,8 @@ describe("CrossMachineCores", () => {
       { at: 0, cores: [50, 60] },
     ]);
 
-    await cores.emit(snapshot([70, 80]), T + 5_000);
+    // A shared stream repeats the same history object on every snapshot; it seeds only once.
+    await cores.emit(snapshot([70, 80], { history: HISTORY }), T + 5_000);
     expect(rows(ring).at(-1)).toEqual({ at: 5_000, cores: [70, 80] });
     expect(ring.length).toBe(4);
     await expect.element(cores.screen.getByRole("img")).toBeInTheDocument();
@@ -151,6 +152,24 @@ describe("CrossMachineCores", () => {
       expect(rows(ring).at(-1)).toEqual({ at: tickMs, cores: [70, 80] });
     },
   );
+
+  it("reseeds the same ring from a reopened stream's new history", async () => {
+    await using cores = await renderCores();
+    await cores.emit(snapshot([50, 60], { history: HISTORY }), T);
+    await cores.emit(snapshot([70, 80]), T + 5_000);
+    const ring = cores.rings()[0]!;
+
+    // A hidden tab closes the stream; the reopened one sends its own history.
+    const source = await cores.rekey(5_000);
+    await cores.emit(snapshot([90, 95], { history: { ...HISTORY } }), T + 60_000, source);
+
+    expect(cores.rings()).toEqual([ring]);
+    expect(rows(ring)).toEqual([
+      { at: 50_000, cores: [10, 20] },
+      { at: 55_000, cores: [30, 40] },
+      { at: 60_000, cores: [50, 60] },
+    ]);
+  });
 
   it("keeps the ring and its line when the row goes unreachable", async () => {
     await using cores = await renderCores();

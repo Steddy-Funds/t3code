@@ -6,7 +6,7 @@ import { type Atom, AtomRegistry } from "effect/reactivity";
 import { describe, expect, it, vi } from "vite-plus/test";
 import { userEvent } from "vite-plus/test/browser";
 
-import { render } from "../../../../test/render";
+import { act, render } from "../../../../test/render";
 
 type Totals = NonNullable<MachineStatusSnapshot["totals"]>;
 
@@ -190,6 +190,20 @@ async function renderList() {
   };
 }
 
+/** Overrides document.visibilityState until disposed. */
+function tabVisibility() {
+  const set = (visible: boolean) => {
+    Object.defineProperty(document, "visibilityState", {
+      configurable: true,
+      get: () => (visible ? "visible" : "hidden"),
+    });
+    return act(() => {
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+  };
+  return { set, [Symbol.dispose]: () => Reflect.deleteProperty(document, "visibilityState") };
+}
+
 const live = (prefix: string) =>
   [...state.mounted].filter((key) => key.startsWith(prefix)).toSorted();
 
@@ -260,6 +274,30 @@ describe("CrossMachineList", () => {
         `processes:bravo:${tick}:3`,
       ]);
     }
+  });
+
+  it("closes every machine and process stream while the tab is hidden, and reopens them", async () => {
+    setup([OK, STRESSED]);
+    using tab = tabVisibility();
+    await using list = await renderList();
+    const streams = [
+      "machine:alpha:5000:300000",
+      "machine:bravo:5000:300000",
+      "processes:alpha:5000:3",
+      "processes:bravo:5000:3",
+    ];
+    await vi.waitFor(() => expect(live("")).toEqual(streams));
+
+    await tab.set(false);
+
+    // Includes the streams the worst-first ordering reads, not only the rows'.
+    await vi.waitFor(() => expect(live("")).toEqual([]));
+    expect(list.rowIds()).toEqual(["bravo", "alpha"]);
+
+    await tab.set(true);
+
+    await vi.waitFor(() => expect(live("")).toEqual(streams));
+    expect(list.rowIds()).toEqual(["bravo", "alpha"]);
   });
 
   it("opens no machine or process stream for an unreachable row", async () => {

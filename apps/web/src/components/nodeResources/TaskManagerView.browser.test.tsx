@@ -9,9 +9,10 @@ import {
   type MachineVerdictReason,
 } from "@t3tools/contracts";
 import { type Atom, AtomRegistry } from "effect/reactivity";
+import { useState } from "react";
 import { describe, expect, it, vi } from "vite-plus/test";
 
-import { render } from "../../../test/render";
+import { act, render } from "../../../test/render";
 
 const GIB = 1024 ** 3;
 
@@ -30,6 +31,14 @@ const state = vi.hoisted(() => ({
   machineError: null as Error | null,
   /** Every GPU flag and unavailable reason the lists were rendered with, in order. */
   lists: [] as Array<{ hasGpu: boolean | null; unavailable: string | null }>,
+  /** Times the lists mounted; view state such as sort and columns lives across renders, not mounts. */
+  listMounts: 0,
+  /** Renders of the chart leaves, which re-render only when their graph or grid does. */
+  canvases: 0,
+  grids: 0,
+  /** The machine stream atoms by key, so a test can push a new snapshot through them. */
+  atoms: new Map<string, unknown>(),
+  commands: [] as Array<{ label: unknown; input: unknown }>,
 }));
 
 vi.mock(import("~/state/environments"), async (original) => ({
@@ -42,7 +51,7 @@ vi.mock(import("~/state/machineResources"), async () => {
   const Cause = await import("effect/Cause");
   const indicator = Atom.make(() => state.indicator);
   const capable = Atom.make(() => state.capable);
-  const atoms = new Map<string, Atom.Atom<unknown>>();
+  const atoms = state.atoms as Map<string, Atom.Atom<unknown>>;
   return {
     machineIndicator: {
       machineIndicatorAtom: () => indicator,
@@ -81,6 +90,24 @@ vi.mock(import("~/state/session"), async (original) => ({
   ...(await original()),
   useEnvironmentScope: ((_id: unknown, scope: string) => state.scopes.includes(scope)) as never,
 }));
+vi.mock(import("~/state/use-atom-command"), () => ({
+  useAtomCommand: ((_command: unknown, label: unknown) => (input: unknown) => {
+    state.commands.push({ label, input });
+    return Promise.resolve();
+  }) as never,
+}));
+vi.mock(import("./charts/TimeSeriesCanvas"), () => ({
+  TimeSeriesCanvas: (() => {
+    state.canvases += 1;
+    return null;
+  }) as never,
+}));
+vi.mock(import("./charts/CellGrid"), () => ({
+  CellGrid: (() => {
+    state.grids += 1;
+    return null;
+  }) as never,
+}));
 vi.mock(import("~/state/terminalSessions"), async (original) => ({
   ...(await original()),
   useKnownTerminalSessions: (() => state.sessions) as never,
@@ -94,6 +121,8 @@ vi.mock(import("./taskManager/TaskManagerLists"), () => ({
     hasGpu: boolean | null;
     processesUnavailable: string | null;
   }) => {
+    // Render-time only: the component body runs after every import has resolved.
+    useState(() => (state.listMounts += 1));
     state.lists.push({ hasGpu, unavailable: processesUnavailable });
     return null;
   }) as never,
@@ -103,10 +132,12 @@ vi.mock(import("../ThreadTerminalDrawer"), () => ({
     threadId: string;
     terminalId: string;
     cwd: string;
+    autoFocus: boolean;
     onSessionExited: () => void;
   }) => (
     <div
       data-testid="terminal-viewport"
+      data-autofocus={String(props.autoFocus)}
       data-thread={props.threadId}
       data-terminal={props.terminalId}
       data-cwd={props.cwd}
@@ -210,13 +241,34 @@ function setup({
   state.requested.clear();
   state.machineError = null;
   state.lists.length = 0;
+  state.listMounts = 0;
+  state.canvases = 0;
+  state.grids = 0;
+  state.commands.length = 0;
   localStorage.removeItem(PREFERENCES_KEY);
-  return { [Symbol.dispose]: () => localStorage.removeItem(PREFERENCES_KEY) };
+  return {
+    [Symbol.dispose]: () => {
+      localStorage.removeItem(PREFERENCES_KEY);
+      Reflect.deleteProperty(document, "visibilityState");
+    },
+  };
+}
+
+/** Flips the real tab visibility the documentActivity listener reads. */
+function setTabVisible(visible: boolean) {
+  Object.defineProperty(document, "visibilityState", {
+    configurable: true,
+    get: () => (visible ? "visible" : "hidden"),
+  });
+  return act(() => {
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
 }
 
 async function renderView() {
+  const registry = AtomRegistry.make();
   const screen = await render(
-    <RegistryContext value={AtomRegistry.make()}>
+    <RegistryContext value={registry}>
       <TaskManagerView environmentId={environmentId} />
     </RegistryContext>,
   );
@@ -230,8 +282,24 @@ async function renderView() {
       ),
     viewport: () =>
       screen.container.querySelector<HTMLElement>('[data-testid="terminal-viewport"]'),
+    /** The detail text of the first section titled `title`. */
+    detail: (title: string) =>
+      [...screen.container.querySelectorAll("section")]
+        .find((section) => section.querySelector("h3")?.textContent === title)
+        ?.querySelector("h3 ~ span")?.textContent ?? null,
+    /** The next snapshot on every live machine stream. */
+    push: (next: MachineStatusSnapshot) =>
+      act(() => {
+        state.snapshot = next;
+        // Copied: a refresh removes and re-adds its key, which would loop a live Set.
+        for (const key of Array.from(state.mounted)) {
+          registry.refresh(state.atoms.get(key) as Atom.Atom<unknown>);
+        }
+      }),
   });
 }
+
+const renders = () => ({ canvases: state.canvases, grids: state.grids, lists: state.lists.length });
 
 const gpuFlags = () => state.lists.map((lists) => lists.hasGpu);
 const live = () => [...state.mounted].toSorted();
@@ -340,6 +408,62 @@ describe("TaskManagerView", () => {
     expect(flags.slice(0, first).every((hasGpu) => hasGpu === null)).toBe(true);
     expect(flags.slice(first).every((hasGpu) => hasGpu === true)).toBe(true);
     expect(state.lists.every((lists) => lists.unavailable === null)).toBe(true);
+    expect(screen.sections()).toContain("GPU");
+  });
+
+  it("renders the overview, graphs and grids only when a value they draw changes", async () => {
+    using _setup = setup();
+    await using screen = await renderView();
+    await vi.waitFor(() => expect(screen.detail("CPU")).toBe("25%"));
+    const cpu = screen.detail("CPU");
+    const memory = screen.detail("Memory");
+    const before = renders();
+
+    const next = snapshot();
+    await screen.push({
+      ...next,
+      sequence: 2,
+      totals: { ...next.totals!, cpuUtilization: 0.75, memoryAvailableBytes: 8 * GIB },
+      sample: { perCore: [90, 80, 70, 60] },
+    });
+
+    await vi.waitFor(() => expect(screen.detail("CPU")).not.toBe(cpu));
+    expect(screen.detail("CPU")).toBe("75%");
+    expect(screen.detail("Memory")).not.toBe(memory);
+    expect(renders()).toEqual(before);
+  });
+
+  it("draws the GPU graph once a sample shows a readable GPU", async () => {
+    using _setup = setup();
+    await using screen = await renderView();
+    await vi.waitFor(() => expect(screen.sections()).toContain("Cores"));
+    expect(screen.sections()).not.toContain("GPU");
+
+    await screen.push(snapshot([GPU]));
+
+    await vi.waitFor(() => expect(screen.sections()).toContain("GPU"));
+    expect(screen.sections()).toContain("VRAM");
+  });
+
+  it("closes the machine and process streams while the tab is hidden, keeping the lists", async () => {
+    using _setup = setup({ gpus: [GPU] });
+    await using screen = await renderView();
+    await vi.waitFor(() => expect(state.lists.at(-1)?.hasGpu).toBe(true));
+    expect(live()).toEqual(["machine:1000:900000"]);
+
+    await setTabVisible(false);
+
+    await vi.waitFor(() => expect(live()).toEqual([]));
+    // No GPU flag closes the process stream; the drawn graphs stay.
+    expect(state.lists.at(-1)?.hasGpu).toBeNull();
+    expect(screen.sections()).toContain("GPU");
+
+    await setTabVisible(true);
+
+    await vi.waitFor(() => expect(live()).toEqual(["machine:1000:900000"]));
+    await vi.waitFor(() => expect(state.lists.at(-1)?.hasGpu).toBe(true));
+    // Mounted once throughout, so the process list's sort and columns survive.
+    expect(state.listMounts).toBe(1);
   });
 
   it.each<[string, () => void, { hasGpu: boolean | null; unavailable: string | null }]>([
@@ -401,6 +525,7 @@ describe("TaskManagerView", () => {
         thread: "machine-terminal",
         terminal: "default",
         cwd: "/home/studio",
+        autofocus: "true",
       });
       expect(screen.sections()).toContain("Terminal");
       expect(screen.getByRole("button", { name: "Open terminal" }).query()).toBeNull();
@@ -426,24 +551,46 @@ describe("TaskManagerView", () => {
       await vi.waitFor(() => expect(screen.sections()).toContain("CPU"));
       expect(screen.viewport() !== null).toBe(open);
       expect(screen.getByRole("button", { name: "Open terminal" }).query() === null).toBe(open);
+      // A reattached shell leaves focus where the user had it.
+      if (open) expect(screen.viewport()?.dataset.autofocus).toBe("false");
     });
 
-    it.each(["Hide terminal", "Exit shell"])(
-      "unmounts on %s and offers Open terminal again",
-      async (button) => {
-        using _setup = setup({
-          scopes: ["terminal:operate"],
-          sessions: [{ state: { status: "running" } }],
-        });
-        await using screen = await renderView();
-        await vi.waitFor(() => expect(screen.viewport()).not.toBeNull());
+    it.each([
+      ["Hide terminal", false],
+      ["Exit shell", false],
+      ["End session", true],
+    ] as const)("unmounts on %s and offers Open terminal again", async (button, closesSession) => {
+      using _setup = setup({
+        scopes: ["terminal:operate"],
+        sessions: [{ state: { status: "running" } }],
+      });
+      await using screen = await renderView();
+      await vi.waitFor(() => expect(screen.viewport()).not.toBeNull());
 
-        await screen.getByRole("button", { name: button }).click();
+      await screen.getByRole("button", { name: button }).click();
 
-        await vi.waitFor(() => expect(screen.viewport()).toBeNull());
-        // The shell is still running, but the user's choice wins over reopening it.
-        await expect.element(screen.getByRole("button", { name: "Open terminal" })).toBeVisible();
-      },
-    );
+      await vi.waitFor(() => expect(screen.viewport()).toBeNull());
+      expect(screen.sections()).not.toContain("Terminal");
+      // The shell may still be running, but the user's choice wins over reopening it.
+      await expect.element(screen.getByRole("button", { name: "Open terminal" })).toBeVisible();
+      // Only End session closes the PTY; hiding detaches and the next visit reattaches.
+      expect(state.commands).toEqual(
+        closesSession
+          ? [
+              {
+                label: "terminal close",
+                input: {
+                  environmentId,
+                  input: {
+                    threadId: "machine-terminal",
+                    terminalId: "default",
+                    deleteHistory: true,
+                  },
+                },
+              },
+            ]
+          : [],
+      );
+    });
   });
 });

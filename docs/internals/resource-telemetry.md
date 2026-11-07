@@ -31,10 +31,14 @@ plus a 30 s heartbeat. Clients judge staleness by their own receipt time, so the
 must stay well inside the client's 75 s expiry. Per-core samples run on their own fiber only
 while a view subscribes with an interval.
 
-On macOS the RAM rule needs the memory-pressure level, which Node cannot read. Until the
-native monitor reports host totals, one long-lived `sh` loop runs `sysctl` and `vm_stat`
-every 5 s into a pipe the server owns. It is the one exception to "no recurring shell
-probe": it exits when its parent dies or a write to the pipe fails.
+On macOS the RAM rule needs the memory-pressure level, which Node cannot read, so each tick
+asks the native monitor for `hostTotals`. Without a monitor, or while it restarts, memory reads
+unknown and the load rule still works; there is no shell fallback. Each tick also asks for
+`gpuTotals`, merged into the totals for the GPU rules; without a monitor they skip.
+
+The same tick feeds a one-hour ring of Float32Array columns (totals, per-core, GPU devices),
+bounded at 512 KB. Only the first snapshot of a subscription that asks for `historyMs`
+carries it, quantised to permille, so a heartbeat never repeats it.
 
 The monitor's host mode (protocol 4) walks every process on the machine, not just the
 server's tree, so it runs only while a view streams it (`setHostStreaming`) or on one

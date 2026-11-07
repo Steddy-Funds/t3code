@@ -25,6 +25,8 @@ export type GpuDeviceSample = typeof GpuDeviceSample.Type;
 
 export const MACHINE_HOLD_MAX_MS = 3_600_000;
 export const MACHINE_SAMPLE_MIN_INTERVAL_MS = 500;
+export const MACHINE_HISTORY_MAX_MS = 3_600_000;
+export const MACHINE_HISTORY_STEP_MS = 5_000;
 export const MACHINE_PROCESSES_MIN_INTERVAL_MS = 1_000;
 const MACHINE_PROCESSES_MAX_TOP = 10;
 export const MACHINE_PROCESSES_MAX_ROWS = 4_000;
@@ -46,6 +48,9 @@ export const MachineThresholds = Schema.Struct({
   enterHoldMs: HoldMs.pipe(Schema.withDecodingDefault(Effect.succeed(10_000))),
   exitHoldMs: HoldMs.pipe(Schema.withDecodingDefault(Effect.succeed(60_000))),
   exitFactor: ExitFactor.pipe(Schema.withDecodingDefault(Effect.succeed(0.85))),
+  gpuVramUsedPercent: Percent.pipe(Schema.withDecodingDefault(Effect.succeed(92.5))),
+  gpuUtilPercent: Percent.pipe(Schema.withDecodingDefault(Effect.succeed(95))),
+  gpuUtilHoldMs: HoldMs.pipe(Schema.withDecodingDefault(Effect.succeed(300_000))),
 });
 export type MachineThresholds = typeof MachineThresholds.Type;
 
@@ -61,6 +66,9 @@ export const MachineThresholdsPatch = Schema.Struct({
   enterHoldMs: Schema.optionalKey(HoldMs),
   exitHoldMs: Schema.optionalKey(HoldMs),
   exitFactor: Schema.optionalKey(ExitFactor),
+  gpuVramUsedPercent: Schema.optionalKey(Percent),
+  gpuUtilPercent: Schema.optionalKey(Percent),
+  gpuUtilHoldMs: Schema.optionalKey(HoldMs),
 });
 export type MachineThresholdsPatch = typeof MachineThresholdsPatch.Type;
 
@@ -129,6 +137,36 @@ export const MachineStatusSample = Schema.Struct({
 });
 export type MachineStatusSample = typeof MachineStatusSample.Type;
 
+/** Permille 0–1000, or -1 where the tick had no reading. */
+const Permille = Schema.Int.check(Schema.isBetween({ minimum: -1, maximum: 1000 }));
+
+/** Columns are index-aligned, oldest first, one entry per 5 s tick. */
+export const MachineHistory = Schema.Struct({
+  stepMs: PositiveInt,
+  count: NonNegativeInt,
+  /** Age of the newest entry when the snapshot was built. */
+  endAgeMs: NonNegativeInt,
+  cpu: Schema.Array(Permille),
+  /** `count` × `cores`, row-major. */
+  perCore: Schema.Array(Permille),
+  cores: NonNegativeInt,
+  /** Of total memory. */
+  memoryUsed: Schema.Array(Permille),
+  /** Of total swap. */
+  swapUsed: Schema.Array(Permille),
+  /** One-minute load average; -1 where unmeasured (Windows). */
+  load1: Schema.Array(Schema.Number),
+  gpus: Schema.Array(
+    Schema.Struct({
+      id: Schema.String,
+      util: Schema.Array(Permille),
+      /** Of the device's VRAM. */
+      vramUsed: Schema.Array(Permille),
+    }),
+  ),
+});
+export type MachineHistory = typeof MachineHistory.Type;
+
 export const MachineStatusSnapshot = Schema.Struct({
   /** Advances only when the verdict or reason rule changes; heartbeats repeat it. */
   sequence: NonNegativeInt,
@@ -138,12 +176,17 @@ export const MachineStatusSnapshot = Schema.Struct({
   sampleAgeMs: NonNegativeInt,
   totals: Schema.NullOr(MachineTotalsSummary),
   sample: Schema.optionalKey(MachineStatusSample),
+  /** Only on the first snapshot of a subscription that asked for `historyMs`. */
+  history: Schema.optionalKey(MachineHistory),
 });
 export type MachineStatusSnapshot = typeof MachineStatusSnapshot.Type;
 
 export const SubscribeMachineInput = Schema.Struct({
   intervalMs: Schema.optionalKey(
     Schema.Int.check(Schema.isGreaterThanOrEqualTo(MACHINE_SAMPLE_MIN_INTERVAL_MS)),
+  ),
+  historyMs: Schema.optionalKey(
+    Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: MACHINE_HISTORY_MAX_MS })),
   ),
 });
 export type SubscribeMachineInput = typeof SubscribeMachineInput.Type;
@@ -165,7 +208,10 @@ export const MachineProcessAdded = Schema.Struct({
 });
 export type MachineProcessAdded = typeof MachineProcessAdded.Type;
 
-/** Columnar live values for every row in view; the arrays are index-aligned. */
+/**
+ * Columnar live values, index-aligned. A full frame lists every row in view; a diff lists only
+ * rows whose values changed, and the client keeps the rest.
+ */
 export const MachineProcessRows = Schema.Struct({
   key: Schema.Array(NonNegativeInt),
   /** Percent of one core. */

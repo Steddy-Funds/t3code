@@ -31,8 +31,9 @@ export function createMachineResourcesAtoms<R, E>(
     tag: WS_METHODS.subscribeMachine,
     idleTtlMs: 0,
   });
+  // History rides only on a subscription's first snapshot, so a history view never shares.
   const machine = (environmentId: EnvironmentId, input: SubscribeMachineInput = {}) =>
-    input.intervalMs === undefined
+    input.intervalMs === undefined && input.historyMs === undefined
       ? status({ environmentId, input: {} })
       : live({ environmentId, input });
 

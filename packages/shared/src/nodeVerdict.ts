@@ -12,8 +12,8 @@ export interface VerdictState {
   /** When the current verdict began. */
   readonly since: number;
   readonly reason: MachineVerdictReason | null;
-  /** When each rule began to sit continuously at or above its threshold. */
-  readonly overSince: Partial<Record<MachineVerdictRule, number>>;
+  /** When each rule (per device for GPU rules) began to sit at or above its threshold. */
+  readonly overSince: Readonly<Record<string, number>>;
   /** While stressed: when every rule fell below its exit level. */
   readonly clearSince: number | null;
 }
@@ -23,11 +23,15 @@ export function initialVerdictState(now: number): VerdictState {
 }
 
 interface RuleReading {
+  /** The rule, or `rule:deviceId` for a per-device GPU rule. */
+  readonly key: string;
   readonly rule: MachineVerdictRule;
   /** In the rule's unit: load per core, percent, or the macOS pressure level. */
   readonly value: number;
   readonly threshold: number;
   readonly enterHoldMs: number;
+  readonly deviceId?: string;
+  readonly deviceName?: string;
 }
 
 const CRITICAL_PRESSURE_LEVEL = 4;
@@ -38,6 +42,7 @@ function readRules(totals: HostTotals, th: MachineThresholds): ReadonlyArray<Rul
   if (totals.platform === "win32") {
     if (totals.cpuUtilization !== null) {
       rules.push({
+        key: "cpu",
         rule: "cpu",
         value: totals.cpuUtilization * 100,
         threshold: th.windowsCpuPercent,
@@ -46,6 +51,7 @@ function readRules(totals: HostTotals, th: MachineThresholds): ReadonlyArray<Rul
     }
   } else if (totals.load !== null && totals.cpuCount > 0) {
     rules.push({
+      key: "load",
       rule: "load",
       value: totals.load.five / totals.cpuCount,
       threshold: th.loadPerCore,
@@ -56,6 +62,7 @@ function readRules(totals: HostTotals, th: MachineThresholds): ReadonlyArray<Rul
   if (totals.platform === "darwin") {
     if (totals.memoryPressure !== null) {
       rules.push({
+        key: "memoryPressure",
         rule: "memoryPressure",
         value: PRESSURE_LEVEL[totals.memoryPressure],
         threshold: CRITICAL_PRESSURE_LEVEL,
@@ -64,12 +71,39 @@ function readRules(totals: HostTotals, th: MachineThresholds): ReadonlyArray<Rul
     }
   } else if (totals.memoryTotalBytes > 0) {
     rules.push({
+      key: "memory",
       rule: "memory",
       value:
         ((totals.memoryTotalBytes - totals.memoryAvailableBytes) / totals.memoryTotalBytes) * 100,
       threshold: th.memoryUsedPercent,
       enterHoldMs: th.enterHoldMs,
     });
+  }
+  // A suspended GPU is not measured; with no monitor `gpus` is absent and these rules skip.
+  for (const gpu of totals.gpus ?? []) {
+    if (gpu.status !== "active") continue;
+    const device = { deviceId: gpu.id, deviceName: gpu.name };
+    // Integrated GPUs share system RAM, which the memory rule already covers.
+    if (gpu.vendor === "nvidia" && gpu.vramUsedPercent !== null) {
+      rules.push({
+        key: `gpuVram:${gpu.id}`,
+        rule: "gpuVram",
+        value: gpu.vramUsedPercent,
+        threshold: th.gpuVramUsedPercent,
+        enterHoldMs: th.enterHoldMs,
+        ...device,
+      });
+    }
+    if (gpu.utilPercent !== null) {
+      rules.push({
+        key: `gpuUtil:${gpu.id}`,
+        rule: "gpuUtil",
+        value: gpu.utilPercent,
+        threshold: th.gpuUtilPercent,
+        enterHoldMs: th.gpuUtilHoldMs,
+        ...device,
+      });
+    }
   }
   return rules;
 }
@@ -80,6 +114,9 @@ function toReason(reading: RuleReading, heldForMs: number): MachineVerdictReason
     value: reading.value,
     threshold: reading.threshold,
     heldForMs: Math.max(0, Math.round(heldForMs)),
+    ...(reading.deviceId === undefined
+      ? {}
+      : { deviceId: reading.deviceId, deviceName: reading.deviceName ?? reading.deviceId }),
   };
 }
 
@@ -108,19 +145,19 @@ export function stepVerdict(
     return prev.verdict === "unknown" ? prev : initialVerdictState(now);
   }
 
-  const overSince: Partial<Record<MachineVerdictRule, number>> = {};
+  const overSince: Record<string, number> = {};
   for (const reading of readings) {
     if (reading.value >= reading.threshold) {
-      overSince[reading.rule] = prev.overSince[reading.rule] ?? now;
+      overSince[reading.key] = prev.overSince[reading.key] ?? now;
     }
   }
-  const heldFor = (reading: RuleReading) => now - (overSince[reading.rule] ?? now);
+  const heldFor = (reading: RuleReading) => now - (overSince[reading.key] ?? now);
 
   if (prev.verdict !== "stressed") {
     const entering = worst(
       readings.filter(
         (reading) =>
-          overSince[reading.rule] !== undefined && heldFor(reading) >= reading.enterHoldMs,
+          overSince[reading.key] !== undefined && heldFor(reading) >= reading.enterHoldMs,
       ),
     );
     if (entering === undefined) {
@@ -147,11 +184,14 @@ export function stepVerdict(
   if (aboveExit.length > 0) {
     // Keep the current rule while it still holds, so the reason does not flip between rules.
     const current =
-      aboveExit.find((reading) => reading.rule === prev.reason?.rule) ?? worst(aboveExit)!;
+      aboveExit.find(
+        (reading) =>
+          reading.rule === prev.reason?.rule && reading.deviceId === prev.reason?.deviceId,
+      ) ?? worst(aboveExit)!;
     return {
       verdict: "stressed",
       since: prev.since,
-      reason: toReason(current, now - (overSince[current.rule] ?? prev.since)),
+      reason: toReason(current, now - (overSince[current.key] ?? prev.since)),
       overSince,
       clearSince: null,
     };

@@ -81,11 +81,19 @@ trait Backend {
     fn processes(&mut self) -> Result<Vec<GpuProcessSample>, String>;
 }
 
+/// One vendor's backend with its own error count, so a failing vendor turns off alone.
+struct Slot {
+    backend: Box<dyn Backend>,
+    device_errors: u32,
+    process_errors: u32,
+    processes_off: bool,
+    /// The last good device read, reused while a read fails.
+    last_devices: Option<Vec<GpuDeviceSample>>,
+}
+
 /// Lives for the monitor's lifetime. Vendor backends initialise lazily on first use.
 pub(crate) struct Gpus {
-    backends: Vec<Box<dyn Backend>>,
-    consecutive_errors: u32,
-    disabled: bool,
+    slots: Vec<Slot>,
 }
 
 impl Default for Gpus {
@@ -100,9 +108,16 @@ impl Default for Gpus {
 impl Gpus {
     fn with_backends(backends: Vec<Box<dyn Backend>>) -> Self {
         Self {
-            backends,
-            consecutive_errors: 0,
-            disabled: false,
+            slots: backends
+                .into_iter()
+                .map(|backend| Slot {
+                    backend,
+                    device_errors: 0,
+                    processes_off: false,
+                    process_errors: 0,
+                    last_devices: None,
+                })
+                .collect(),
         }
     }
 
@@ -114,48 +129,71 @@ impl Gpus {
 
     /// Devices, plus per-process rows when `processes` is set. `start_time_ms` resolves a pid to
     /// the caller's process identity; rows whose pid it does not know are dropped.
+    ///
+    /// Each backend counts its own failures: a failed device read reuses that backend's last
+    /// devices, three in a row turn that backend off, and a failed process walk drops only its
+    /// rows (three in a row stop its walks). `Disabled` comes once, when the last backend turns
+    /// off; `Failed` only when a backend failed with no earlier devices to stand in.
     pub(crate) fn sample(
         &mut self,
         processes: bool,
         start_time_ms: &dyn Fn(u32) -> Option<u64>,
     ) -> Result<GpuSample, GpuError> {
-        if self.disabled {
+        if self.slots.is_empty() {
             return Ok(GpuSample::default());
         }
-        match self.query(processes) {
-            Ok(mut sample) => {
-                self.consecutive_errors = 0;
-                sample
-                    .processes
-                    .retain_mut(|row| match start_time_ms(row.pid) {
-                        Some(start) => {
-                            row.start_time_ms = start;
-                            true
+        let mut sample = GpuSample::default();
+        let mut failed = None;
+        let mut disabled = None;
+        self.slots.retain_mut(|slot| match slot.backend.devices() {
+            Ok(devices) => {
+                slot.device_errors = 0;
+                sample.devices.extend(devices.iter().cloned());
+                slot.last_devices = Some(devices);
+                if processes && !slot.processes_off {
+                    match slot.backend.processes() {
+                        Ok(rows) => {
+                            slot.process_errors = 0;
+                            sample.processes.extend(rows);
                         }
-                        None => false,
-                    });
-                Ok(sample)
+                        Err(_) => {
+                            slot.process_errors += 1;
+                            slot.processes_off = slot.process_errors >= MAX_CONSECUTIVE_ERRORS;
+                        }
+                    }
+                }
+                true
             }
             Err(message) => {
-                self.consecutive_errors += 1;
-                if self.consecutive_errors < MAX_CONSECUTIVE_ERRORS {
-                    return Err(GpuError::Failed(message));
+                slot.device_errors += 1;
+                if slot.device_errors >= MAX_CONSECUTIVE_ERRORS {
+                    disabled = Some(message);
+                    return false;
                 }
-                self.disabled = true;
-                self.backends.clear();
-                Err(GpuError::Disabled(message))
+                match &slot.last_devices {
+                    Some(devices) => sample.devices.extend(devices.iter().cloned()),
+                    None => failed = Some(message),
+                }
+                true
             }
+        });
+        if let Some(message) = disabled
+            && self.slots.is_empty()
+        {
+            return Err(GpuError::Disabled(message));
         }
-    }
-
-    fn query(&mut self, processes: bool) -> Result<GpuSample, String> {
-        let mut sample = GpuSample::default();
-        for backend in &mut self.backends {
-            sample.devices.extend(backend.devices()?);
-            if processes {
-                sample.processes.extend(backend.processes()?);
-            }
+        if let Some(message) = failed {
+            return Err(GpuError::Failed(message));
         }
+        sample
+            .processes
+            .retain_mut(|row| match start_time_ms(row.pid) {
+                Some(start) => {
+                    row.start_time_ms = start;
+                    true
+                }
+                None => false,
+            });
         Ok(sample)
     }
 }
@@ -408,8 +446,16 @@ mod tests {
         assert_eq!(fake.process_calls.get(), 0);
     }
 
+    fn ids(devices: &[GpuDeviceSample]) -> Vec<&str> {
+        devices.iter().map(|device| device.id.as_str()).collect()
+    }
+
+    fn pids(sample: &super::GpuSample) -> Vec<u32> {
+        sample.processes.iter().map(|row| row.pid).collect()
+    }
+
     #[test]
-    fn a_success_resets_the_streak() {
+    fn a_failed_read_reuses_the_last_devices_and_a_success_resets_the_streak() {
         let fake = script(vec![
             err("a"),
             err("b"),
@@ -418,45 +464,87 @@ mod tests {
             err("d"),
             err("e"),
         ]);
-        let mut gpus = gpus_with(&[fake]);
-        assert!(matches!(gpus.totals(), Err(GpuError::Failed(_))));
-        assert!(matches!(gpus.totals(), Err(GpuError::Failed(_))));
-        assert_eq!(gpus.totals().expect("success").len(), 1);
-        assert!(matches!(gpus.totals(), Err(GpuError::Failed(m)) if m == "c"));
-        assert!(matches!(gpus.totals(), Err(GpuError::Failed(m)) if m == "d"));
-        assert!(matches!(gpus.totals(), Err(GpuError::Disabled(m)) if m == "e"));
-    }
-
-    #[test]
-    fn process_errors_share_the_streak_with_device_errors() {
-        let fake = script(vec![err("devices")]);
-        *fake.processes.borrow_mut() =
-            vec![Err("walk 1".to_owned()), Err("walk 2".to_owned())].into();
         let mut gpus = gpus_with(std::slice::from_ref(&fake));
-        assert!(matches!(gpus.totals(), Err(GpuError::Failed(_))));
-        assert!(matches!(
-            gpus.sample(true, &|_| Some(0)),
-            Err(GpuError::Failed(m)) if m == "walk 1"
-        ));
-        assert!(matches!(
-            gpus.sample(true, &|_| Some(0)),
-            Err(GpuError::Disabled(m)) if m == "walk 2"
-        ));
-        assert_eq!(fake.process_calls.get(), 2);
+        assert!(matches!(gpus.totals(), Err(GpuError::Failed(m)) if m == "a"));
+        assert!(matches!(gpus.totals(), Err(GpuError::Failed(m)) if m == "b"));
+        assert_eq!(ids(&gpus.totals().expect("success")), ["0000:01:00.0"]);
+        for _ in ["c", "d"] {
+            assert_eq!(ids(&gpus.totals().expect("held")), ["0000:01:00.0"]);
+        }
+        assert!(matches!(gpus.totals(), Err(GpuError::Disabled(m)) if m == "e"));
+        assert_eq!(fake.device_calls.get(), 6);
     }
 
     #[test]
-    fn one_failing_backend_fails_the_query_and_counts_once() {
-        let healthy = script(vec![
-            Ok(vec![device("0000:01:00.0")]),
-            Ok(vec![device("0000:01:00.0")]),
-            Ok(vec![device("0000:01:00.0")]),
-        ]);
+    fn process_walk_failures_keep_devices_and_three_stop_only_that_backends_walks() {
+        let healthy = script(vec![Ok(vec![device("a")]); 6]);
+        *healthy.processes.borrow_mut() = vec![Ok(vec![process(1)]); 5].into();
+        let broken = script(vec![Ok(vec![device("b")]); 6]);
+        *broken.processes.borrow_mut() = vec![
+            Err("walk 1".to_owned()),
+            Ok(vec![process(2)]),
+            Err("walk 2".to_owned()),
+            Err("walk 3".to_owned()),
+            Err("walk 4".to_owned()),
+        ]
+        .into();
+        let mut gpus = gpus_with(&[healthy.clone(), broken.clone()]);
+        let run = |gpus: &mut Gpus| gpus.sample(true, &|pid| Some(u64::from(pid))).expect("ok");
+
+        let first = run(&mut gpus);
+        assert_eq!(ids(&first.devices), ["a", "b"]);
+        assert_eq!(pids(&first), [1]);
+        // The good walk resets the streak: walks 2 to 4 are the three in a row.
+        assert_eq!(pids(&run(&mut gpus)), [1, 2]);
+        assert_eq!(pids(&run(&mut gpus)), [1]);
+        assert_eq!(pids(&run(&mut gpus)), [1]);
+        assert_eq!(broken.process_calls.get(), 4);
+        let off = run(&mut gpus);
+        assert_eq!(pids(&off), [1]);
+        assert_eq!(ids(&off.devices), ["a", "b"]);
+
+        let after = run(&mut gpus);
+        assert_eq!(ids(&after.devices), ["a", "b"]);
+        assert_eq!(broken.process_calls.get(), 5);
+        assert_eq!(healthy.process_calls.get(), 6);
+    }
+
+    #[test]
+    fn one_backend_turning_off_leaves_the_others_reporting() {
+        let healthy = script(vec![Ok(vec![device("a")]); 4]);
         let broken = script(vec![err("x"), err("y"), err("z")]);
-        let mut gpus = gpus_with(&[healthy, broken]);
-        assert!(matches!(gpus.totals(), Err(GpuError::Failed(_))));
-        assert!(matches!(gpus.totals(), Err(GpuError::Failed(_))));
-        assert!(matches!(gpus.totals(), Err(GpuError::Disabled(_))));
+        let mut gpus = gpus_with(&[healthy, broken.clone()]);
+        assert!(matches!(gpus.totals(), Err(GpuError::Failed(m)) if m == "x"));
+        assert!(matches!(gpus.totals(), Err(GpuError::Failed(m)) if m == "y"));
+        assert_eq!(
+            ids(&gpus.totals().expect("only the broken backend turns off")),
+            ["a"]
+        );
+        assert_eq!(ids(&gpus.totals().expect("ok")), ["a"]);
+        assert_eq!(broken.device_calls.get(), 3);
+    }
+
+    #[test]
+    fn disabled_comes_once_when_the_last_backend_turns_off() {
+        let first = script(vec![err("x"), err("y"), err("z")]);
+        let second = script(vec![
+            Ok(vec![device("b")]),
+            Ok(vec![device("b")]),
+            Ok(vec![device("b")]),
+            err("p"),
+            err("q"),
+            err("r"),
+        ]);
+        let mut gpus = gpus_with(&[first, second.clone()]);
+        assert!(matches!(gpus.totals(), Err(GpuError::Failed(m)) if m == "x"));
+        assert!(matches!(gpus.totals(), Err(GpuError::Failed(m)) if m == "y"));
+        assert_eq!(ids(&gpus.totals().expect("second still reports")), ["b"]);
+        for _ in ["p", "q"] {
+            assert_eq!(ids(&gpus.totals().expect("held")), ["b"]);
+        }
+        assert!(matches!(gpus.totals(), Err(GpuError::Disabled(m)) if m == "r"));
+        assert!(gpus.totals().expect("off answers Ok").is_empty());
+        assert_eq!(second.device_calls.get(), 6);
     }
 
     #[test]

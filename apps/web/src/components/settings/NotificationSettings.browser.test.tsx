@@ -57,7 +57,10 @@ describe("MachineStressedNotificationSetting", () => {
   });
 
   it.each([
-    ["desktop notifications", { notificationMode: "notifications", inAppNotificationsEnabled: false }],
+    [
+      "desktop notifications",
+      { notificationMode: "notifications", inAppNotificationsEnabled: false },
+    ],
     ["in-app notifications", { notificationMode: "sound", inAppNotificationsEnabled: true }],
   ] as const)("saves the toggle while %s are on", async (_label, settings) => {
     setup({ ...settings, notifyOnMachineStressed: true });
@@ -70,6 +73,8 @@ describe("MachineStressedNotificationSetting", () => {
       .toBeVisible();
     await userEvent.click(toggle);
 
-    expect(state.updateSettings).toHaveBeenCalledExactlyOnceWith({ notifyOnMachineStressed: false });
+    expect(state.updateSettings).toHaveBeenCalledExactlyOnceWith({
+      notifyOnMachineStressed: false,
+    });
   });
 });

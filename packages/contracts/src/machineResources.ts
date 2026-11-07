@@ -6,8 +6,7 @@ import { NonNegativeInt, PositiveInt } from "./baseSchemas.ts";
 export const MACHINE_HOLD_MAX_MS = 3_600_000;
 export const MACHINE_SAMPLE_MIN_INTERVAL_MS = 500;
 export const MACHINE_PROCESSES_MIN_INTERVAL_MS = 1_000;
-export const MACHINE_PROCESSES_DEFAULT_INTERVAL_MS = 2_000;
-export const MACHINE_PROCESSES_MAX_TOP = 10;
+const MACHINE_PROCESSES_MAX_TOP = 10;
 export const MACHINE_PROCESSES_MAX_ROWS = 4_000;
 
 const Percent = Schema.Number.check(

@@ -415,7 +415,10 @@ export function dropInvalidMachineThresholds(file: unknown): {
     else dropped.push(`machineResources.thresholds.${key}`);
   }
   if (dropped.length === 0) return { file, dropped };
-  return { file: { ...file, machineResources: { ...machineResources, thresholds: kept } }, dropped };
+  return {
+    file: { ...file, machineResources: { ...machineResources, thresholds: kept } },
+    dropped,
+  };
 }
 const LegacyProviderSettingsJson = fromLenientJson(
   Schema.Struct({

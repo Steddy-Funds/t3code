@@ -75,7 +75,9 @@ vi.mock(import("~/state/peerLinks"), async (original) => ({
 }));
 vi.mock(import("./settingsLayout"), async (original) => ({
   ...(await original()),
-  SettingsPageContainer: (({ children }: { children: ReactNode }) => <div>{children}</div>) as never,
+  SettingsPageContainer: (({ children }: { children: ReactNode }) => (
+    <div>{children}</div>
+  )) as never,
   SettingsSection: (({
     title,
     headerAction,

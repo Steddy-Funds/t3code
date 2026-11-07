@@ -82,7 +82,9 @@ function config({
 } = {}) {
   return {
     environment: { capabilities: { machineResources: capable }, platform: { os } },
-    settings: { machineResources: { thresholds: { ...DEFAULT_MACHINE_THRESHOLDS, ...thresholds } } },
+    settings: {
+      machineResources: { thresholds: { ...DEFAULT_MACHINE_THRESHOLDS, ...thresholds } },
+    },
   };
 }
 
@@ -157,7 +159,10 @@ describe("MachineResourcesSection saving", () => {
     await expect
       .element(screen.getByRole("textbox", { name: "Clears below" }))
       .toHaveValue(String(DEFAULT_MACHINE_THRESHOLDS.exitFactor * 100));
-    await enter(screen.getByRole("textbox", { name: "Clears below" }).element() as HTMLElement, "90");
+    await enter(
+      screen.getByRole("textbox", { name: "Clears below" }).element() as HTMLElement,
+      "90",
+    );
     await enter(
       screen.getByRole("textbox", { name: "Hold before stressed" }).element() as HTMLElement,
       "12.5",
@@ -244,7 +249,9 @@ describe("MachineResourcesSection reset", () => {
     await using screen = await renderSection(registry, config({ thresholds: { loadPerCore: 4 } }));
 
     await expect
-      .element(screen.getByText("This connection lacks permission to change settings on this machine."))
+      .element(
+        screen.getByText("This connection lacks permission to change settings on this machine."),
+      )
       .toBeVisible();
     await expect.element(screen.getByRole("textbox", { name: "Load per core" })).toBeDisabled();
     expect(screen.getByRole("button", { name: /^Reset/ }).query()).toBeNull();
@@ -253,7 +260,9 @@ describe("MachineResourcesSection reset", () => {
 
 describe("MachineResourcesSection rows by OS", () => {
   const inputNames = (screen: { container: HTMLElement }) =>
-    [...screen.container.querySelectorAll("input")].map((input) => input.getAttribute("aria-label"));
+    [...screen.container.querySelectorAll("input")].map((input) =>
+      input.getAttribute("aria-label"),
+    );
 
   it("uses CPU used and CPU hold instead of load per core on Windows", async () => {
     const registry = setup();

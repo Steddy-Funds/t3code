@@ -1,6 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off globalTimers:off globalDate:off - plain Node so the `t3 guard` CLI can share it.
-import { spawn } from "node:child_process";
-import { readFile } from "node:fs/promises";
+import * as NodeChildProcess from "node:child_process";
+import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
 
 import type { MachineMemoryPressure } from "@t3tools/contracts";
@@ -115,7 +115,7 @@ function parseSwapSize(value: string, unit: string): number {
 }
 
 /** `kern.memorystatus_vm_pressure_level`: 1 normal, 2 warn, 4 critical. */
-export function memoryPressureFromLevel(level: number): MachineMemoryPressure | null {
+function memoryPressureFromLevel(level: number): MachineMemoryPressure | null {
   if (level === 1) return "normal";
   if (level === 2) return "warn";
   if (level === 4) return "critical";
@@ -153,13 +153,13 @@ export function startDarwinPressureReader(
   let latest: DarwinPressureSample | null = null;
   let stopped = false;
   let restartTimer: ReturnType<typeof setTimeout> | undefined;
-  let child: ReturnType<typeof spawn> | undefined;
+  let child: ReturnType<typeof NodeChildProcess.spawn> | undefined;
   let earlyExits = 0;
 
   const start = () => {
     let buffered = "";
     const startedAt = Date.now();
-    const current = spawn(
+    const current = NodeChildProcess.spawn(
       options.shell ?? "/bin/sh",
       ["-c", options.script ?? DARWIN_PRESSURE_LOOP],
       {
@@ -214,7 +214,7 @@ export function startDarwinPressureReader(
 
 async function readLinuxMeminfo() {
   try {
-    return parseProcMeminfo(await readFile("/proc/meminfo", "utf8"));
+    return parseProcMeminfo(await NodeFSP.readFile("/proc/meminfo", "utf8"));
   } catch {
     return null;
   }
@@ -228,6 +228,7 @@ export async function readHostTotals(
     readonly darwin?: DarwinPressureReader | undefined;
   } = {},
 ): Promise<{ totals: HostTotals; next: CpuCounters }> {
+  // oxlint-disable-next-line t3code/no-global-process-runtime -- Plain Node module shared with the t3 guard CLI; callers can pass platform.
   const platform = options.platform ?? process.platform;
   const next = readCpuCounters();
   const { cpuUtilization, perCore } = cpuDeltas(prev, next);

@@ -20,15 +20,13 @@ vi.mock(import("~/state/machineResources"), async () => {
       machineIndicatorAtom: (environmentId: string) => {
         let atom = atoms.get(environmentId);
         if (!atom) {
-          atom = Atom.make(
-            (): MachineIndicator => ({
-              show: true,
-              verdict: state.stressed.has(environmentId) ? "stressed" : "ok",
-              unreachable: false,
-              lastSeen: null,
-              reason: null,
-            }),
-          );
+          atom = Atom.make((): MachineIndicator => ({
+            show: true,
+            verdict: state.stressed.has(environmentId) ? "stressed" : "ok",
+            unreachable: false,
+            lastSeen: null,
+            reason: null,
+          }));
           atoms.set(environmentId, atom);
         }
         return atom;

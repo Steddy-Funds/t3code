@@ -238,9 +238,7 @@ const make = Effect.fn("makeHostResources")(function* () {
     return Stream.fromPubSub(source.pubsub);
   });
 
-  const subscribe = Effect.fn("HostResources.subscribe")(function* (
-    input: SubscribeMachineInput,
-  ) {
+  const subscribe = Effect.fn("HostResources.subscribe")(function* (input: SubscribeMachineInput) {
     if (input.intervalMs === undefined) return status;
     const live = yield* samples(input.intervalMs);
     // Heartbeats and verdict changes keep the last sample, so an open view never loses per-core.

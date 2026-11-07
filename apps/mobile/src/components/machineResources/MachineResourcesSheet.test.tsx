@@ -23,7 +23,11 @@ vi.mock("react-native", () => {
     View: Box,
     ScrollView: Box,
     Platform: { OS: "ios" },
-    Pressable: (props: { accessibilityLabel: string; onPress: () => void; children?: ReactNode }) => (
+    Pressable: (props: {
+      accessibilityLabel: string;
+      onPress: () => void;
+      children?: ReactNode;
+    }) => (
       <button type="button" aria-label={props.accessibilityLabel} onClick={props.onPress}>
         {props.children}
       </button>

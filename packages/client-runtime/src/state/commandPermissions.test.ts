@@ -9,6 +9,7 @@ import { vi } from "vite-plus/test";
 import {
   AuthAccessReadScope,
   AuthAccessWriteScope,
+  AuthEnvironmentMaintainScope,
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
   AuthPreviewOperateScope,
@@ -17,6 +18,7 @@ import {
   ThreadId,
   EnvironmentId,
   ORCHESTRATION_V2_WS_METHODS,
+  CLIENT_GUARDED_RPC_SCOPES,
   ScheduledTaskId,
   WS_METHODS,
   type AuthSessionState,
@@ -152,6 +154,32 @@ describe("command permissions", () => {
         yield* cleanup.authorize(registry, env);
         registry.set(sessions(other), AsyncResult.success(grant(false)));
         expect(registry.get(cleanup.permissionAtom(other))).toBe(false);
+      }),
+    ),
+  );
+
+  it.effect("requires the destination maintain grant to signal a process", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        expect(CLIENT_GUARDED_RPC_SCOPES[WS_METHODS.serverSignalProcess]).toBe(
+          AuthEnvironmentMaintainScope,
+        );
+        const registry = yield* setup;
+        const signal = createCommandPermissions(runtime, WS_METHODS.serverSignalProcess);
+        const only = (scope: NonNullable<AuthSessionState["scopes"]>[number]) =>
+          AsyncResult.success({ ...grant(false), scopes: [scope], permissions: [scope] });
+        registry.set(sessions(env), AsyncResult.success(grant(true)));
+        expect(registry.get(signal.permissionAtom(env))).toBe(false);
+        registry.set(sessions(env), only(AuthSettingsWriteScope));
+        expect(registry.get(signal.permissionAtom(env))).toBe(false);
+        expect((yield* signal.authorize(registry, env).pipe(Effect.flip))._tag).toBe(
+          "EnvironmentAuthorizationError",
+        );
+        registry.set(sessions(env), only(AuthEnvironmentMaintainScope));
+        expect(registry.get(signal.permissionAtom(env))).toBe(true);
+        yield* signal.authorize(registry, env);
+        registry.set(sessions(other), AsyncResult.success(grant(false)));
+        expect(registry.get(signal.permissionAtom(other))).toBe(false);
       }),
     ),
   );

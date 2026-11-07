@@ -15,6 +15,8 @@ const state = vi.hoisted(() => ({
   indicator: null as unknown as MachineIndicator,
   canReadDiagnostics: true,
   processes: null as unknown as MachineProcessTable,
+  /** Thread shells by environment id. */
+  shells: new Map<string, ReadonlyArray<{ id: string; title: string; status: string }>>(),
   /** Live atoms currently mounted, by "machine:<intervalMs>" or "processes:<intervalMs>:<top>". */
   mounted: new Set<string>(),
   /** Every subscription key ever requested, mounted or not. */
@@ -52,6 +54,14 @@ vi.mock(import("~/state/environments"), async (original) => ({
   ...(await original()),
   useEnvironment: (() => ({ label: "Studio", serverConfig: null })) as never,
 }));
+vi.mock(import("~/state/threads"), async () => {
+  const { Atom } = await import("effect/reactivity");
+  return {
+    environmentThreadShells: {
+      environmentThreadsAtom: (id: string) => Atom.make(() => state.shells.get(id) ?? []),
+    } as never,
+  } as never;
+});
 vi.mock(import("~/state/server"), async () => {
   const { Atom } = await import("effect/reactivity");
   const config = Atom.make(null);
@@ -104,11 +114,19 @@ function setup({
   indicator = {},
   canReadDiagnostics = true,
   processes = T3_SERVER,
+  shells = {},
 }: {
   indicator?: Partial<MachineIndicator>;
   canReadDiagnostics?: boolean;
   processes?: MachineProcessTable;
+  shells?: Record<string, ReadonlyArray<string>>;
 } = {}) {
+  state.shells = new Map(
+    Object.entries(shells).map(([id, statuses]) => [
+      id,
+      statuses.map((status, index) => ({ id: `${id}-${index}`, title: status, status })),
+    ]),
+  );
   state.indicator = {
     show: true,
     verdict: "ok",
@@ -276,13 +294,33 @@ describe("MachineHoverTarget", () => {
     await expect.element(page.getByText("Process list needs the resource monitor")).toBeVisible();
   });
 
-  it("opens no live stream for an unreachable machine", async () => {
-    setup({ indicator: { verdict: "unknown", unreachable: true } });
+  it.each([
+    { statuses: ["running"], line: "1 T3 thread running" },
+    {
+      statuses: ["running", "queued", "idle", "completed", "failed"],
+      line: "2 T3 threads running",
+    },
+    { statuses: ["idle"], line: "0 T3 threads running" },
+  ])("counts $line from this machine's thread shells", async ({ statuses, line }) => {
+    setup({ shells: { "machine-a": statuses, "machine-b": ["running", "running", "running"] } });
+    await using screen = await renderTarget();
+
+    await userEvent.hover(screen.getByRole("button", { name: "Open" }));
+
+    await expect.element(page.getByText(line, { exact: true })).toBeVisible();
+  });
+
+  it("opens no live stream and shows no thread line for an unreachable machine", async () => {
+    setup({
+      indicator: { verdict: "unknown", unreachable: true },
+      shells: { "machine-a": ["running"] },
+    });
     await using screen = await renderTarget();
 
     await userEvent.hover(screen.getByRole("button", { name: "Open" }));
 
     await expect.element(card()).toBeVisible();
     expect(state.requested.size).toBe(0);
+    expect(document.body.textContent).not.toMatch(/T3 threads? running/);
   });
 });

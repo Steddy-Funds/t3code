@@ -7,7 +7,7 @@ import { AtomRegistry } from "effect/reactivity";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import { render } from "../../../../test/render";
-import type { TaskManagerTick } from "../taskManagerPreferences";
+import type { TaskManagerRange, TaskManagerTick } from "../taskManagerPreferences";
 
 const state = vi.hoisted(() => ({ indicator: null as unknown as MachineIndicator }));
 
@@ -42,10 +42,12 @@ function setup(indicator: Partial<MachineIndicator> = {}) {
 function renderHeader({
   tick = 1000,
   onTickChange = vi.fn(),
+  onRangeChange = vi.fn(),
   onOpenTerminal,
 }: {
   tick?: TaskManagerTick;
   onTickChange?: (tick: TaskManagerTick) => void;
+  onRangeChange?: (range: TaskManagerRange) => void;
   onOpenTerminal?: () => void;
 } = {}) {
   return render(
@@ -55,6 +57,8 @@ function renderHeader({
         label="Studio"
         tick={tick}
         onTickChange={onTickChange}
+        range={900_000}
+        onRangeChange={onRangeChange}
         {...(onOpenTerminal ? { onOpenTerminal } : {})}
       />
     </RegistryContext>,
@@ -111,6 +115,23 @@ describe("TaskManagerHeader", () => {
     expect(onTickChange).toHaveBeenCalledExactlyOnceWith(2000);
   });
 
+  it("picks 15 min by default and reports a new range", async () => {
+    setup();
+    const onRangeChange = vi.fn();
+    await using screen = await renderHeader({ onRangeChange });
+    const fifteen = screen.getByRole("button", { name: "15 min" });
+    await expect.element(fifteen).toHaveAttribute("aria-pressed", "true");
+    await expect
+      .element(screen.getByRole("button", { name: "1 h" }))
+      .toHaveAttribute("aria-pressed", "false");
+
+    await fifteen.click();
+    expect(onRangeChange).not.toHaveBeenCalled();
+
+    await screen.getByRole("button", { name: "1 h" }).click();
+    expect(onRangeChange).toHaveBeenCalledExactlyOnceWith(3_600_000);
+  });
+
   it("offers Open terminal only when the terminal can open", async () => {
     setup();
     await using screen = await renderHeader();
@@ -125,6 +146,8 @@ describe("TaskManagerHeader", () => {
           label="Studio"
           tick={1000}
           onTickChange={vi.fn()}
+          range={900_000}
+          onRangeChange={vi.fn()}
           onOpenTerminal={onOpenTerminal}
         />
       </RegistryContext>,

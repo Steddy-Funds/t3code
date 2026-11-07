@@ -170,6 +170,8 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   oneTimeSchedules: Schema.optionalKey(Schema.Boolean),
   /** Serves `subscribeMachine`; without it clients show the plain icon and never call it. */
   machineResources: Schema.optionalKey(Schema.Boolean),
+  /** `serverSignalProcess` accepts SIGTERM and signals host-wide processes; older servers take only INT/KILL. */
+  processSigterm: Schema.optionalKey(Schema.Boolean),
 });
 export type ExecutionEnvironmentCapabilities = typeof ExecutionEnvironmentCapabilities.Type;
 

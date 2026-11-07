@@ -425,7 +425,7 @@ export const ServerTraceDiagnosticsResult = Schema.Struct({
 });
 export type ServerTraceDiagnosticsResult = typeof ServerTraceDiagnosticsResult.Type;
 
-export const ServerProcessSignal = Schema.Literals(["SIGINT", "SIGKILL"]);
+export const ServerProcessSignal = Schema.Literals(["SIGINT", "SIGTERM", "SIGKILL"]);
 export type ServerProcessSignal = typeof ServerProcessSignal.Type;
 
 export const ServerProcessDiagnosticsEntry = Schema.Struct({

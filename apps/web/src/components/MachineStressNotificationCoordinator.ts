@@ -1,6 +1,7 @@
 import { formatAge, formatMachineReason } from "@t3tools/client-runtime/state/machineFormat";
 import type { MachineIndicator } from "@t3tools/client-runtime/state/machineIndicator";
 import type { EnvironmentId } from "@t3tools/contracts";
+import type { AnyRouter } from "@tanstack/react-router";
 
 import { getClientSettings, subscribeClientSettings } from "../hooks/useSettings";
 import { appAtomRegistry } from "../rpc/atomRegistry";
@@ -21,9 +22,10 @@ function machineStressDescription(indicator: MachineIndicator): string {
 
 /**
  * Tells the user once per episode when a connected machine goes from ok to stressed. The first
- * verdict seen for a machine only sets the baseline, and unknown never moves it.
+ * verdict seen for a machine only sets the baseline, and unknown never moves it. Clicking the
+ * toast's action or the OS notification opens that machine's task manager.
  */
-export function startMachineStressNotifications(): () => void {
+export function startMachineStressNotifications(router: AnyRouter): () => void {
   const watched = new Map<EnvironmentId, () => void>();
 
   const present = (environmentId: EnvironmentId, indicator: MachineIndicator) => {
@@ -34,8 +36,21 @@ export function startMachineStressNotifications(): () => void {
         .find((identity) => identity.environmentId === environmentId)?.label ?? "A machine";
     const title = `${label} is stressed`;
     const description = machineStressDescription(indicator);
+    const openTaskManager = () =>
+      void router.navigate({ to: "/machines/$environmentId", params: { environmentId } });
     if (inAppNotificationsEnabled && isAppInForeground()) {
-      toastManager.add({ type: "warning", title, description });
+      const id = toastManager.add({
+        type: "warning",
+        title,
+        description,
+        actionProps: {
+          children: "Open",
+          onClick: () => {
+            toastManager.close(id);
+            openTaskManager();
+          },
+        },
+      });
       return;
     }
     if (!hasDesktopNotifications(notificationMode)) return;
@@ -43,6 +58,7 @@ export function startMachineStressNotifications(): () => void {
       title,
       body: description,
       tag: `machine-stress:${environmentId}`,
+      onClick: openTaskManager,
     });
   };
 

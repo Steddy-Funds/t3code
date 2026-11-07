@@ -176,7 +176,9 @@ export function createWorkspaceFocusController(doc: Document) {
         ? (areas.find((element) => element.dataset.workspaceArea === "composer") ??
           areas.find(
             (element) =>
-              element.dataset.workspaceArea === "pull-requests" || element.matches("main"),
+              element.dataset.workspaceArea === "pull-requests" ||
+              element.dataset.workspaceArea === "machines" ||
+              element.matches("main"),
           ) ??
           areas.find((element) => element.dataset.workspaceArea === "conversation") ??
           areas.find((element) => element.dataset.workspaceArea === "panel"))
@@ -326,9 +328,12 @@ let controller: ReturnType<typeof createWorkspaceFocusController> | undefined;
 let focusRequestVersion = 0;
 export const getWorkspaceFocusRequestVersion = () => focusRequestVersion;
 
+const isMachinesPath = (pathname: string | undefined) =>
+  pathname === "/machines" || pathname?.startsWith("/machines/") === true;
+
 /**
  * Starts workspace focus for the app: F6 area moves, focus requests, focus-loss recovery,
- * focus into a panel the user opens, and focus into the Pull Requests page on entry.
+ * focus into a panel the user opens, and focus into the Pull Requests and Machines pages on entry.
  */
 export function startWorkspaceFocus(router: AnyRouter): () => void {
   const active = createWorkspaceFocusController(document);
@@ -346,6 +351,8 @@ export function startWorkspaceFocus(router: AnyRouter): () => void {
   const stopRoute = router.subscribe("onResolved", ({ fromLocation, toLocation }) => {
     if (toLocation.pathname === "/pull-requests" && fromLocation?.pathname !== "/pull-requests")
       requestWorkspaceFocus({ area: "pull-requests" });
+    if (isMachinesPath(toLocation.pathname) && !isMachinesPath(fromLocation?.pathname))
+      requestWorkspaceFocus({ area: "machines" });
   });
   return () => {
     stopPanels();

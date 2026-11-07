@@ -1,5 +1,6 @@
 import { useAtomValue } from "@effect/atom-react";
 import type { EnvironmentId } from "@t3tools/contracts";
+import { useNavigate } from "@tanstack/react-router";
 import { type ComponentProps, type KeyboardEvent, type ReactElement, useState } from "react";
 
 import { machineIndicator } from "~/state/machineResources";
@@ -8,9 +9,10 @@ import { PreviewCard, PreviewCardPopup, PreviewCardTrigger } from "../ui/preview
 import { MachineHoverCard } from "./MachineHoverCard";
 
 /**
- * Opens the machine card on hover or click. The card, and its live streams, mount only while open.
- * Machines that don't serve the verdict get no card. Pass `label` when the child is not already
- * a focusable control: the trigger then becomes a tab stop named "<label> machine resources".
+ * Opens the machine card on hover; a click, Enter or Space opens the machine's task manager. The
+ * card, and its live streams, mount only while open. Machines that don't serve the verdict get no
+ * card. Pass `label` when the child is not already a focusable control: the trigger then becomes a
+ * tab stop named "<label> machine resources".
  */
 export function MachineHoverTarget({
   environmentId,
@@ -25,11 +27,16 @@ export function MachineHoverTarget({
 }) {
   const { show } = useAtomValue(machineIndicator.machineIndicatorAtom(environmentId));
   const [open, setOpen] = useState(false);
+  const navigate = useNavigate();
   if (!show) return children;
+  const openTaskManager = () => {
+    setOpen(false);
+    void navigate({ to: "/machines/$environmentId", params: { environmentId } });
+  };
   const openOnKey = (event: KeyboardEvent) => {
     if (event.key !== "Enter" && event.key !== " ") return;
     event.preventDefault();
-    setOpen(true);
+    openTaskManager();
   };
   return (
     <PreviewCard open={open} onOpenChange={setOpen}>
@@ -37,7 +44,7 @@ export function MachineHoverTarget({
         render={children}
         delay={350}
         closeDelay={120}
-        onClick={() => setOpen(true)}
+        onClick={openTaskManager}
         onKeyDown={openOnKey}
         {...(label === undefined
           ? {}

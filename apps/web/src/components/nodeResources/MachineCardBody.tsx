@@ -4,6 +4,8 @@ import {
   formatPercent,
   formatPerCore,
   formatProcessMemory,
+  gpuRowValues,
+  gpuTrippedRule,
   type MachineIndicatorView,
   type MachineProcessSummary,
   memoryUsedBytes,
@@ -11,7 +13,12 @@ import {
   type TopProcess,
   topProcessesByName,
 } from "@t3tools/client-runtime/state/machineFormat";
-import type { MachineStatusSnapshot, MachineTotalsSummary } from "@t3tools/contracts";
+import type {
+  GpuDeviceSample,
+  MachineStatusSnapshot,
+  MachineTotalsSummary,
+  MachineVerdictReason,
+} from "@t3tools/contracts";
 import type { ReactNode } from "react";
 
 import { Skeleton } from "~/components/ui/skeleton";
@@ -79,6 +86,12 @@ export function MachineCardBody({
             staleAge={staleAge}
             tripped={rule === "memory" || rule === "memoryPressure"}
           />
+          {snapshot?.sample?.gpus && snapshot.sample.gpus.length > 0 ? (
+            <GpuSection
+              gpus={snapshot.sample.gpus}
+              reason={view.unreachable ? null : view.reason}
+            />
+          ) : null}
         </div>
       ) : null}
       {view.unreachable ? null : <ProcessesSection processes={processes} />}
@@ -234,6 +247,44 @@ function MemorySection({
             Swap {formatGiB(totals.swapUsedBytes)} / {formatGiB(totals.swapTotalBytes)} GiB
           </span>
         ) : null}
+      </div>
+    </Section>
+  );
+}
+
+function GpuSection({
+  gpus,
+  reason,
+}: {
+  readonly gpus: ReadonlyArray<GpuDeviceSample>;
+  readonly reason: MachineVerdictReason | null;
+}) {
+  return (
+    <Section>
+      <SectionTitle title={gpus.length === 1 ? "GPU" : "GPUs"} />
+      <div className="flex flex-col gap-1">
+        {gpus.map((gpu) => {
+          const values = gpuRowValues(gpu);
+          const tripped = gpuTrippedRule(reason, gpu.id);
+          return (
+            <div key={gpu.id} className="flex min-w-0 items-baseline gap-2 tabular-nums">
+              <span className="min-w-0 flex-1 truncate">{gpu.name}</span>
+              {values.note ? <span className="text-muted-foreground">{values.note}</span> : null}
+              {values.vram ? (
+                <span className={cn(tripped === "gpuVram" && "text-error-foreground")}>
+                  {values.vram}
+                </span>
+              ) : null}
+              {values.util ? (
+                <span
+                  className={cn("w-9 text-end", tripped === "gpuUtil" && "text-error-foreground")}
+                >
+                  {values.util}
+                </span>
+              ) : null}
+            </div>
+          );
+        })}
       </div>
     </Section>
   );

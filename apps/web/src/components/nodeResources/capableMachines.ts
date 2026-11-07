@@ -11,7 +11,7 @@ interface MachineIdentity {
   readonly label: string;
 }
 
-const capableMachinesAtom = Atom.make((get) => {
+export const capableMachinesAtom = Atom.make((get) => {
   const next = get(environmentSummaries.identitiesAtom).filter((identity) =>
     get(machineIndicator.machineCapableAtom(identity.environmentId)),
   );

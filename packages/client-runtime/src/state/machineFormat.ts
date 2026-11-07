@@ -1,4 +1,8 @@
-import type { MachineTotalsSummary, MachineVerdictReason } from "@t3tools/contracts";
+import type {
+  GpuDeviceSample,
+  MachineTotalsSummary,
+  MachineVerdictReason,
+} from "@t3tools/contracts";
 
 import type { MachineIndicator } from "./machineIndicator.ts";
 import type { MachineProcessRow } from "./machineProcessFrames.ts";
@@ -52,6 +56,42 @@ export function memoryUsedBytes(totals: MachineTotalsSummary): number {
 export function memoryUsedPercent(totals: MachineTotalsSummary): number {
   if (totals.memoryTotalBytes <= 0) return 0;
   return (memoryUsedBytes(totals) / totals.memoryTotalBytes) * 100;
+}
+
+export interface GpuRowValues {
+  /** "Suspended" or "Unavailable": the device has no reading. */
+  readonly note: string | null;
+  readonly util: string | null;
+  readonly vram: string | null;
+}
+
+/** A GPU row's values; a suspended device is never woken, so it shows only its state. */
+export function gpuRowValues(gpu: GpuDeviceSample): GpuRowValues {
+  if (gpu.status !== "active") {
+    return {
+      note: gpu.status === "suspended" ? "Suspended" : "Unavailable",
+      util: null,
+      vram: null,
+    };
+  }
+  const vram =
+    gpu.vramUsedBytes === null || gpu.vramTotalBytes === null || gpu.vramTotalBytes === 0
+      ? null
+      : `${formatGiB(gpu.vramUsedBytes)} / ${formatGiB(gpu.vramTotalBytes)} GiB${gpu.sharedMemory ? " shared" : ""}`;
+  return {
+    note: null,
+    util: gpu.utilPercent === null ? null : formatPercent(gpu.utilPercent),
+    vram,
+  };
+}
+
+/** Which of a GPU's values tripped the verdict, if its device is the one named in the reason. */
+export function gpuTrippedRule(
+  reason: MachineVerdictReason | null,
+  gpuId: string,
+): "gpuUtil" | "gpuVram" | null {
+  if (reason === null || reason.deviceId !== gpuId) return null;
+  return reason.rule === "gpuUtil" || reason.rule === "gpuVram" ? reason.rule : null;
 }
 
 // value and threshold arrive in the rule's own unit: per-core load, or percent.

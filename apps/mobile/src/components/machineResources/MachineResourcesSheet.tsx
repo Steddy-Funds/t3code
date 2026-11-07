@@ -4,6 +4,8 @@ import {
   formatPercent,
   formatPerCore,
   formatProcessMemory,
+  gpuRowValues,
+  gpuTrippedRule,
   machineVerdictText,
   memoryUsedBytes,
   memoryUsedPercent,
@@ -13,8 +15,10 @@ import type { MachineIndicator } from "@t3tools/client-runtime/state/machineIndi
 import type { MachineProcessTable } from "@t3tools/client-runtime/state/machineProcessFrames";
 import type {
   EnvironmentId,
+  GpuDeviceSample,
   MachineStatusSnapshot,
   MachineTotalsSummary,
+  MachineVerdictReason,
   MachineVerdictRule,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
@@ -102,6 +106,9 @@ function LiveMachine(props: {
         <>
           <CpuSection totals={totals} perCore={snapshot.sample?.perCore} rule={rule} />
           <MemorySection totals={totals} rule={rule} />
+          {snapshot.sample?.gpus && snapshot.sample.gpus.length > 0 ? (
+            <GpuSection gpus={snapshot.sample.gpus} reason={props.indicator.reason} />
+          ) : null}
         </>
       ) : null}
       <ProcessesSection result={processes} />
@@ -230,6 +237,41 @@ function MemorySection(props: {
           </Text>
         ) : null}
       </View>
+    </View>
+  );
+}
+
+function GpuSection(props: {
+  readonly gpus: ReadonlyArray<GpuDeviceSample>;
+  readonly reason: MachineVerdictReason | null;
+}) {
+  return (
+    <View className="gap-1">
+      <SectionTitle title={props.gpus.length === 1 ? "GPU" : "GPUs"} />
+      {props.gpus.map((gpu) => {
+        const values = gpuRowValues(gpu);
+        const tripped = gpuTrippedRule(props.reason, gpu.id);
+        return (
+          <View key={gpu.id} className="flex-row items-baseline gap-2">
+            <Text className="flex-1 text-sm text-foreground" numberOfLines={1}>
+              {gpu.name}
+            </Text>
+            {values.note ? (
+              <Text className="text-sm text-foreground-muted">{values.note}</Text>
+            ) : null}
+            {values.vram ? (
+              <Text className={cn("text-sm tabular-nums", trippedClassName(tripped === "gpuVram"))}>
+                {values.vram}
+              </Text>
+            ) : null}
+            {values.util ? (
+              <Text className={cn("text-sm tabular-nums", trippedClassName(tripped === "gpuUtil"))}>
+                {values.util}
+              </Text>
+            ) : null}
+          </View>
+        );
+      })}
     </View>
   );
 }

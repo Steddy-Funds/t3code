@@ -93,8 +93,10 @@ impl Intel {
             shared_memory: !is_discrete(display),
         };
         if !display.awake() {
+            // A suspended GPU is idle; holding 0 keeps the first read after a wake (a bare
+            // baseline) from blanking a GPU that wakes and sleeps every few seconds.
             self.residency.remove(&display.address);
-            self.last_util.remove(&display.address);
+            self.last_util.insert(display.address.clone(), 0.0);
             return Ok(sample);
         }
         if let Some(previous) = self.residency.get(&display.address)
@@ -129,7 +131,7 @@ impl Intel {
     fn util(&mut self, address: &str, current: Residency) -> Option<f64> {
         let Some(previous) = self.residency.get(address) else {
             self.residency.insert(address.to_owned(), current);
-            return None;
+            return self.last_util.get(address).copied();
         };
         let wall = current.at.saturating_sub(previous.at);
         let util = (previous.gt_count == current.gt_count)
@@ -594,34 +596,46 @@ mod tests {
     }
 
     #[test]
-    fn suspended_igpu_reads_nothing_and_resets_the_baseline() {
+    fn suspended_igpu_reads_nothing_and_holds_zero_through_the_wake() {
         let mut rig = Rig::new();
-        rig.gpu(IGPU, "i915", "active", None);
+        rig.gpu(IGPU, "i915", "active", Some(10_000));
         rig.rc6(IGPU, 0, 0);
-        rig.util();
-        rig.advance(Duration::from_secs(10));
-        rig.rc6(IGPU, 0, 5_000);
+        assert_eq!(rig.util(), None, "the first read ever is a bare baseline");
+        rig.advance(Duration::from_secs(12));
+        rig.rc6(IGPU, 0, 6_000);
         assert_eq!(rig.util(), Some(50.0));
 
         rig.tree.set_runtime_status(IGPU, "suspended");
         // A garbage counter proves the file is not read while suspended.
-        rig.rc6(IGPU, 0, 0);
         rig.tree.write(
             &format!("sys/bus/pci/devices/{IGPU}/drm/card0/gt/gt0/rc6_residency_ms"),
             "garbage\n",
         );
-        rig.advance(Duration::from_secs(10));
+        rig.advance(Duration::from_secs(12));
         let devices = rig.intel.devices().expect("ok");
         assert_eq!(devices[0].status, GpuStatus::Suspended);
         assert_eq!(devices[0].util_percent, Some(0.0));
 
         rig.tree.set_runtime_status(IGPU, "active");
         rig.rc6(IGPU, 0, 90_000);
-        rig.advance(Duration::from_secs(10));
-        assert_eq!(rig.util(), None, "baseline restarts after suspend");
-        rig.advance(Duration::from_secs(10));
-        rig.rc6(IGPU, 0, 100_000);
-        assert_eq!(rig.util(), Some(0.0));
+        rig.advance(Duration::from_secs(1));
+        assert_eq!(
+            rig.util(),
+            Some(0.0),
+            "the wake read is a baseline that holds 0"
+        );
+
+        // Inside delay + 2 s of that baseline the counter is not read again.
+        rig.advance(Duration::from_secs(5));
+        rig.tree.write(
+            &format!("sys/bus/pci/devices/{IGPU}/drm/card0/gt/gt0/rc6_residency_ms"),
+            "garbage\n",
+        );
+        assert_eq!(rig.util(), Some(0.0), "held through the read window");
+
+        rig.advance(Duration::from_secs(7));
+        rig.rc6(IGPU, 0, 96_000);
+        assert_eq!(rig.util(), Some(50.0));
     }
 
     #[test]

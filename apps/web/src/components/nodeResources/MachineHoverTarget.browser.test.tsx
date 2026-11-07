@@ -4,6 +4,7 @@ import { RegistryContext } from "@effect/atom-react";
 import type { MachineIndicator } from "@t3tools/client-runtime/state/machineIndicator";
 import type { MachineProcessTable } from "@t3tools/client-runtime/state/machineProcessFrames";
 import { EnvironmentId, type MachineStatusSnapshot } from "@t3tools/contracts";
+import type { AnyRouter } from "@tanstack/react-router";
 import { type Atom, AtomRegistry } from "effect/reactivity";
 import { describe, expect, it, vi } from "vite-plus/test";
 import { page, userEvent } from "vite-plus/test/browser";
@@ -129,8 +130,14 @@ function renderTarget() {
         <button type="button">Open</button>
       </MachineHoverTarget>
     </RegistryContext>,
-    { router: false }, // the card has no links
+    { router: "/" },
   );
+}
+
+const TASK_MANAGER_PATH = "/machines/machine-a";
+
+async function expectPath(screen: { readonly router: AnyRouter | undefined }, pathname: string) {
+  await vi.waitFor(() => expect(screen.router?.state.location.pathname).toBe(pathname));
 }
 
 const card = () => page.getByText("Studio", { exact: true });
@@ -152,47 +159,53 @@ describe("MachineHoverTarget", () => {
     await vi.waitFor(() => expect(liveKeys()).toEqual([]));
   });
 
-  it("opens on click and closes on Escape, unmounting the streams", async () => {
+  it("a click opens the machine's task manager instead of the card", async () => {
     setup();
     await using screen = await renderTarget();
 
     await userEvent.click(screen.getByRole("button", { name: "Open" }));
-    await expect.element(card()).toBeVisible();
-    expect(liveKeys()).toEqual([LIVE_MACHINE, TOP_PROCESSES]);
 
-    await userEvent.keyboard("{Escape}");
-    await expect.element(card()).not.toBeInTheDocument();
-    await vi.waitFor(() => expect(liveKeys()).toEqual([]));
+    await expectPath(screen, TASK_MANAGER_PATH);
+    expect(card().query()).toBeNull();
+    expect(liveKeys()).toEqual([]);
   });
 
-  it("a labelled plain trigger is a tab stop that opens on Enter and Space", async () => {
+  it.each([
+    { key: "{Enter}", name: "Enter" },
+    { key: " ", name: "Space" },
+  ])(
+    "a labelled plain trigger is a tab stop that opens the task manager on $name",
+    async ({ key }) => {
+      setup();
+      await using screen = await render(
+        <RegistryContext value={AtomRegistry.make()}>
+          <MachineHoverTarget environmentId={environmentId} label="Studio">
+            <span>icon</span>
+          </MachineHoverTarget>
+        </RegistryContext>,
+        { router: "/" },
+      );
+      const trigger = screen.getByRole("button", { name: "Studio machine resources" });
+      await expect.element(trigger).toBeVisible();
+
+      await userEvent.tab();
+      await expect.element(trigger).toHaveFocus();
+      await userEvent.keyboard(key);
+
+      await expectPath(screen, TASK_MANAGER_PATH);
+      expect(card().query()).toBeNull();
+    },
+  );
+
+  it("other keys neither navigate nor open the card", async () => {
     setup();
-    await using screen = await render(
-      <RegistryContext value={AtomRegistry.make()}>
-        <MachineHoverTarget environmentId={environmentId} label="Studio">
-          <span>icon</span>
-        </MachineHoverTarget>
-      </RegistryContext>,
-      { router: false }, // the card has no links
-    );
-    const trigger = screen.getByRole("button", { name: "Studio machine resources" });
-    await expect.element(trigger).toBeVisible();
+    await using screen = await renderTarget();
+    screen.getByRole("button", { name: "Open" }).element().focus();
 
-    await userEvent.tab();
-    await expect.element(trigger).toHaveFocus();
+    await userEvent.keyboard("a");
 
-    await userEvent.keyboard("{Enter}");
-    await expect.element(card()).toBeVisible();
-    expect(liveKeys()).toEqual([LIVE_MACHINE, TOP_PROCESSES]);
-
-    await userEvent.keyboard("{Escape}");
-    await expect.element(card()).not.toBeInTheDocument();
-    await vi.waitFor(() => expect(liveKeys()).toEqual([]));
-
-    trigger.element().focus();
-    await userEvent.keyboard(" ");
-    await expect.element(card()).toBeVisible();
-    expect(liveKeys()).toEqual([LIVE_MACHINE, TOP_PROCESSES]);
+    expect(screen.router?.state.location.pathname).toBe("/");
+    expect(card().query()).toBeNull();
   });
 
   it("gives a machine that doesn't serve the verdict no card and no subscription", async () => {
@@ -203,13 +216,14 @@ describe("MachineHoverTarget", () => {
 
     expect(card().query()).toBeNull();
     expect(state.requested.size).toBe(0);
+    expect(screen.router?.state.location.pathname).toBe("/");
   });
 
   it("skips the process stream and says why without diagnostics:read", async () => {
     setup({ canReadDiagnostics: false });
     await using screen = await renderTarget();
 
-    await userEvent.click(screen.getByRole("button", { name: "Open" }));
+    await userEvent.hover(screen.getByRole("button", { name: "Open" }));
 
     await expect.element(page.getByText("Process list needs diagnostics access")).toBeVisible();
     expect(liveKeys()).toEqual([LIVE_MACHINE]);
@@ -220,7 +234,7 @@ describe("MachineHoverTarget", () => {
     setup({ processes: table([]) });
     await using screen = await renderTarget();
 
-    await userEvent.click(screen.getByRole("button", { name: "Open" }));
+    await userEvent.hover(screen.getByRole("button", { name: "Open" }));
 
     await expect.element(page.getByText("Process list needs the resource monitor")).toBeVisible();
   });
@@ -229,7 +243,7 @@ describe("MachineHoverTarget", () => {
     setup({ indicator: { verdict: "unknown", unreachable: true } });
     await using screen = await renderTarget();
 
-    await userEvent.click(screen.getByRole("button", { name: "Open" }));
+    await userEvent.hover(screen.getByRole("button", { name: "Open" }));
 
     await expect.element(card()).toBeVisible();
     expect(state.requested.size).toBe(0);

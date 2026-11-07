@@ -1,5 +1,6 @@
 import type { MachineIndicator } from "@t3tools/client-runtime/state/machineIndicator";
 import { EnvironmentId, type MachineVerdictReason } from "@t3tools/contracts";
+import type { AnyRouter } from "@tanstack/react-router";
 import { Atom } from "effect/reactivity";
 import { expect, it, vi } from "vite-plus/test";
 
@@ -10,12 +11,21 @@ const state = vi.hoisted(() => ({
   mode: "notifications",
   inApp: false,
   notifyOnMachineStressed: true,
-  toast: vi.fn(),
+  toast: vi.fn((_toast: unknown) => "toast-1"),
+  closeToast: vi.fn(),
+  navigate: vi.fn(() => Promise.resolve()),
   settingsListeners: new Set<() => void>(),
 }));
 vi.mock(import("./ui/toast"), async (original) => {
   const actual = await original();
-  return { ...actual, toastManager: { ...actual.toastManager, add: state.toast as never } };
+  return {
+    ...actual,
+    toastManager: {
+      ...actual.toastManager,
+      add: state.toast as never,
+      close: state.closeToast as never,
+    },
+  };
 });
 vi.mock(import("../hooks/useSettings"), async (original) => ({
   ...(await original()),
@@ -117,7 +127,8 @@ function setup() {
   stack.use(vi.spyOn(document, "visibilityState", "get").mockImplementation(() => "visible"));
   return {
     start: () => {
-      stack.defer(startMachineStressNotifications());
+      const router = { navigate: state.navigate } as unknown as AnyRouter;
+      stack.defer(startMachineStressNotifications(router));
     },
     show: (...steps: ReadonlyArray<MachineIndicator>) => {
       for (const step of steps) appAtomRegistry.set(indicatorAtom(ONE), step);
@@ -223,5 +234,35 @@ it("shows a toast instead of an OS notification while the app is in the foregrou
     type: "warning",
     title: "Studio is stressed",
     description: "Load 20.0 / 12.5 per core for 1 m",
+    actionProps: { children: "Open", onClick: expect.any(Function) },
   });
+});
+
+const TASK_MANAGER = { to: "/machines/$environmentId", params: { environmentId: ONE } };
+
+it("the toast's Open action closes the toast and opens the machine's task manager", () => {
+  using app = setup();
+  state.inApp = true;
+  focused = true;
+  app.start();
+  app.show(indicator("ok"), indicator("stressed"));
+  expect(state.navigate).not.toHaveBeenCalled();
+
+  const [toast] = state.toast.mock.calls[0] ?? [];
+  (toast as { actionProps: { onClick: () => void } }).actionProps.onClick();
+
+  expect(state.closeToast).toHaveBeenCalledExactlyOnceWith("toast-1");
+  expect(state.navigate).toHaveBeenCalledExactlyOnceWith(TASK_MANAGER);
+});
+
+it("clicking the OS notification opens the machine's task manager", () => {
+  using app = setup();
+  app.start();
+  app.show(indicator("ok"), indicator("stressed"));
+  expect(state.navigate).not.toHaveBeenCalled();
+
+  TestNotification.sent[0]?.dispatchEvent(new Event("click"));
+
+  expect(TestNotification.sent[0]?.close).toHaveBeenCalledOnce();
+  expect(state.navigate).toHaveBeenCalledExactlyOnceWith(TASK_MANAGER);
 });

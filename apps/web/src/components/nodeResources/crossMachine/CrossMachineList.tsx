@@ -98,7 +98,7 @@ export function CrossMachineList() {
         </ToggleGroup>
       </header>
       <div className="overflow-x-auto">
-        <ul className="flex min-w-[1040px] flex-col">
+        <ul className="flex min-w-[934px] flex-col">
           <li
             aria-hidden
             className={cn(

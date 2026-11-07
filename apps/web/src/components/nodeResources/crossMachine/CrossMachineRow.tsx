@@ -23,8 +23,8 @@ import { cn } from "~/lib/utils";
 import { useEnvironmentMachines } from "~/state/environments";
 import { machineIndicator, machineResources } from "~/state/machineResources";
 import { useEnvironmentScope } from "~/state/session";
-import { environmentThreadShells } from "~/state/threads";
 
+import { runningThreadCountAtom } from "../runningThreads";
 import { CORE_HISTORY_MS, CrossMachineCores } from "./CrossMachineCores";
 import { loadPerCore, vramTotal } from "./crossMachineModel";
 
@@ -48,20 +48,9 @@ export function crossMachineSnapshotAtom(
     : machineResources.machine(environmentId, { intervalMs: tickMs, historyMs: CORE_HISTORY_MS });
 }
 
-const isRunning = (status: string) =>
-  status === "preparing" || status === "queued" || status === "starting" || status === "running";
-
-const runningThreadsAtom = Atom.family((environmentId: EnvironmentId) =>
-  Atom.make(
-    (get) =>
-      get(environmentThreadShells.environmentThreadsAtom(environmentId)).filter((thread) =>
-        isRunning(thread.status),
-      ).length,
-  ).pipe(Atom.withLabel(`cross-machine-running-threads:${environmentId}`)),
-);
-
 export const CROSS_MACHINE_GRID =
-  "grid grid-cols-[16px_minmax(96px,140px)_minmax(160px,1.2fr)_244px_minmax(140px,1fr)_minmax(110px,0.8fr)_minmax(130px,1fr)_48px] items-center gap-3";
+  // Minimums sum to 934 px with gaps and padding, so the row fits beside the sidebar at 1280 px.
+  "grid grid-cols-[16px_minmax(96px,140px)_minmax(120px,1.2fr)_244px_minmax(120px,1fr)_minmax(100px,0.8fr)_minmax(110px,1fr)_48px] items-center gap-2";
 
 /** One dense row: verdict first, the core grid, memory and VRAM pools, top process, threads. */
 export function CrossMachineRow({
@@ -86,7 +75,7 @@ export function CrossMachineRow({
         })
       : NO_PROCESSES,
   );
-  const threads = useAtomValue(runningThreadsAtom(environmentId));
+  const threads = useAtomValue(runningThreadCountAtom(environmentId));
   const totals = view.unreachable ? null : (snapshot?.totals ?? null);
   const rule = view.unreachable ? null : (view.reason?.rule ?? null);
   const stressed = !view.unreachable && view.verdict === "stressed";

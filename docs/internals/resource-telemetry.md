@@ -68,6 +68,11 @@ unconstrained states. Headless servers leave unavailable power data unknown.
   Electron and native start times have different precision, so merging allows a
   small tolerance. Process signaling rechecks the native identity with a fresh
   sample.
+- Kill sends SIGTERM and Force kill sends SIGKILL. Servers older than host mode accept
+  only INT and KILL, so clients offer those there. On Windows every signal is
+  TerminateProcess, so there is a single Kill. The server refuses pid 1 and below, itself
+  and its ancestors, the monitor, and any process whose start time no longer matches the
+  fresh sample, so a reused PID is never signalled.
 - Snapshot sequence numbers belong to a monitor generation. Comparing them across
   restarts would discard the new monitor's samples until its sequence caught up.
 - Sampling can miss a process that starts and exits between samples. Cumulative

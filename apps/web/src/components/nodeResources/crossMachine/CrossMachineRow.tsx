@@ -24,6 +24,7 @@ import { useEnvironmentMachines } from "~/state/environments";
 import { machineIndicator, machineResources } from "~/state/machineResources";
 import { useEnvironmentScope } from "~/state/session";
 
+import { documentVisibleAtom } from "../documentVisible";
 import { runningThreadCountAtom } from "../runningThreads";
 import { CORE_HISTORY_MS, CrossMachineCores } from "./CrossMachineCores";
 import { loadPerCore, vramTotal } from "./crossMachineModel";
@@ -41,9 +42,10 @@ export function crossMachineSnapshotAtom(
   environmentId: EnvironmentId,
   view: MachineIndicatorView,
   tickMs: number,
+  visible: boolean,
 ): Atom.Atom<SnapshotResult> {
   // An unreachable machine is never subscribed, as the indicator never opens a dead link.
-  return view.unreachable
+  return view.unreachable || !visible
     ? NO_SNAPSHOT
     : machineResources.machine(environmentId, { intervalMs: tickMs, historyMs: CORE_HISTORY_MS });
 }
@@ -64,11 +66,12 @@ export function CrossMachineRow({
 }) {
   const view = useAtomValue(machineIndicator.machineIndicatorAtom(environmentId));
   const kind = useEnvironmentMachines().get(environmentId) ?? "server";
-  const source = crossMachineSnapshotAtom(environmentId, view, tickMs);
+  const visible = useAtomValue(documentVisibleAtom);
+  const source = crossMachineSnapshotAtom(environmentId, view, tickMs, visible);
   const snapshot = Option.getOrNull(AsyncResult.value(useAtomValue(source)));
   const canReadDiagnostics = useEnvironmentScope(environmentId, AuthDiagnosticsReadScope);
   const processes = useAtomValue(
-    canReadDiagnostics && !view.unreachable
+    canReadDiagnostics && !view.unreachable && visible
       ? machineResources.machineProcesses(environmentId, {
           intervalMs: tickMs,
           top: TOP_PROCESSES,

@@ -1,5 +1,6 @@
 import {
   DEFAULT_MACHINE_THRESHOLDS,
+  type GpuDeviceSample,
   MACHINE_HISTORY_MAX_MS,
   MACHINE_HISTORY_STEP_MS,
   MACHINE_SAMPLE_MIN_INTERVAL_MS,
@@ -252,6 +253,8 @@ const make = Effect.fn("makeHostResources")(function* () {
 
   // Device totals only, never a process walk; absent without a v4 monitor, so GPU rules skip.
   const readGpus = native.gpuTotals.pipe(Effect.option);
+  // Live samples reuse the base tick's reading: GPU queries stay at 5 s however many views are open.
+  const latestGpus = yield* Ref.make<Option.Option<ReadonlyArray<GpuDeviceSample>>>(Option.none());
 
   const thresholds = settings.getSettings.pipe(
     Effect.map((current) => current.machineResources.thresholds),
@@ -265,6 +268,7 @@ const make = Effect.fn("makeHostResources")(function* () {
     const [nativeTotals, gpus] = yield* Effect.all([readNativeTotals, readGpus], {
       concurrency: "unbounded",
     });
+    yield* Ref.set(latestGpus, gpus);
     const read = yield* readTotals(prev.counters, nativeTotals);
     const now = yield* Clock.currentTimeMillis;
     const totals: HostTotals | null =
@@ -333,7 +337,7 @@ const make = Effect.fn("makeHostResources")(function* () {
     while (true) {
       yield* Effect.sleep(intervalMs);
       const next = readCpuCounters();
-      const gpus = yield* readGpus;
+      const gpus = yield* Ref.get(latestGpus);
       yield* PubSub.publish(pubsub, {
         perCore: cpuDeltas(prev, next).perCore,
         ...(Option.isSome(gpus) ? { gpus: gpus.value } : {}),

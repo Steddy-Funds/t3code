@@ -45,9 +45,14 @@ server's tree, so it runs only while a view streams it (`setHostStreaming`) or o
 request (`hostSampleNow`), and it frees its process table when streaming stops. Host samples
 never enter history. Static fields (command, cwd, user, cgroup) are read once per process
 identity, and the client keeps that table per monitor generation. `gpuTotals` reads device
-totals only, so it can ride the always-on 5 s tick; a suspended GPU is never woken to read
-it. GPU code runs inside the monitor, so after a crash with GPUs in use, or the monitor's own
-`gpu-unavailable`, GPUs stay off until the server restarts. A protocol 3 binary still works without the host features.
+totals only, so it rides the always-on 5 s tick, and live views reuse that tick's reading
+rather than querying at their own rate; a suspended GPU is never woken to read it. Each vendor
+backend counts its own failures and turns off alone after three in a row; the monitor sends
+`gpu-unavailable` only when the last one does. GPU code runs inside the monitor, so a crash
+while GPU work was in flight (a pending GPU request, or host streaming with GPUs) also blames
+the GPUs. After either, GPUs stay off until the server restarts; a crash with no GPU work in
+flight restarts the monitor with GPUs on. A protocol 3 binary still works without the host
+features.
 
 History has independent bounds for age, snapshot count, process rows, and retained
 bytes. A count limit alone cannot bound memory when command lines vary in size.

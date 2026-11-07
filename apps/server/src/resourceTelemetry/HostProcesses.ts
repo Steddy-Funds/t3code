@@ -176,6 +176,8 @@ export interface HostFrameBuilderState {
   /** Process identity → key for every row the client currently holds. */
   readonly keys: ReadonlyMap<string, number>;
   readonly sent: ReadonlyMap<number, SentValues>;
+  /** Keys added with empty statics; re-added named once the monitor reads them. */
+  readonly unnamed: ReadonlySet<number>;
   readonly lastSampledAtMs: number | null;
 }
 
@@ -185,6 +187,7 @@ export const initialHostFrameBuilderState: HostFrameBuilderState = {
   nextKey: 0,
   keys: new Map(),
   sent: new Map(),
+  unnamed: new Set(),
   lastSampledAtMs: null,
 };
 
@@ -243,14 +246,18 @@ function gpuUseByIdentity(
   return byIdentity;
 }
 
+function knownStatics(row: HostRow, statics: NativeTelemetryClient.HostProcessStatics) {
+  const known = statics.get(row.pid);
+  return known?.startTimeMs === row.startTimeMs ? known : undefined;
+}
+
 function hostStaticFields(
   key: number,
   row: HostRow,
   statics: NativeTelemetryClient.HostProcessStatics,
 ): MachineProcessAdded {
-  const known = statics.get(row.pid);
   // A process the monitor could not read keeps its row with empty static fields.
-  const entry = known?.startTimeMs === row.startTimeMs ? known : undefined;
+  const entry = knownStatics(row, statics);
   return {
     key,
     pid: row.pid,
@@ -311,13 +318,17 @@ export function nextHostFrames(
   }
 
   const { selected, truncated } = selectTop(hostRows(sample), input.top, hostByCpu, hostByRss);
-  const gpuColumns = input.gpuProcesses && sample.gpuProcesses !== undefined;
-  const gpuUse = gpuColumns ? gpuUseByIdentity(sample.gpuProcesses ?? []) : new Map();
+  // The columns follow the request; a sample without GPU rows sends null (unmeasured) once, so
+  // the client never keeps a stale value after GPUs turn off.
+  const gpuColumns = input.gpuProcesses;
+  const gpuMeasured = sample.gpuProcesses !== undefined;
+  const gpuUse = gpuMeasured ? gpuUseByIdentity(sample.gpuProcesses ?? []) : new Map();
   const previousKeys = full ? new Map<string, number>() : state.keys;
   let nextKey = full ? 0 : state.nextKey;
 
   const keys = new Map<string, number>();
   const sent = new Map<number, SentValues>();
+  const unnamed = new Set<number>();
   const parts: Array<{ added: Array<MachineProcessAdded>; rows: FrameRows }> = [];
   let part = { added: [] as Array<MachineProcessAdded>, rows: emptyRows(gpuColumns) };
   let partBytes = 0;
@@ -325,11 +336,18 @@ export function nextHostFrames(
     let key = previousKeys.get(row.identity);
     const use = gpuUse.get(row.identity);
     // Absent from the device's process list means the process is not using that GPU.
-    const values: SentValues = gpuColumns
-      ? [row.cpu, row.rss, use ? use.util : 0, use ? use.vram : 0]
-      : [row.cpu, row.rss, null, null];
-    if (key === undefined) {
+    const values: SentValues =
+      gpuColumns && gpuMeasured
+        ? [row.cpu, row.rss, use ? use.util : 0, use ? use.vram : 0]
+        : [row.cpu, row.rss, null, null];
+    const named = knownStatics(row, statics) !== undefined;
+    if (key !== undefined && state.unnamed.has(key) && named) {
+      // Re-added with its values: the client resets a row's values when it is added.
+      part.added.push(hostStaticFields(key, row, statics));
+      pushRow(part.rows, key, values);
+    } else if (key === undefined) {
       key = nextKey++;
+      if (!named) unnamed.add(key);
       const added = hostStaticFields(key, row, statics);
       const bytes = addedBytes(added);
       if (full && partBytes > 0 && partBytes + bytes > MAX_ADDED_BYTES_PER_PART) {
@@ -351,6 +369,7 @@ export function nextHostFrames(
       ) {
         pushRow(part.rows, key, values);
       }
+      if (!named) unnamed.add(key);
     }
     keys.set(row.identity, key);
     sent.set(key, values);
@@ -391,6 +410,7 @@ export function nextHostFrames(
       nextKey,
       keys,
       sent,
+      unnamed,
       lastSampledAtMs: sample.sampledAtUnixMs,
     },
   ];

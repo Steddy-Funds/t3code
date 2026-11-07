@@ -9,50 +9,76 @@ import type {
   MachineThresholds,
   MachineVerdictRule,
 } from "@t3tools/contracts";
+import type { Atom } from "effect/reactivity";
 
 import { TimeSeriesCanvas } from "../charts/TimeSeriesCanvas";
 import { MachineSection } from "../primitives/MachineSection";
-import {
-  GPU_COLUMN,
-  gpuReadings,
-  hasReadableGpu,
-  MEMORY_COLUMN,
-  type MachineSeries,
-} from "./machineSeries";
+import { GPU_COLUMN, gpuReadings, MEMORY_COLUMN, type MachineSeries } from "./machineSeries";
+import { type SnapshotResult, SnapshotText, useSnapshotValue } from "./snapshotValue";
 
 const CHART = "h-28";
 const percentLabel = (name: string, value: number) =>
   Number.isNaN(value) ? name : `${name} ${formatPercent(value)}`;
 
-/** CPU, memory with swap dashed, load per core, and GPU with VRAM dashed (only with a GPU). */
+const hasSwap = (snapshot: MachineStatusSnapshot | null) =>
+  (snapshot?.totals?.swapTotalBytes ?? 0) > 0;
+const usesPressure = (snapshot: MachineStatusSnapshot | null) =>
+  snapshot?.totals?.memoryPressure != null;
+
+const cpuDetail = (snapshot: MachineStatusSnapshot | null) => {
+  const cpu = snapshot?.totals?.cpuUtilization;
+  return cpu == null ? "" : formatPercent(cpu * 100);
+};
+const memoryDetail = (snapshot: MachineStatusSnapshot | null) => {
+  const totals = snapshot?.totals;
+  if (!totals) return "";
+  const swap = totals.swapTotalBytes > 0 ? ` · swap ${formatGiB(totals.swapUsedBytes)} GiB` : "";
+  return `${formatGiB(memoryUsedBytes(totals))} / ${formatGiB(totals.memoryTotalBytes)} GiB${swap}`;
+};
+const loadDetail = (snapshot: MachineStatusSnapshot | null) => {
+  const totals = snapshot?.totals;
+  return totals?.load ? formatPerCore(totals.load.one, totals.cpuCount) : "";
+};
+const gpuDetail = (snapshot: MachineStatusSnapshot | null) => {
+  const gpu = gpuReadings(snapshot?.sample?.gpus);
+  return [
+    Number.isNaN(gpu.util) ? null : formatPercent(gpu.util),
+    Number.isNaN(gpu.vramPercent) ? null : `VRAM ${formatPercent(gpu.vramPercent)}`,
+  ]
+    .filter((part) => part !== null)
+    .join(" · ");
+};
+
+/**
+ * CPU, memory with swap dashed, load per core, and GPU with VRAM dashed (only with a GPU). The
+ * canvases draw from the rings and the numbers are leaves on the stream, so a tick renders neither.
+ */
 export function TaskManagerGraphs({
   series,
-  snapshot,
+  source,
+  hasGpu,
   rule,
   thresholds,
   windows,
 }: {
   readonly series: MachineSeries;
-  readonly snapshot: MachineStatusSnapshot | null;
+  readonly source: Atom.Atom<SnapshotResult>;
+  readonly hasGpu: boolean;
   /** The rule that tripped the verdict; its graph is tinted. */
   readonly rule: MachineVerdictRule | null;
   readonly thresholds: MachineThresholds | undefined;
   /** The CPU rule judges Windows only, which has no load average. */
   readonly windows: boolean;
 }) {
-  const totals = snapshot?.totals ?? null;
-  const usesPressure = totals?.memoryPressure != null;
-  const hasSwap = (totals?.swapTotalBytes ?? 0) > 0;
-  const gpu = hasReadableGpu(snapshot) ? gpuReadings(snapshot?.sample?.gpus) : null;
+  const swap = useSnapshotValue(source, hasSwap);
+  const pressure = useSnapshotValue(source, usesPressure);
   const memoryTripped = rule === "memory" || rule === "memoryPressure";
   return (
     <div className="grid grid-cols-1 gap-3 @2xl/task-manager:grid-cols-2">
       <MachineSection
         title="CPU"
         tripped={rule === "cpu"}
-        detail={
-          totals?.cpuUtilization == null ? undefined : formatPercent(totals.cpuUtilization * 100)
-        }
+        detail={<SnapshotText source={source} select={cpuDetail} />}
       >
         <TimeSeriesCanvas
           ring={series.cpu}
@@ -67,24 +93,18 @@ export function TaskManagerGraphs({
       <MachineSection
         title="Memory"
         tripped={memoryTripped}
-        detail={
-          totals
-            ? `${formatGiB(memoryUsedBytes(totals))} / ${formatGiB(totals.memoryTotalBytes)} GiB${
-                hasSwap ? ` · swap ${formatGiB(totals.swapUsedBytes)} GiB` : ""
-              }`
-            : undefined
-        }
+        detail={<SnapshotText source={source} select={memoryDetail} />}
       >
         <TimeSeriesCanvas
           ring={series.memory}
           lines={[
             { column: MEMORY_COLUMN.used },
-            ...(hasSwap ? [{ column: MEMORY_COLUMN.swap, dashed: true }] : []),
+            ...(swap ? [{ column: MEMORY_COLUMN.swap, dashed: true }] : []),
           ]}
           max={100}
           tripped={memoryTripped}
           // macOS counts cache as used, so the pressure level replaces the RAM limit there.
-          {...(!usesPressure && thresholds ? { threshold: thresholds.memoryUsedPercent } : {})}
+          {...(!pressure && thresholds ? { threshold: thresholds.memoryUsedPercent } : {})}
           label={() => percentLabel("Memory", series.memory.latest(MEMORY_COLUMN.used))}
           className={CHART}
         />
@@ -93,7 +113,7 @@ export function TaskManagerGraphs({
         <MachineSection
           title="Load / core"
           tripped={rule === "load"}
-          detail={totals?.load ? formatPerCore(totals.load.one, totals.cpuCount) : undefined}
+          detail={<SnapshotText source={source} select={loadDetail} />}
         >
           <TimeSeriesCanvas
             ring={series.load}
@@ -109,16 +129,11 @@ export function TaskManagerGraphs({
           />
         </MachineSection>
       )}
-      {gpu === null ? null : (
+      {hasGpu ? (
         <MachineSection
           title="GPU"
           tripped={rule === "gpuUtil" || rule === "gpuVram"}
-          detail={[
-            Number.isNaN(gpu.util) ? null : formatPercent(gpu.util),
-            Number.isNaN(gpu.vramPercent) ? null : `VRAM ${formatPercent(gpu.vramPercent)}`,
-          ]
-            .filter((part) => part !== null)
-            .join(" · ")}
+          detail={<SnapshotText source={source} select={gpuDetail} />}
         >
           <TimeSeriesCanvas
             ring={series.gpu}
@@ -130,7 +145,7 @@ export function TaskManagerGraphs({
             className={CHART}
           />
         </MachineSection>
-      )}
+      ) : null}
     </div>
   );
 }

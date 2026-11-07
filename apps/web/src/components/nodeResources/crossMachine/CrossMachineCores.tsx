@@ -34,6 +34,8 @@ export function CrossMachineCores({
   readonly tickMs: number;
 }) {
   const ringRef = useRef<SeriesRing | null>(null);
+  // A shared stream repeats its history on every snapshot; seed once per history.
+  const seededRef = useRef<MachineStatusSnapshot["history"]>(undefined);
   const [ring, setRing] = useState<SeriesRing | null>(null);
   const capacity = Math.round(CORE_HISTORY_MS / tickMs);
 
@@ -47,9 +49,11 @@ export function CrossMachineCores({
     if (target === null || target.columns !== cells || target.capacity !== capacity) {
       target = SeriesRing.create({ columns: cells, capacity });
       ringRef.current = target;
+      seededRef.current = undefined;
       setRing(target);
     }
-    if (snapshot.history) {
+    if (snapshot.history && snapshot.history !== seededRef.current) {
+      seededRef.current = snapshot.history;
       const history = decodeMachineHistory(snapshot.history, result.timestamp);
       const seeded = resampleSeries(
         groupCoreSeries(history.perCore, cells),

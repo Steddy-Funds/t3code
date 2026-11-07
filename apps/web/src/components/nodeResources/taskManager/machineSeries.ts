@@ -26,6 +26,8 @@ export interface MachineSeries {
   readonly cores: SeriesRing;
   readonly memoryPool: CellPool;
   readonly vramPool: CellPool;
+  /** The history last seeded; a shared stream repeats it on every snapshot. */
+  seededFrom: MachineStatusSnapshot["history"];
 }
 
 /** Graph rings hold `rangeMs / tickMs` points, so the graphs span the chosen range at any tick. */
@@ -41,6 +43,7 @@ export function createMachineSeries(tickMs: number, rangeMs: number, cores: numb
     cores: SeriesRing.create({ columns: Math.max(1, cores), capacity: CORE_SAMPLES }),
     memoryPool: CellPool.create(),
     vramPool: CellPool.create(),
+    seededFrom: undefined,
   };
 }
 
@@ -87,7 +90,8 @@ export function poolCellBytes(totalBytes: number, base: number): number {
 }
 
 function seedHistory(series: MachineSeries, snapshot: MachineStatusSnapshot, receivedAtMs: number) {
-  if (!snapshot.history) return;
+  if (!snapshot.history || snapshot.history === series.seededFrom) return;
+  series.seededFrom = snapshot.history;
   const history = decodeMachineHistory(snapshot.history, receivedAtMs);
   const length = history.cpu.length;
   const cores = Math.max(1, snapshot.history.cores);
@@ -113,7 +117,7 @@ function seedHistory(series: MachineSeries, snapshot: MachineStatusSnapshot, rec
   if (history.perCore.length === series.cores.columns) seed(series.cores, history.perCore);
 }
 
-/** Folds one snapshot in: history seeds every ring once, then each sample appends a row. */
+/** Folds one snapshot in: each new history seeds every ring once, then each sample appends a row. */
 export function receiveMachineSnapshot(
   series: MachineSeries,
   snapshot: MachineStatusSnapshot,

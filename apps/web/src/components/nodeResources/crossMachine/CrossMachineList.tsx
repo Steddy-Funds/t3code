@@ -10,6 +10,7 @@ import { cn } from "~/lib/utils";
 import { machineIndicator } from "~/state/machineResources";
 
 import { capableMachinesAtom } from "../capableMachines";
+import { documentVisibleAtom } from "../documentVisible";
 import { CROSS_MACHINE_GRID, CrossMachineRow, crossMachineSnapshotAtom } from "./CrossMachineRow";
 import {
   CROSS_MACHINE_GROUPS,
@@ -49,10 +50,13 @@ const sameOrder = (a: ReadonlyArray<OrderedMachine>, b: ReadonlyArray<OrderedMac
 // Reads the same per-machine streams the rows do, so ordering by load opens nothing extra.
 const orderedMachinesAtom = Atom.family((tickMs: number) =>
   Atom.make((get): ReadonlyArray<OrderedMachine> => {
+    const visible = get(documentVisibleAtom);
     const entries = get(capableMachinesAtom).map((identity) => {
       const view = get(machineIndicator.machineIndicatorAtom(identity.environmentId));
       const snapshot = Option.getOrNull(
-        AsyncResult.value(get(crossMachineSnapshotAtom(identity.environmentId, view, tickMs))),
+        AsyncResult.value(
+          get(crossMachineSnapshotAtom(identity.environmentId, view, tickMs, visible)),
+        ),
       );
       return {
         item: { ...identity, unreachable: view.unreachable },

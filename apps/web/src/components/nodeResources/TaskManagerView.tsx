@@ -17,6 +17,7 @@ import { serverEnvironment } from "~/state/server";
 import { useEnvironmentScope } from "~/state/session";
 import { useKnownTerminalSessions } from "~/state/terminalSessions";
 
+import { documentVisibleAtom } from "./documentVisible";
 import { MachineSectionMessage } from "./primitives/MachineSection";
 import type { ProcessViewMode } from "./primitives/ProcessViewToggle";
 import { TaskManagerGraphs } from "./taskManager/TaskManagerGraphs";
@@ -100,18 +101,21 @@ function TaskManagerOverview({
   readonly onViewModeChange: (mode: ProcessViewMode) => void;
 }) {
   const view = useAtomValue(machineIndicator.machineIndicatorAtom(environmentId));
-  // An unreachable machine is never subscribed; the rings keep what was last drawn.
-  const source = view.unreachable
-    ? NO_SNAPSHOT
-    : machineResources.machine(environmentId, { intervalMs: tick, historyMs: range });
+  const visible = useAtomValue(documentVisibleAtom);
+  // An unreachable machine or a hidden tab isn't subscribed; the rings keep what was last drawn,
+  // and the reopened stream's history fills the gap.
+  const source =
+    view.unreachable || !visible
+      ? NO_SNAPSHOT
+      : machineResources.machine(environmentId, { intervalMs: tick, historyMs: range });
   const series = useMachineSeries(source, tick, range);
-  const machine = useAtomValue(source);
-  const snapshot = Option.getOrNull(AsyncResult.value(machine));
+  // Primitives only, so a tick doesn't render the overview; per-tick text lives in leaves.
+  const sampledGpu = useAtomValue(source, selectSampledGpu);
+  const failure = useAtomValue(source, selectFailure);
   const config = useAtomValue(serverEnvironment.configValueAtom(environmentId));
   const rule = view.unreachable ? null : (view.reason?.rule ?? null);
   // Remembered across tick and range re-keys, whose fresh streams start empty, so the process
   // stream isn't reopened without and then with GPU columns.
-  const sampledGpu = snapshot?.sample ? hasReadableGpu(snapshot) : null;
   const [knownGpu, setKnownGpu] = useState<{
     readonly environmentId: EnvironmentId;
     readonly hasGpu: boolean;
@@ -125,13 +129,7 @@ function TaskManagerOverview({
   const hasGpu = knownGpu?.environmentId === environmentId ? knownGpu.hasGpu : null;
   // Without a GPU flag the process list waits for one; say why when no sample is coming.
   const processesUnavailable =
-    hasGpu !== null
-      ? null
-      : view.unreachable
-        ? "Machine unreachable"
-        : AsyncResult.isFailure(machine)
-          ? errorMessage(machine.cause)
-          : null;
+    hasGpu !== null ? null : view.unreachable ? "Machine unreachable" : failure;
 
   const canOperateTerminal = useEnvironmentScope(environmentId, AuthTerminalOperateScope);
   const terminalSessions = useKnownTerminalSessions({
@@ -161,6 +159,7 @@ function TaskManagerOverview({
       {terminalOpen ? (
         <TaskManagerTerminal
           environmentId={environmentId}
+          autoFocus={terminalChoice === true}
           onClose={() => setTerminalChoice(false)}
         />
       ) : null}
@@ -168,25 +167,35 @@ function TaskManagerOverview({
         <>
           <TaskManagerGraphs
             series={series}
-            snapshot={snapshot}
+            source={source}
+            hasGpu={hasGpu === true}
             rule={rule}
             thresholds={config?.settings.machineResources.thresholds}
             windows={config?.environment.platform.os === "windows"}
           />
-          <TaskManagerGrids series={series} snapshot={snapshot} rule={rule} />
+          <TaskManagerGrids series={series} source={source} rule={rule} />
         </>
       )}
-      {/* Rendered here for the snapshot's GPU flag; its props stay equal across ticks. */}
+      {/* A hidden tab passes no GPU flag, so the process stream closes too; sort and columns stay. */}
       <TaskManagerLists
         environmentId={environmentId}
         tick={tick}
-        hasGpu={hasGpu}
+        hasGpu={visible ? hasGpu : null}
         processesUnavailable={processesUnavailable}
         viewMode={viewMode}
         onViewModeChange={onViewModeChange}
       />
     </>
   );
+}
+
+function selectSampledGpu(result: SnapshotResult): boolean | null {
+  const snapshot = Option.getOrNull(AsyncResult.value(result));
+  return snapshot?.sample ? hasReadableGpu(snapshot) : null;
+}
+
+function selectFailure(result: SnapshotResult): string | null {
+  return AsyncResult.isFailure(result) ? errorMessage(result.cause) : null;
 }
 
 function errorMessage(cause: Cause.Cause<unknown>): string {

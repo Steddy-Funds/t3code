@@ -562,9 +562,10 @@ export const make = Effect.fn("resourceTelemetry.nativeTelemetryClient.make")(fu
     readonly table: HostProcessStatics;
   }>({ generation: -1, table: new Map() });
   const hostSamplePubSub = yield* PubSub.sliding<NativeHostSample>(4);
-  // GPU code runs inside the monitor: after a crash with GPUs in use, or the monitor's own
-  // `gpu-unavailable`, GPUs stay off until the server restarts.
-  const gpuState = yield* Ref.make({ usedThisGeneration: false, off: false });
+  // GPU code runs inside the monitor: after a crash with GPU work in flight (a GPU request, or host
+  // streaming with GPUs), or the monitor's own `gpu-unavailable`, GPUs stay off until restart.
+  const gpuState = yield* Ref.make({ off: false });
+  const gpuRequestsInFlight = yield* Ref.make(0);
   const snapshots = yield* PubSub.sliding<NativeTelemetrySnapshot>(8);
   const healthChanges = yield* PubSub.sliding<NativeTelemetryClientHealth>(4);
   const retryQueue = yield* Queue.sliding<void>(1);
@@ -653,10 +654,22 @@ export const make = Effect.fn("resourceTelemetry.nativeTelemetryClient.make")(fu
 
   const gpusAllowed = Ref.get(gpuState).pipe(Effect.map((gpu) => !gpu.off));
 
-  const markGpusUsed = (used: boolean) =>
-    used
-      ? Ref.update(gpuState, (current) => ({ ...current, usedThisGeneration: true }))
-      : Effect.void;
+  const withGpuInFlight = <A, E>(
+    gpuWork: boolean,
+    effect: Effect.Effect<A, E>,
+  ): Effect.Effect<A, E> =>
+    gpuWork
+      ? Effect.acquireUseRelease(
+          Ref.update(gpuRequestsInFlight, (count) => count + 1),
+          () => effect,
+          () => Ref.update(gpuRequestsInFlight, (count) => count - 1),
+        )
+      : effect;
+
+  const gpuWorkInFlight = Effect.all([
+    Ref.get(gpuRequestsInFlight),
+    Ref.get(appliedHostDemand),
+  ]).pipe(Effect.map(([requests, demand]) => requests > 0 || demand.gpus || demand.gpuProcesses));
 
   /** Sends the combined host demand when it differs from what the monitor already has. */
   const applyHostDemand: Effect.Effect<void, NativeTelemetryClientError> = hostMutex.withPermits(1)(
@@ -668,7 +681,6 @@ export const make = Effect.fn("resourceTelemetry.nativeTelemetryClient.make")(fu
         yield* gpusAllowed,
       );
       if (sameHostSampleDemand(demand, yield* Ref.get(appliedHostDemand))) return;
-      yield* markGpusUsed(demand.gpus || demand.gpuProcesses);
       yield* writeCommand(handle.value, {
         version: RESOURCE_MONITOR_PROTOCOL_VERSION,
         type: "setHostStreaming",
@@ -987,10 +999,9 @@ export const make = Effect.fn("resourceTelemetry.nativeTelemetryClient.make")(fu
 
       const error = result.failure;
       const crashed = (isExited(error) && error.exitCode !== 0) || isStreamClosed(error);
-      yield* Ref.update(gpuState, (gpu) => ({
-        usedThisGeneration: false,
-        off: gpu.off || (crashed && gpu.usedThisGeneration),
-      }));
+      // Read before failPending settles the in-flight requests.
+      const gpuBusy = crashed && (yield* gpuWorkInFlight);
+      yield* Ref.update(gpuState, (gpu) => ({ off: gpu.off || gpuBusy }));
       const now = DateTime.toEpochMillis(yield* DateTime.now);
       const recentFailures = retainRecentNativeTelemetryFailures(failures, now);
       if (recentFailures.length === 0) {
@@ -1300,7 +1311,8 @@ export const make = Effect.fn("resourceTelemetry.nativeTelemetryClient.make")(fu
     );
   });
 
-  const requestV4 = Effect.fn("NativeTelemetryClient.requestV4")(function* <A>(
+  // Untraced: host samples and per-view GPU totals call this about twice a second.
+  const requestV4 = Effect.fnUntraced(function* <A>(
     operation: RequestOperation,
     pending: PendingReplies<A>,
     timeout: Duration.Duration,
@@ -1385,17 +1397,14 @@ export const make = Effect.fn("resourceTelemetry.nativeTelemetryClient.make")(fu
       gpus: allowed && options.gpus,
       gpuProcesses: allowed && options.gpuProcesses,
     };
-    yield* markGpusUsed(fields.gpus || fields.gpuProcesses);
-    return yield* requestV4(
-      "hostSampleNow",
-      pendingHostSamples,
-      HOST_SAMPLE_REQUEST_TIMEOUT,
-      (requestId) => ({
+    return yield* withGpuInFlight(
+      fields.gpus || fields.gpuProcesses,
+      requestV4("hostSampleNow", pendingHostSamples, HOST_SAMPLE_REQUEST_TIMEOUT, (requestId) => ({
         version: RESOURCE_MONITOR_PROTOCOL_VERSION,
         type: "hostSampleNow",
         requestId,
         ...fields,
-      }),
+      })),
     );
   });
 
@@ -1408,12 +1417,15 @@ export const make = Effect.fn("resourceTelemetry.nativeTelemetryClient.make")(fu
 
   const gpuTotals: NativeTelemetryClient["Service"]["gpuTotals"] = Effect.gen(function* () {
     if (!(yield* gpusAllowed)) return [];
-    yield* markGpusUsed(true);
-    const reply = yield* requestV4(
-      "gpuTotals",
-      pendingGpuTotals,
-      GPU_TOTALS_REQUEST_TIMEOUT,
-      (requestId) => ({ version: RESOURCE_MONITOR_PROTOCOL_VERSION, type: "gpuTotals", requestId }),
+    const capabilities = Option.getOrUndefined((yield* Ref.get(state)).hello)?.capabilities;
+    if (capabilities?.gpuNvidia === false && capabilities.gpuIntel === false) return [];
+    const reply = yield* withGpuInFlight(
+      true,
+      requestV4("gpuTotals", pendingGpuTotals, GPU_TOTALS_REQUEST_TIMEOUT, (requestId) => ({
+        version: RESOURCE_MONITOR_PROTOCOL_VERSION,
+        type: "gpuTotals",
+        requestId,
+      })),
     );
     // No `gpus` means this one query failed, which is not the same as no GPUs.
     if (reply.gpus === undefined) {

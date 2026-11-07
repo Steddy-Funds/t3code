@@ -32,9 +32,18 @@ const fromPermille = (values: ReadonlyArray<number>, count: number) => {
   return series;
 };
 
+// A shared stream repeats one history on later snapshots; its age counts from first arrival.
+const historyArrivals = new WeakMap<MachineHistory, number>();
+
+/** Records when a history first arrived, so a view that reads it later still places it in time. */
+export function markMachineHistoryArrival(history: MachineHistory, atMs: number): void {
+  if (!historyArrivals.has(history)) historyArrivals.set(history, atMs);
+}
+
 /**
  * Decodes a snapshot's history for `SeriesRing.seed(columns, stepMs, endAtMs)`. Every series is
- * full length, so a seeded ring keeps the columns aligned in time.
+ * full length, so a seeded ring keeps the columns aligned in time. `receivedAtMs` is used only
+ * when the history's arrival wasn't recorded.
  */
 export function decodeMachineHistory(
   history: MachineHistory,
@@ -55,7 +64,7 @@ export function decodeMachineHistory(
   }
   return {
     stepMs: history.stepMs,
-    endAtMs: receivedAtMs - history.endAgeMs,
+    endAtMs: (historyArrivals.get(history) ?? receivedAtMs) - history.endAgeMs,
     cpu: fromPermille(history.cpu, count),
     perCore,
     memoryUsed: fromPermille(history.memoryUsed, count),

@@ -262,13 +262,13 @@ describe("HostResources samples", () => {
         const secondQueue = yield* open(second, 120);
 
         yield* TestClock.adjust("500 millis");
-        expect(yield* take(firstQueue)).toEqual({ perCore: [50], gpus: [] });
-        expect(yield* take(secondQueue)).toEqual({ perCore: [50], gpus: [] });
+        expect(yield* take(firstQueue)).toEqual({ perCore: [50] });
+        expect(yield* take(secondQueue)).toEqual({ perCore: [50] });
         expect(counterReads()).toBe(2);
 
         yield* Scope.close(first, Exit.void);
         yield* TestClock.adjust("500 millis");
-        expect(yield* take(secondQueue)).toEqual({ perCore: [50], gpus: [] });
+        expect(yield* take(secondQueue)).toEqual({ perCore: [50] });
         expect(counterReads()).toBe(3);
 
         yield* Scope.close(second, Exit.void);
@@ -278,7 +278,7 @@ describe("HostResources samples", () => {
         const reopened = yield* Scope.make();
         const reopenedQueue = yield* open(reopened, 500);
         yield* TestClock.adjust("500 millis");
-        expect(yield* take(reopenedQueue)).toEqual({ perCore: [50], gpus: [] });
+        expect(yield* take(reopenedQueue)).toEqual({ perCore: [50] });
         expect(counterReads()).toBe(5);
         yield* Scope.close(reopened, Exit.void);
       }).pipe(Effect.provide(layer));
@@ -470,23 +470,38 @@ describe("HostResources tick", () => {
 });
 
 describe("HostResources samples with GPUs", () => {
-  it.effect("adds device samples when gpuTotals succeeds", () => {
+  it.effect("adds the base tick's devices to every sample without querying GPUs again", () => {
     setup();
-    const device = nvidia({ status: "suspended", utilPercent: null, vramUsedBytes: null });
-    const { layer } = makeLayer({ native: { gpuTotals: Effect.succeed([device]) } });
+    let devices = [nvidia({ status: "suspended", utilPercent: null, vramUsedBytes: null })];
+    const gpuTotals = counted(Effect.sync(() => devices));
+    const { layer, tick } = makeLayer({ native: { gpuTotals: gpuTotals.effect } });
     return Effect.gen(function* () {
       const resources = yield* HostResources;
       const queue = yield* Stream.toQueue(yield* resources.samples(500), { capacity: "unbounded" });
       yield* TestClock.adjust("500 millis");
-      expect(yield* take(queue)).toEqual({ perCore: [50], gpus: [device] });
+      expect(yield* take(queue)).toEqual({ perCore: [50] });
+
+      yield* tick;
+      const first = devices;
+      yield* TestClock.adjust("2 seconds");
+      const samples = yield* Effect.orDie(Queue.clear(queue));
+      expect(samples).toEqual(Array.from({ length: 4 }, () => ({ perCore: [50], gpus: first })));
+      expect(gpuTotals.calls.count).toBe(1);
+
+      devices = [nvidia()];
+      yield* tick;
+      yield* TestClock.adjust("500 millis");
+      expect(yield* take(queue)).toEqual({ perCore: [50], gpus: devices });
+      expect(gpuTotals.calls.count).toBe(2);
     }).pipe(Effect.scoped, Effect.provide(layer));
   });
 
   it.effect("omits gpus when gpuTotals fails", () => {
     setup();
-    const { layer } = makeLayer({ native: { gpuTotals: unavailable } });
+    const { layer, tick } = makeLayer({ native: { gpuTotals: unavailable } });
     return Effect.gen(function* () {
       const resources = yield* HostResources;
+      yield* tick;
       const queue = yield* Stream.toQueue(yield* resources.samples(500), { capacity: "unbounded" });
       yield* TestClock.adjust("500 millis");
       expect(yield* take(queue)).toEqual({ perCore: [50] });

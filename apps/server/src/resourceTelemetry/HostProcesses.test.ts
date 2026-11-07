@@ -621,7 +621,29 @@ describe("nextHostFrames", () => {
       initialHostFrameBuilderState,
       hostInput(hostSample(threeRows), { gpuProcesses: true }),
     );
-    expect(noGpuColumns!.rows).not.toHaveProperty("vram");
+    expect(noGpuColumns!.rows).toMatchObject({
+      key: [0, 1, 2],
+      gpuUtil: [null, null, null],
+      vram: [null, null, null],
+    });
+
+    // GPU rows stop (GPUs off): measured values turn null once, then rows go quiet.
+    const [[unmeasured], unmeasuredState] = nextHostFrames(
+      state,
+      hostInput(hostSample(threeRows, { sampledAtUnixMs: 11_000 }), { gpuProcesses: true }),
+    );
+    expect(unmeasured!.rows).toEqual({
+      key: [0, 2],
+      cpu: [1, 3],
+      rss: [100, 300],
+      gpuUtil: [null, null],
+      vram: [null, null],
+    });
+    const [[quiet]] = nextHostFrames(
+      unmeasuredState,
+      hostInput(hostSample(threeRows, { sampledAtUnixMs: 12_000 }), { gpuProcesses: true }),
+    );
+    expect(quiet!.rows).toEqual({ key: [], cpu: [], rss: [], gpuUtil: [], vram: [] });
 
     const vramMoved = hostSample(threeRows, {
       sampledAtUnixMs: 11_000,
@@ -653,11 +675,32 @@ describe("nextHostFrames", () => {
       [{ pid: 1, cpu: 1, rss: 100 }, { pid: 2, cpu: 2, rss: 200, startTimeMs: 77 }, threeRows[2]!],
       { sampledAtUnixMs: 11_000, statics },
     );
-    const [[diff]] = nextHostFrames(state, hostInput(reused));
+    const [[diff], reusedState] = nextHostFrames(state, hostInput(reused));
     expect(diff).toMatchObject({ removed: [1], rows: { key: [3] } });
     expect(diff!.added).toEqual([
       { key: 3, pid: 2, ppid: 1, startTimeMs: 77, name: "", user: "", command: "" },
     ]);
+
+    // Once the statics match, an unnamed row is re-added named, with its unchanged values.
+    const reusedRows = [
+      threeRows[0]!,
+      { pid: 2, cpu: 2, rss: 200, startTimeMs: 77 },
+      threeRows[2]!,
+    ];
+    const namedStatics = [statics[0]!, hostStatic(2, { startTimeMs: 77 }), hostStatic(3)];
+    const named = (sampledAtUnixMs: number) =>
+      hostInput(hostSample(reusedRows, { sampledAtUnixMs, statics: namedStatics }));
+    const [[renamed], renamedState] = nextHostFrames(reusedState, named(12_000));
+    expect(renamed!.added.map((added) => [added.key, added.pid, added.name]).toSorted()).toEqual([
+      [2, 3, "p3"],
+      [3, 2, "p2"],
+    ]);
+    expect(renamed!.removed).toEqual([]);
+    expect(renamed!.rows.key.toSorted()).toEqual([2, 3]);
+    expect(renamed!.rows.cpu.toSorted()).toEqual([2, 3]);
+
+    const [[settled]] = nextHostFrames(renamedState, named(13_000));
+    expect(settled).toMatchObject({ added: [], removed: [], rows: { key: [] } });
   });
 });
 

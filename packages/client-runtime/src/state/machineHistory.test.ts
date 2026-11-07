@@ -1,9 +1,23 @@
 import { describe, expect, it } from "@effect/vitest";
-import { EnvironmentId, type MachineHistory } from "@t3tools/contracts";
+import {
+  EnvironmentId,
+  type MachineHistory,
+  type MachineStatusSnapshot,
+  WS_METHODS,
+} from "@t3tools/contracts";
+import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import { Atom } from "effect/reactivity";
+import * as Option from "effect/Option";
+import * as Queue from "effect/Queue";
+import * as Stream from "effect/Stream";
+import * as SubscriptionRef from "effect/SubscriptionRef";
+import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
+import { vi } from "vite-plus/test";
 
+import { AVAILABLE_CONNECTION_STATE, BearerConnectionTarget } from "../connection/model.ts";
 import * as EnvironmentRegistry from "../connection/registry.ts";
+import { EnvironmentSupervisor } from "../connection/supervisor.ts";
+import type { RpcSession } from "../rpc/session.ts";
 import { decodeMachineHistory } from "./machineHistory.ts";
 import { createMachineResourcesAtoms } from "./machineResources.ts";
 
@@ -114,4 +128,61 @@ describe("createMachineResourcesAtoms machine", () => {
     expect(atom).not.toBe(machine(environmentId));
     expect(atom.idleTTL).toBe(0);
   });
+});
+
+describe("createMachineResourcesAtoms live machine", () => {
+  const environmentId = EnvironmentId.make("env-1");
+  const snapshot = (overrides: Partial<MachineStatusSnapshot> = {}): MachineStatusSnapshot => ({
+    sequence: 1,
+    verdict: "ok",
+    verdictAgeMs: 0,
+    reason: null,
+    sampleAgeMs: 0,
+    totals: null,
+    ...overrides,
+  });
+
+  it.effect("gives a later reader the first history, dated from when it arrived", () =>
+    Effect.gen(function* () {
+      const server = yield* Queue.unbounded<MachineStatusSnapshot>();
+      const client = { [WS_METHODS.subscribeMachine]: () => Stream.fromQueue(server) };
+      const supervisor = {
+        target: new BearerConnectionTarget({ environmentId, label: "Test", connectionId: "test" }),
+        session: yield* SubscriptionRef.make(Option.some({ client } as unknown as RpcSession)),
+        state: yield* SubscriptionRef.make({
+          ...AVAILABLE_CONNECTION_STATE,
+          phase: "connected" as const,
+        }),
+      } as EnvironmentSupervisor["Service"];
+      const { machine } = createMachineResourcesAtoms(
+        Atom.runtime(
+          Layer.succeed(EnvironmentRegistry.EnvironmentRegistry, {
+            followStream: (_id, stream) =>
+              Stream.provideService(stream, EnvironmentSupervisor, supervisor),
+          } as EnvironmentRegistry.EnvironmentRegistry["Service"]),
+        ),
+      );
+      const input = { intervalMs: 1_000, historyMs: 60_000 };
+      const registry = AtomRegistry.make();
+      const seen = yield* Queue.unbounded<MachineStatusSnapshot>();
+      const unmount = registry.subscribe(machine(environmentId, input), (result) => {
+        if (AsyncResult.isSuccess(result)) Queue.offerUnsafe(seen, result.value);
+      });
+      using now = vi.spyOn(Date, "now").mockReturnValue(100_000);
+
+      const first = history();
+      yield* Queue.offer(server, snapshot({ history: first }));
+      expect((yield* Queue.take(seen)).history).toBe(first);
+
+      now.mockReturnValue(130_000);
+      yield* Queue.offer(server, snapshot({ sequence: 2 }));
+      expect(yield* Queue.take(seen)).toMatchObject({ sequence: 2 });
+
+      const late = registry.get(machine(environmentId, input));
+      const lateHistory = AsyncResult.isSuccess(late) ? late.value.history : undefined;
+      expect(lateHistory).toBe(first);
+      expect(decodeMachineHistory(lateHistory!, 130_000).endAtMs).toBe(100_000 - 2_500);
+      unmount();
+    }),
+  );
 });

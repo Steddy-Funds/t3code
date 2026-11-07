@@ -427,8 +427,12 @@ const takeCommand = <T extends ResourceMonitorCommand["type"]>(monitor: FakeMoni
   );
 
 /** Says hello and returns the startup commands, ending with `setExternalProcesses`. */
-const handshake = Effect.fn("test.handshake")(function* (monitor: FakeMonitor, version: 3 | 4) {
-  yield* monitor.emit(hello(version));
+const handshake = Effect.fn("test.handshake")(function* (
+  monitor: FakeMonitor,
+  version: 3 | 4,
+  capabilities: Record<string, boolean> = {},
+) {
+  yield* monitor.emit(hello(version, capabilities));
   const startup: Array<ResourceMonitorCommand> = [];
   while (startup.at(-1)?.type !== "setExternalProcesses") {
     startup.push(yield* Queue.take(monitor.commands));
@@ -747,60 +751,103 @@ describe("NativeTelemetryClient with a native monitor", () => {
     }),
   );
 
-  it.effect("keeps GPUs after a clean exit and turns them off after a crash that used them", () =>
+  it.effect("keeps GPUs after a clean exit and after a crash with no GPU request in flight", () =>
     Effect.gen(function* () {
       const { client, nextMonitor } = yield* makeClient;
+      const answerGpuTotals = Effect.fn("test.answerGpuTotals")(function* (monitor: FakeMonitor) {
+        const totals = yield* client.gpuTotals.pipe(Effect.forkChild);
+        const command = yield* takeCommand(monitor, "gpuTotals");
+        yield* monitor.emit({
+          version: 4,
+          type: "gpuTotals",
+          requestId: command.requestId,
+          gpus: [gpuDevice],
+        });
+        expect(yield* Fiber.join(totals)).toEqual([gpuDevice]);
+      });
       const first = yield* nextMonitor;
       yield* handshake(first, 4);
-      const totals = yield* client.gpuTotals.pipe(Effect.forkChild);
-      const command = yield* takeCommand(first, "gpuTotals");
-      yield* first.emit({
-        version: 4,
-        type: "gpuTotals",
-        requestId: command.requestId,
-        gpus: [gpuDevice],
-      });
-      expect(yield* Fiber.join(totals)).toEqual([gpuDevice]);
+      yield* answerGpuTotals(first);
 
       yield* first.exit(0);
       yield* awaitHealth(client, (health) => health.restartCount === 1);
       yield* TestClock.adjust("500 millis");
       const second = yield* nextMonitor;
       yield* handshake(second, 4);
-      const failed = yield* client.gpuTotals.pipe(Effect.flip, Effect.forkChild);
-      const failedCommand = yield* takeCommand(second, "gpuTotals");
-      yield* second.emit({ version: 4, type: "gpuTotals", requestId: failedCommand.requestId });
-      const error = yield* Fiber.join(failed);
-      expect(error._tag).toBe("NativeTelemetryCommandFailed");
+      yield* answerGpuTotals(second);
 
       yield* second.exit(1);
       yield* awaitHealth(client, (health) => health.restartCount === 2);
       yield* TestClock.adjust("1 second");
       const third = yield* nextMonitor;
       yield* handshake(third, 4);
-      expect(yield* client.gpuTotals).toEqual([]);
-      yield* roundTrip(client, third);
+      yield* answerGpuTotals(third);
     }),
   );
 
-  it.effect("turns GPUs off when the event stream closes after GPU use", () =>
+  it.effect("turns GPUs off after a crash or a closed stream with gpuTotals pending", () =>
+    Effect.gen(function* () {
+      const crashes: ReadonlyArray<(monitor: FakeMonitor) => Effect.Effect<void>> = [
+        (monitor) => monitor.exit(1),
+        (monitor) => monitor.closeStdout,
+      ];
+      for (const crash of crashes) {
+        const { client, nextMonitor } = yield* makeClient;
+        const first = yield* nextMonitor;
+        yield* handshake(first, 4);
+        const pending = yield* client.gpuTotals.pipe(Effect.flip, Effect.forkChild);
+        yield* takeCommand(first, "gpuTotals");
+
+        yield* crash(first);
+        yield* awaitHealth(client, (health) => health.restartCount === 1);
+        yield* Fiber.join(pending);
+        yield* TestClock.adjust("500 millis");
+        const second = yield* nextMonitor;
+        yield* handshake(second, 4);
+        expect(yield* client.gpuTotals).toEqual([]);
+        yield* roundTrip(client, second);
+      }
+    }),
+  );
+
+  it.effect("turns GPUs off after a crash while host streaming has GPUs on", () =>
     Effect.gen(function* () {
       const { client, nextMonitor } = yield* makeClient;
       const first = yield* nextMonitor;
       yield* handshake(first, 4);
-      const totals = yield* client.gpuTotals.pipe(Effect.forkChild);
-      const command = yield* takeCommand(first, "gpuTotals");
-      yield* first.emit({ version: 4, type: "gpuTotals", requestId: command.requestId, gpus: [] });
-      expect(yield* Fiber.join(totals)).toEqual([]);
+      const samples = yield* collectHostSamples(
+        client,
+        demand({ intervalMs: 1_000, processes: true, gpus: true }),
+      );
+      expect(yield* takeCommand(first, "setHostStreaming")).toMatchObject({ gpus: true });
 
-      yield* first.closeStdout;
+      yield* first.exit(1);
       yield* awaitHealth(client, (health) => health.restartCount === 1);
       yield* TestClock.adjust("500 millis");
       const second = yield* nextMonitor;
       yield* handshake(second, 4);
+      expect(yield* takeCommand(second, "setHostStreaming")).toMatchObject({
+        intervalMs: 1_000,
+        processes: true,
+        gpus: false,
+        gpuProcesses: false,
+      });
       expect(yield* client.gpuTotals).toEqual([]);
       yield* roundTrip(client, second);
+      yield* Fiber.interrupt(samples.fiber);
     }),
+  );
+
+  it.effect(
+    "answers gpuTotals with no GPUs and no command when the monitor has no GPU backend",
+    () =>
+      Effect.gen(function* () {
+        const { client, nextMonitor } = yield* makeClient;
+        const monitor = yield* nextMonitor;
+        yield* handshake(monitor, 4, { gpuNvidia: false, gpuIntel: false });
+        expect(yield* client.gpuTotals).toEqual([]);
+        yield* roundTrip(client, monitor);
+      }),
   );
 
   it.effect("rejects a monitor speaking an unknown protocol version", () =>

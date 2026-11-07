@@ -269,10 +269,14 @@ describe("MachineResourcesSection rows by OS", () => {
     await using screen = await renderSection(registry, config({ os: "windows" }));
 
     await expect.element(screen.getByRole("textbox", { name: "CPU used" })).toBeVisible();
+    // The monitor reads GPUs on Windows too, so the GPU rows stay.
     expect(inputNames(screen)).toEqual([
       "CPU used",
       "CPU hold",
       "RAM used",
+      "GPU memory used",
+      "GPU busy",
+      "GPU busy hold",
       "Hold before stressed",
       "Clears below",
       "Hold before clearing",

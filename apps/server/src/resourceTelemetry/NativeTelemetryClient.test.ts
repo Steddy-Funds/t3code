@@ -807,11 +807,14 @@ describe("NativeTelemetryClient with a native monitor", () => {
     Effect.gen(function* () {
       const { client, nextMonitor } = yield* makeClient;
       const monitor = yield* nextMonitor;
+      const degraded = yield* awaitHealth(client, (current) => current.restartCount === 1).pipe(
+        Effect.forkChild,
+      );
       yield* monitor.emit({ ...hello(4), version: 5 });
       // A correct client fails at once; the adjust only keeps a regression from hanging.
       yield* TestClock.adjust("5 seconds");
 
-      const health = yield* awaitHealth(client, (current) => current.restartCount === 1);
+      const health = yield* Fiber.join(degraded);
       expect(health.status).toBe("degraded");
       expect(Option.getOrThrow(health.lastError)).toContain("protocol 5");
     }),

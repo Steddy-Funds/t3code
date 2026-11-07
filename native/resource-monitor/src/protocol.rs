@@ -667,24 +667,46 @@ mod tests {
                 "swapUsedBytes": null,
             })
         );
+    }
 
-        let failed = serde_json::to_value(GpuTotalsEvent {
-            version: PROTOCOL_VERSION,
-            event_type: "gpuTotals",
-            request_id: "gpu-1",
-            gpus: None,
-        })
-        .expect("failed gpu totals");
+    #[test]
+    fn gpu_totals_replies_map_query_results() {
+        let device = crate::gpu::GpuDeviceSample {
+            id: "0000:01:00.0".to_owned(),
+            vendor: crate::gpu::GpuVendor::Nvidia,
+            name: "Test GPU".to_owned(),
+            status: crate::gpu::GpuStatus::Active,
+            util_percent: Some(12.0),
+            vram_total_bytes: Some(8_192),
+            vram_used_bytes: None,
+            shared_memory: false,
+        };
+
+        let (ok, disabled) = GpuTotalsEvent::reply("gpu-1", Ok(vec![device]));
+        assert!(disabled.is_none());
+        let ok = serde_json::to_value(ok).expect("gpu totals");
+        assert_eq!(ok["version"], PROTOCOL_VERSION);
+        assert_eq!(ok["type"], "gpuTotals");
+        assert_eq!(ok["requestId"], "gpu-1");
+        assert_eq!(ok["gpus"][0]["id"], "0000:01:00.0");
+        assert_eq!(ok["gpus"][0]["vramUsedBytes"], serde_json::Value::Null);
+
+        let (failed, disabled) =
+            GpuTotalsEvent::reply("gpu-2", Err(GpuError::Failed("nvml timeout".to_owned())));
+        assert!(disabled.is_none());
+        let failed = serde_json::to_value(failed).expect("failed gpu totals");
         assert!(failed.get("gpus").is_none());
+        assert_eq!(failed["requestId"], "gpu-2");
 
-        let empty = serde_json::to_value(GpuTotalsEvent {
-            version: PROTOCOL_VERSION,
-            event_type: "gpuTotals",
-            request_id: "gpu-1",
-            gpus: Some(Vec::new()),
-        })
-        .expect("empty gpu totals");
-        assert_eq!(empty["gpus"], serde_json::json!([]));
+        let (off, disabled) = GpuTotalsEvent::reply(
+            "gpu-3",
+            Err(GpuError::Disabled("three failures".to_owned())),
+        );
+        assert_eq!(disabled.as_deref(), Some("three failures"));
+        assert_eq!(
+            serde_json::to_value(off).expect("disabled gpu totals")["gpus"],
+            serde_json::json!([])
+        );
     }
 
     #[test]

@@ -356,6 +356,40 @@ pub(crate) fn unix_time_ms() -> u64 {
 mod tests {
     use super::*;
 
+    fn external(pid: u32, start_time_ms: Option<u64>) -> ExternalProcess {
+        ExternalProcess { pid, start_time_ms }
+    }
+
+    #[test]
+    fn claims_keep_the_first_256_in_send_order() {
+        let processes: Vec<_> = (1..=300)
+            .map(|pid| external(pid, Some(u64::from(pid))))
+            .collect();
+        let claimed = claimed_identities(processes.clone());
+        assert_eq!(claimed.len(), MAX_CLAIMED_PROCESSES);
+        assert!(claimed.contains_key(&256));
+        assert!(!claimed.contains_key(&257));
+        assert_eq!(identity_map(processes).len(), 300);
+
+        let reversed: Vec<_> = (1..=300).rev().map(|pid| external(pid, None)).collect();
+        let claimed = claimed_identities(reversed);
+        assert!(claimed.contains_key(&300));
+        assert!(claimed.contains_key(&45));
+        assert!(!claimed.contains_key(&44));
+    }
+
+    #[test]
+    fn a_repeated_claim_keeps_its_later_start_time() {
+        let claimed = claimed_identities(vec![
+            external(7, Some(1_000)),
+            external(8, None),
+            external(7, Some(2_000)),
+        ]);
+        assert_eq!(claimed.len(), 2);
+        assert_eq!(claimed[&7], Some(2_000));
+        assert_eq!(claimed[&8], None);
+    }
+
     #[test]
     fn selects_roots_and_all_descendants() {
         let rows = vec![

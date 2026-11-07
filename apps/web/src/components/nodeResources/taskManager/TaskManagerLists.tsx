@@ -3,10 +3,10 @@ import { useState } from "react";
 
 import { ToggleGroup, ToggleGroupItem } from "~/components/ui/toggle-group";
 
-import { MachineSection } from "../primitives/MachineSection";
 import type { ProcessViewMode } from "../primitives/ProcessViewToggle";
 import { MachineProcessList } from "../processTable/MachineProcessList";
 import type { TaskManagerTick } from "../taskManagerPreferences";
+import { TaskManagerThreads } from "./TaskManagerThreads";
 
 const LISTS = [
   { value: "processes", label: "Processes" },
@@ -56,7 +56,7 @@ export function TaskManagerLists({
           onViewModeChange={onViewModeChange}
         />
       ) : (
-        <MachineSection title="Threads on this machine">{null}</MachineSection>
+        <TaskManagerThreads environmentId={environmentId} />
       )}
     </div>
   );

@@ -95,6 +95,29 @@ export function groupCoreSeries(
   });
 }
 
+/**
+ * Puts series sampled every `fromStepMs` onto a `toStepMs` grid ending at the same newest sample,
+ * so a seeded ring stays time-true at the live tick. Each output point holds the newest input
+ * sample at or before its time: a finer step repeats values, a coarser one skips them.
+ */
+export function resampleSeries(
+  series: ReadonlyArray<Float32Array>,
+  fromStepMs: number,
+  toStepMs: number,
+): Array<Float32Array> {
+  if (fromStepMs === toStepMs) return [...series];
+  const length = series[0]?.length ?? 0;
+  const points = length === 0 ? 0 : Math.floor(((length - 1) * fromStepMs) / toStepMs) + 1;
+  return series.map((input) => {
+    const output = new Float32Array(points);
+    for (let point = 0; point < points; point++) {
+      const ageMs = (points - 1 - point) * toStepMs;
+      output[point] = input[length - 1 - Math.ceil(ageMs / fromStepMs)] ?? Number.NaN;
+    }
+    return output;
+  });
+}
+
 export interface VramTotal {
   readonly usedBytes: number;
   readonly totalBytes: number;

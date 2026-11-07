@@ -8,7 +8,13 @@ import { useStableCallback } from "~/hooks/useStableCallback";
 
 import { CellGrid } from "../charts/CellGrid";
 import { SeriesRing } from "../charts/SeriesRing";
-import { CORE_GRID_CELLS, coreCellCount, groupCoreRow, groupCoreSeries } from "./crossMachineModel";
+import {
+  CORE_GRID_CELLS,
+  coreCellCount,
+  groupCoreRow,
+  groupCoreSeries,
+  resampleSeries,
+} from "./crossMachineModel";
 
 export const CORE_HISTORY_MS = 300_000;
 // Each 18 px tall at the column's fixed width, matching the 20-cell layout.
@@ -45,7 +51,12 @@ export function CrossMachineCores({
     }
     if (snapshot.history) {
       const history = decodeMachineHistory(snapshot.history, result.timestamp);
-      target.seed(groupCoreSeries(history.perCore, cells), history.stepMs, history.endAtMs);
+      const seeded = resampleSeries(
+        groupCoreSeries(history.perCore, cells),
+        history.stepMs,
+        tickMs,
+      );
+      target.seed(seeded, tickMs, history.endAtMs);
     }
     if (perCore && perCore.length > 0) {
       target.push(groupCoreRow(perCore, cells), result.timestamp - snapshot.sampleAgeMs);

@@ -303,4 +303,57 @@ mod tests {
             Some(1)
         );
     }
+
+    #[test]
+    fn keeps_claimed_subtrees_out_of_history() {
+        let mut history = HistoryRecorder::default();
+        let process = |pid: u32| ProcessSample {
+            pid,
+            ppid: 1,
+            start_time_ms: 0,
+            run_time_ms: 0,
+            name: "process".to_owned(),
+            command: String::new(),
+            status: "Run".to_owned(),
+            cpu_percent: 0.0,
+            cpu_time_ms: 0,
+            resident_bytes: 0,
+            virtual_bytes: 0,
+            io_read_bytes: 0,
+            io_write_bytes: 0,
+            io_semantics: IoSemantics::Storage,
+        };
+        history.record(&SnapshotEvent {
+            version: PROTOCOL_VERSION,
+            event_type: "snapshot",
+            sequence: 1,
+            sampled_at_unix_ms: 1_000,
+            collection_duration_micros: 1,
+            scanned_process_count: 5,
+            retained_process_count: 5,
+            inaccessible_process_count: 0,
+            request_id: None,
+            external_processes: Vec::new(),
+            processes: [3, 5, 8, 13, 21].map(process).to_vec(),
+            claimed_processes: Some(vec![ExternalProcess {
+                pid: 5,
+                start_time_ms: Some(0),
+            }]),
+            claimed_pids: Some(vec![5, 13, 99]),
+        });
+
+        let retained = history.read(10_000, 1_000);
+        assert_eq!(retained.len(), 1);
+        assert!(retained[0].claimed_processes.is_none());
+        assert!(retained[0].claimed_pids.is_none());
+        assert_eq!(
+            retained[0]
+                .processes
+                .iter()
+                .map(|process| process.pid)
+                .collect::<Vec<_>>(),
+            vec![3, 8, 21]
+        );
+        assert_eq!(history.retained_entry_count, 3);
+    }
 }

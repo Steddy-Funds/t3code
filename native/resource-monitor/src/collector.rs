@@ -495,4 +495,70 @@ mod tests {
         assert!(refresh_kind.memory());
         assert!(refresh_kind.disk_usage());
     }
+
+    #[cfg(unix)]
+    #[test]
+    fn reports_the_whole_claimed_subtree_sorted() {
+        let mut child = std::process::Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .expect("spawn child");
+        let own = std::process::id();
+        let mut collector = Collector::new();
+        let mut config = CollectorConfig {
+            root_pid: u32::MAX,
+            sample_interval: None,
+            external_processes: HashMap::new(),
+            claimed_processes: HashMap::new(),
+        };
+
+        let unclaimed = collector.sample(&config, None);
+        assert!(unclaimed.claimed_pids.is_none());
+        assert!(unclaimed.claimed_processes.is_none());
+
+        config.claimed_processes.insert(own, None);
+        let claimed = collector.sample(&config, None);
+        let _ = child.kill();
+        let _ = child.wait();
+
+        let claimed_pids = claimed.claimed_pids.expect("claimed pids");
+        assert!(claimed_pids.contains(&own));
+        assert!(
+            claimed_pids.contains(&child.id()),
+            "descendants are claimed"
+        );
+        assert!(claimed_pids.windows(2).all(|pair| pair[0] < pair[1]));
+        let roots = claimed.claimed_processes.expect("claimed roots");
+        assert_eq!(roots.len(), 1);
+        assert_eq!(roots[0].pid, own);
+        assert!(roots[0].start_time_ms.is_some_and(|start| start > 0));
+        assert!(
+            claimed.processes.iter().any(|process| process.pid == own),
+            "claimed roots are sampled so the server can attribute them"
+        );
+    }
+
+    #[test]
+    fn keeps_claimed_fields_while_claims_are_set_even_when_none_are_alive() {
+        let mut collector = Collector::new();
+        let config = CollectorConfig {
+            root_pid: u32::MAX,
+            sample_interval: None,
+            external_processes: HashMap::new(),
+            claimed_processes: HashMap::from([
+                (u32::MAX - 1, None),
+                // Our own pid with a start time it never had: a reused pid, not a claim.
+                (std::process::id(), Some(1_000)),
+            ]),
+        };
+        let snapshot = collector.sample(&config, None);
+
+        assert_eq!(snapshot.claimed_pids, Some(Vec::new()));
+        assert!(
+            snapshot
+                .claimed_processes
+                .is_some_and(|roots| roots.is_empty())
+        );
+        assert!(snapshot.processes.is_empty());
+    }
 }

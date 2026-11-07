@@ -575,3 +575,368 @@ mod darwin {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn processes_only() -> HostSampleOptions {
+        HostSampleOptions {
+            processes: true,
+            gpus: false,
+            gpu_processes: false,
+        }
+    }
+
+    fn sample(collector: &mut HostCollector, request_id: Option<&str>) -> HostSampleEvent {
+        let mut gpus = Gpus::default();
+        collector
+            .sample(processes_only(), request_id.map(str::to_owned), &mut gpus)
+            .event
+    }
+
+    fn column_index(columns: &HostProcessColumns, pid: u32) -> Option<usize> {
+        columns.pid.iter().position(|candidate| *candidate == pid)
+    }
+
+    #[test]
+    fn host_samples_measure_cpu_and_memory_without_tasks_or_commands() {
+        let refresh_kind = host_refresh_kind();
+
+        assert!(refresh_kind.cpu());
+        assert!(refresh_kind.memory());
+        assert!(!refresh_kind.tasks());
+        assert_eq!(refresh_kind.cmd(), UpdateKind::Never);
+        assert!(!static_refresh_kind().tasks());
+        assert!(!static_refresh_kind().cpu());
+    }
+
+    #[test]
+    fn clamps_host_intervals_and_treats_zero_as_off() {
+        assert_eq!(clamp_host_interval(0), None);
+        assert_eq!(clamp_host_interval(1), Some(Duration::from_secs(1)));
+        assert_eq!(clamp_host_interval(1_000), Some(Duration::from_secs(1)));
+        assert_eq!(
+            clamp_host_interval(2_500),
+            Some(Duration::from_millis(2_500))
+        );
+        assert_eq!(clamp_host_interval(60_000), Some(Duration::from_secs(60)));
+        assert_eq!(clamp_host_interval(u64::MAX), Some(Duration::from_secs(60)));
+    }
+
+    #[test]
+    fn finds_container_ids_in_runtime_cgroup_paths() {
+        let id = "a".repeat(32) + &"0123456789abcdef".repeat(2);
+        assert_eq!(id.len(), 64);
+        for cgroup in [
+            format!("/docker/{id}"),
+            format!("/system.slice/docker-{id}.scope"),
+            format!("/user.slice/user-1000.slice/libpod-{id}.scope/container"),
+            format!("/kubepods/besteffort/pod1234/cri-containerd-{id}.scope"),
+            format!("/kubepods.slice/kubepods-pod1.slice/crio-{id}.scope"),
+        ] {
+            assert_eq!(container_id(&cgroup), Some(id.as_str()), "{cgroup}");
+        }
+
+        assert_eq!(container_id(""), None);
+        assert_eq!(
+            container_id("/user.slice/user-1000.slice/session-2.scope"),
+            None
+        );
+        assert_eq!(
+            container_id(&format!("/docker/{}", &id[1..])),
+            None,
+            "63 hex"
+        );
+        assert_eq!(container_id(&format!("/docker/{id}f")), None, "65 hex");
+        assert_eq!(
+            container_id(&format!("/docker/{}g", &id[1..])),
+            None,
+            "64 alphanumerics, not all hex"
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn reads_the_path_from_cgroup_lines() {
+        assert_eq!(
+            cgroup_path("0::/user.slice/app.scope"),
+            Some("/user.slice/app.scope")
+        );
+        assert_eq!(
+            cgroup_path("4:cpu,cpuacct:/docker/abc"),
+            Some("/docker/abc")
+        );
+        assert_eq!(
+            cgroup_path("1:name=systemd:/a:b"),
+            Some("/a:b"),
+            "paths may contain colons"
+        );
+        assert_eq!(cgroup_path("garbage"), None);
+        assert_eq!(cgroup_path("0:"), None);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn reads_our_own_cgroup() {
+        assert!(read_cgroup(std::process::id()).starts_with('/'));
+        assert_eq!(read_cgroup(u32::MAX), "");
+    }
+
+    #[test]
+    fn process_table_lists_live_identities_sorted() {
+        let mut collector = HostCollector::new();
+        let table = collector.process_table();
+        let own = std::process::id();
+
+        assert!(table.iter().all(|entry| entry.pid != 0));
+        assert!(table.windows(2).all(|pair| pair[0].pid < pair[1].pid));
+        let entry = table
+            .iter()
+            .find(|entry| entry.pid == own)
+            .expect("own process");
+        assert!(entry.start_time_ms > 0);
+        assert_eq!(entry.start_time_ms % 1_000, 0);
+        assert!(!entry.name.is_empty());
+        assert!(entry.name.len() <= MAX_PROCESS_NAME_BYTES);
+        assert!(
+            collector.session.is_none(),
+            "processTable never starts a host session"
+        );
+    }
+
+    #[test]
+    fn process_table_never_moves_host_cpu_baselines() {
+        let mut collector = HostCollector::new();
+        collector.set_streaming(1_000, processes_only());
+        sample(&mut collector, None);
+        let pid = Pid::from_u32(std::process::id());
+        let session = collector.session.as_ref().expect("streaming session");
+        let before = session.system.process(pid).expect("own process");
+        let before = (before.run_time(), before.cpu_usage().to_bits());
+        let refreshed_at = session.baseline_refreshed_at;
+
+        collector.process_table();
+
+        let session = collector.session.as_ref().expect("streaming session");
+        assert_eq!(session.baseline_refreshed_at, refreshed_at);
+        let after = session.system.process(pid).expect("own process");
+        assert_eq!((after.run_time(), after.cpu_usage().to_bits()), before);
+        let identity = collector.identity.process(pid).expect("identity process");
+        assert_eq!(
+            identity.cpu_usage(),
+            0.0,
+            "the identity System never measures CPU"
+        );
+        assert!(identity.cmd().is_empty());
+        assert_eq!(identity.memory(), 0);
+    }
+
+    #[test]
+    fn sends_static_fields_once_per_identity() {
+        let mut collector = HostCollector::new();
+        collector.set_streaming(1_000, processes_only());
+        let own = std::process::id();
+
+        let first = sample(&mut collector, None);
+        assert!(first.static_reset);
+        assert!(first.scanned_process_count > 0);
+        let columns = first.processes.as_ref().expect("columns");
+        let rows = columns.pid.len();
+        assert!(rows > 0);
+        assert_eq!(columns.ppid.len(), rows);
+        assert_eq!(columns.start_time_ms.len(), rows);
+        assert_eq!(columns.cpu_percent.len(), rows);
+        assert_eq!(columns.resident_bytes.len(), rows);
+        assert!(columns.pid.windows(2).all(|pair| pair[0] < pair[1]));
+        assert!(!columns.pid.contains(&0));
+        assert!(
+            columns
+                .cpu_percent
+                .iter()
+                .all(|cpu| cpu.is_finite() && *cpu >= 0.0)
+        );
+        let index = column_index(columns, own).expect("own column");
+        assert!(columns.resident_bytes[index] > 0);
+
+        let added = first.added.as_ref().expect("added");
+        let entry = added
+            .iter()
+            .find(|entry| entry.pid == own)
+            .expect("own static fields");
+        assert_eq!(entry.start_time_ms, columns.start_time_ms[index]);
+        assert!(!entry.name.is_empty());
+        assert!(entry.name.len() <= MAX_PROCESS_NAME_BYTES);
+        assert!(!entry.command.is_empty());
+        assert!(entry.command.len() <= MAX_STATIC_FIELD_BYTES);
+        assert!(!entry.exe.is_empty());
+        assert!(entry.cwd.len() <= MAX_STATIC_FIELD_BYTES);
+        assert!(entry.cgroup.len() <= MAX_STATIC_FIELD_BYTES);
+        assert!(added.iter().all(|entry| columns.pid.contains(&entry.pid)));
+        assert_eq!(
+            first.inaccessible_process_count,
+            columns.pid.len() - added.len()
+        );
+
+        let second = sample(&mut collector, None);
+        assert!(!second.static_reset);
+        assert!(second.sequence > first.sequence);
+        let added = second.added.as_ref().expect("added");
+        assert!(added.iter().all(|entry| entry.pid != own));
+        let columns = second.processes.as_ref().expect("columns");
+        assert!(
+            column_index(columns, own).is_some(),
+            "columns still carry every process"
+        );
+    }
+
+    #[test]
+    fn resends_static_fields_for_a_reused_pid() {
+        let mut collector = HostCollector::new();
+        collector.set_streaming(1_000, processes_only());
+        let own = std::process::id();
+        sample(&mut collector, None);
+
+        let session = collector.session.as_mut().expect("streaming session");
+        *session
+            .sent_statics
+            .get_mut(&own)
+            .expect("own statics sent") += 1_000;
+        session.sent_statics.insert(u32::MAX, 1);
+
+        let next = sample(&mut collector, None);
+        assert!(!next.static_reset);
+        assert!(
+            next.added
+                .as_ref()
+                .expect("added")
+                .iter()
+                .any(|entry| entry.pid == own)
+        );
+        let session = collector.session.as_ref().expect("streaming session");
+        assert!(
+            !session.sent_statics.contains_key(&u32::MAX),
+            "dead pids are pruned"
+        );
+    }
+
+    #[test]
+    fn reads_static_fields_for_the_monitor_alone() {
+        let mut collector = HostCollector::new();
+        collector.set_streaming(1_000, processes_only());
+        sample(&mut collector, None);
+        let own = std::process::id();
+        let start_time_ms = collector.session.as_ref().expect("session").sent_statics[&own];
+
+        // Listing the monitor pid twice made sysinfo return nothing.
+        let session = collector.session.as_ref().expect("session");
+        let (added, inaccessible) = read_statics(session, &[(own, start_time_ms)]);
+        assert_eq!(inaccessible, 0);
+        assert_eq!(added.len(), 1);
+        assert_eq!(added[0].pid, own);
+        assert!(!added[0].command.is_empty());
+
+        let (added, inaccessible) = read_statics(session, &[(u32::MAX, 1_000)]);
+        assert!(added.is_empty());
+        assert_eq!(
+            inaccessible, 1,
+            "unreadable identities are counted and retried"
+        );
+    }
+
+    #[test]
+    fn a_new_session_starts_with_a_static_reset() {
+        let mut collector = HostCollector::new();
+        collector.set_streaming(1_000, processes_only());
+        sample(&mut collector, None);
+        assert!(!sample(&mut collector, None).static_reset);
+
+        collector.set_streaming(0, processes_only());
+        assert!(collector.session.is_none(), "interval 0 frees the session");
+        assert_eq!(collector.interval(), None);
+
+        collector.set_streaming(2_000, processes_only());
+        let restarted = sample(&mut collector, None);
+        assert!(restarted.static_reset);
+        assert!(
+            restarted
+                .added
+                .as_ref()
+                .expect("added")
+                .iter()
+                .any(|entry| entry.pid == std::process::id())
+        );
+    }
+
+    #[test]
+    fn one_shot_samples_drop_their_session() {
+        let mut collector = HostCollector::new();
+        let first = sample(&mut collector, Some("host-1"));
+
+        assert_eq!(first.request_id.as_deref(), Some("host-1"));
+        assert!(first.static_reset);
+        assert!(first.processes.is_some());
+        assert!(collector.session.is_none());
+
+        let second = sample(&mut collector, Some("host-2"));
+        assert!(
+            second.static_reset,
+            "every one-shot sample is self-contained"
+        );
+        assert_eq!(second.sequence, first.sequence + 1);
+    }
+
+    #[test]
+    fn streaming_keeps_its_session_across_requested_samples() {
+        let mut collector = HostCollector::new();
+        collector.set_streaming(5_000, processes_only());
+        assert_eq!(collector.interval(), Some(Duration::from_secs(5)));
+        assert_eq!(collector.streaming_options(), processes_only());
+
+        sample(&mut collector, None);
+        let requested = sample(&mut collector, Some("host-1"));
+        assert_eq!(requested.request_id.as_deref(), Some("host-1"));
+        assert!(!requested.static_reset);
+        assert!(collector.session.is_some());
+    }
+
+    #[test]
+    fn samples_without_options_carry_no_process_fields() {
+        let mut collector = HostCollector::new();
+        let mut gpus = Gpus::default();
+        let outcome = collector.sample(HostSampleOptions::default(), None, &mut gpus);
+
+        assert!(outcome.event.processes.is_none());
+        assert!(outcome.event.added.is_none());
+        assert!(outcome.event.gpus.is_none());
+        assert!(outcome.event.gpu_processes.is_none());
+        assert!(!outcome.event.static_reset);
+        assert_eq!(outcome.event.scanned_process_count, 0);
+        assert!(outcome.gpus_disabled.is_none());
+        assert!(collector.session.is_none());
+    }
+
+    #[test]
+    fn normalizes_start_times_onto_the_identity_epoch() {
+        let mut collector = HostCollector::new();
+        let own = std::process::id();
+        let identity_start = collector
+            .process_table()
+            .into_iter()
+            .find(|entry| entry.pid == own)
+            .expect("own process")
+            .start_time_ms;
+        let event = sample(&mut collector, None);
+        let columns = event.processes.as_ref().expect("columns");
+        let index = column_index(columns, own).expect("own column");
+
+        assert_eq!(columns.start_time_ms[index], identity_start);
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn host_totals_are_unknown_off_macos() {
+        const { assert!(!HOST_TOTALS_SUPPORTED) };
+        assert_eq!(host_totals(), HostTotals::default());
+    }
+}

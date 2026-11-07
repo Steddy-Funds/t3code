@@ -396,4 +396,294 @@ mod tests {
             Command::ProcessTable { request_id, .. } if request_id == "processes-1"
         ));
     }
+
+    #[test]
+    fn decodes_v4_host_commands_with_default_options() {
+        let claims = serde_json::from_str::<Command>(
+            r#"{"version":4,"type":"setClaimedProcesses","processes":[{"pid":9,"startTimeMs":5000},{"pid":10}]}"#,
+        )
+        .expect("set claimed processes");
+        match claims {
+            Command::SetClaimedProcesses { version, processes } => {
+                assert_eq!(version, 4);
+                assert_eq!(processes.len(), 2);
+                assert_eq!(processes[0].start_time_ms, Some(5_000));
+                assert_eq!(processes[1].start_time_ms, None);
+            }
+            _ => panic!("unexpected command"),
+        }
+
+        let streaming = serde_json::from_str::<Command>(
+            r#"{"version":4,"type":"setHostStreaming","intervalMs":2000,"processes":true}"#,
+        )
+        .expect("set host streaming");
+        assert!(matches!(
+            streaming,
+            Command::SetHostStreaming {
+                version: 4,
+                interval_ms: 2_000,
+                options: HostSampleOptions {
+                    processes: true,
+                    gpus: false,
+                    gpu_processes: false
+                },
+            }
+        ));
+
+        let off = serde_json::from_str::<Command>(
+            r#"{"version":4,"type":"setHostStreaming","intervalMs":0}"#,
+        )
+        .expect("host streaming off");
+        assert!(matches!(
+            off,
+            Command::SetHostStreaming { interval_ms: 0, options, .. } if options == HostSampleOptions::default()
+        ));
+
+        let sample_now = serde_json::from_str::<Command>(
+            r#"{"version":4,"type":"hostSampleNow","requestId":"host-1","gpus":true,"gpuProcesses":true}"#,
+        )
+        .expect("host sample now");
+        assert!(matches!(
+            sample_now,
+            Command::HostSampleNow {
+                request_id,
+                options: HostSampleOptions { processes: false, gpus: true, gpu_processes: true },
+                ..
+            } if request_id == "host-1"
+        ));
+
+        let totals = serde_json::from_str::<Command>(
+            r#"{"version":4,"type":"hostTotals","requestId":"totals-1"}"#,
+        )
+        .expect("host totals");
+        assert!(
+            matches!(totals, Command::HostTotals { request_id, .. } if request_id == "totals-1")
+        );
+
+        let gpu_totals = serde_json::from_str::<Command>(
+            r#"{"version":4,"type":"gpuTotals","requestId":"gpu-1"}"#,
+        )
+        .expect("gpu totals");
+        assert_eq!(gpu_totals.version(), 4);
+        assert!(
+            matches!(gpu_totals, Command::GpuTotals { request_id, .. } if request_id == "gpu-1")
+        );
+
+        assert!(
+            serde_json::from_str::<Command>(r#"{"version":4,"type":"hostTotals"}"#).is_err(),
+            "requests need a requestId"
+        );
+        assert!(
+            serde_json::from_str::<Command>(r#"{"version":4,"type":"setHostStreaming"}"#).is_err(),
+            "setHostStreaming needs an interval"
+        );
+    }
+
+    fn snapshot() -> SnapshotEvent {
+        SnapshotEvent {
+            version: PROTOCOL_VERSION,
+            event_type: "snapshot",
+            sequence: 1,
+            sampled_at_unix_ms: 1_000,
+            collection_duration_micros: 1,
+            scanned_process_count: 0,
+            retained_process_count: 0,
+            inaccessible_process_count: 0,
+            request_id: None,
+            external_processes: Vec::new(),
+            processes: Vec::new(),
+            claimed_processes: None,
+            claimed_pids: None,
+        }
+    }
+
+    #[test]
+    fn snapshots_carry_claimed_fields_only_while_claims_are_set() {
+        let unclaimed = serde_json::to_value(snapshot()).expect("snapshot json");
+        assert!(unclaimed.get("claimedProcesses").is_none());
+        assert!(unclaimed.get("claimedPids").is_none());
+
+        let claimed = serde_json::to_value(SnapshotEvent {
+            claimed_processes: Some(vec![ExternalProcess {
+                pid: 9,
+                start_time_ms: Some(5_000),
+            }]),
+            claimed_pids: Some(vec![9, 12]),
+            ..snapshot()
+        })
+        .expect("claimed snapshot json");
+        assert_eq!(
+            claimed["claimedProcesses"],
+            serde_json::json!([{ "pid": 9, "startTimeMs": 5000 }])
+        );
+        assert_eq!(claimed["claimedPids"], serde_json::json!([9, 12]));
+
+        let none_alive = serde_json::to_value(SnapshotEvent {
+            claimed_processes: Some(Vec::new()),
+            claimed_pids: Some(Vec::new()),
+            ..snapshot()
+        })
+        .expect("empty claims json");
+        assert_eq!(none_alive["claimedPids"], serde_json::json!([]));
+    }
+
+    #[test]
+    fn serializes_host_events_in_camel_case() {
+        let entry = serde_json::to_value(ProcessTableEntry {
+            pid: 7,
+            ppid: 1,
+            name: "node".to_owned(),
+            start_time_ms: 3_000,
+        })
+        .expect("process table entry");
+        assert_eq!(
+            entry,
+            serde_json::json!({ "pid": 7, "ppid": 1, "name": "node", "startTimeMs": 3000 })
+        );
+
+        let bare = serde_json::to_value(HostSampleEvent {
+            version: PROTOCOL_VERSION,
+            event_type: "hostSample",
+            sequence: 3,
+            sampled_at_unix_ms: 9,
+            request_id: None,
+            collection_duration_micros: 1,
+            scanned_process_count: 0,
+            inaccessible_process_count: 0,
+            static_reset: false,
+            processes: None,
+            added: None,
+            gpus: None,
+            gpu_processes: None,
+        })
+        .expect("bare host sample");
+        assert_eq!(
+            bare,
+            serde_json::json!({
+                "version": 4,
+                "type": "hostSample",
+                "sequence": 3,
+                "sampledAtUnixMs": 9,
+                "collectionDurationMicros": 1,
+                "scannedProcessCount": 0,
+                "inaccessibleProcessCount": 0,
+                "staticReset": false,
+            })
+        );
+
+        let full = serde_json::to_value(HostSampleEvent {
+            version: PROTOCOL_VERSION,
+            event_type: "hostSample",
+            sequence: 4,
+            sampled_at_unix_ms: 9,
+            request_id: Some("host-1".to_owned()),
+            collection_duration_micros: 1,
+            scanned_process_count: 1,
+            inaccessible_process_count: 0,
+            static_reset: true,
+            processes: Some(HostProcessColumns {
+                pid: vec![7],
+                ppid: vec![1],
+                start_time_ms: vec![3_000],
+                cpu_percent: vec![12.5],
+                resident_bytes: vec![4_096],
+            }),
+            added: Some(vec![HostProcessAdded {
+                pid: 7,
+                start_time_ms: 3_000,
+                name: "node".to_owned(),
+                user: "dev".to_owned(),
+                command: "node server.js".to_owned(),
+                exe: "/usr/bin/node".to_owned(),
+                cwd: "/srv".to_owned(),
+                cgroup: "/user.slice".to_owned(),
+                container_id: String::new(),
+            }]),
+            gpus: Some(Vec::new()),
+            gpu_processes: Some(Vec::new()),
+        })
+        .expect("full host sample");
+        assert_eq!(full["requestId"], "host-1");
+        assert_eq!(full["staticReset"], true);
+        assert_eq!(
+            full["processes"],
+            serde_json::json!({
+                "pid": [7],
+                "ppid": [1],
+                "startTimeMs": [3000],
+                "cpuPercent": [12.5],
+                "residentBytes": [4096],
+            })
+        );
+        assert_eq!(full["added"][0]["containerId"], "");
+        assert_eq!(full["added"][0]["startTimeMs"], 3000);
+        assert_eq!(full["gpus"], serde_json::json!([]));
+        assert_eq!(full["gpuProcesses"], serde_json::json!([]));
+    }
+
+    #[test]
+    fn totals_replies_distinguish_unknown_from_failed() {
+        let host = serde_json::to_value(HostTotalsEvent {
+            version: PROTOCOL_VERSION,
+            event_type: "hostTotals",
+            request_id: "totals-1",
+            memory_pressure: None,
+            memory_available_bytes: None,
+            swap_total_bytes: None,
+            swap_used_bytes: None,
+        })
+        .expect("host totals");
+        assert_eq!(
+            host,
+            serde_json::json!({
+                "version": 4,
+                "type": "hostTotals",
+                "requestId": "totals-1",
+                "memoryPressure": null,
+                "memoryAvailableBytes": null,
+                "swapTotalBytes": null,
+                "swapUsedBytes": null,
+            })
+        );
+
+        let failed = serde_json::to_value(GpuTotalsEvent {
+            version: PROTOCOL_VERSION,
+            event_type: "gpuTotals",
+            request_id: "gpu-1",
+            gpus: None,
+        })
+        .expect("failed gpu totals");
+        assert!(failed.get("gpus").is_none());
+
+        let empty = serde_json::to_value(GpuTotalsEvent {
+            version: PROTOCOL_VERSION,
+            event_type: "gpuTotals",
+            request_id: "gpu-1",
+            gpus: Some(Vec::new()),
+        })
+        .expect("empty gpu totals");
+        assert_eq!(empty["gpus"], serde_json::json!([]));
+    }
+
+    #[test]
+    fn capabilities_name_the_host_features() {
+        let capabilities = serde_json::to_value(Capabilities {
+            cumulative_cpu_time: true,
+            current_cpu_percent: true,
+            resident_memory: true,
+            virtual_memory: true,
+            io_bytes: true,
+            process_start_time: true,
+            process_tree: true,
+            host_processes: true,
+            gpu_nvidia: false,
+            gpu_intel: true,
+            host_totals: false,
+        })
+        .expect("capabilities");
+        assert_eq!(capabilities["hostProcesses"], true);
+        assert_eq!(capabilities["gpuNvidia"], false);
+        assert_eq!(capabilities["gpuIntel"], true);
+        assert_eq!(capabilities["hostTotals"], false);
+    }
 }

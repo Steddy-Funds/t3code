@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 
-pub(crate) const PROTOCOL_VERSION: u32 = 3;
+use crate::gpu::{GpuDeviceSample, GpuProcessSample};
+
+pub(crate) const PROTOCOL_VERSION: u32 = 4;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -55,9 +57,45 @@ pub(crate) enum Command {
         request_id: String,
         window_ms: u64,
     },
+    SetClaimedProcesses {
+        version: u32,
+        processes: Vec<ExternalProcess>,
+    },
+    SetHostStreaming {
+        version: u32,
+        interval_ms: u64,
+        #[serde(flatten)]
+        options: HostSampleOptions,
+    },
+    HostSampleNow {
+        version: u32,
+        request_id: String,
+        #[serde(flatten)]
+        options: HostSampleOptions,
+    },
+    HostTotals {
+        version: u32,
+        request_id: String,
+    },
+    GpuTotals {
+        version: u32,
+        request_id: String,
+    },
     Shutdown {
         version: u32,
     },
+}
+
+/// What one `hostSample` carries.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct HostSampleOptions {
+    #[serde(default)]
+    pub(crate) processes: bool,
+    #[serde(default)]
+    pub(crate) gpus: bool,
+    #[serde(default)]
+    pub(crate) gpu_processes: bool,
 }
 
 impl Command {
@@ -70,6 +108,11 @@ impl Command {
             | Self::SampleNow { version, .. }
             | Self::ProcessTable { version, .. }
             | Self::ReadHistory { version, .. }
+            | Self::SetClaimedProcesses { version, .. }
+            | Self::SetHostStreaming { version, .. }
+            | Self::HostSampleNow { version, .. }
+            | Self::HostTotals { version, .. }
+            | Self::GpuTotals { version, .. }
             | Self::Shutdown { version } => *version,
         }
     }
@@ -85,6 +128,10 @@ pub(crate) struct Capabilities {
     pub(crate) io_bytes: bool,
     pub(crate) process_start_time: bool,
     pub(crate) process_tree: bool,
+    pub(crate) host_processes: bool,
+    pub(crate) gpu_nvidia: bool,
+    pub(crate) gpu_intel: bool,
+    pub(crate) host_totals: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -132,6 +179,7 @@ pub(crate) struct ProcessTableEntry {
     pub(crate) pid: u32,
     pub(crate) ppid: u32,
     pub(crate) name: String,
+    pub(crate) start_time_ms: u64,
 }
 
 #[derive(Debug, Serialize)]
@@ -169,6 +217,12 @@ pub(crate) struct SnapshotEvent {
     pub(crate) request_id: Option<String>,
     pub(crate) external_processes: Vec<ExternalProcess>,
     pub(crate) processes: Vec<ProcessSample>,
+    /// Present while claims are set; the claimed roots that are still alive.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) claimed_processes: Option<Vec<ExternalProcess>>,
+    /// Every pid in a claimed subtree, so the server can keep those rows out of T3 totals.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) claimed_pids: Option<Vec<u32>>,
 }
 
 impl SnapshotEvent {
@@ -204,6 +258,83 @@ pub(crate) struct HistoryChunkEvent<'a> {
     pub(crate) request_id: &'a str,
     pub(crate) done: bool,
     pub(crate) snapshots: &'a [SnapshotEvent],
+}
+
+/// Index-aligned columns, one entry per sampled process.
+#[derive(Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct HostProcessColumns {
+    pub(crate) pid: Vec<u32>,
+    pub(crate) ppid: Vec<u32>,
+    pub(crate) start_time_ms: Vec<u64>,
+    pub(crate) cpu_percent: Vec<f32>,
+    pub(crate) resident_bytes: Vec<u64>,
+}
+
+/// Static fields, sent once per process identity until the next `staticReset`.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct HostProcessAdded {
+    pub(crate) pid: u32,
+    pub(crate) start_time_ms: u64,
+    pub(crate) name: String,
+    pub(crate) user: String,
+    pub(crate) command: String,
+    pub(crate) exe: String,
+    pub(crate) cwd: String,
+    pub(crate) cgroup: String,
+    pub(crate) container_id: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct HostSampleEvent {
+    pub(crate) version: u32,
+    #[serde(rename = "type")]
+    pub(crate) event_type: &'static str,
+    pub(crate) sequence: u64,
+    pub(crate) sampled_at_unix_ms: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) request_id: Option<String>,
+    pub(crate) collection_duration_micros: u64,
+    pub(crate) scanned_process_count: usize,
+    pub(crate) inaccessible_process_count: usize,
+    /// The receiver drops every static field it holds before applying `added`.
+    pub(crate) static_reset: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) processes: Option<HostProcessColumns>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) added: Option<Vec<HostProcessAdded>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) gpus: Option<Vec<GpuDeviceSample>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) gpu_processes: Option<Vec<GpuProcessSample>>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct HostTotalsEvent<'a> {
+    pub(crate) version: u32,
+    #[serde(rename = "type")]
+    pub(crate) event_type: &'static str,
+    pub(crate) request_id: &'a str,
+    /// "normal", "warn" or "critical".
+    pub(crate) memory_pressure: Option<&'static str>,
+    pub(crate) memory_available_bytes: Option<u64>,
+    pub(crate) swap_total_bytes: Option<u64>,
+    pub(crate) swap_used_bytes: Option<u64>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct GpuTotalsEvent<'a> {
+    pub(crate) version: u32,
+    #[serde(rename = "type")]
+    pub(crate) event_type: &'static str,
+    pub(crate) request_id: &'a str,
+    /// None when this one query failed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) gpus: Option<Vec<GpuDeviceSample>>,
 }
 
 #[derive(Debug, Serialize)]

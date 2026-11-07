@@ -36,6 +36,15 @@ native monitor reports host totals, one long-lived `sh` loop runs `sysctl` and `
 every 5 s into a pipe the server owns. It is the one exception to "no recurring shell
 probe": it exits when its parent dies or a write to the pipe fails.
 
+The monitor's host mode (protocol 4) walks every process on the machine, not just the
+server's tree, so it runs only while a view streams it (`setHostStreaming`) or on one
+request (`hostSampleNow`), and it frees its process table when streaming stops. Host samples
+never enter history. Static fields (command, cwd, user, cgroup) are read once per process
+identity, and the client keeps that table per monitor generation. `gpuTotals` reads device
+totals only, so it can ride the always-on 5 s tick; a suspended GPU is never woken to read
+it. GPU code runs inside the monitor, so after a crash with GPUs in use, or the monitor's own
+`gpu-unavailable`, GPUs stay off until the server restarts. A protocol 3 binary still works without the host features.
+
 History has independent bounds for age, snapshot count, process rows, and retained
 bytes. A count limit alone cannot bound memory when command lines vary in size.
 Large process trees therefore shorten the available history window. Linux task

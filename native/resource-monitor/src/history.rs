@@ -37,6 +37,13 @@ impl HistoryRecorder {
             .is_some_and(|previous| previous.sampled_at_unix_ms > snapshot.sampled_at_unix_ms);
         let mut retained = snapshot.clone();
         retained.request_id = None;
+        // Claimed subtrees belong to their claimants, not to T3's own history.
+        retained.claimed_processes = None;
+        if let Some(claimed_pids) = retained.claimed_pids.take() {
+            retained
+                .processes
+                .retain(|process| claimed_pids.binary_search(&process.pid).is_err());
+        }
         self.retained_entry_count = self
             .retained_entry_count
             .saturating_add(retained.retained_entry_count());
@@ -132,6 +139,8 @@ mod tests {
                     start_time_ms: Some(1_000),
                 }],
                 processes: Vec::new(),
+                claimed_processes: None,
+                claimed_pids: None,
             });
         }
 
@@ -170,6 +179,8 @@ mod tests {
             request_id: None,
             external_processes: Vec::new(),
             processes: Vec::new(),
+            claimed_processes: None,
+            claimed_pids: None,
         };
         history.record(&snapshot);
 
@@ -227,6 +238,8 @@ mod tests {
                         start_time_ms: sequence * 1_000,
                         ..process.clone()
                     }],
+                    claimed_processes: None,
+                    claimed_pids: None,
                 },
                 3,
                 3,
@@ -263,6 +276,8 @@ mod tests {
             request_id: None,
             external_processes,
             processes: Vec::new(),
+            claimed_processes: None,
+            claimed_pids: None,
         };
         let snapshot_bytes = snapshot.estimated_history_bytes();
         let snapshot_entries = snapshot.retained_entry_count();

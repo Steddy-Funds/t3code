@@ -2,6 +2,7 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
 import { NonNegativeInt, PositiveInt } from "./baseSchemas.ts";
+import { GpuDeviceSample } from "./resourceTelemetry.ts";
 
 export const MACHINE_HOLD_MAX_MS = 3_600_000;
 export const MACHINE_SAMPLE_MIN_INTERVAL_MS = 500;
@@ -105,6 +106,7 @@ export type MachineTotalsSummary = typeof MachineTotalsSummary.Type;
 export const MachineStatusSample = Schema.Struct({
   /** Percent 0–100 per logical core. */
   perCore: Schema.Array(Schema.Number),
+  gpus: Schema.optionalKey(Schema.Array(GpuDeviceSample)),
 });
 export type MachineStatusSample = typeof MachineStatusSample.Type;
 
@@ -151,6 +153,10 @@ export const MachineProcessRows = Schema.Struct({
   cpu: Schema.Array(Schema.Number),
   /** Resident bytes. */
   rss: Schema.Array(NonNegativeInt),
+  /** GPU util percent; null where unmeasured. Only with `gpuProcesses`. */
+  gpuUtil: Schema.optionalKey(Schema.Array(Schema.NullOr(Schema.Number))),
+  /** VRAM bytes across devices; null where unmeasured. Only with `gpuProcesses`. */
+  vram: Schema.optionalKey(Schema.Array(Schema.NullOr(NonNegativeInt))),
 });
 export type MachineProcessRows = typeof MachineProcessRows.Type;
 
@@ -167,6 +173,7 @@ export const MachineProcessFrame = Schema.Struct({
   added: Schema.Array(MachineProcessAdded),
   removed: Schema.Array(NonNegativeInt),
   rows: MachineProcessRows,
+  gpus: Schema.optionalKey(Schema.Array(GpuDeviceSample)),
   /** Rows left out past the row cap. */
   truncated: Schema.optionalKey(PositiveInt),
 });
@@ -179,5 +186,7 @@ export const SubscribeMachineProcessesInput = Schema.Struct({
   top: Schema.optionalKey(
     Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: MACHINE_PROCESSES_MAX_TOP })),
   ),
+  /** Per-process GPU columns; the host walks DRM fdinfo or asks NVML for them. */
+  gpuProcesses: Schema.optionalKey(Schema.Boolean),
 });
 export type SubscribeMachineProcessesInput = typeof SubscribeMachineProcessesInput.Type;

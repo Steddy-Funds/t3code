@@ -5,17 +5,39 @@ mod host;
 mod io;
 mod protocol;
 
-use std::io::BufWriter;
+use std::collections::HashMap;
+use std::io::{BufWriter, Write};
 use std::sync::mpsc::RecvTimeoutError;
 use std::time::{Duration, Instant};
 
 use crate::collector::{Collector, CollectorConfig, unix_time_ms};
+use crate::gpu::{GpuError, Gpus};
 use crate::history::HistoryRecorder;
+use crate::host::{HOST_TOTALS_SUPPORTED, HostCollector, HostSampleOutcome, host_totals};
 use crate::io::{Input, spawn_input_reader, write_error, write_event, write_history};
-use crate::protocol::{Capabilities, Command, HelloEvent, PROTOCOL_VERSION, ProcessTableEvent};
+use crate::protocol::{
+    Capabilities, Command, ExternalProcess, GpuTotalsEvent, HelloEvent, HostTotalsEvent,
+    PROTOCOL_VERSION, ProcessTableEvent,
+};
 
 const MIN_SAMPLE_INTERVAL_MS: u64 = 250;
 const MAX_SAMPLE_INTERVAL_MS: u64 = 60_000;
+const MAX_CLAIMED_PROCESSES: usize = 256;
+
+fn identity_map(processes: Vec<ExternalProcess>) -> HashMap<u32, Option<u64>> {
+    processes
+        .into_iter()
+        .map(|process| (process.pid, process.start_time_ms))
+        .collect()
+}
+
+fn write_host_sample(writer: &mut impl Write, outcome: HostSampleOutcome) -> std::io::Result<()> {
+    write_event(writer, &outcome.event)?;
+    match outcome.gpus_disabled {
+        Some(message) => write_error(writer, "gpu-unavailable", message, true),
+        None => Ok(()),
+    }
+}
 
 fn clamp_sample_interval(sample_interval_ms: u64) -> Option<Duration> {
     (sample_interval_ms > 0).then(|| {
@@ -35,6 +57,7 @@ fn sample_now_deadline(
 
 fn main() -> std::io::Result<()> {
     let mut writer = BufWriter::new(std::io::stdout().lock());
+    let gpu_capabilities = crate::gpu::capabilities();
     write_event(
         &mut writer,
         &HelloEvent {
@@ -52,6 +75,10 @@ fn main() -> std::io::Result<()> {
                 io_bytes: true,
                 process_start_time: true,
                 process_tree: true,
+                host_processes: true,
+                gpu_nvidia: gpu_capabilities.nvidia,
+                gpu_intel: gpu_capabilities.intel,
+                host_totals: HOST_TOTALS_SUPPORTED,
             },
         },
     )?;
@@ -62,8 +89,18 @@ fn main() -> std::io::Result<()> {
     let mut config: Option<CollectorConfig> = None;
     let mut next_sample_at: Option<Instant> = None;
     let mut streaming_enabled = false;
+    let mut host = HostCollector::new();
+    let mut gpus = Gpus::default();
+    let mut next_host_sample_at: Option<Instant> = None;
 
     loop {
+        if next_host_sample_at.is_some_and(|deadline| deadline <= Instant::now()) {
+            let outcome = host.sample(host.streaming_options(), None, &mut gpus);
+            write_host_sample(&mut writer, outcome)?;
+            next_host_sample_at = host.interval().map(|interval| Instant::now() + interval);
+            continue;
+        }
+
         if next_sample_at.is_some_and(|deadline| deadline <= Instant::now()) {
             if let Some(current) = config.as_ref() {
                 if let Some(interval) = current.sample_interval {
@@ -82,7 +119,10 @@ fn main() -> std::io::Result<()> {
             continue;
         }
 
-        let timeout = next_sample_at
+        let timeout = [next_sample_at, next_host_sample_at]
+            .into_iter()
+            .flatten()
+            .min()
             .map(|deadline| deadline.saturating_duration_since(Instant::now()))
             .unwrap_or(Duration::from_secs(60));
 
@@ -115,20 +155,18 @@ fn main() -> std::io::Result<()> {
                         config = Some(CollectorConfig {
                             root_pid,
                             sample_interval,
-                            external_processes: external_processes
-                                .into_iter()
-                                .map(|process| (process.pid, process.start_time_ms))
-                                .collect(),
+                            external_processes: identity_map(external_processes),
+                            claimed_processes: config
+                                .take()
+                                .map(|previous| previous.claimed_processes)
+                                .unwrap_or_default(),
                         });
                         collector.prime_cpu_usage();
                         next_sample_at = sample_interval.map(|_| Instant::now());
                     }
                     Command::SetExternalProcesses { processes, .. } => {
                         if let Some(current) = config.as_mut() {
-                            current.external_processes = processes
-                                .into_iter()
-                                .map(|process| (process.pid, process.start_time_ms))
-                                .collect();
+                            current.external_processes = identity_map(processes);
                         } else {
                             write_error(
                                 &mut writer,
@@ -182,9 +220,72 @@ fn main() -> std::io::Result<()> {
                             version: PROTOCOL_VERSION,
                             event_type: "processTable",
                             request_id: &request_id,
-                            processes: collector.process_table(),
+                            processes: host.process_table(),
                         };
                         write_event(&mut writer, &event)?;
+                    }
+                    Command::SetClaimedProcesses { mut processes, .. } => {
+                        if let Some(current) = config.as_mut() {
+                            processes.truncate(MAX_CLAIMED_PROCESSES);
+                            current.claimed_processes = identity_map(processes);
+                        } else {
+                            write_error(
+                                &mut writer,
+                                "not-configured",
+                                "configure must be sent before claimed processes",
+                                true,
+                            )?;
+                        }
+                    }
+                    Command::SetHostStreaming {
+                        interval_ms,
+                        options,
+                        ..
+                    } => {
+                        host.set_streaming(interval_ms, options);
+                        next_host_sample_at = host.interval().map(|_| Instant::now());
+                    }
+                    Command::HostSampleNow {
+                        request_id,
+                        options,
+                        ..
+                    } => {
+                        let outcome = host.sample(options, Some(request_id), &mut gpus);
+                        write_host_sample(&mut writer, outcome)?;
+                    }
+                    Command::HostTotals { request_id, .. } => {
+                        let totals = host_totals();
+                        write_event(
+                            &mut writer,
+                            &HostTotalsEvent {
+                                version: PROTOCOL_VERSION,
+                                event_type: "hostTotals",
+                                request_id: &request_id,
+                                memory_pressure: totals.memory_pressure,
+                                memory_available_bytes: totals.memory_available_bytes,
+                                swap_total_bytes: totals.swap_total_bytes,
+                                swap_used_bytes: totals.swap_used_bytes,
+                            },
+                        )?;
+                    }
+                    Command::GpuTotals { request_id, .. } => {
+                        let (devices, disabled) = match gpus.totals() {
+                            Ok(devices) => (Some(devices), None),
+                            Err(GpuError::Failed(_)) => (None, None),
+                            Err(GpuError::Disabled(message)) => (Some(Vec::new()), Some(message)),
+                        };
+                        write_event(
+                            &mut writer,
+                            &GpuTotalsEvent {
+                                version: PROTOCOL_VERSION,
+                                event_type: "gpuTotals",
+                                request_id: &request_id,
+                                gpus: devices,
+                            },
+                        )?;
+                        if let Some(message) = disabled {
+                            write_error(&mut writer, "gpu-unavailable", message, true)?;
+                        }
                     }
                     Command::ReadHistory {
                         request_id,

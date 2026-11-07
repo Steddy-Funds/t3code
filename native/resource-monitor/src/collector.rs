@@ -6,11 +6,11 @@ use sysinfo::{
 };
 
 use crate::protocol::{
-    ExternalProcess, IoSemantics, PROTOCOL_VERSION, ProcessSample, ProcessTableEntry, SnapshotEvent,
+    ExternalProcess, IoSemantics, PROTOCOL_VERSION, ProcessSample, SnapshotEvent,
 };
 
 const PROCESS_START_TIME_PRECISION_MS: u64 = 1_000;
-const MAX_PROCESS_NAME_BYTES: usize = 1_024;
+pub(crate) const MAX_PROCESS_NAME_BYTES: usize = 1_024;
 const MAX_PROCESS_COMMAND_BYTES: usize = 16 * 1_024;
 const MAX_PROCESS_STATUS_BYTES: usize = 256;
 const TWO_STAGE_PROCESS_REFRESH: bool = cfg!(any(target_os = "linux", target_os = "macos"));
@@ -20,6 +20,7 @@ pub(crate) struct CollectorConfig {
     pub(crate) root_pid: u32,
     pub(crate) sample_interval: Option<Duration>,
     pub(crate) external_processes: HashMap<u32, Option<u64>>,
+    pub(crate) claimed_processes: HashMap<u32, Option<u64>>,
 }
 
 pub(crate) struct Collector {
@@ -44,37 +45,6 @@ impl Collector {
             process_discovery_refresh_kind(),
         );
         self.cpu_baseline_refreshed_at = Some(Instant::now());
-    }
-
-    pub(crate) fn process_table(&self) -> Vec<ProcessTableEntry> {
-        // A separate System preserves snapshot CPU baselines.
-        let mut process_table_system = System::new();
-        process_table_system.refresh_processes_specifics(
-            ProcessesToUpdate::All,
-            true,
-            ProcessRefreshKind::nothing().without_tasks(),
-        );
-        let mut processes = process_table_system
-            .processes()
-            .iter()
-            .filter_map(|(pid, process)| {
-                let pid = pid.as_u32();
-                // Kernel idle PID 0 would fail the server's positive-PID event schema.
-                if pid == 0 {
-                    return None;
-                }
-                Some(ProcessTableEntry {
-                    pid,
-                    ppid: process.parent().map(Pid::as_u32).unwrap_or(0),
-                    name: truncate_utf8(
-                        process.name().to_string_lossy().into_owned(),
-                        MAX_PROCESS_NAME_BYTES,
-                    ),
-                })
-            })
-            .collect::<Vec<_>>();
-        processes.sort_by_key(|process| process.pid);
-        processes
     }
 
     pub(crate) fn sample(
@@ -105,27 +75,26 @@ impl Collector {
                 (pid, ppid, process.start_time().saturating_mul(1_000))
             })
             .collect::<Vec<_>>();
-        let external_processes = config
-            .external_processes
-            .iter()
-            .filter_map(|(pid, expected_start_time_ms)| {
-                let (_, _, actual_start_time_ms) = rows
-                    .iter()
-                    .find(|(candidate_pid, _, _)| candidate_pid == pid)?;
-                matches_external_identity(*actual_start_time_ms, *expected_start_time_ms).then_some(
-                    ExternalProcess {
-                        pid: *pid,
-                        start_time_ms: Some(*actual_start_time_ms),
-                    },
-                )
-            })
-            .collect::<Vec<_>>();
+        let external_processes = live_external_processes(&rows, &config.external_processes);
+        let claimed_processes = live_external_processes(&rows, &config.claimed_processes);
         let mut roots = external_processes
             .iter()
+            .chain(&claimed_processes)
             .map(|process| process.pid)
             .collect::<HashSet<_>>();
         roots.insert(config.root_pid);
         let tracked = select_tracked_pids(&rows, &roots);
+        let claimed_pids = (!config.claimed_processes.is_empty()).then(|| {
+            let claimed_roots = claimed_processes
+                .iter()
+                .map(|process| process.pid)
+                .collect();
+            let mut pids = select_tracked_pids(&rows, &claimed_roots)
+                .into_iter()
+                .collect::<Vec<_>>();
+            pids.sort_unstable();
+            pids
+        });
         let tracked_process_count = tracked.len();
         let process_details = if TWO_STAGE_PROCESS_REFRESH && !tracked.is_empty() {
             let monitor_pid = Pid::from_u32(std::process::id());
@@ -228,8 +197,30 @@ impl Collector {
             request_id,
             external_processes,
             processes,
+            claimed_processes: claimed_pids.is_some().then_some(claimed_processes),
+            claimed_pids,
         }
     }
+}
+
+fn live_external_processes(
+    rows: &[(u32, u32, u64)],
+    expected: &HashMap<u32, Option<u64>>,
+) -> Vec<ExternalProcess> {
+    expected
+        .iter()
+        .filter_map(|(pid, expected_start_time_ms)| {
+            let (_, _, actual_start_time_ms) = rows
+                .iter()
+                .find(|(candidate_pid, _, _)| candidate_pid == pid)?;
+            matches_external_identity(*actual_start_time_ms, *expected_start_time_ms).then_some(
+                ExternalProcess {
+                    pid: *pid,
+                    start_time_ms: Some(*actual_start_time_ms),
+                },
+            )
+        })
+        .collect()
 }
 
 // Keep CPU baselines separate. Even a metadata refresh resets Linux process times.
@@ -254,7 +245,7 @@ fn inaccessible_process_count(selected: usize, materialized: usize) -> usize {
     selected.saturating_sub(materialized)
 }
 
-fn matches_process_start_time(discovered: u64, detail: u64, epoch_offset: i128) -> bool {
+pub(crate) fn matches_process_start_time(discovered: u64, detail: u64, epoch_offset: i128) -> bool {
     i128::from(detail) - epoch_offset == i128::from(discovered)
 }
 
@@ -317,7 +308,7 @@ fn select_tracked_pids(rows: &[(u32, u32, u64)], roots: &HashSet<u32>) -> HashSe
     tracked
 }
 
-fn truncate_utf8(mut value: String, max_bytes: usize) -> String {
+pub(crate) fn truncate_utf8(mut value: String, max_bytes: usize) -> String {
     if value.len() <= max_bytes {
         return value;
     }
@@ -399,6 +390,7 @@ mod tests {
             root_pid: u32::MAX,
             sample_interval: None,
             external_processes: HashMap::new(),
+            claimed_processes: HashMap::new(),
         };
         assert!(collector.sample(&config, None).processes.is_empty());
 
@@ -423,6 +415,7 @@ mod tests {
             root_pid: u32::MAX,
             sample_interval: None,
             external_processes: HashMap::new(),
+            claimed_processes: HashMap::new(),
         };
         assert!(collector.sample(&config, None).processes.is_empty());
 

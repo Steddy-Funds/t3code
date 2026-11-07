@@ -15,7 +15,7 @@ import { MachineSection } from "../primitives/MachineSection";
 
 /** Not a real thread: the server keys PTYs by thread, so the machine terminal gets its own id. */
 export const MACHINE_TERMINAL_THREAD_ID = ThreadId.make("machine-terminal");
-export const MACHINE_TERMINAL_ID = "default";
+const MACHINE_TERMINAL_ID = "default";
 
 /**
  * A shell in the server user's home directory. Hide only detaches: the PTY keeps running and the

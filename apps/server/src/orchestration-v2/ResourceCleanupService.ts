@@ -9,7 +9,6 @@ import { resolveAttachmentRelativePath } from "../attachmentPaths.ts";
 import { parseAttachmentFileExtension, resolveAttachmentPathById } from "../attachmentStore.ts";
 import * as ServerConfig from "../config.ts";
 import * as PreviewManager from "../preview/Manager.ts";
-import * as ProcessRunner from "../processRunner.ts";
 import { ProcessOwnership } from "../resourceTelemetry/ProcessOwnership.ts";
 import * as ScheduledTaskService from "../scheduledTasks/ScheduledTaskService.ts";
 import * as TerminalManager from "../terminal/Manager.ts";
@@ -141,4 +140,4 @@ export const layer = Layer.effect(
       }),
     };
   }),
-).pipe(Layer.provide(ProcessRunner.layer));
+);

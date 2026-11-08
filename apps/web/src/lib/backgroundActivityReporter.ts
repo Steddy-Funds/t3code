@@ -144,7 +144,10 @@ export function retainBackgroundScope(
     notifyRetainedScopesChanged();
   }
 
+  let released = false;
   return () => {
+    if (released) return;
+    released = true;
     const current = retainedScopes.get(key);
     if (!current) return;
     current.refCount -= 1;

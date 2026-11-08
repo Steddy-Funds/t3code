@@ -131,6 +131,8 @@ describe("mobile background activity", () => {
     const releaseSecond = retainMobileBackgroundScope(environmentId, { ...scope });
     expect([retainedMobileBackgroundScopes(environmentId), changes]).toEqual([[scope], 1]);
 
+    // Releasing one handle twice must not drop the other holder's retain.
+    releaseFirst();
     releaseFirst();
     expect([retainedMobileBackgroundScopes(environmentId), changes]).toEqual([[scope], 1]);
     releaseSecond();

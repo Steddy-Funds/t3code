@@ -77,7 +77,10 @@ export function retainMobileBackgroundScope(
     retainedScopes.set(key, { environmentId, scope, refCount: 1 });
     notify();
   }
+  let released = false;
   return () => {
+    if (released) return;
+    released = true;
     const retained = retainedScopes.get(key);
     if (!retained) return;
     retained.refCount -= 1;

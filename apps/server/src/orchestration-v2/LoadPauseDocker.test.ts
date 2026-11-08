@@ -1,10 +1,17 @@
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import type { OrchestrationV2LoadPausedContainer } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import type * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
+import * as ServerConfig from "../config.ts";
+import * as PreviewManager from "../preview/Manager.ts";
 import * as ProcessRunner from "../processRunner.ts";
+import * as ScheduledTaskService from "../scheduledTasks/ScheduledTaskService.ts";
+import * as TerminalManager from "../terminal/Manager.ts";
 import * as LoadPauseDocker from "./LoadPauseDocker.ts";
+import * as ResourceCleanupService from "./ResourceCleanupService.ts";
 
 const FULL_ID = "c".repeat(64);
 const HOST = "ssh://builder@box";
@@ -185,6 +192,59 @@ describe("LoadPauseDocker", () => {
         calls.map((call) => call.args[0]),
         ["inspect"],
       );
+    }),
+  );
+
+  it.effect("cleanup unpauses every recorded container past one that fails", () =>
+    Effect.gen(function* () {
+      const failures: Record<string, string> = {
+        ["a".repeat(64)]: "Error response from daemon: No such container: aaa",
+        ["b".repeat(64)]: "Error response from daemon: operation not permitted (EPERM)",
+        ["c".repeat(64)]: "Error response from daemon: something broke",
+      };
+      const unpaused: Array<string> = [];
+      const runner: ProcessRunner.ProcessRunner["Service"] = {
+        run: (input) => {
+          const id = input.args.at(-1)!;
+          const reply =
+            input.args[0] === "inspect"
+              ? { stdout: `${id} paused 4242`, stderr: "", code: 0 }
+              : { stdout: "", stderr: failures[id] ?? "", code: id in failures ? 1 : 0 };
+          if (input.args[0] === "unpause") unpaused.push(id);
+          return Effect.succeed({
+            ...reply,
+            code: reply.code as ChildProcessSpawner.ExitCode,
+            timedOut: false,
+            stdoutTruncated: false,
+            stderrTruncated: false,
+            stdoutInvalidUtf8: false,
+            stderrInvalidUtf8: false,
+          });
+        },
+      };
+      const ids = ["a", "b", "c", "d"].map((letter) => letter.repeat(64));
+      const result = yield* Effect.gen(function* () {
+        const cleanup = yield* ResourceCleanupService.ResourceCleanupService;
+        yield* cleanup.unpauseLoadPausedContainers(ids.map((id) => ({ id })));
+      }).pipe(
+        Effect.provide(
+          ResourceCleanupService.layer.pipe(
+            Layer.provide(
+              Layer.mergeAll(
+                Layer.mock(TerminalManager.TerminalManager)({}),
+                Layer.mock(PreviewManager.PreviewManager)({}),
+                Layer.mock(ScheduledTaskService.ScheduledTaskService)({}),
+                Layer.succeed(ProcessRunner.ProcessRunner, runner),
+              ),
+            ),
+            Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "t3-load-pause-" })),
+            Layer.provide(NodeServices.layer),
+          ),
+        ),
+        Effect.result,
+      );
+      assert.equal(result._tag, "Success");
+      assert.deepEqual(unpaused, ids);
     }),
   );
 });

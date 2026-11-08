@@ -65,12 +65,30 @@ export function formatCount(value: number): string {
 }
 
 export function formatTokens(value: number): string {
+  return compact(value) ?? INTEGER.format(Math.round(value));
+}
+
+/** Three significant digits with K, M, B, T, and cents below $10: $0.68, $15.7, $1.57K. */
+export function formatCompactUsd(value: number): string {
+  const sign = value < 0 ? "-" : "";
   const abs = Math.abs(value);
-  if (abs >= 1e12) return `${trim(value / 1e12)}T`;
-  if (abs >= 1e9) return `${trim(value / 1e9)}B`;
-  if (abs >= 1e6) return `${trim(value / 1e6)}M`;
-  if (abs >= 1e3) return `${trim(value / 1e3)}K`;
-  return INTEGER.format(Math.round(value));
+  return `${sign}$${compact(abs) ?? trim(abs)}`;
+}
+
+const UNITS = [
+  [1e12, "T"],
+  [1e9, "B"],
+  [1e6, "M"],
+  [1e3, "K"],
+] as const;
+
+// Picks the unit after rounding, so 999,600 reads 1M rather than 1000K.
+function compact(value: number): string | null {
+  const rounded = Number(value.toPrecision(3));
+  for (const [size, suffix] of UNITS) {
+    if (Math.abs(rounded) >= size) return `${trim(rounded / size)}${suffix}`;
+  }
+  return null;
 }
 
 function trim(value: number): string {

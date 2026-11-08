@@ -207,6 +207,8 @@ const toTotals = (totals: Totals, sampleAgeMs: number): ThreadResourceTotals => 
 export interface ThreadResourcesIo {
   /** A cgroup or /proc file, or undefined when it is gone or unreadable. */
   readonly readFile: (path: string) => string | undefined;
+  /** The names of a directory's subdirectories; empty when it is gone or unreadable. */
+  readonly readDirectories: (path: string) => ReadonlyArray<string>;
   readonly pageSize: number;
 }
 
@@ -226,8 +228,19 @@ function livePageSize(): number {
   return 2 ** Math.round(Math.log2(size));
 }
 
+const readDirectoriesOrEmpty = (path: string) => {
+  try {
+    return NodeFS.readdirSync(path, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name);
+  } catch {
+    return [];
+  }
+};
+
 export const liveIo = (): ThreadResourcesIo => ({
   readFile: readFileOrUndefined,
+  readDirectories: readDirectoriesOrEmpty,
   pageSize: livePageSize(),
 });
 
@@ -269,14 +282,25 @@ export const makeWith = Effect.fn("ThreadResources.make")(function* (io: ThreadR
     { atMs: 0, totals: new Map() };
   let lastRollupAtMs: number | null = null;
 
+  const readProcs = (directory: string) =>
+    (io.readFile(`${directory}/cgroup.procs`) ?? "")
+      .split("\n")
+      .filter((line) => line !== "")
+      .map(Number);
+
+  /** Processes in the cgroups below `cgroup`, leaving out the subtrees of the kept units in `skip`. */
+  const countDescendantProcs = (cgroup: string, skip: ReadonlyArray<string>): number =>
+    io.readDirectories(cgroupDirectory(cgroup)).reduce((sum, name) => {
+      const child = `${cgroup}/${name}`;
+      if (skip.includes(child)) return sum;
+      return sum + readProcs(cgroupDirectory(child)).length + countDescendantProcs(child, skip);
+    }, 0);
+
   const readCgroup = (unit: string, atMs: number) => {
     const directory = cgroupDirectory(unit);
     const usage = parseCpuStatUsageUsec(io.readFile(`${directory}/cpu.stat`) ?? "");
     if (usage === undefined) return undefined;
-    const procs = (io.readFile(`${directory}/cgroup.procs`) ?? "")
-      .split("\n")
-      .filter((line) => line !== "")
-      .map(Number);
+    const procs = readProcs(directory);
     const cpuMs = usage / 1_000;
     const cpuPercent = cpuPercentBetween(cgroupCpu.get(unit), cpuMs, atMs);
     cgroupCpu.set(unit, { cpuMs, atMs });
@@ -391,8 +415,9 @@ export const makeWith = Effect.fn("ThreadResources.make")(function* (io: ThreadR
         0,
         reading.memoryBytes - nested.reduce((sum, inner) => sum + inner.memoryBytes, 0),
       );
-      // cgroup.procs lists only the cgroup's own processes, never its children's.
-      entry.processCount += reading.procs.length;
+      // cgroup.procs lists only the cgroup's own processes, so walk its sub-cgroups too.
+      entry.processCount +=
+        reading.procs.length + countDescendantProcs(unit.cgroup, unit.subtract);
       entry.cgroup = true;
     }
 

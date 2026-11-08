@@ -1936,7 +1936,10 @@ it.layer(
         env: { T3CODE_PORT: "3773", T3CODE_GUARD: "/inherited/t3-guard" },
       }).pipe(
         Effect.provideService(GuardEnvironment, {
-          env: () => ({ T3CODE_GUARD: "/state/t3-guard", T3CODE_GUARD_CONFIG: "/state/guard.json" }),
+          env: () => ({
+            T3CODE_GUARD: "/state/t3-guard",
+            T3CODE_GUARD_CONFIG: "/state/guard.json",
+          }),
         }),
       );
       yield* guarded.manager.open(openInput());

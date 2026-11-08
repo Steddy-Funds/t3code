@@ -189,7 +189,9 @@ export function buildThreadActionMenuItems(
             ? { id: "unbackground" as const, label: "Bring to foreground", icon: "sun" }
             : { id: "background" as const, label: "Background", icon: "moon" },
         ]),
-    ...(state.loadPaused ? [{ id: "resume-load-pause" as const, label: "Resume now" }] : []),
+    ...(state.loadPaused
+      ? [{ id: "resume-load-pause" as const, label: "Resume now", icon: "play" }]
+      : []),
     ...(state.priority === undefined ? [] : [priorityMenuItem(state.priority)]),
     { id: "rename", label: "Rename thread", icon: "pencil", separatorBefore: true },
     ...(state.supports.titleRegeneration
@@ -296,6 +298,7 @@ function priorityMenuItem(priority: NonNullable<ThreadActionMenuState["priority"
   return {
     id: "priority" as const,
     label: `Priority: ${priority.effective === "low" ? "Low" : "Normal"}`,
+    icon: "gauge",
     children: [
       { id: "priority:low" as const, label: "Low", checked: priority.choice === "low" },
       { id: "priority:normal" as const, label: "Normal", checked: priority.choice === "normal" },

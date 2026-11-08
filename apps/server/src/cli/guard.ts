@@ -13,7 +13,7 @@ export const GUARD_KILL_GRACE_MS = 10_000;
 /** How long a SIGTERM to the guard waits before it goes on to a command that is still running. */
 export const GUARD_FORWARD_DELAY_MS = 1_000;
 
-export const GUARD_HELP = `Usage: t3 guard [--hold <duration>] -- <command> [args...]
+const GUARD_HELP = `Usage: t3 guard [--hold <duration>] -- <command> [args...]
 
 Runs <command> and stops it when this machine stays stressed, so a heavy build or test
 cannot take the machine down. Every 5 s it checks CPU load and RAM (not GPUs) against the
@@ -92,7 +92,7 @@ function guardConfigTurnedOff(text: string | undefined): boolean {
   }
 }
 
-export function parseHoldDuration(value: string): number | null {
+function parseHoldDuration(value: string): number | null {
   const match = /^(\d+)(s|m)?$/.exec(value.trim());
   if (match === null) return null;
   return Number(match[1]) * (match[2] === "m" ? 60_000 : 1000);

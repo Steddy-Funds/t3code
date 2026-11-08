@@ -503,7 +503,9 @@ describe("thread open stats", () => {
     const decode = Schema.decodeUnknownExit(OrchestrationV2Command);
     const base = { commandId: "command-test", threadId: "thread-test" };
     expect(
-      Exit.isSuccess(decode({ ...base, type: "thread.metadata.update", loadPause: { resume: true } })),
+      Exit.isSuccess(
+        decode({ ...base, type: "thread.metadata.update", loadPause: { resume: true } }),
+      ),
     ).toBe(true);
     for (const command of [
       { ...base, type: "thread.metadata.update", loadPause: { resume: false } },

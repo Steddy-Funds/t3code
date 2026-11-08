@@ -68,7 +68,7 @@ export interface LoadPauseVictim {
 }
 
 /** The thread's share of what the stress rule measures; null for rules no rollup measures (GPU). */
-export function loadShareOf(
+function loadShareOf(
   rule: MachineVerdictReason["rule"],
   usage: ThreadResourceTotals,
   totals: MachineTotalsSummary,

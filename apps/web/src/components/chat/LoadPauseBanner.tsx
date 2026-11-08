@@ -60,7 +60,7 @@ export function useLoadPauseActions(environmentId: EnvironmentId, threadId: Thre
   };
 }
 
-export function LoadPauseActions(props: {
+function LoadPauseActions(props: {
   environmentId: EnvironmentId;
   threadId: ThreadId;
   offerNormal: boolean;

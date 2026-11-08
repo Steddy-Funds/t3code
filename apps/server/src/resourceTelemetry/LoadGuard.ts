@@ -16,7 +16,7 @@ import * as Stream from "effect/Stream";
 import { ServerConfig } from "../config.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
 
-export const GUARD_LAUNCHER_MARKER = "Written by T3 Code: runs `t3 guard`.";
+const GUARD_LAUNCHER_MARKER = "Written by T3 Code: runs `t3 guard`.";
 
 export type GuardLauncherTarget =
   /** Node or Electron-as-Node running the bundled guard script. */

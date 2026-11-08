@@ -12,6 +12,7 @@ import {
   type ServerSettings,
 } from "@t3tools/contracts";
 import { GuardEnvironment } from "@t3tools/shared/GuardEnvironment";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -28,7 +29,7 @@ import * as LoadGuard from "./LoadGuard.ts";
 const machineResources = Schema.decodeSync(MachineResourcesSettings);
 
 describe("renderGuardLauncher", () => {
-  it.skipIf(process.platform === "win32")(
+  it.skipIf(HostProcess.Platform.defaultValue() === "win32")(
     "sh: execs the script target with the caller's args, quoting paths with a single quote",
     () => {
       const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3 it's-guard-"));
@@ -54,15 +55,10 @@ describe("renderGuardLauncher", () => {
             .split("\n");
         };
         const entry = NodePath.join(dir, "gu'ard.mjs");
-        assert.deepStrictEqual(runLauncher(false, { kind: "script", executable: fakeNode, entry }), [
-          "ELECTRON=unset",
-          entry,
-          "--hold",
-          "90s",
-          "--",
-          "a b",
-          "$HOME",
-        ]);
+        assert.deepStrictEqual(
+          runLauncher(false, { kind: "script", executable: fakeNode, entry }),
+          ["ELECTRON=unset", entry, "--hold", "90s", "--", "a b", "$HOME"],
+        );
         assert.deepStrictEqual(
           runLauncher(true, { kind: "executable", executable: fakeNode }).slice(0, 3),
           ["ELECTRON=1", "guard", "--hold"],
@@ -199,12 +195,16 @@ it.layer(NodeServices.layer)("LoadGuard layer", (it) => {
         Effect.map(ServerSettingsService, (base) => ({
           ...base,
           subscribeChanges: Effect.succeed(
-            Stream.fromEffectRepeat(Queue.offer(pulls, undefined).pipe(Effect.andThen(Effect.never))),
+            Stream.fromEffectRepeat(
+              Queue.offer(pulls, undefined).pipe(Effect.andThen(Effect.never)),
+            ),
           ),
         })),
       ).pipe(
         Layer.provide(
-          ServerSettingsService.layerTest({ machineResources: { loadManagement: { enabled: true } } }),
+          ServerSettingsService.layerTest({
+            machineResources: { loadManagement: { enabled: true } },
+          }),
         ),
       );
       yield* Effect.gen(function* () {

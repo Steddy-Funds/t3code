@@ -31,6 +31,7 @@ upstream; a feature can, from its own branch, when Akiva decides.
 | Thread cost and activity on one line, labels on hover | #60 | 4f50cad |
 | Machines show stress: sweating icon, hover card, mobile sheet (node resources 1/5) | #61 | 6612446 |
 | Task manager, cross-machine view, NVIDIA and Intel GPUs (node resources 2/5) | #62 | 4c28c14 |
+| Who is using a machine: ownership, claims, buckets, per-thread resources (node resources 3/5) | #63 | 3180ffa |
 
 Held: #38 (pods notes in the t3-orchestration skill). It edits
 `.agents/skills/t3-orchestration/`, which exists only on
@@ -46,6 +47,7 @@ The Mac runs this tip, which already has them all.
 - #56 Thread usage RPC (`server.getThreadUsage`)
 - #61 Machine verdict (`subscribeMachine`, `subscribeMachineProcesses`): server half only, since the branch stacks on this tip
 - #62 Native monitor v4, GPUs, host processes, history, kill: server half only (`eba584d`), plus the client-runtime frame folder its test reads
+- #63 Ownership, claims, buckets, per-thread resources, MCP tools: server half only (`8256ecc`), with the provider packages' spawn sites
 
 A feature that changes `apps/server`, or a contract the server reads, is
 merged there too: its branch head with `--no-ff`, never this tip.

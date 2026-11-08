@@ -38,8 +38,8 @@ import { type OwnerTotals, ownerBucketId, totalsBy } from "../ownership/processO
 import { MachineSection, MachineSectionMessage } from "../primitives/MachineSection";
 import { OwnerChip } from "../primitives/OwnerChip";
 import { ownerLabel } from "../primitives/OwnerLabel";
+import { Unmeasured } from "../primitives/Unmeasured";
 
-const UNMEASURED = "unmeasured";
 const NO_ROWS: ReadonlyArray<MachineProcessRow> = [];
 
 const claimIdOf = (row: MachineProcessRow) =>
@@ -168,20 +168,22 @@ function ClaimList({
                     </TableCell>
                     <TableCell className="text-end">
                       <span className="tabular-nums">
-                        {measured ? formatPercent(claimTotals?.cpu ?? 0) : UNMEASURED}
+                        {measured ? formatPercent(claimTotals?.cpu ?? 0) : <Unmeasured />}
                       </span>
                     </TableCell>
                     <TableCell className="text-end">
                       <span className="tabular-nums">
-                        {measured ? formatProcessMemory(claimTotals?.rss ?? 0) : UNMEASURED}
+                        {measured ? formatProcessMemory(claimTotals?.rss ?? 0) : <Unmeasured />}
                       </span>
                     </TableCell>
                     {showGpu ? (
                       <TableCell className="text-end">
                         <span className="tabular-nums">
-                          {!measured || claimTotals?.gpuUtil === null
-                            ? UNMEASURED
-                            : formatPercent(claimTotals?.gpuUtil ?? 0)}
+                          {!measured || claimTotals?.gpuUtil === null ? (
+                            <Unmeasured />
+                          ) : (
+                            formatPercent(claimTotals?.gpuUtil ?? 0)
+                          )}
                         </span>
                       </TableCell>
                     ) : null}

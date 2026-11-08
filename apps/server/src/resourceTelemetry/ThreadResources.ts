@@ -211,6 +211,61 @@ const emptyTotals = (): Totals => ({
 
 const roundCpu = (cpuPercent: number) => Math.round(cpuPercent * 10) / 10;
 
+/** The thread, then its `subagent` descendants in `tree`, breadth first. */
+export function lineageOf(
+  tree: ReadonlyArray<ProjectionStoreV2.SubagentTreeEntry>,
+  threadId: ThreadId,
+): ReadonlyArray<ThreadId> {
+  const lineage = [threadId];
+  const seen = new Set(lineage);
+  for (let index = 0; index < lineage.length; index++) {
+    for (const entry of tree) {
+      if (entry.parentThreadId !== lineage[index] || seen.has(entry.threadId)) continue;
+      seen.add(entry.threadId);
+      lineage.push(entry.threadId);
+    }
+  }
+  return lineage;
+}
+
+/** The threads whose lineage holds a running thread: each running thread and its live ancestors. */
+export function lineageRoots(
+  tree: ReadonlyArray<ProjectionStoreV2.SubagentTreeEntry>,
+  running: ReadonlySet<ThreadId>,
+): ReadonlySet<ThreadId> {
+  const parents = new Map(tree.map((entry) => [entry.threadId, entry.parentThreadId]));
+  const roots = new Set<ThreadId>();
+  for (const threadId of running) {
+    let current: ThreadId | null | undefined = threadId;
+    while (current !== null && current !== undefined && !roots.has(current)) {
+      roots.add(current);
+      const parent = parents.get(current);
+      current = parent !== null && parent !== undefined && parents.has(parent) ? parent : null;
+    }
+  }
+  return roots;
+}
+
+/** One lineage's totals: every member's own totals from one `measure`, so nothing counts twice. */
+function sumTotals(
+  totals: ReadonlyMap<ThreadId, Totals>,
+  lineage: ReadonlyArray<ThreadId>,
+): Totals | undefined {
+  let sum: Totals | undefined;
+  for (const threadId of lineage) {
+    const entry = totals.get(threadId);
+    if (entry === undefined) continue;
+    sum ??= emptyTotals();
+    sum.cpuPercent += entry.cpuPercent;
+    sum.cpuCurrent &&= entry.cpuCurrent;
+    sum.memoryBytes += entry.memoryBytes;
+    sum.processCount += entry.processCount;
+    sum.cgroup ||= entry.cgroup;
+    sum.sample ||= entry.sample;
+  }
+  return sum;
+}
+
 /** On demand, CPU is null unless it is current; a rollup's 30 s average is always a number. */
 const toTotals = (
   totals: Totals,
@@ -268,9 +323,14 @@ const liveIo = (): ThreadResourcesIo => ({
 });
 
 export interface ThreadResourcesShape {
-  /** `current` is sampled on demand when the thread has no running turn. */
+  /**
+   * The thread's lineage totals and history. `current` comes from the last rollup when the
+   * lineage held a running thread then, and is sampled on demand otherwise.
+   */
   readonly read: (threadId: ThreadId) => Effect.Effect<ThreadResourcesResult>;
-  /** Totals from the last rollup, for threads with a running turn then. */
+  /** The thread, then its `subagent` descendants on this environment; just the thread on a failed read. */
+  readonly lineage: (threadId: ThreadId) => Effect.Effect<ReadonlyArray<ThreadId>>;
+  /** Each thread's own totals from the last rollup, for threads with a running turn then. */
   readonly byThread: Effect.Effect<ReadonlyMap<ThreadId, ThreadResourceTotals>>;
   /** One rollup, if 30 s passed and a turn is running; the Scheduler calls it every tick. */
   readonly rollup: Effect.Effect<void>;
@@ -281,7 +341,8 @@ export class ThreadResources extends Context.Reference<ThreadResourcesShape>(
   "t3/resourceTelemetry/ThreadResources",
   {
     defaultValue: () => ({
-      read: () => Effect.succeed({ current: null, history: [] }),
+      read: (threadId) => Effect.succeed({ current: null, history: [], threadIds: [threadId] }),
+      lineage: (threadId) => Effect.succeed([threadId]),
       byThread: Effect.succeed(new Map()),
       rollup: Effect.void,
     }),
@@ -304,7 +365,11 @@ const makeWith = Effect.fn("ThreadResources.make")(function* (io: ThreadResource
   let latest: {
     readonly atMs: number;
     readonly totals: ReadonlyMap<ThreadId, ThreadResourceTotals>;
-  } = { atMs: 0, totals: new Map() };
+    readonly lineages: ReadonlyMap<
+      ThreadId,
+      { readonly totals: ThreadResourceTotals; readonly threadIds: ReadonlyArray<ThreadId> }
+    >;
+  } = { atMs: 0, totals: new Map(), lineages: new Map() };
   let lastRollupAtMs: number | null = null;
 
   const readProcs = (directory: string) =>
@@ -521,29 +586,51 @@ const makeWith = Effect.fn("ThreadResources.make")(function* (io: ThreadResource
     return { atMs, totals };
   });
 
+  const lineage: ThreadResourcesShape["lineage"] = (threadId) =>
+    projections.listSubagentTrees([threadId]).pipe(
+      Effect.map((tree) => lineageOf(tree, threadId)),
+      Effect.orElseSucceed(() => [threadId]),
+    );
+
+  /**
+   * Rings are kept per lineage root and summed now, so a child archived or deleted later never
+   * changes its ancestors' history.
+   */
   const rollupNow = Effect.fn("ThreadResources.rollupNow")(function* (
     running: ReadonlySet<ThreadId>,
   ) {
-    const { atMs, totals } = yield* measure(running);
-    const next = new Map(rings);
+    const tree = yield* projections.listSubagentTrees([...running]);
+    const lineageByRoot = new Map(
+      [...lineageRoots(tree, running)].map((root) => [root, lineageOf(tree, root)]),
+    );
+    const { atMs, totals } = yield* measure(new Set([...lineageByRoot.values()].flat()));
     const byThread = new Map<ThreadId, ThreadResourceTotals>();
     for (const threadId of running) {
       const entry = totals.get(threadId);
-      if (entry === undefined) continue;
-      const value = toTotals(entry, 0, false);
-      byThread.set(threadId, value);
+      if (entry !== undefined) byThread.set(threadId, toTotals(entry, 0, false));
+    }
+    const next = new Map(rings);
+    const lineages = new Map<
+      ThreadId,
+      { readonly totals: ThreadResourceTotals; readonly threadIds: ReadonlyArray<ThreadId> }
+    >();
+    for (const [root, threadIds] of lineageByRoot) {
+      const sum = sumTotals(totals, threadIds);
+      if (sum === undefined) continue;
+      const value = toTotals(sum, 0, false);
+      lineages.set(root, { totals: value, threadIds });
       next.set(
-        threadId,
-        appendPoint(next.get(threadId) ?? [], {
+        root,
+        appendPoint(next.get(root) ?? [], {
           atMs,
-          cpuPercent: roundCpu(entry.cpuPercent),
+          cpuPercent: roundCpu(sum.cpuPercent),
           memoryBytes: value.memoryBytes,
           gpuUtilPercent: value.gpuUtilPercent,
         }),
       );
     }
     rings = boundRings(next);
-    latest = { atMs, totals: byThread };
+    latest = { atMs, totals: byThread, lineages };
   });
 
   const rollup: ThreadResourcesShape["rollup"] = lock.withPermits(1)(
@@ -564,22 +651,30 @@ const makeWith = Effect.fn("ThreadResources.make")(function* (io: ThreadResource
   const read: ThreadResourcesShape["read"] = Effect.fn("ThreadResources.read")(
     function* (threadId) {
       const nowMs = yield* Clock.currentTimeMillis;
-      const recent = latest.totals.get(threadId);
-      const current =
-        recent !== undefined && nowMs - latest.atMs <= ROLLUP_FRESH_MS
-          ? { ...recent, sampleAgeMs: Math.max(0, Math.round(nowMs - latest.atMs)) }
-          : yield* lock.withPermits(1)(
-              Effect.map(measure(new Set([threadId])), ({ totals }) => {
-                const entry = totals.get(threadId);
-                return entry === undefined ? null : toTotals(entry, 0, true);
-              }),
-            );
-      return { current, history: historyPoints(rings.get(threadId) ?? [], nowMs) };
+      const history = historyPoints(rings.get(threadId) ?? [], nowMs);
+      const recent = latest.lineages.get(threadId);
+      if (recent !== undefined && nowMs - latest.atMs <= ROLLUP_FRESH_MS) {
+        const sampleAgeMs = Math.max(0, Math.round(nowMs - latest.atMs));
+        return {
+          current: { ...recent.totals, sampleAgeMs },
+          history,
+          threadIds: recent.threadIds,
+        };
+      }
+      const threadIds = yield* lineage(threadId);
+      const current = yield* lock.withPermits(1)(
+        Effect.map(measure(new Set(threadIds)), ({ totals }) => {
+          const sum = sumTotals(totals, threadIds);
+          return sum === undefined ? null : toTotals(sum, 0, true);
+        }),
+      );
+      return { current, history, threadIds };
     },
   );
 
   return {
     read,
+    lineage,
     byThread: Effect.sync(() => latest.totals),
     rollup,
   } satisfies ThreadResourcesShape;

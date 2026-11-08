@@ -437,6 +437,12 @@ export interface ShellSnapshotOptions {
   readonly threadIds?: ReadonlyArray<ThreadId>;
 }
 
+export interface SubagentTreeEntry {
+  readonly threadId: ThreadId;
+  /** The `subagent` parent; null for a tree's top. */
+  readonly parentThreadId: ThreadId | null;
+}
+
 /** What a shell subscriber's trims read from an active thread, without building its shell. */
 export interface ActiveShellIndexEntry extends Pick<
   OrchestrationV2ThreadShell,
@@ -536,6 +542,13 @@ export interface ProjectionStoreV2Shape {
     ReadonlyArray<ThreadId>,
     ProjectionStoreV2Error
   >;
+  /**
+   * The live threads of the subagent trees holding these threads: up their `subagent` parents,
+   * then down every `subagent` child. Forks start their own tree; deleted threads end a branch.
+   */
+  readonly listSubagentTrees: (
+    threadIds: ReadonlyArray<ThreadId>,
+  ) => Effect.Effect<ReadonlyArray<SubagentTreeEntry>, ProjectionStoreV2Error>;
   /** Threads that are not deleted, archived ones included. */
   readonly countThreads: () => Effect.Effect<number, ProjectionStoreV2Error>;
   /** Every active thread, in shell order. */
@@ -7183,6 +7196,47 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       return rows.map((row) => ThreadId.make(row.thread_id));
     }, Effect.mapError(shellSnapshotReadError));
 
+    const listSubagentTrees = Effect.fn("ProjectionStore.listSubagentTrees")(function* (
+      threadIds: ReadonlyArray<ThreadId>,
+    ) {
+      if (threadIds.length === 0) return [];
+      const rows = yield* sql<{
+        readonly thread_id: string;
+        readonly parent_thread_id: string | null;
+      }>`
+        WITH RECURSIVE
+          up(thread_id) AS (
+            SELECT thread_id FROM orchestration_v2_projection_threads
+            WHERE deleted_at IS NULL AND thread_id IN ${sql.in(threadIds)}
+            UNION
+            SELECT json_extract(t.payload_json, '$.lineage.parentThreadId')
+            FROM orchestration_v2_projection_threads t
+            JOIN up ON t.thread_id = up.thread_id
+            WHERE t.deleted_at IS NULL
+              AND json_extract(t.payload_json, '$.lineage.relationshipToParent') = 'subagent'
+              AND json_extract(t.payload_json, '$.lineage.parentThreadId') IS NOT NULL
+          ),
+          down(thread_id, parent_thread_id) AS (
+            SELECT thread_id,
+              CASE WHEN json_extract(payload_json, '$.lineage.relationshipToParent') = 'subagent'
+                THEN json_extract(payload_json, '$.lineage.parentThreadId') END
+            FROM orchestration_v2_projection_threads
+            WHERE deleted_at IS NULL AND thread_id IN (SELECT thread_id FROM up)
+            UNION
+            SELECT child.thread_id, down.thread_id
+            FROM orchestration_v2_projection_threads child
+            JOIN down ON json_extract(child.payload_json, '$.lineage.parentThreadId') = down.thread_id
+            WHERE child.deleted_at IS NULL
+              AND json_extract(child.payload_json, '$.lineage.relationshipToParent') = 'subagent'
+          )
+        SELECT DISTINCT thread_id, parent_thread_id FROM down
+      `;
+      return rows.map((row): SubagentTreeEntry => ({
+        threadId: ThreadId.make(row.thread_id),
+        parentThreadId: row.parent_thread_id === null ? null : ThreadId.make(row.parent_thread_id),
+      }));
+    }, Effect.mapError(shellSnapshotReadError));
+
     const countThreads = Effect.fn("ProjectionStore.countThreads")(function* () {
       const rows = yield* sql<{ readonly count: number }>`
         SELECT COUNT(*) AS count FROM orchestration_v2_projection_threads WHERE deleted_at IS NULL
@@ -7504,6 +7558,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       getPullRequestSnapshot: readOnReader(getPullRequestSnapshot),
       listActiveSubagentThreadIds: readOnReader(listActiveSubagentThreadIds),
       listRunningThreadIds: readOnReader(listRunningThreadIds),
+      listSubagentTrees: readOnReader(listSubagentTrees),
       countThreads: readOnReader(countThreads),
       listActiveShellIndex: readOnReader(listActiveShellIndex),
       readShellSnapshot: readOnReader(readShellSnapshot),

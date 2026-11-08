@@ -1,7 +1,7 @@
 import { useAtomValue } from "@effect/atom-react";
 import { formatPercent, formatProcessMemory } from "@t3tools/client-runtime/state/machineFormat";
 import type { MachineProcessRow } from "@t3tools/client-runtime/state/machineProcessFrames";
-import { AuthDiagnosticsReadScope, type EnvironmentId } from "@t3tools/contracts";
+import { AuthDiagnosticsReadScope, type EnvironmentId, type ThreadId } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/reactivity";
@@ -12,6 +12,7 @@ import { ToggleGroup, ToggleGroupItem } from "~/components/ui/toggle-group";
 import { machineResources } from "~/state/machineResources";
 import { useEnvironmentScope } from "~/state/session";
 
+import { processInFocus } from "../machineFocus";
 import { type MachineOwnerNames, ownerNamesAtom } from "../ownership/ownerNames";
 import {
   type OwnerPalette,
@@ -257,6 +258,7 @@ export function machineProcessesSource(input: {
  */
 export function MachineProcessList({
   environmentId,
+  focus = null,
   processes,
   hasGpu,
   unavailable = null,
@@ -265,6 +267,8 @@ export function MachineProcessList({
   onViewModeChange,
 }: {
   readonly environmentId: EnvironmentId;
+  /** A focused thread's lineage, whose processes are picked out and listed first. */
+  readonly focus?: ReadonlySet<ThreadId> | null;
   readonly processes: Atom.Atom<ProcessesResult>;
   /** Per-process GPU columns are offered only on a machine with a readable GPU. */
   readonly hasGpu: boolean | null;
@@ -370,6 +374,7 @@ export function MachineProcessList({
             groupOf={groupOf}
             defaultSort={DEFAULT_SORT}
             state={state.table}
+            pinned={focus === null ? undefined : (row) => processInFocus(row, focus)}
             kill={
               signal.canSignal
                 ? {

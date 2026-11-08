@@ -81,6 +81,7 @@ export function ProcessTable<Row extends ProcessTableRow>({
   kill,
   empty,
   className,
+  pinned,
 }: {
   readonly rows: ReadonlyArray<Row>;
   /** Columns after the name, which always comes first. */
@@ -95,6 +96,8 @@ export function ProcessTable<Row extends ProcessTableRow>({
   readonly empty: ReactNode;
   /** Sets the table's height; the list scrolls inside it. */
   readonly className?: string;
+  /** Rows picked out and listed first, such as a focused thread's processes. */
+  readonly pinned?: ((row: Row) => boolean) | undefined;
 }) {
   const ownState = useProcessTableState(defaultSort);
   const { sort, setSort, toggled, setToggled } = state ?? ownState;
@@ -115,6 +118,7 @@ export function ProcessTable<Row extends ProcessTableRow>({
     sort: sortValue ? { value: sortValue, descending: sort.descending } : null,
     toggled,
     groupOf,
+    pinned,
   });
   const gridTemplateColumns = [
     NAME_TRACK,
@@ -267,7 +271,11 @@ function ProcessRowView<Row extends ProcessTableRow>({
   return (
     <div
       role="row"
-      className="group/process-row grid items-center gap-2 px-2 hover:bg-accent/50"
+      data-pinned={item.pinned || undefined}
+      className={cn(
+        "group/process-row grid items-center gap-2 px-2 hover:bg-accent/50",
+        item.pinned && "bg-primary/8",
+      )}
       style={{ gridTemplateColumns, height: ROW_HEIGHT }}
     >
       <ProcessTreeName
@@ -321,7 +329,11 @@ function GroupRowView<Row extends ProcessTableRow>({
   return (
     <div
       role="row"
-      className="grid items-center gap-2 bg-muted/30 px-2 hover:bg-accent/50"
+      data-pinned={item.pinned || undefined}
+      className={cn(
+        "grid items-center gap-2 px-2 hover:bg-accent/50",
+        item.pinned ? "bg-primary/8" : "bg-muted/30",
+      )}
       style={{ gridTemplateColumns, height: ROW_HEIGHT }}
     >
       <ProcessTreeName
@@ -355,6 +367,7 @@ const ProcessRow = memo(
     previous.item.depth === next.item.depth &&
     previous.item.expandable === next.item.expandable &&
     previous.item.collapsed === next.item.collapsed &&
+    previous.item.pinned === next.item.pinned &&
     previous.columns === next.columns &&
     previous.gridTemplateColumns === next.gridTemplateColumns &&
     previous.onToggle === next.onToggle &&

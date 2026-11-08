@@ -16,9 +16,24 @@ requests one sample a minute and exports process totals by group
 ([`ProcessGroupMetrics`](../../apps/server/src/resourceTelemetry/ProcessGroupMetrics.ts)),
 because the user asked for continuous telemetry. Groups are a fixed set named after
 the server's direct children, never process IDs or threads, so the series count
-stays bounded as agents come and go. History therefore covers only time with a live
+stays bounded as agents come and go. Per-thread ownership
+([`ProcessOwnership`](../../apps/server/src/resourceTelemetry/ProcessOwnership.ts)) runs only
+on process-table frames, so it costs nothing without a viewer; its claims stay in memory and
+end with the process, the container or the thread. History therefore covers only time with a live
 subscriber, plus on-demand and export samples. Consuming host power for background scheduling must not retain
 live diagnostics. There is no telemetry database or recurring shell-probe fallback.
+
+Per-thread totals
+([`ThreadResources`](../../apps/server/src/resourceTelemetry/ThreadResources.ts)) are the one
+viewer-independent exception, and stay cheap because they run only while a turn is running:
+every 30 s on the `Scheduler` tick, and skipped outright when no run is active. On Linux a
+rollup reads each owned unit's cgroup files (`cpu.stat`, `memory.current`, falling back to
+`statm` over `cgroup.procs`). Nested units are subtracted, so a process under both a root and a
+claim counts once. Members of shared roots are split by the `T3CODE_THREAD_ID` in their
+environment. Roots without a cgroup, macOS and Windows take one native discovery pass instead
+(about 130 ms). History is in memory only: 240 points for each of at most 200 threads. A thread
+with no running turn gets its current value sampled on demand, which adds no point, so idle time
+shows as a gap rather than filler.
 
 ## Machine verdict
 

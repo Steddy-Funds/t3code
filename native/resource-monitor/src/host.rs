@@ -193,6 +193,7 @@ impl HostCollector {
         let mut gpus_disabled = None;
         let mut gpu_devices = None;
         let mut gpu_processes = None;
+        let mut gpu_process_devices = None;
         if options.gpus || options.gpu_processes {
             let system = self.session.as_ref().map(|session| &session.system);
             let offset = system
@@ -207,6 +208,7 @@ impl HostCollector {
                 Ok(sample) => {
                     gpu_devices = options.gpus.then_some(sample.devices);
                     gpu_processes = options.gpu_processes.then_some(sample.processes);
+                    gpu_process_devices = options.gpu_processes.then_some(sample.process_devices);
                 }
                 Err(GpuError::Failed(_)) => {}
                 Err(GpuError::Disabled(message)) => gpus_disabled = Some(message),
@@ -232,6 +234,7 @@ impl HostCollector {
                 added,
                 gpus: gpu_devices,
                 gpu_processes,
+                gpu_process_devices,
             },
             gpus_disabled,
         }

@@ -1,7 +1,17 @@
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import * as SchemaTransformation from "effect/SchemaTransformation";
 
-import { NonNegativeInt, PositiveInt } from "./baseSchemas.ts";
+import {
+  ForwardCompatibleArray,
+  ForwardCompatibleUnion,
+  NonNegativeInt,
+  PositiveInt,
+  ThreadId,
+  TrimmedNonEmptyString,
+} from "./baseSchemas.ts";
+import { ProviderDriverKind } from "./providerInstance.ts";
 
 export const GpuVendor = Schema.Literals(["nvidia", "intel"]);
 export type GpuVendor = typeof GpuVendor.Type;
@@ -72,19 +82,261 @@ export const MachineThresholdsPatch = Schema.Struct({
 });
 export type MachineThresholdsPatch = typeof MachineThresholdsPatch.Type;
 
+export const MACHINE_BUCKET_MAX_RULES = 16;
+export const MACHINE_BUCKETS_MAX = 50;
+export const MACHINE_BUCKET_RULE_VALUE_MAX = 1_024;
+export const MACHINE_BUCKET_NAME_MAX = 80;
+
+export const MachineBucketId = TrimmedNonEmptyString.pipe(Schema.brand("MachineBucketId"));
+export type MachineBucketId = typeof MachineBucketId.Type;
+
+export const ClaimId = TrimmedNonEmptyString.pipe(Schema.brand("ClaimId"));
+export type ClaimId = typeof ClaimId.Type;
+
+/** Who wrote a bucket or a claim: the user in Settings, an agent, or the auto-buckets task. */
+export const MachineActor = Schema.Union([
+  Schema.Struct({ type: Schema.Literal("user") }),
+  Schema.Struct({ type: Schema.Literal("agent"), threadId: ThreadId }),
+  Schema.Struct({ type: Schema.Literal("auto"), threadId: ThreadId }),
+]);
+export type MachineActor = typeof MachineActor.Type;
+
+export const MachineBucketRuleField = Schema.Literals([
+  "command",
+  "exe",
+  "cwd",
+  "user",
+  "container",
+  "parent",
+]);
+export type MachineBucketRuleField = typeof MachineBucketRuleField.Type;
+
+export const MachineBucketRuleOp = Schema.Literals(["equals", "contains", "glob"]);
+export type MachineBucketRuleOp = typeof MachineBucketRuleOp.Type;
+
+/** A process matches a bucket when any of its rules matches; a matched process's children follow it. */
+export const BucketRule = Schema.Union([
+  Schema.Struct({
+    field: MachineBucketRuleField,
+    op: MachineBucketRuleOp,
+    value: Schema.String.check(
+      Schema.isMinLength(1),
+      Schema.isMaxLength(MACHINE_BUCKET_RULE_VALUE_MAX),
+    ),
+  }),
+  /** Processes whose launch environment names the thread (`T3CODE_THREAD_ID`). */
+  Schema.Struct({ field: Schema.Literal("thread"), threadId: ThreadId }),
+  /** A pin: one process identity; removed once the process exits. */
+  Schema.Struct({ field: Schema.Literal("pid"), pid: PositiveInt, startTimeMs: NonNegativeInt }),
+]);
+export type BucketRule = typeof BucketRule.Type;
+
+export const BucketProvenance = Schema.Struct({
+  createdBy: MachineActor,
+  updatedBy: MachineActor,
+  /** Stored in settings.json, which is decoded from parsed JSON, so the encoded form is a string. */
+  updatedAt: Schema.DateTimeUtcFromString,
+});
+export type BucketProvenance = typeof BucketProvenance.Type;
+
+const MachineBucketFields = {
+  id: MachineBucketId,
+  name: TrimmedNonEmptyString.check(Schema.isMaxLength(MACHINE_BUCKET_NAME_MAX)),
+  rules: Schema.Array(BucketRule).check(Schema.isMaxLength(MACHINE_BUCKET_MAX_RULES)),
+};
+
+export const MachineBucket = Schema.Struct({
+  ...MachineBucketFields,
+  provenance: BucketProvenance,
+});
+export type MachineBucket = typeof MachineBucket.Type;
+
+/** What a client writes; the server stamps `provenance` and ignores any a client sends. */
+export const MachineBucketInput = Schema.Struct(MachineBucketFields);
+export type MachineBucketInput = typeof MachineBucketInput.Type;
+
+/** A settings patch entry. `provenance` is set only by the server's own stamped writes. */
+export const MachineBucketPatchEntry = Schema.Struct({
+  ...MachineBucketFields,
+  provenance: Schema.optionalKey(BucketProvenance),
+});
+export type MachineBucketPatchEntry = typeof MachineBucketPatchEntry.Type;
+
+export class BucketEditedError extends Schema.TaggedError<BucketEditedError>()(
+  "BucketEditedError",
+  { bucketId: MachineBucketId },
+) {
+  override get message(): string {
+    return `Bucket ${this.bucketId} was edited by someone else; create a new bucket.`;
+  }
+}
+
+export class MachineBucketLimitError extends Schema.TaggedError<MachineBucketLimitError>()(
+  "MachineBucketLimitError",
+  { limit: PositiveInt },
+) {
+  override get message(): string {
+    return `A machine holds at most ${this.limit} buckets.`;
+  }
+}
+
+export const ClaimTarget = Schema.Union([
+  Schema.Struct({ type: Schema.Literal("process"), pid: PositiveInt, startTimeMs: NonNegativeInt }),
+  Schema.Struct({
+    type: Schema.Literal("container"),
+    /** A container id, id prefix or name, as `docker inspect` takes it. */
+    id: TrimmedNonEmptyString,
+    dockerHost: Schema.optionalKey(TrimmedNonEmptyString),
+  }),
+  /** A unified cgroup path such as `/system.slice/foo.service`. */
+  Schema.Struct({
+    type: Schema.Literal("cgroup"),
+    path: TrimmedNonEmptyString.check(Schema.isPattern(/^\//)),
+  }),
+]);
+export type ClaimTarget = typeof ClaimTarget.Type;
+
+/** A process, container or cgroup attached to a thread. In memory only, lost on restart. */
+export const Claim = Schema.Struct({
+  id: ClaimId,
+  threadId: ThreadId,
+  target: ClaimTarget,
+  createdAt: Schema.DateTimeUtc,
+  createdBy: MachineActor,
+  /** False where the server cannot measure the target, such as Docker Desktop containers. */
+  measurable: Schema.optionalKey(Schema.Boolean),
+});
+export type Claim = typeof Claim.Type;
+
+export class MachineClaimError extends Schema.TaggedError<MachineClaimError>()(
+  "MachineClaimError",
+  {
+    reason: Schema.Literals([
+      "not-found",
+      "refused",
+      "docker-unavailable",
+      "limit",
+      "not-supported",
+    ]),
+    detail: Schema.String,
+  },
+) {
+  override get message(): string {
+    return this.detail;
+  }
+}
+
+/** Whose a process is, first match wins: roots, shared units, claims, buckets, provider, container. */
+export const ProcessOwner = Schema.Union([
+  Schema.Struct({
+    type: Schema.Literal("thread"),
+    threadId: ThreadId,
+    terminalId: Schema.optionalKey(Schema.String),
+  }),
+  /** A process serving several threads that could not be split, such as Codex `app-server`. */
+  Schema.Struct({
+    type: Schema.Literal("shared"),
+    provider: ProviderDriverKind,
+    label: Schema.String,
+    threadCount: NonNegativeInt,
+  }),
+  Schema.Struct({ type: Schema.Literal("t3"), label: Schema.String }),
+  Schema.Struct({ type: Schema.Literal("claimed"), claimId: ClaimId, threadId: ThreadId }),
+  Schema.Struct({ type: Schema.Literal("bucket"), bucketId: MachineBucketId }),
+  Schema.Struct({ type: Schema.Literal("provider"), provider: ProviderDriverKind }),
+  Schema.Struct({ type: Schema.Literal("container"), id: Schema.String }),
+  Schema.Struct({ type: Schema.Literal("other") }),
+]);
+export type ProcessOwner = typeof ProcessOwner.Type;
+
+/** An owner kind from a newer server decodes as an unknown member, so the frame still decodes. */
+export const ReceivedProcessOwner = ForwardCompatibleUnion(ProcessOwner.members, "type");
+export type ReceivedProcessOwner = typeof ReceivedProcessOwner.Type;
+
+export const ThreadResourceSource = Schema.Literals(["cgroup", "sample", "none"]);
+export type ThreadResourceSource = typeof ThreadResourceSource.Type;
+
+/** What one thread's processes, its claims included, use now. Each process counts once. */
+export const ThreadResourceTotals = Schema.Struct({
+  /** Percent of one core; null when an on-demand read has no reading under 10 s old to compare. */
+  cpuPercent: Schema.NullOr(Schema.Number),
+  memoryBytes: NonNegativeInt,
+  gpuUtilPercent: Schema.NullOr(Schema.Number),
+  vramBytes: Schema.NullOr(NonNegativeInt),
+  processCount: NonNegativeInt,
+  sampleAgeMs: NonNegativeInt,
+  source: ThreadResourceSource,
+});
+export type ThreadResourceTotals = typeof ThreadResourceTotals.Type;
+
+/** One 30 s rollup. Two points more than 30 s apart mean no turn ran between them. */
+export const ThreadResourcePoint = Schema.Struct({
+  ageMs: NonNegativeInt,
+  cpuPercent: Schema.Number,
+  memoryBytes: NonNegativeInt,
+  gpuUtilPercent: Schema.NullOr(Schema.Number),
+});
+export type ThreadResourcePoint = typeof ThreadResourcePoint.Type;
+
+export const THREAD_RESOURCE_HISTORY_POINTS = 240;
+
+export const ServerGetThreadResourcesInput = Schema.Struct({ threadId: ThreadId });
+export type ServerGetThreadResourcesInput = typeof ServerGetThreadResourcesInput.Type;
+
+export const ThreadResources = Schema.Struct({
+  /** Null when nothing is known to belong to the thread. */
+  current: Schema.NullOr(ThreadResourceTotals),
+  /** Oldest first, at most 240 points. */
+  history: Schema.Array(ThreadResourcePoint),
+});
+export type ThreadResources = typeof ThreadResources.Type;
+
+export const MachineClaimsReleaseInput = Schema.Struct({ claimId: ClaimId });
+export type MachineClaimsReleaseInput = typeof MachineClaimsReleaseInput.Type;
+
+/**
+ * A bucket a newer writer stored with a rule or actor this version lacks is dropped whole, not
+ * shown without that rule: saving it back would erase the rule. Writes are per entry, so a
+ * dropped bucket is never rewritten. The encoded side is untyped because `withDecodingDefault`
+ * validates it before any per-entry recovery could run.
+ */
+const decodesAsBucket = Schema.decodeUnknownOption(MachineBucket);
+const ReceivedBuckets = Schema.Record(Schema.String, Schema.Unknown).pipe(
+  Schema.decodeTo(
+    Schema.Record(MachineBucketId, MachineBucket),
+    SchemaTransformation.transform<
+      Readonly<Record<string, (typeof MachineBucket)["Encoded"]>>,
+      Readonly<Record<string, unknown>>
+    >({
+      decode: (buckets) => {
+        const kept: Record<string, (typeof MachineBucket)["Encoded"]> = {};
+        for (const [id, bucket] of Object.entries(buckets)) {
+          if (Option.isSome(decodesAsBucket(bucket)))
+            kept[id] = bucket as (typeof MachineBucket)["Encoded"];
+        }
+        return kept;
+      },
+      encode: (buckets) => buckets,
+    }),
+  ),
+);
+
 export const MachineResourcesSettings = Schema.Struct({
   thresholds: MachineThresholds.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_MACHINE_THRESHOLDS)),
   ),
+  buckets: ReceivedBuckets.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
 });
 export type MachineResourcesSettings = typeof MachineResourcesSettings.Type;
 
-export const DEFAULT_MACHINE_RESOURCES_SETTINGS: MachineResourcesSettings = Schema.decodeSync(
-  MachineResourcesSettings,
-)({});
-
 export const MachineResourcesSettingsPatch = Schema.Struct({
   thresholds: Schema.optionalKey(MachineThresholdsPatch),
+  /** Per entry; null deletes. */
+  buckets: Schema.optionalKey(
+    Schema.Record(MachineBucketId, Schema.NullOr(MachineBucketPatchEntry)).check(
+      Schema.isMaxProperties(MACHINE_BUCKETS_MAX),
+    ),
+  ),
 });
 export type MachineResourcesSettingsPatch = typeof MachineResourcesSettingsPatch.Type;
 
@@ -205,6 +457,8 @@ export const MachineProcessAdded = Schema.Struct({
   user: Schema.String,
   command: Schema.String,
   containerId: Schema.optionalKey(Schema.String),
+  /** Re-sent with the row when it changes. Absent from servers before ownership. */
+  owner: Schema.optionalKey(ReceivedProcessOwner),
 });
 export type MachineProcessAdded = typeof MachineProcessAdded.Type;
 
@@ -239,6 +493,11 @@ export const MachineProcessFrame = Schema.Struct({
   removed: Schema.Array(NonNegativeInt),
   rows: MachineProcessRows,
   gpus: Schema.optionalKey(Schema.Array(GpuDeviceSample)),
+  /**
+   * Every claim on this machine; on full frames and whenever the list changes, else absent.
+   * A claim with a target or actor kind this version lacks is dropped on its own.
+   */
+  claims: Schema.optionalKey(ForwardCompatibleArray(Claim)),
   /** Rows left out past the row cap. */
   truncated: Schema.optionalKey(PositiveInt),
 });
@@ -253,5 +512,7 @@ export const SubscribeMachineProcessesInput = Schema.Struct({
   ),
   /** Per-process GPU columns; the host walks DRM fdinfo or asks NVML for them. */
   gpuProcesses: Schema.optionalKey(Schema.Boolean),
+  /** Only processes this thread owns, directly or through a claim. */
+  threadId: Schema.optionalKey(ThreadId),
 });
 export type SubscribeMachineProcessesInput = typeof SubscribeMachineProcessesInput.Type;

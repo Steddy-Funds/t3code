@@ -9,6 +9,7 @@ import * as Stream from "effect/Stream";
 import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as EffectAcpErrors from "effect-acp/errors";
+import { ProcessOwnershipRegistry } from "@t3tools/shared/ProcessOwnershipRegistry";
 import type * as EffectAcpSchema from "effect-acp/compat";
 import * as NodeBuffer from "node:buffer";
 
@@ -129,6 +130,8 @@ export interface AcpClientTerminalsOptions {
     | ((sessionId: string) => NodeJS.ProcessEnv | undefined)
     | undefined;
   readonly forceKillAfter?: Duration.Input | undefined;
+  /** The thread the session serves, so the machine task manager attributes its commands. */
+  readonly threadId?: string | undefined;
 }
 
 function acpTerminalCommand(input: {
@@ -150,6 +153,7 @@ export const makeAcpClientTerminals = Effect.fn("makeAcpClientTerminals")(functi
   options: AcpClientTerminalsOptions,
 ): Effect.fn.Return<AcpClientTerminals, never, ChildProcessSpawner.ChildProcessSpawner> {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+  const ownership = yield* ProcessOwnershipRegistry;
   const forceKillAfter = options.forceKillAfter ?? "5 seconds";
   const creationPermit = yield* Semaphore.make(1);
   const terminals = new Map<string, ManagedAcpTerminal>();
@@ -250,6 +254,15 @@ export const makeAcpClientTerminals = Effect.fn("makeAcpClientTerminals")(functi
             ),
           );
 
+          const releaseRoot =
+            options.threadId === undefined
+              ? () => undefined
+              : ownership.registerRoot({
+                  pid: child.pid,
+                  owner: { type: "thread", threadId: options.threadId },
+                });
+          yield* Scope.addFinalizer(terminalScope, Effect.sync(releaseRoot));
+
           const terminalId = `t3-term-${nextTerminalNumber}`;
           nextTerminalNumber += 1;
           const record: ManagedAcpTerminal = {
@@ -289,6 +302,7 @@ export const makeAcpClientTerminals = Effect.fn("makeAcpClientTerminals")(functi
           const stderrPump = yield* Effect.forkDetach(pump(child.stderr));
           yield* Effect.forkDetach(
             child.exitCode.pipe(
+              Effect.ensuring(Effect.sync(releaseRoot)),
               Effect.match({
                 onFailure: (error) => ({ exitCode: null, signal: terminalExitSignal(error) }),
                 onSuccess: (code) => ({ exitCode: Number(code), signal: null }),

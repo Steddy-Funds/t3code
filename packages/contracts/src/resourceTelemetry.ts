@@ -346,6 +346,8 @@ export const ResourceMonitorHostSampleEvent = Schema.Struct({
   added: Schema.optionalKey(Schema.Array(ResourceMonitorHostProcessStatic)),
   gpus: Schema.optionalKey(Schema.Array(GpuDeviceSample)),
   gpuProcesses: Schema.optionalKey(Schema.Array(GpuProcessSample)),
+  /** Devices whose process walk succeeded; a process is unmeasured on any other device. */
+  gpuProcessDevices: Schema.optionalKey(Schema.Array(Schema.String)),
 });
 export type ResourceMonitorHostSampleEvent = typeof ResourceMonitorHostSampleEvent.Type;
 

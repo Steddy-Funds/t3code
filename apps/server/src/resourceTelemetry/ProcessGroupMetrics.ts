@@ -32,7 +32,8 @@ const OTHER_GROUPS: ReadonlyArray<readonly [RegExp, string]> = [
   [/^(?:ba|z|fi|da|c)?sh(?:\.exe)?$|^pwsh|^powershell|^cmd\.exe$/, "terminal"],
 ];
 
-const childGroup = (name: string, command: string) => {
+/** The group a direct child of the server names for its subtree: a provider, "browser", "terminal" or "other". */
+export const childGroup = (name: string, command: string) => {
   const lowerName = name.toLowerCase();
   return (
     processProviderGroup(name, command) ??

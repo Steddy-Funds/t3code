@@ -9,6 +9,7 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 
 import * as AcpSessionRuntime from "@t3tools/provider-acp/server/AcpSessionRuntime";
+import { parseUnifiedCgroupPath } from "@t3tools/shared/cgroup";
 
 const identity = (
   pid: number,
@@ -58,10 +59,8 @@ const server = () => identity(process.pid, 1, process.pid, process.pid, "server"
 
 describe("terminatePosixOwnedProcessTree", () => {
   it("parses unified cgroup paths and escaped cgroup2 mountinfo", () => {
-    expect(AcpSessionRuntime.parseUnifiedCgroupPath("0::/user.slice/app.scope\n")).toBe(
-      "/user.slice/app.scope",
-    );
-    expect(AcpSessionRuntime.parseUnifiedCgroupPath("0::/one\n0::/two\n")).toBeUndefined();
+    expect(parseUnifiedCgroupPath("0::/user.slice/app.scope\n")).toBe("/user.slice/app.scope");
+    expect(parseUnifiedCgroupPath("0::/one\n0::/two\n")).toBeUndefined();
     expect(AcpSessionRuntime.isSafeCgroupPath("/user.slice/app.scope")).toBe(true);
     expect(AcpSessionRuntime.isSafeCgroupPath("/user.slice/../escape")).toBe(false);
     expect(AcpSessionRuntime.isSafeCgroupPath("/user.slice/app.scope (deleted)")).toBe(false);
@@ -222,9 +221,7 @@ describe("terminatePosixOwnedProcessTree", () => {
     const outputPath = NodePath.join(scratch, "argv output");
     NodeFS.mkdirSync(leasePath);
     NodeFS.writeFileSync(NodePath.join(leasePath, "cgroup.procs"), "");
-    const relativePath = AcpSessionRuntime.parseUnifiedCgroupPath(
-      NodeFS.readFileSync("/proc/self/cgroup", "utf8"),
-    );
+    const relativePath = parseUnifiedCgroupPath(NodeFS.readFileSync("/proc/self/cgroup", "utf8"));
     expect(relativePath).toBeDefined();
     const lease: AcpSessionRuntime.AcpLinuxCgroupLease = {
       contains: () => false,

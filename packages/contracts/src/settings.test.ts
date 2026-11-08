@@ -2,7 +2,11 @@ import { describe, expect, it } from "vite-plus/test";
 import * as Schema from "effect/Schema";
 
 import { type CommandId, ProjectId } from "./baseSchemas.ts";
-import { DEFAULT_MACHINE_THRESHOLDS, MACHINE_HOLD_MAX_MS } from "./machineResources.ts";
+import {
+  DEFAULT_MACHINE_THRESHOLDS,
+  MACHINE_BUCKETS_MAX,
+  MACHINE_HOLD_MAX_MS,
+} from "./machineResources.ts";
 import {
   ProviderDriverKind,
   ProviderInstanceEnvironment,
@@ -374,6 +378,63 @@ describe("ServerSettings machine resource thresholds", () => {
     expect(patchThresholds({ enterHoldMs: 0, exitFactor: 0.5 })).toEqual({
       machineResources: { thresholds: { enterHoldMs: 0, exitFactor: 0.5 } },
     });
+  });
+});
+
+describe("ServerSettings machine buckets", () => {
+  const rules = [{ field: "command", op: "contains", value: "cargo" }];
+  const stored = {
+    id: "builds",
+    name: "Builds",
+    rules,
+    provenance: {
+      createdBy: { type: "user" },
+      updatedBy: { type: "auto", threadId: "thread-a" },
+      updatedAt: "2026-11-07T00:00:00.000Z",
+    },
+  };
+
+  it("defaults to no buckets for settings stored before them", () => {
+    expect(decodeServerSettings({}).machineResources.buckets).toEqual({});
+    expect(
+      decodeServerSettings({ machineResources: { thresholds: {} } }).machineResources,
+    ).toMatchObject({ buckets: {} });
+    expect(DEFAULT_SERVER_SETTINGS.machineResources.buckets).toEqual({});
+  });
+
+  it("reads a bucket back from the settings file", () => {
+    const decodeFile = Schema.decodeUnknownSync(Schema.fromJsonString(ServerSettings));
+    const settings = decodeFile(
+      JSON.stringify({ machineResources: { buckets: { builds: stored } } }),
+    );
+    expect(settings.machineResources.buckets).toMatchObject({
+      builds: { id: "builds", name: "Builds", rules },
+    });
+  });
+
+  it("patches buckets per entry, null deleting one, provenance optional", () => {
+    expect(
+      decodeServerSettingsPatch({
+        machineResources: {
+          buckets: { builds: { id: "builds", name: "Builds", rules }, old: null },
+        },
+      }),
+    ).toEqual({
+      machineResources: { buckets: { builds: { id: "builds", name: "Builds", rules }, old: null } },
+    });
+  });
+
+  it("caps a patch at the bucket limit", () => {
+    const entries = (count: number) =>
+      Object.fromEntries(Array.from({ length: count }, (_, index) => [`b${index}`, null]));
+    expect(() =>
+      decodeServerSettingsPatch({ machineResources: { buckets: entries(MACHINE_BUCKETS_MAX) } }),
+    ).not.toThrow();
+    expect(() =>
+      decodeServerSettingsPatch({
+        machineResources: { buckets: entries(MACHINE_BUCKETS_MAX + 1) },
+      }),
+    ).toThrow();
   });
 });
 

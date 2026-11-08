@@ -202,6 +202,30 @@ Killing needs the `environment:maintain` permission.
 **Open terminal** starts a shell in the machine's home directory. It needs the
 `terminal:operate` permission.
 
+#### Who is using a machine
+
+The **Owner** column says which thread, terminal, bucket or provider each process belongs to.
+Choose **Grouped** to sum processes by thread, bucket or provider, and the memory graph colours
+memory by its biggest owners. A process an agent's provider starts belongs to that thread. When one
+provider process serves several threads, such as Codex's app server, its tools are split by
+thread and the rest shows as shared. Cursor runs inside the T3 server, so only the shells it
+starts count toward a thread. Anything else is **Other** until a bucket or a claim covers it.
+
+**Buckets** name processes T3 didn't start, such as a database or a build watcher. Create one in
+**Buckets & claims** or in the machine's settings, with rules that match a command, executable,
+directory, user, container, parent or thread, or pin process IDs. Buckets are saved on that
+machine. Agents can create them too, and the list shows who made each one. Totals read
+"unmeasured" when the machine's resource monitor isn't running, since T3 then sees only its own
+processes. Saving buckets needs a machine on this version of T3 Code or newer.
+
+**Claims** tie a process, a container or a cgroup to a thread, so a dev server or a Docker
+container an agent started counts toward that thread. Agents make claims. A claim ends when its
+process exits, its container or cgroup is removed, or its thread is deleted, and when the server
+restarts; archiving a thread keeps them. Removing a claim stops nothing.
+
+To see one thread's use, open the thread's details: **Resources** shows its CPU and memory now,
+the last 10 minutes, and its processes. T3 records this while a turn runs, even with nothing open.
+
 ### Tailscale HTTPS
 
 Join both devices to the same tailnet. In the desktop app, enable **Tailscale

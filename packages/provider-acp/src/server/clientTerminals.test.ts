@@ -9,6 +9,10 @@ import * as Result from "effect/Result";
 import * as Stream from "effect/Stream";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as HostProcess from "@t3tools/shared/HostProcess";
+import {
+  makeProcessOwnershipRegistry,
+  ProcessOwnershipRegistry,
+} from "@t3tools/shared/ProcessOwnershipRegistry";
 
 import {
   makeAcpClientTerminals,
@@ -209,6 +213,106 @@ describe("AcpClientTerminals", () => {
         yield* Fiber.join(killing);
         expect(yield* Fiber.join(waiting)).toEqual({ exitCode: 137, signal: null });
       }).pipe(Effect.scoped),
+  );
+
+  it.effect.each([
+    { ends: "the command exits", release: false },
+    { ends: "the terminal is released", release: true },
+  ])("attributes a command to its thread until $ends", ({ release }) =>
+    Effect.gen(function* () {
+      const exited = yield* Deferred.make<ChildProcessSpawner.ExitCode>();
+      const child = ChildProcessSpawner.makeHandle({
+        pid: ChildProcessSpawner.ProcessId(4242),
+        exitCode: Deferred.await(exited),
+        isRunning: Deferred.isDone(exited).pipe(Effect.map((done) => !done)),
+        kill: () => Deferred.succeed(exited, ChildProcessSpawner.ExitCode(143)).pipe(Effect.asVoid),
+        stdin: Sink.drain,
+        stdout: Stream.empty,
+        stderr: Stream.empty,
+        all: Stream.empty,
+        getInputFd: () => Sink.drain,
+        getOutputFd: () => Stream.empty,
+        unref: Effect.succeed(Effect.void),
+      });
+      const registry = makeProcessOwnershipRegistry({
+        readPidCgroup: () => undefined,
+        selfCgroup: undefined,
+        now: () => 0,
+      });
+      const terminals = yield* makeAcpClientTerminals({
+        defaultCwd: process.cwd(),
+        threadId: "thread-acp",
+      }).pipe(
+        Effect.provideService(ProcessOwnershipRegistry, registry),
+        Effect.provideService(
+          ChildProcessSpawner.ChildProcessSpawner,
+          // Closing the terminal's scope stops the command, as the real spawner does.
+          ChildProcessSpawner.make(() =>
+            Effect.acquireRelease(Effect.succeed(child), () =>
+              Deferred.succeed(exited, ChildProcessSpawner.ExitCode(143)),
+            ),
+          ),
+        ),
+      );
+      yield* Effect.addFinalizer(() => terminals.disposeAll);
+      const request = {
+        sessionId: "session",
+        ...(yield* terminals.create({ sessionId: "session", command: "runs" })),
+      };
+      expect(registry.roots().map((entry) => entry.root)).toEqual([
+        { pid: 4242, owner: { type: "thread", threadId: "thread-acp" } },
+      ]);
+
+      if (release) {
+        yield* terminals.release(request);
+      } else {
+        yield* Deferred.succeed(exited, ChildProcessSpawner.ExitCode(0));
+        yield* terminals.waitForExit(request);
+      }
+      expect(registry.roots()).toEqual([]);
+      // The other way out finds the root already gone.
+      if (!release) yield* terminals.release(request);
+      expect(registry.roots()).toEqual([]);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("attributes nothing when the session has no thread", () =>
+    Effect.gen(function* () {
+      const registered: Array<unknown> = [];
+      const terminals = yield* makeAcpClientTerminals({ defaultCwd: process.cwd() }).pipe(
+        Effect.provideService(ProcessOwnershipRegistry, {
+          registerRoot: (root) => {
+            registered.push(root);
+            return () => undefined;
+          },
+          roots: () => [],
+        }),
+        Effect.provideService(
+          ChildProcessSpawner.ChildProcessSpawner,
+          ChildProcessSpawner.make(() =>
+            Effect.succeed(
+              ChildProcessSpawner.makeHandle({
+                pid: ChildProcessSpawner.ProcessId(4243),
+                exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(0)),
+                isRunning: Effect.succeed(false),
+                kill: () => Effect.void,
+                stdin: Sink.drain,
+                stdout: Stream.empty,
+                stderr: Stream.empty,
+                all: Stream.empty,
+                getInputFd: () => Sink.drain,
+                getOutputFd: () => Stream.empty,
+                unref: Effect.succeed(Effect.void),
+              }),
+            ),
+          ),
+        ),
+      );
+      yield* Effect.addFinalizer(() => terminals.disposeAll);
+      const created = yield* terminals.create({ sessionId: "session", command: "runs" });
+      yield* terminals.waitForExit({ sessionId: "session", ...created });
+      expect(registered).toEqual([]);
+    }).pipe(Effect.scoped),
   );
 
   it.live("force-kills commands that ignore SIGTERM and resolves wait_for_exit", () =>

@@ -23,6 +23,10 @@ import { vi } from "vite-plus/test";
 
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { AgentScope } from "@t3tools/shared/AgentScope";
+import {
+  ProcessOwnershipRegistry,
+  type ProcessRoot,
+} from "@t3tools/shared/ProcessOwnershipRegistry";
 import { ProviderEventLoggers } from "@t3tools/provider-core/server/ProviderEventLoggers";
 import { makeProviderFailure } from "@t3tools/provider-core/server/failure";
 import { signalProcessGroup } from "@t3tools/provider-core/server/processGroup";
@@ -659,7 +663,28 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("Claude CLI pro
     let runningAgents = 0;
     let releaseAgent!: () => void;
     const agentReleased = new Promise<void>((resolve) => (releaseAgent = resolve));
+    const roots: Array<{ readonly root: ProcessRoot; releases: number }> = [];
     const runner = layerQueryRunner.pipe(
+      Layer.provide(
+        Layer.succeed(ProcessOwnershipRegistry, {
+          registerRoot: (root) => {
+            const entry = { root, releases: 0 };
+            roots.push(entry);
+            return () => {
+              entry.releases += 1;
+            };
+          },
+          roots: () => [],
+        }),
+      ),
+      Layer.provide(
+        Layer.succeed(AgentScope, {
+          ...AgentScope.defaultValue(),
+          wrap: ({ command, args }) => Effect.succeed({ command, args, unit: "t3-claude.scope" }),
+          controlGroup: (unit) =>
+            Effect.succeed(unit === "t3-claude.scope" ? "/agents/t3-claude.scope" : undefined),
+        }),
+      ),
       Layer.provide(
         Layer.mock(PortScanner.PortDiscovery)({
           trackAgent: () => {
@@ -680,6 +705,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("Claude CLI pro
       const cli = fakeClaudeCli(
         [
           'dir=$(dirname "$0")',
+          `printf '%s' "$$" > "$dir/pid"`,
           `printf '%s' "$${PortScanner.AGENT_THREAD_ENV}" > "$dir/thread"`,
           "cat > /dev/null",
         ].join("\n"),
@@ -699,9 +725,21 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("Claude CLI pro
       const session = yield* openFakeCli(cli);
       assert.equal(yield* Effect.promise(() => threadRead), "thread-fake-cli");
       assert.equal(runningAgents, 1);
+      assert.deepEqual(
+        roots.map((entry) => entry.root),
+        [
+          {
+            pid: Number(NodeFS.readFileSync(NodePath.join(dir, "pid"), "utf8")),
+            cgroup: "/agents/t3-claude.scope",
+            owner: { type: "thread", threadId: "thread-fake-cli" },
+          },
+        ],
+      );
+      assert.equal(roots[0]!.releases, 0);
       yield* session.close;
       yield* Effect.promise(() => agentReleased);
       assert.equal(runningAgents, 0);
+      assert.equal(roots[0]!.releases, 1);
     }).pipe(Effect.provide(runner));
   });
 });

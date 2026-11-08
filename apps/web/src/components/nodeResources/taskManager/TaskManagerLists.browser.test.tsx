@@ -1,6 +1,6 @@
 import "~/index.css";
 
-import { RegistryContext } from "@effect/atom-react";
+import { RegistryContext, useAtomValue } from "@effect/atom-react";
 import type { MachineProcessTable } from "@t3tools/client-runtime/state/machineProcessFrames";
 import { EnvironmentId } from "@t3tools/contracts";
 import { type Atom, AtomRegistry } from "effect/reactivity";
@@ -65,23 +65,47 @@ vi.mock(import("../runningThreads"), async (original) => {
   return { ...(await original()), runningThreadsAtom: (() => none) as never };
 });
 
+import {
+  machineProcessesSource,
+  useMachineProcessListState,
+} from "../processTable/MachineProcessList";
 import { TaskManagerLists } from "./TaskManagerLists";
 
 function setup() {
   state.mounted.clear();
 }
 
+const environmentId = EnvironmentId.make("machine-a");
+
+/** The page's wiring: one stream from the list state, also read above the tabs as the pool does. */
+function Lists() {
+  const processListState = useMachineProcessListState();
+  const processes = machineProcessesSource({
+    environmentId,
+    tick: 1000,
+    hasGpu: false,
+    canReadDiagnostics: true,
+    hidden: processListState.hidden,
+    tab: processListState.tab,
+  });
+  useAtomValue(processes);
+  return (
+    <TaskManagerLists
+      environmentId={environmentId}
+      processes={processes}
+      processListState={processListState}
+      hasGpu={false}
+      processesUnavailable={null}
+      viewMode="raw"
+      onViewModeChange={() => {}}
+    />
+  );
+}
+
 const renderLists = () =>
   render(
     <RegistryContext value={AtomRegistry.make()}>
-      <TaskManagerLists
-        environmentId={EnvironmentId.make("machine-a")}
-        tick={1000}
-        hasGpu={false}
-        processesUnavailable={null}
-        viewMode="raw"
-        onViewModeChange={() => {}}
-      />
+      <Lists />
     </RegistryContext>,
   );
 
@@ -107,6 +131,7 @@ describe("TaskManagerLists", () => {
     await screen.getByRole("button", { name: "Threads" }).click();
     await expect.element(screen.getByText("Threads on this machine")).toBeVisible();
     expect(header("Memory").query()).toBeNull();
+    // Closed even though the pool above the tabs still reads the stream.
     await vi.waitFor(() => expect([...state.mounted]).toEqual([]));
 
     await screen.getByRole("button", { name: "Processes" }).click();

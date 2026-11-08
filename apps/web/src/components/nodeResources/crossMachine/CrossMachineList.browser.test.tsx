@@ -1,7 +1,12 @@
 import { RegistryContext } from "@effect/atom-react";
 import type { MachineIndicator } from "@t3tools/client-runtime/state/machineIndicator";
 import type { MachineProcessTable } from "@t3tools/client-runtime/state/machineProcessFrames";
-import { EnvironmentId, type MachineStatusSnapshot } from "@t3tools/contracts";
+import {
+  EnvironmentId,
+  MachineBucketId,
+  type MachineStatusSnapshot,
+  ThreadId,
+} from "@t3tools/contracts";
 import { type Atom, AtomRegistry } from "effect/reactivity";
 import { describe, expect, it, vi } from "vite-plus/test";
 import { userEvent } from "vite-plus/test/browser";
@@ -18,6 +23,8 @@ const state = vi.hoisted(() => ({
   /** Live atoms mounted, by "machine:<id>:<intervalMs>:<historyMs>" or "processes:<id>:<intervalMs>:<top>". */
   mounted: new Set<string>(),
   requested: new Set<string>(),
+  /** Replaces the T3 server's lone row, such as with owned rows. */
+  processRows: null as MachineProcessTable["rows"] | null,
 }));
 
 vi.mock(import("../capableMachines"), async () => {
@@ -50,7 +57,9 @@ vi.mock(import("~/state/machineResources"), async () => {
           totals: state.totals.get(id) ?? null,
         })),
       machineProcesses: (id: string, input: { intervalMs: number; top: number }) =>
-        tracked(`processes:${id}:${input.intervalMs}:${input.top}`, () => T3_SERVER),
+        tracked(`processes:${id}:${input.intervalMs}:${input.top}`, () =>
+          state.processRows === null ? T3_SERVER : { ...T3_SERVER, rows: state.processRows },
+        ),
     } as never,
   };
 });
@@ -159,6 +168,7 @@ function setup(machines: ReadonlyArray<Machine>, { canReadDiagnostics = true } =
   state.canReadDiagnostics = canReadDiagnostics;
   state.mounted.clear();
   state.requested.clear();
+  state.processRows = null;
 }
 
 async function renderList() {
@@ -256,7 +266,7 @@ describe("CrossMachineList", () => {
     await vi.waitFor(() =>
       expect(live("machine:")).toEqual(["machine:alpha:5000:300000", "machine:bravo:5000:300000"]),
     );
-    expect(live("processes:")).toEqual(["processes:alpha:5000:3", "processes:bravo:5000:3"]);
+    expect(live("processes:")).toEqual(["processes:alpha:5000:10", "processes:bravo:5000:10"]);
 
     for (const [label, tick] of [
       ["2 s", 2_000],
@@ -270,8 +280,8 @@ describe("CrossMachineList", () => {
         ]),
       );
       expect(live("processes:")).toEqual([
-        `processes:alpha:${tick}:3`,
-        `processes:bravo:${tick}:3`,
+        `processes:alpha:${tick}:10`,
+        `processes:bravo:${tick}:10`,
       ]);
     }
   });
@@ -283,8 +293,8 @@ describe("CrossMachineList", () => {
     const streams = [
       "machine:alpha:5000:300000",
       "machine:bravo:5000:300000",
-      "processes:alpha:5000:3",
-      "processes:bravo:5000:3",
+      "processes:alpha:5000:10",
+      "processes:bravo:5000:10",
     ];
     await vi.waitFor(() => expect(live("")).toEqual(streams));
 
@@ -299,6 +309,67 @@ describe("CrossMachineList", () => {
     await vi.waitFor(() => expect(live("")).toEqual(streams));
     expect(list.rowIds()).toEqual(["bravo", "alpha"]);
   });
+
+  it("asks for 10 rows to sum by thread or bucket and 3 for the top process", async () => {
+    setup([OK]);
+    await using list = await renderList();
+    const toggle = list.screen.getByRole("group", { name: "Top consumer by" });
+
+    await vi.waitFor(() => expect(live("processes:")).toEqual(["processes:alpha:5000:10"]));
+    for (const [label, top] of [
+      ["Process", 3],
+      ["Bucket", 10],
+      ["Thread", 10],
+    ] as const) {
+      await userEvent.click(toggle.getByRole("button", { name: label }));
+      await vi.waitFor(() => expect(live("processes:")).toEqual([`processes:alpha:5000:${top}`]));
+    }
+  });
+
+  it("shows the busiest thread or bucket by summed CPU, and the top process by name", async () => {
+    const owned = (pid: number, name: string, cpu: number, owner: object) => ({
+      ...T3_SERVER.rows[0]!,
+      key: pid,
+      pid,
+      name,
+      cpu,
+      owner: owner as never,
+    });
+    setup([OK]);
+    state.processRows = [
+      // Two rows of one thread outsum the single busiest process.
+      owned(2, "node", 30, { type: "thread", threadId: ThreadId.make("thread-aaaaaaaaaa") }),
+      owned(3, "node", 30, { type: "thread", threadId: ThreadId.make("thread-aaaaaaaaaa") }),
+      owned(4, "cargo", 40, { type: "bucket", bucketId: MachineBucketId.make("bucket_x") }),
+      owned(5, "cargo", 5, { type: "bucket", bucketId: MachineBucketId.make("bucket_y") }),
+      owned(6, "rustc", 45, { type: "thread", threadId: ThreadId.make("thread-bbbbbbbbbb") }),
+    ];
+    await using list = await renderList();
+    const toggle = list.screen.getByRole("group", { name: "Top consumer by" });
+    const cell = () => list.row("alpha").children[6]?.textContent;
+
+    // Threads this client hasn't loaded show a short id.
+    await vi.waitFor(() => expect(cell()).toBe("thread thread-a≥60%"));
+    await userEvent.click(toggle.getByRole("button", { name: "Bucket" }));
+    // A bucket missing from settings reads as deleted.
+    await vi.waitFor(() => expect(cell()).toBe("deleted bucket≥40%"));
+    await userEvent.click(toggle.getByRole("button", { name: "Process" }));
+    await vi.waitFor(() => expect(cell()).toBe("node ×260%"));
+  });
+
+  it.each(["Thread", "Bucket"])(
+    "falls back to the top process by %s on a server without owners",
+    async (label) => {
+      setup([OK]);
+      await using list = await renderList();
+      const toggle = list.screen.getByRole("group", { name: "Top consumer by" });
+      await userEvent.click(toggle.getByRole("button", { name: label }));
+
+      await vi.waitFor(() =>
+        expect(list.row("alpha").children[6]?.textContent).toBe("t3-server12%"),
+      );
+    },
+  );
 
   it("opens no machine or process stream for an unreachable row", async () => {
     setup(ALL);

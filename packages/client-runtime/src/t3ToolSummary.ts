@@ -355,6 +355,12 @@ export function summarizeT3ToolCalls(
     case "environment-update":
       label = phrase("Updated", "update", `environment preferences ${times}`);
       break;
+    case "machine-buckets":
+      label = phrase("Used", "use", `machine buckets ${times}`);
+      break;
+    case "resource-claims":
+      label = phrase("Used", "use", `resource claims ${times}`);
+      break;
     case "environment-links":
       label = phrase("Listed", "list", `linked environments ${times}`);
       break;

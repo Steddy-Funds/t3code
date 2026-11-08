@@ -1205,6 +1205,13 @@ export const SETTINGS_SEARCH_ITEMS = [
     ],
   },
   {
+    id: "machine-process-buckets",
+    title: "Process buckets",
+    to: "/settings/access",
+    targetId: "connections-environment",
+    searchTerms: ["machine resources process owner bucket group rule match exe command cwd pin"],
+  },
+  {
     id: "pull-request-routing",
     title: "Pull request sharing",
     to: "/settings/connections",

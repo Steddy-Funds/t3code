@@ -68,6 +68,8 @@ const state = vi.hoisted(() => ({
   secondaryLoadSchedules: false,
   builtIn: false,
   autoBuckets: false,
+  builtInBlock: undefined as string | undefined,
+  autoBucketsSetting: null as boolean | null,
   canWriteSettings: true,
   settingsPatches: [] as unknown[],
 }));
@@ -82,6 +84,8 @@ function setup() {
   state.secondaryLoadSchedules = false;
   state.builtIn = false;
   state.autoBuckets = false;
+  state.builtInBlock = undefined;
+  state.autoBucketsSetting = null;
   state.canWriteSettings = true;
   state.settingsPatches = [];
   permissions.clear();
@@ -153,6 +157,12 @@ vi.mock(import("../../state/server"), async (original) => {
         Atom.make({
           environment: { capabilities: { machineAutoBuckets: state.autoBuckets } },
         })) as never,
+      settingsValueAtom: (() =>
+        Atom.make(
+          state.autoBucketsSetting === null
+            ? null
+            : { machineResources: { autoBuckets: { enabled: state.autoBucketsSetting } } },
+        )) as never,
       upsertScheduledTask: {
         ...actual.serverEnvironment.upsertScheduledTask,
         permissionAtom: (id: string | null) => permissions.get(id ?? "")!,
@@ -174,7 +184,17 @@ vi.mock(import("../../state/query"), async (original) => ({
     data:
       request === null || request === threadFamilyRead
         ? request
-        : { tasks: state.tasksLoaded ? [state.builtIn ? builtInTask : task] : [] },
+        : {
+            tasks: state.tasksLoaded
+              ? [
+                  state.builtIn
+                    ? state.builtInBlock === undefined
+                      ? builtInTask
+                      : { ...builtInTask, enabled: false, blockedByPolicy: state.builtInBlock }
+                    : task,
+                ]
+              : [],
+          },
     error: null,
     isPending: false,
     refresh: vi.fn(),
@@ -332,16 +352,28 @@ describe("ScheduledTasksSettings", () => {
       .toBeDisabled();
   });
 
-  it("pauses the built-in task through its machine setting", async () => {
-    setup();
-    state.builtIn = true;
-    state.autoBuckets = true;
-    await using screen = await render(<ScheduledTasksSettings />);
-    const toggle = screen.getByRole("switch", { name: "Enable Machine buckets" });
-    await expect.element(toggle).toBeEnabled();
-    await userEvent.click(toggle);
-    expect(state.settingsPatches).toEqual([
-      { machineResources: { autoBuckets: { enabled: false } } },
-    ]);
-  });
+  it.each([
+    ["from the task when settings are not loaded", undefined, null],
+    // Blocked keeps the task off, so the switch shows the setting the click flips.
+    ["from the setting while blocked", "No provider available", true],
+  ] as const)(
+    "pauses the built-in task through its machine setting, %s",
+    async (_label, block, setting) => {
+      setup();
+      state.builtIn = true;
+      state.autoBuckets = true;
+      state.builtInBlock = block;
+      state.autoBucketsSetting = setting;
+      await using screen = await render(<ScheduledTasksSettings />);
+      const toggle = screen.getByRole("switch", { name: "Enable Machine buckets" });
+      await expect.element(toggle).toBeEnabled();
+      await expect.element(toggle).toBeChecked();
+      if (block !== undefined)
+        await expect.element(screen.getByText(new RegExp(`· ${block}$`))).toBeVisible();
+      await userEvent.click(toggle);
+      expect(state.settingsPatches).toEqual([
+        { machineResources: { autoBuckets: { enabled: false } } },
+      ]);
+    },
+  );
 });

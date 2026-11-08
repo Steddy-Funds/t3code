@@ -437,6 +437,12 @@ export interface ShellSnapshotOptions {
   readonly threadIds?: ReadonlyArray<ThreadId>;
 }
 
+/** A live thread and its live `subagent` parent. */
+export interface SubagentLink {
+  readonly threadId: ThreadId;
+  readonly parentThreadId: ThreadId;
+}
+
 /** What a shell subscriber's trims read from an active thread, without building its shell. */
 export interface ActiveShellIndexEntry extends Pick<
   OrchestrationV2ThreadShell,
@@ -534,6 +540,14 @@ export interface ProjectionStoreV2Shape {
   /** Threads with a run preparing, starting or running now. */
   readonly listRunningThreadIds: () => Effect.Effect<
     ReadonlyArray<ThreadId>,
+    ProjectionStoreV2Error
+  >;
+  /**
+   * Every `subagent` link between two live threads, archived ones included. Forks are not
+   * links, and a deleted thread has none, so it ends its branch.
+   */
+  readonly listSubagentLinks: () => Effect.Effect<
+    ReadonlyArray<SubagentLink>,
     ProjectionStoreV2Error
   >;
   /** Threads that are not deleted, archived ones included. */
@@ -7183,6 +7197,25 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       return rows.map((row) => ThreadId.make(row.thread_id));
     }, Effect.mapError(shellSnapshotReadError));
 
+    const listSubagentLinks = Effect.fn("ProjectionStore.listSubagentLinks")(function* () {
+      const rows = yield* sql<{ readonly thread_id: string; readonly parent_thread_id: string }>`
+        SELECT child.thread_id,
+          json_extract(child.payload_json, '$.lineage.parentThreadId') AS parent_thread_id
+        FROM orchestration_v2_projection_threads child
+        JOIN orchestration_v2_projection_threads parent
+          ON parent.thread_id = json_extract(child.payload_json, '$.lineage.parentThreadId')
+        WHERE child.deleted_at IS NULL
+          AND parent.deleted_at IS NULL
+          AND CASE WHEN json_valid(child.payload_json)
+            THEN json_extract(child.payload_json, '$.lineage.relationshipToParent') = 'subagent'
+            ELSE 0 END
+      `;
+      return rows.map((row): SubagentLink => ({
+        threadId: ThreadId.make(row.thread_id),
+        parentThreadId: ThreadId.make(row.parent_thread_id),
+      }));
+    }, Effect.mapError(shellSnapshotReadError));
+
     const countThreads = Effect.fn("ProjectionStore.countThreads")(function* () {
       const rows = yield* sql<{ readonly count: number }>`
         SELECT COUNT(*) AS count FROM orchestration_v2_projection_threads WHERE deleted_at IS NULL
@@ -7504,6 +7537,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       getPullRequestSnapshot: readOnReader(getPullRequestSnapshot),
       listActiveSubagentThreadIds: readOnReader(listActiveSubagentThreadIds),
       listRunningThreadIds: readOnReader(listRunningThreadIds),
+      listSubagentLinks: readOnReader(listSubagentLinks),
       countThreads: readOnReader(countThreads),
       listActiveShellIndex: readOnReader(listActiveShellIndex),
       readShellSnapshot: readOnReader(readShellSnapshot),

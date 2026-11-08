@@ -847,12 +847,13 @@ export function buildUnbucketed(input: {
   const { sample, owners } = input;
   const rows = hostRows(sample.sample);
   const unbucketed = rows.filter((row) => isUnbucketed(owners.get(row.identity)));
-  const listed =
-    input.limit === 0
-      ? []
-      : selectTop(unbucketed, Math.ceil(input.limit / 2), hostByCpu, hostByRss)
-          .selected.toSorted(hostByCpu)
-          .slice(0, input.limit);
+  const byCpuTop = unbucketed.toSorted(hostByCpu).slice(0, Math.ceil(input.limit / 2));
+  const chosen = new Set(byCpuTop);
+  const byRssFill = unbucketed
+    .toSorted(hostByRss)
+    .filter((row) => !chosen.has(row))
+    .slice(0, input.limit - byCpuTop.length);
+  const listed = [...byCpuTop, ...byRssFill].toSorted(hostByCpu);
   const byPid = new Map(rows.map((row) => [row.pid, row]));
   const processes = listed.map((row): UnbucketedProcess => {
     const entry = knownStatics(row, sample.statics);

@@ -1662,6 +1662,10 @@ describe("unbucketed processes", () => {
     expect(top.processes.map((process) => process.pid)).toEqual([6, 7]);
     expect(top.truncated).toBe(3);
 
+    const three = unbucketed(3);
+    expect(three.processes.map((process) => process.pid)).toEqual([6, 8, 7]);
+    expect(three.truncated).toBe(2);
+
     const four = unbucketed(4);
     expect(four.processes.map((process) => process.pid)).toEqual([6, 8, 9, 7]);
     expect(four.truncated).toBe(1);
@@ -1678,6 +1682,24 @@ describe("unbucketed processes", () => {
     expect(shareOnly.processes).toEqual([]);
     expect(shareOnly).not.toHaveProperty("truncated");
     expect(shareOnly.sharePercent).toBe(all.sharePercent);
+  });
+
+  it("fills every slot by memory when one process tops both CPU and memory", () => {
+    const { processes, truncated } = buildUnbucketed({
+      sample: hostSample([
+        { pid: 6, cpu: 50, rss: 9_000 },
+        { pid: 7, cpu: 1, rss: 5_000 },
+        { pid: 8, cpu: 30, rss: 200 },
+        { pid: 9, cpu: 2, rss: 300 },
+      ]),
+      owners: owned,
+      nowMs: 0,
+      limit: 2,
+      commands: false,
+      bucketNames: new Map(),
+    });
+    expect(processes.map((process) => process.pid)).toEqual([6, 7]);
+    expect(truncated).toBe(2);
   });
 
   it("fills the fields bucket rules match on, and command and cwd only when asked", () => {

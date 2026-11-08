@@ -1,13 +1,17 @@
 import { it } from "@effect/vitest";
 import {
+  type Claim,
+  ClaimId,
   type GpuDeviceSample,
   type GpuProcessSample,
   MACHINE_PROCESSES_MAX_ROWS,
   type MachineProcessFrame,
+  type ProcessOwner,
   type ResourceMonitorHostProcessStatic,
   type ResourceTelemetryAggregate,
   type ResourceTelemetryProcess,
   type ResourceTelemetrySnapshot,
+  ThreadId,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -27,12 +31,14 @@ import {
   type FrameInput,
   type HostFrameInput,
   HostProcesses,
+  hostOwnershipRows,
   initialFrameBuilderState,
   initialHostFrameBuilderState,
   layer as hostProcessesLayer,
   nextFrame,
   nextHostFrames,
   selectProcesses,
+  subtreeOwnershipRows,
 } from "./HostProcesses.ts";
 import * as NativeTelemetryClient from "./NativeTelemetryClient.ts";
 import { ResourceTelemetry } from "./ResourceTelemetry.ts";
@@ -339,6 +345,7 @@ function hostSample(
     readonly statics?: ReadonlyArray<ResourceMonitorHostProcessStatic>;
     readonly gpus?: ReadonlyArray<GpuDeviceSample>;
     readonly gpuProcesses?: ReadonlyArray<GpuProcessSample>;
+    readonly gpuProcessDevices?: ReadonlyArray<string>;
   } = {},
 ): NativeTelemetryClient.NativeHostSample {
   const startTime = (row: HostRowSpec) => row.startTimeMs ?? row.pid * 10;
@@ -364,6 +371,7 @@ function hostSample(
       },
       ...(options.gpus ? { gpus: options.gpus } : {}),
       ...(options.gpuProcesses ? { gpuProcesses: options.gpuProcesses } : {}),
+      ...(options.gpuProcessDevices ? { gpuProcessDevices: options.gpuProcessDevices } : {}),
     },
   };
 }
@@ -398,6 +406,8 @@ const gpuDevice: GpuDeviceSample = {
   vramUsedBytes: 1_000,
   sharedMemory: false,
 };
+const gpuDeviceB: GpuDeviceSample = { ...gpuDevice, id: "gpu-b", name: "Second GPU" };
+const bothWalked = ["gpu-a", "gpu-b"];
 
 const addedKeys = (frame: MachineProcessFrame) => frame.added.map((added) => added.key);
 
@@ -597,7 +607,11 @@ describe("nextHostFrames", () => {
       // A reused pid's old identity does not count toward the live process.
       { pid: 3, startTimeMs: 999, deviceId: "gpu-a", utilPercent: 70, vramBytes: 700 },
     ];
-    const sample = hostSample(threeRows, { gpus: [gpuDevice], gpuProcesses });
+    const sample = hostSample(threeRows, {
+      gpus: [gpuDevice, gpuDeviceB],
+      gpuProcesses,
+      gpuProcessDevices: bothWalked,
+    });
 
     const [[withGpu], state] = nextHostFrames(
       initialHostFrameBuilderState,
@@ -610,7 +624,7 @@ describe("nextHostFrames", () => {
       gpuUtil: [15, null, 0],
       vram: [150, null, 0],
     });
-    expect(withGpu!.gpus).toEqual([gpuDevice]);
+    expect(withGpu!.gpus).toEqual([gpuDevice, gpuDeviceB]);
 
     const [[withoutGpu]] = nextHostFrames(initialHostFrameBuilderState, hostInput(sample));
     expect(withoutGpu!.rows).not.toHaveProperty("gpuUtil");
@@ -647,6 +661,7 @@ describe("nextHostFrames", () => {
 
     const vramMoved = hostSample(threeRows, {
       sampledAtUnixMs: 11_000,
+      gpuProcessDevices: bothWalked,
       gpuProcesses: [
         { pid: 1, startTimeMs: 10, deviceId: "gpu-a", utilPercent: 10, vramBytes: 300 },
         { pid: 1, startTimeMs: 10, deviceId: "gpu-b", utilPercent: 5, vramBytes: 50 },
@@ -655,6 +670,76 @@ describe("nextHostFrames", () => {
     });
     const [[diff]] = nextHostFrames(state, hostInput(vramMoved, { gpuProcesses: true }));
     expect(diff!.rows).toEqual({ key: [0], cpu: [1], rss: [100], gpuUtil: [15], vram: [350] });
+  });
+
+  it("leaves every process unmeasured unless every GPU's process walk succeeded", () => {
+    const gpus = [gpuDevice, gpuDeviceB];
+    const gpuProcesses: ReadonlyArray<GpuProcessSample> = [
+      { pid: 1, startTimeMs: 10, deviceId: "gpu-a", utilPercent: 10, vramBytes: 100 },
+      { pid: 1, startTimeMs: 10, deviceId: "gpu-b", utilPercent: 5, vramBytes: 50 },
+    ];
+    const rowsFor = (options: Parameters<typeof hostSample>[1]) =>
+      nextHostFrames(
+        initialHostFrameBuilderState,
+        hostInput(hostSample(threeRows, options), { gpuProcesses: true }),
+      )[0][0]!.rows;
+    const unmeasured = { gpuUtil: [null, null, null], vram: [null, null, null] };
+
+    // Walked: a process without GPU rows used none; one with rows sums its devices.
+    expect(rowsFor({ gpus, gpuProcesses, gpuProcessDevices: bothWalked })).toMatchObject({
+      gpuUtil: [15, 0, 0],
+      vram: [150, 0, 0],
+    });
+    // gpu-b's walk failed: no process is measured, not even on gpu-a.
+    expect(rowsFor({ gpus, gpuProcesses, gpuProcessDevices: ["gpu-a"] })).toMatchObject(unmeasured);
+    expect(rowsFor({ gpus, gpuProcesses, gpuProcessDevices: [] })).toMatchObject(unmeasured);
+    // An older v4 monitor sends no walked list.
+    expect(rowsFor({ gpus, gpuProcesses })).toMatchObject(unmeasured);
+
+    // Measured → a failed walk sends null once, then the rows stay quiet until it recovers.
+    const [, measuredState] = nextHostFrames(
+      initialHostFrameBuilderState,
+      hostInput(hostSample(threeRows, { gpus, gpuProcesses, gpuProcessDevices: bothWalked }), {
+        gpuProcesses: true,
+      }),
+    );
+    const failedWalk = (sampledAtUnixMs: number) =>
+      hostInput(
+        hostSample(threeRows, {
+          sampledAtUnixMs,
+          gpus,
+          gpuProcesses,
+          gpuProcessDevices: ["gpu-a"],
+        }),
+        { gpuProcesses: true },
+      );
+    const [[failed], failedState] = nextHostFrames(measuredState, failedWalk(11_000));
+    expect(failed!.rows).toEqual({
+      key: [0, 1, 2],
+      cpu: [1, 2, 3],
+      rss: [100, 200, 300],
+      gpuUtil: [null, null, null],
+      vram: [null, null, null],
+    });
+    const [[stillFailed], stillFailedState] = nextHostFrames(failedState, failedWalk(12_000));
+    expect(stillFailed!.rows).toEqual({ key: [], cpu: [], rss: [], gpuUtil: [], vram: [] });
+    const [[recovered]] = nextHostFrames(
+      stillFailedState,
+      hostInput(
+        hostSample(threeRows, {
+          sampledAtUnixMs: 13_000,
+          gpus,
+          gpuProcesses,
+          gpuProcessDevices: bothWalked,
+        }),
+        { gpuProcesses: true },
+      ),
+    );
+    expect(recovered!.rows).toMatchObject({
+      key: [0, 1, 2],
+      gpuUtil: [15, 0, 0],
+      vram: [150, 0, 0],
+    });
   });
 
   it("gives a reused pid a new key with empty static fields and omits empty container ids", () => {
@@ -701,6 +786,196 @@ describe("nextHostFrames", () => {
 
     const [[settled]] = nextHostFrames(renamedState, named(13_000));
     expect(settled).toMatchObject({ added: [], removed: [], rows: { key: [] } });
+  });
+});
+
+describe("frame owners and claims", () => {
+  const threadA = ThreadId.make("thread-a");
+  const ownerA: ProcessOwner = { type: "thread", threadId: threadA };
+  const ownerB: ProcessOwner = { type: "t3", label: "machine terminal" };
+  const claim = (id: string): Claim => ({
+    id: ClaimId.make(id),
+    threadId: threadA,
+    target: { type: "process", pid: 2, startTimeMs: 20 },
+    createdAt: EPOCH,
+    createdBy: { type: "agent", threadId: threadA },
+  });
+  const claims = [claim("claim-1")];
+  const owners = (entries: ReadonlyArray<readonly [string, ProcessOwner]>) => new Map(entries);
+
+  it("puts an owner on the rows that have one and re-adds a row whose owner changed", () => {
+    const [[first], firstState] = nextHostFrames(
+      initialHostFrameBuilderState,
+      hostInput(hostSample(threeRows), { owners: owners([["1:10", ownerA]]) }),
+    );
+    expect(first!.added.map((added) => [added.pid, added.owner])).toEqual([
+      [1, ownerA],
+      [2, undefined],
+      [3, undefined],
+    ]);
+    expect(first!.added[1]).not.toHaveProperty("owner");
+
+    const next = (
+      sampledAtUnixMs: number,
+      entries: ReadonlyArray<readonly [string, ProcessOwner]>,
+    ) => hostInput(hostSample(threeRows, { sampledAtUnixMs }), { owners: owners(entries) });
+    const [[same], sameState] = nextHostFrames(firstState, next(11_000, [["1:10", ownerA]]));
+    expect(same).toMatchObject({ added: [], rows: { key: [] } });
+
+    const [[changed], changedState] = nextHostFrames(
+      sameState,
+      next(12_000, [
+        ["1:10", ownerB],
+        ["2:20", ownerA],
+      ]),
+    );
+    expect(changed!.added.map((added) => [added.key, added.owner])).toEqual([
+      [0, ownerB],
+      [1, ownerA],
+    ]);
+    expect(changed!.rows).toEqual({ key: [0, 1], cpu: [1, 2], rss: [100, 200] });
+
+    const [[cleared]] = nextHostFrames(changedState, next(13_000, [["2:20", ownerA]]));
+    expect(cleared!.added.map((added) => [added.key, added.owner])).toEqual([[0, undefined]]);
+  });
+
+  it("sends claims on full frames and when the array changes, never when absent", () => {
+    const at = (sampledAtUnixMs: number, overrides: Partial<Omit<HostFrameInput, "sample">>) =>
+      hostInput(hostSample(threeRows, { sampledAtUnixMs }), overrides);
+    const [[none], noneState] = nextHostFrames(initialHostFrameBuilderState, at(10_000, {}));
+    expect(none).not.toHaveProperty("claims");
+
+    const [[first], firstState] = nextHostFrames(noneState, at(11_000, { claims }));
+    expect(first!.claims).toBe(claims);
+    const [[same], sameState] = nextHostFrames(firstState, at(12_000, { claims }));
+    expect(same).not.toHaveProperty("claims");
+    const emptied: ReadonlyArray<Claim> = [];
+    const [[released]] = nextHostFrames(sameState, at(13_000, { claims: emptied }));
+    expect(released!.claims).toBe(emptied);
+
+    const [[restarted]] = nextHostFrames(
+      sameState,
+      hostInput(hostSample(threeRows, { generation: 1, sampledAtUnixMs: 12_100 }), { claims }),
+    );
+    expect(restarted).toMatchObject({ full: true, claims });
+  });
+
+  it("puts claims on the last part of a split full frame only", () => {
+    const pids = Array.from({ length: 1_000 }, (_, index) => index + 1);
+    const sample = hostSample(
+      pids.map((pid) => ({ pid })),
+      { statics: pids.map((pid) => hostStatic(pid, { command: "x".repeat(1_000) })) },
+    );
+    const [frames] = nextHostFrames(initialHostFrameBuilderState, hostInput(sample, { claims }));
+    expect(frames.length).toBeGreaterThan(1);
+    expect(frames.map((frame) => frame.claims)).toEqual([
+      ...frames.slice(1).map(() => undefined),
+      claims,
+    ]);
+  });
+
+  it("keeps only the rows a thread owns, directly or through a claim, when asked", () => {
+    const claimedByA: ProcessOwner = {
+      type: "claimed",
+      claimId: ClaimId.make("claim-1"),
+      threadId: threadA,
+    };
+    const ownerOther: ProcessOwner = { type: "thread", threadId: ThreadId.make("thread-b") };
+    const [[host]] = nextHostFrames(
+      initialHostFrameBuilderState,
+      hostInput(hostSample(threeRows), {
+        threadId: threadA,
+        owners: owners([
+          ["1:10", ownerA],
+          ["2:20", claimedByA],
+          ["3:30", ownerOther],
+        ]),
+      }),
+    );
+    expect(host!.added.map((added) => added.pid)).toEqual([1, 2]);
+
+    const [subtree] = nextFrame(
+      initialFrameBuilderState,
+      input({
+        processes: [proc(10, 5, 100), proc(11, 1, 200), proc(12, 1, 300)],
+        threadId: threadA,
+        owners: owners([
+          ["10:100", ownerB],
+          ["11:110", claimedByA],
+        ]),
+      }),
+    );
+    expect(subtree!.added.map((added) => added.pid)).toEqual([11]);
+  });
+
+  it("does the same for subtree frames", () => {
+    const [first, firstState] = nextFrame(
+      initialFrameBuilderState,
+      input({ owners: owners([["10:100", ownerA]]), claims }),
+    );
+    expect(first!.added.map((added) => [added.pid, added.owner])).toEqual([
+      [10, ownerA],
+      [11, undefined],
+    ]);
+    expect(first!.claims).toBe(claims);
+
+    const [same, sameState] = nextFrame(
+      firstState,
+      input({ readAtMs: 2_000, owners: owners([["10:100", ownerA]]), claims }),
+    );
+    expect(same).toMatchObject({ added: [] });
+    expect(same).not.toHaveProperty("claims");
+
+    const [changed] = nextFrame(
+      sameState,
+      input({ readAtMs: 3_000, owners: owners([["10:100", ownerB]]), claims: [] }),
+    );
+    expect(changed!.added.map((added) => [added.key, added.owner])).toEqual([[0, ownerB]]);
+    expect(changed!.claims).toEqual([]);
+  });
+
+  it("reads attribution rows from a host sample, statics only for the same process", () => {
+    const sample = hostSample([{ pid: 1 }, { pid: 2, startTimeMs: 999 }]);
+    expect(hostOwnershipRows(sample.sample, sample.statics)).toEqual([
+      {
+        pid: 1,
+        ppid: 1,
+        startTimeMs: 10,
+        name: "p1",
+        command: "p1 --run",
+        exe: "/usr/bin/p1",
+        cwd: "/",
+        user: "dev",
+        cgroup: "/user.slice",
+        containerId: "",
+      },
+      {
+        pid: 2,
+        ppid: 1,
+        startTimeMs: 999,
+        name: "",
+        command: "",
+        exe: "",
+        cwd: "",
+        user: "",
+        cgroup: "",
+        containerId: "",
+      },
+    ]);
+    expect(subtreeOwnershipRows([proc(10, 1, 1, { ppid: 4 })])).toEqual([
+      {
+        pid: 10,
+        ppid: 4,
+        startTimeMs: 100,
+        name: "p10",
+        command: "p10 --run",
+        exe: "",
+        cwd: "",
+        user: "",
+        cgroup: "",
+        containerId: "",
+      },
+    ]);
   });
 });
 

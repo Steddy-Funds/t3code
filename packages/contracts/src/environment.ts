@@ -174,6 +174,8 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   machineOwnership: Schema.optionalKey(Schema.Boolean),
   /** `serverSignalProcess` accepts SIGTERM and signals host-wide processes; older servers take only INT/KILL. */
   processSigterm: Schema.optionalKey(Schema.Boolean),
+  /** Saves and runs `load` scheduled tasks; older servers reject the schedule on decode. */
+  loadSchedules: Schema.optionalKey(Schema.Boolean),
 });
 export type ExecutionEnvironmentCapabilities = typeof ExecutionEnvironmentCapabilities.Type;
 

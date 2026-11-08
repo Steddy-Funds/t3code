@@ -94,6 +94,18 @@ Webhook tasks only run when their URL is called, so they can't be run
 immediately.
 Leaving an edited form asks before discarding unsaved changes.
 
+## Load automations
+
+Choose **On load** as a task's schedule to run it when the environment's
+machine gets busy or frees up, such as "rerun the tests when load drops". Pick
+a measure (stressed or not, load per core, memory, swap, CPU, GPU or VRAM), a
+threshold, and how long it must hold. A task runs once each time its condition
+is met, then waits until the condition clears before it can run again, and runs
+at most once a minute. Tasks waiting for load to drop start one at a time, 20
+to 40 seconds apart, so they do not load the machine again all at once. A task
+that starts a new thread on each run still starts one when it fires because
+the machine is busy. **Run now** runs a load task immediately.
+
 ## Webhook automations
 
 In **Settings → Scheduled tasks**, choose **On webhook**

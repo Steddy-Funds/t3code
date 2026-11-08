@@ -1,5 +1,6 @@
 import {
   type EnvironmentId,
+  type ExecutionEnvironmentCapabilities,
   OrchestratorMcpFailure,
   type PeerLinkError,
   type ProviderInteractionMode,
@@ -42,6 +43,11 @@ export class PeerMcpClient extends Context.Service<
       readonly arguments: Record<string, unknown>;
       readonly limits: PeerCallLimits;
       readonly success: S;
+      /** Refuses the call here, with `refused` as the reason, when the peer lacks this capability. */
+      readonly requires?: {
+        readonly capability: keyof ExecutionEnvironmentCapabilities;
+        readonly refused: string;
+      };
     }) => Effect.Effect<S["Type"], OrchestratorMcpFailure>;
   }
 >()("t3/peer/PeerMcpClient") {}
@@ -158,6 +164,13 @@ const make = Effect.gen(function* () {
       const resolved = yield* links
         .resolve(input.environmentId)
         .pipe(Effect.mapError(fromLinkError));
+      // An older peer would reject the call as a decode error the agent cannot act on.
+      if (input.requires !== undefined && resolved.capabilities[input.requires.capability] !== true) {
+        return yield* new OrchestratorMcpFailure({
+          code: "invalid_request",
+          message: `${resolved.link.label} ${input.requires.refused}`,
+        });
+      }
       const limitHeader = {
         [McpInvocationContext.MODE_LIMIT_HEADER]: `${input.limits.runtimeMode}/${input.limits.interactionMode}`,
       };

@@ -262,6 +262,14 @@ export class ScheduledTaskService extends Context.Service<
       ScheduledTaskRunNowResult & { readonly threadId: ThreadId | null },
       ScheduledTaskError
     >;
+    /**
+     * Runs a `load` task for one episode through the same path as every other trigger.
+     * A task deleted, paused or moved off `load` since the monitor saw it is skipped.
+     */
+    readonly triggerLoad: (
+      id: ScheduledTaskId,
+      episode: string,
+    ) => Effect.Effect<void, ScheduledTaskError>;
     readonly rotateWebhookToken: (
       input: ScheduledTaskRotateWebhookTokenInput,
     ) => Effect.Effect<ScheduledTaskMutationResult, ScheduledTaskError>;
@@ -357,6 +365,11 @@ function webhookEndpoint(
   };
 }
 
+/** Built-in rows are known by id, so they need no column. */
+const BUILT_IN_TASKS: ReadonlyMap<string, NonNullable<ScheduledTask["builtIn"]>> = new Map([
+  ["builtin:machine-buckets", "machine-buckets"],
+]);
+
 // Runs per task row; list and lookup operations already own the span.
 const decodeRow = Effect.fnUntraced(
   function* (row: ScheduledTaskRow, origin: WebhookOrigin | null = null) {
@@ -364,6 +377,7 @@ const decodeRow = Effect.fnUntraced(
     const webhook = schedule.type === "webhook" ? webhookEndpoint(row, origin) : undefined;
     const workspaceStrategy = yield* decodeWorkspaceStrategyJson(row.workspace_strategy_json);
     const modelSelection = yield* decodeModelSelectionJson(row.model_selection_json);
+    const builtIn = BUILT_IN_TASKS.get(row.task_id);
     return yield* decodeTask({
       id: row.task_id,
       title: row.title,
@@ -386,6 +400,7 @@ const decodeRow = Effect.fnUntraced(
       lastRunError: row.last_run_error,
       runCount: row.run_count,
       ...(webhook === undefined ? {} : { webhook }),
+      ...(builtIn === undefined ? {} : { builtIn }),
     });
   },
   (effect, row, _origin?) =>
@@ -518,11 +533,18 @@ export const layer = Layer.effect(
     const listRows = Effect.fn("ScheduledTaskService.listRows")(function* () {
       const rows = yield* selectAllRows();
       const origin = yield* readWebhookOrigin;
-      return yield* Effect.forEach(
-        rows,
-        (row) => decodeRow(row, origin).pipe(Effect.map(withPolicy)),
-        { concurrency: 1 },
-      );
+      const tasks: ScheduledTask[] = [];
+      // One row a rolled-back or newer build wrote must not hide every other task.
+      for (const row of rows) {
+        const decoded = yield* Effect.result(decodeRow(row, origin));
+        if (Result.isSuccess(decoded)) tasks.push(withPolicy(decoded.success));
+        else
+          yield* Effect.logWarning("Skipping undecodable schedule task row", {
+            taskId: row.task_id,
+            cause: decoded.failure,
+          });
+      }
+      return tasks;
     });
 
     const getRows = (id: ScheduledTaskId) =>
@@ -800,13 +822,17 @@ export const layer = Layer.effect(
 
     const runTask = Effect.fn("ScheduledTaskService.runTask")(function* (
       task: ScheduledTask,
-      trigger: "scheduled" | "manual" | "webhook",
+      trigger: "scheduled" | "manual" | "webhook" | "load",
       webhook?: {
         readonly deliveryId: string;
         readonly prompt: string;
         readonly dispatched: Ref.Ref<boolean>;
       },
+      /** Names the load episode, so one episode dispatches one command however often it fires. */
+      loadEpisode?: string,
     ) {
+      // Nobody waits on these triggers, so a deleted or busy task is skipped, not an error.
+      const unattended = trigger === "scheduled" || trigger === "load";
       // Read before reserving: nothing between the reservation and its release may fail.
       const startedAt = yield* localNow;
       const startedAtIso = iso(startedAt);
@@ -819,7 +845,7 @@ export const layer = Layer.effect(
               reason: "The task was deleted before this delivery ran.",
             });
           }
-          if (trigger !== "scheduled") {
+          if (!unattended) {
             return yield* taskError("Schedule task not found.", { taskId: task.id });
           }
           return { task, threadId: null, dispatchFailed: false };
@@ -843,6 +869,9 @@ export const layer = Layer.effect(
             Option.isNone(parsedNextRunAt) ||
             DateTime.toEpochMillis(parsedNextRunAt.value) > DateTime.toEpochMillis(startedAt))
         ) {
+          return { task: active, threadId: null, dispatchFailed: false };
+        }
+        if (trigger === "load" && (!active.enabled || active.schedule.type !== "load")) {
           return { task: active, threadId: null, dispatchFailed: false };
         }
         // Reject queued deliveries after pause, same-id recreation or trigger changes.
@@ -879,9 +908,11 @@ export const layer = Layer.effect(
         yield* notifyChanged;
 
         const fireKey =
-          webhook === undefined
-            ? `${active.id}:${DateTime.toEpochMillis(startedAt)}:${trigger}`
-            : `${active.id}:webhook:${webhook.deliveryId}`;
+          webhook !== undefined
+            ? `${active.id}:webhook:${webhook.deliveryId}`
+            : loadEpisode !== undefined
+              ? `${active.id}:load:${loadEpisode}`
+              : `${active.id}:${DateTime.toEpochMillis(startedAt)}:${trigger}`;
         const commandId = CommandId.make(`scheduled-task:${fireKey}`);
         const messageId = MessageId.make(`scheduled-task-message:${fireKey}`);
         const prompt = webhook?.prompt ?? active.prompt;
@@ -1043,7 +1074,7 @@ export const layer = Layer.effect(
         (reserved) =>
           reserved
             ? run
-            : trigger !== "scheduled"
+            : !unattended
               ? Effect.fail(taskError("Schedule task is already running.", { taskId: task.id }))
               : Effect.succeed({ task, threadId: null, dispatchFailed: false }),
         (reserved) =>
@@ -1500,6 +1531,20 @@ export const layer = Layer.effect(
           isScheduledTaskError(cause)
             ? cause
             : taskError("Could not run schedule task.", { taskId: input.id, cause }),
+        ),
+      );
+    });
+
+    const triggerLoad: ScheduledTaskService["Service"]["triggerLoad"] = Effect.fn(
+      "ScheduledTaskService.triggerLoad",
+    )(function* (id, episode) {
+      const task = yield* findTask(id);
+      if (task === null || !task.enabled || task.schedule.type !== "load") return;
+      yield* runTask(task, "load", undefined, episode).pipe(
+        Effect.mapError((cause) =>
+          isScheduledTaskError(cause)
+            ? cause
+            : taskError("Could not run schedule task.", { taskId: id, cause }),
         ),
       );
     });
@@ -2421,6 +2466,7 @@ export const layer = Layer.effect(
       deleteForThread,
       moveThreadTasks,
       runNow,
+      triggerLoad,
       rotateWebhookToken,
       listWebhookDeliveries,
       getWebhookDelivery,

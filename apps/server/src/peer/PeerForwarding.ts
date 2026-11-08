@@ -91,6 +91,24 @@ export const linkedEnvironmentsOff = new OrchestratorMcpFailure({
 export const remoteTarget = (scope: Scope, environmentId: EnvironmentId | undefined) =>
   environmentId === scope.environmentId ? undefined : environmentId;
 
+/** Calls only some peers can take; the rest are refused here with the reason. */
+const requiredCapability = (toolName: string, args: Record<string, unknown>) => {
+  const schedule = args.schedule;
+  const isLoad =
+    typeof schedule === "object" &&
+    schedule !== null &&
+    "type" in schedule &&
+    schedule.type === "load";
+  return toolName === "schedule_task" && isLoad
+    ? {
+        requires: {
+          capability: "loadSchedules" as const,
+          refused: "runs a T3 Code version without load schedules. Update it, or schedule the task here.",
+        },
+      }
+    : {};
+};
+
 const make = Effect.gen(function* () {
   const peers = yield* PeerMcpClient.PeerMcpClient;
   const links = yield* PeerLinks.PeerLinks;
@@ -152,6 +170,7 @@ const make = Effect.gen(function* () {
       arguments: args,
       limits,
       success: success as Schema.Decoder<A>,
+      ...requiredCapability(toolName, args),
     });
   });
 

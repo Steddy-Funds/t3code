@@ -208,22 +208,32 @@ export const layer = McpToolAccess.toLayer(
               bucket.name,
             ]),
           );
+          // A peer link gets names, pids and usage, never command lines.
+          const commands = callerLinkOrigin(context) === undefined;
+          const limit =
+            input.processes === undefined ? 0 : (input.processes.limit ?? DEFAULT_PROCESS_LIMIT);
+          const processWalk = Effect.gen(function* () {
+            if (input.processes?.unbucketed === true) {
+              const { buckets, ...unbucketed } = yield* hostProcesses.unbucketed({
+                limit,
+                commands,
+                bucketNames,
+              });
+              return { buckets, output: { unbucketed } };
+            }
+            const { buckets, snapshot } = yield* hostProcesses.snapshot({
+              limit,
+              groupBy: input.processes?.groupBy ?? "none",
+              commands,
+              bucketNames,
+            });
+            return { buckets, output: { processes: snapshot } };
+          });
           const [status, sample, walk, running, thread] = yield* Effect.all(
             [
               hostResources.status.pipe(Stream.runHead),
               perCoreSample,
-              hostProcesses
-                .snapshot({
-                  limit:
-                    input.processes === undefined
-                      ? 0
-                      : (input.processes.limit ?? DEFAULT_PROCESS_LIMIT),
-                  groupBy: input.processes?.groupBy ?? "none",
-                  // A peer link gets names, pids and usage, never command lines.
-                  commands: callerLinkOrigin(context) === undefined,
-                  bucketNames,
-                })
-                .pipe(Effect.result),
+              processWalk.pipe(Effect.result),
               runningThreads(context),
               input.threadId === undefined
                 ? Effect.undefined
@@ -245,7 +255,7 @@ export const layer = McpToolAccess.toLayer(
             ...(input.processes === undefined
               ? {}
               : Result.isSuccess(walk)
-                ? { processes: walk.success.snapshot }
+                ? walk.success.output
                 : { processesUnavailable: walk.failure.message }),
             ...(thread === undefined ? {} : { thread }),
             ...(input.show === true

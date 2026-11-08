@@ -1205,6 +1205,22 @@ export const SETTINGS_SEARCH_ITEMS = [
     ],
   },
   {
+    id: "machine-auto-buckets",
+    title: "Auto-buckets",
+    to: "/settings/access",
+    targetId: "connections-environment",
+    searchTerms: [
+      "auto buckets group unowned unbucketed processes task manager background machine resources",
+    ],
+  },
+  {
+    id: "machine-auto-buckets-model",
+    title: "Auto-buckets model",
+    to: "/settings/access",
+    targetId: "connections-environment",
+    searchTerms: ["auto buckets model provider haiku"],
+  },
+  {
     id: "machine-process-buckets",
     title: "Process buckets",
     to: "/settings/access",

@@ -14,19 +14,23 @@ import * as Ref from "effect/Ref";
 import * as Schedule from "effect/Schedule";
 import * as Stream from "effect/Stream";
 
+import * as HostProcesses from "../resourceTelemetry/HostProcesses.ts";
 import * as HostResources from "../resourceTelemetry/HostResources.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
+import { ServerSettingsService } from "../serverSettings.ts";
 import * as ScheduledTaskService from "./ScheduledTaskService.ts";
 
 export const LOAD_COOLDOWN_MS = 60_000;
 export const RELEASE_JITTER_MIN_MS = 20_000;
 export const RELEASE_JITTER_MAX_MS = 40_000;
+/** The unbucketed share needs a full process walk, so it is read at most this often. */
+export const UNBUCKETED_INTERVAL_MS = 3_600_000;
 
 /** What the monitors compare against on one tick. */
 export interface LoadReading {
   readonly totals: HostTotals | null;
   readonly verdict: MachineVerdict | null;
-  /** The auto-buckets pass fills this hourly; until then a monitor on it never fires. */
+  /** Read hourly while a monitor uses it; until the first read a monitor on it never fires. */
   readonly unbucketedSharePercent: number | null;
 }
 
@@ -71,7 +75,9 @@ export function loadMetricValue(condition: LoadCondition, reading: LoadReading):
     case "cpuPercent":
       return totals?.cpuUtilization == null ? null : totals.cpuUtilization * 100;
     case "gpuUtilPercent":
-      return totals === null ? null : maxOverGpus(totals, condition.gpuId, (gpu) => gpu.utilPercent);
+      return totals === null
+        ? null
+        : maxOverGpus(totals, condition.gpuId, (gpu) => gpu.utilPercent);
     case "vramUsedPercent":
       return totals === null
         ? null
@@ -169,6 +175,10 @@ interface WatchedTask {
   readonly key: string;
 }
 
+const usesUnbucketedShare = ({ schedule }: WatchedTask) =>
+  schedule.condition.metric === "unbucketedSharePercent" ||
+  schedule.clear?.metric === "unbucketedSharePercent";
+
 const watchedTask = (task: ScheduledTask): ReadonlyArray<WatchedTask> =>
   task.enabled && task.schedule.type === "load"
     ? [
@@ -185,10 +195,11 @@ const watchedTask = (task: ScheduledTask): ReadonlyArray<WatchedTask> =>
  * only while such a task exists, and the 5 s Scheduler tick returns at once
  * without one. A restart forgets episodes, so a monitor may fire once more.
  */
-export const layer = Layer.effectDiscard(
+export const monitorLayer = Layer.effectDiscard(
   Effect.gen(function* () {
     const scheduledTasks = yield* ScheduledTaskService.ScheduledTaskService;
     const host = yield* HostResources.HostResources;
+    const hostProcesses = yield* HostProcesses.HostProcesses;
     const scheduler = yield* Scheduler.Scheduler;
     const watched = yield* Ref.make<ReadonlyArray<WatchedTask>>([]);
     const reading = yield* Ref.make<LoadReading>(NO_LOAD_READING);
@@ -216,6 +227,15 @@ export const layer = Layer.effectDiscard(
     const states = new Map<ScheduledTaskId, { readonly key: string; state: MonitorState }>();
     let releaseQueue: ScheduledTaskId[] = [];
     let nextReleaseAt = 0;
+    let unbucketedReadAt: number | null = null;
+
+    // One host walk and attribution pass; a monitor that cannot list processes reads no value.
+    const readUnbucketedShare = hostProcesses
+      .unbucketed({ limit: 0, commands: false, bucketNames: new Map() })
+      .pipe(
+        Effect.map((result) => result.sharePercent),
+        Effect.orElseSucceed(() => null),
+      );
     const releaseGap = Random.nextIntBetween(RELEASE_JITTER_MIN_MS, RELEASE_JITTER_MAX_MS);
 
     const trigger = (id: ScheduledTaskId, episode: string) =>
@@ -233,9 +253,16 @@ export const layer = Layer.effectDiscard(
       if (tasks.length === 0) {
         states.clear();
         releaseQueue = [];
+        unbucketedReadAt = null;
         return;
       }
       const now = yield* Clock.currentTimeMillis;
+      if (!tasks.some(usesUnbucketedShare)) unbucketedReadAt = null;
+      else if (unbucketedReadAt === null || now - unbucketedReadAt >= UNBUCKETED_INTERVAL_MS) {
+        unbucketedReadAt = now;
+        const unbucketedSharePercent = yield* readUnbucketedShare;
+        yield* Ref.update(reading, (latest) => ({ ...latest, unbucketedSharePercent }));
+      }
       const current = yield* Ref.get(reading);
       const byId = new Map(tasks.map((task) => [task.id, task]));
       for (const id of states.keys()) if (!byId.has(id)) states.delete(id);
@@ -281,3 +308,26 @@ export const layer = Layer.effectDiscard(
     yield* scheduler.register("LoadMonitor", evaluate());
   }),
 );
+
+/** Keeps built-in tasks (auto-buckets) in step with settings, from startup on. */
+export const builtInTasksLayer = Layer.effectDiscard(
+  Effect.gen(function* () {
+    const scheduledTasks = yield* ScheduledTaskService.ScheduledTaskService;
+    const settings = yield* ServerSettingsService;
+    // Subscribe before the first read so a change in between is not missed.
+    const changes = yield* settings.subscribeChanges;
+    yield* Stream.concat(Stream.make(undefined), changes).pipe(
+      Stream.runForEach(() =>
+        settings.getSettings.pipe(
+          Effect.flatMap(scheduledTasks.ensureBuiltInTasks),
+          Effect.catch((cause) =>
+            Effect.logWarning("Could not update built-in scheduled tasks", { cause }),
+          ),
+        ),
+      ),
+      Effect.forkScoped,
+    );
+  }),
+);
+
+export const layer = Layer.mergeAll(monitorLayer, builtInTasksLayer);

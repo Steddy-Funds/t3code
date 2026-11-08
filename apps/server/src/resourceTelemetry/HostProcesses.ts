@@ -41,6 +41,10 @@ export class HostProcesses extends Context.Service<
     readonly snapshot: (
       input: ProcessSnapshotInput,
     ) => Effect.Effect<ProcessSnapshotResult, HostProcessesUnavailable>;
+    /** One host-wide walk for auto-buckets; unavailable without a host-mode monitor. */
+    readonly unbucketed: (
+      input: UnbucketedInput,
+    ) => Effect.Effect<UnbucketedResult, HostProcessesUnavailable>;
   }
 >()("t3/resourceTelemetry/HostProcesses") {}
 
@@ -73,6 +77,38 @@ export interface BucketTotal {
 export interface ProcessSnapshotResult {
   readonly snapshot: MachineProcessSnapshot;
   /** Buckets with at least one process, busiest first. */
+  readonly buckets: ReadonlyArray<BucketTotal>;
+}
+
+export interface UnbucketedInput {
+  /** Process rows to list; 0 reads only the share. */
+  readonly limit: number;
+  /** False for callers reaching this machine through a peer link: no command or cwd. */
+  readonly commands: boolean;
+  readonly bucketNames: ReadonlyMap<MachineBucketId, string>;
+}
+
+export interface UnbucketedProcess {
+  readonly pid: number;
+  readonly ppid: number;
+  readonly name: string;
+  readonly exe: string;
+  readonly command?: string;
+  readonly cwd?: string;
+  readonly user: string;
+  readonly container?: string;
+  readonly parent?: string;
+  /** Percent of one core. */
+  readonly cpuPercent: number;
+  readonly rssBytes: number;
+}
+
+export interface UnbucketedResult {
+  /** The share of used CPU or memory, whichever is larger, that no thread, claim or bucket owns. */
+  readonly sharePercent: number | null;
+  readonly sampleAgeMs: number;
+  readonly processes: ReadonlyArray<UnbucketedProcess>;
+  readonly truncated?: number;
   readonly buckets: ReadonlyArray<BucketTotal>;
 }
 
@@ -766,6 +802,100 @@ export function buildProcessSnapshot(input: SnapshotBuildInput): ProcessSnapshot
   };
 }
 
+/** Only processes nothing else claims count: a container or an unknown process. */
+const isUnbucketed = (owner: ProcessOwner | undefined) =>
+  owner === undefined || owner.type === "other" || owner.type === "container";
+
+/**
+ * Percent of the processes' summed CPU, or of their summed resident memory if larger, taken by
+ * unbucketed processes. Null when the walk measured neither.
+ */
+export function unbucketedSharePercent(
+  rows: ReadonlyArray<{ readonly identity: string; readonly cpu: number; readonly rss: number }>,
+  owners: ReadonlyMap<string, ProcessOwner>,
+): number | null {
+  let cpu = 0;
+  let rss = 0;
+  let unbucketedCpu = 0;
+  let unbucketedRss = 0;
+  for (const row of rows) {
+    cpu += row.cpu;
+    rss += row.rss;
+    if (!isUnbucketed(owners.get(row.identity))) continue;
+    unbucketedCpu += row.cpu;
+    unbucketedRss += row.rss;
+  }
+  const shares = [
+    ...(cpu > 0 ? [(unbucketedCpu / cpu) * 100] : []),
+    ...(rss > 0 ? [(unbucketedRss / rss) * 100] : []),
+  ];
+  return shares.length === 0 ? null : Math.round(Math.max(...shares) * 10) / 10;
+}
+
+// Enough for a bucket rule; the auto-buckets agent reads up to 50 of these.
+const UNBUCKETED_COMMAND_MAX_CHARS = 4096;
+
+/** The busiest unbucketed processes with the fields bucket rules match on, and the share. */
+export function buildUnbucketed(input: {
+  readonly sample: NativeTelemetryClient.NativeHostSample;
+  readonly owners: ReadonlyMap<string, ProcessOwner>;
+  readonly nowMs: number;
+  readonly limit: number;
+  readonly commands: boolean;
+  readonly bucketNames: ReadonlyMap<MachineBucketId, string>;
+}): UnbucketedResult {
+  const { sample, owners } = input;
+  const rows = hostRows(sample.sample);
+  const unbucketed = rows.filter((row) => isUnbucketed(owners.get(row.identity)));
+  const listed =
+    input.limit === 0
+      ? []
+      : selectTop(unbucketed, Math.ceil(input.limit / 2), hostByCpu, hostByRss)
+          .selected.toSorted(hostByCpu)
+          .slice(0, input.limit);
+  const byPid = new Map(rows.map((row) => [row.pid, row]));
+  const processes = listed.map((row): UnbucketedProcess => {
+    const entry = knownStatics(row, sample.statics);
+    const parentRow = byPid.get(row.ppid);
+    const parent = parentRow === undefined ? undefined : knownStatics(parentRow, sample.statics);
+    return {
+      pid: row.pid,
+      ppid: row.ppid,
+      name: entry?.name ?? "",
+      exe: entry?.exe ?? "",
+      ...(input.commands
+        ? {
+            command: (entry?.command ?? "").slice(0, UNBUCKETED_COMMAND_MAX_CHARS),
+            cwd: entry?.cwd ?? "",
+          }
+        : {}),
+      user: entry?.user ?? "",
+      ...(entry?.containerId ? { container: entry.containerId } : {}),
+      ...(parent?.name ? { parent: parent.name } : {}),
+      cpuPercent: row.cpu,
+      rssBytes: row.rss,
+    };
+  });
+  const truncated = unbucketed.length - listed.length;
+  const { buckets } = buildProcessSnapshot({
+    limit: 0,
+    groupBy: "none",
+    commands: false,
+    bucketNames: input.bucketNames,
+    rows: hostSnapshotRows(sample),
+    owners,
+    source: "host",
+    sampleAgeMs: 0,
+  });
+  return {
+    sharePercent: unbucketedSharePercent(rows, owners),
+    sampleAgeMs: Math.max(0, Math.round(input.nowMs - sample.sample.sampledAtUnixMs)),
+    processes,
+    ...(truncated > 0 && input.limit > 0 ? { truncated } : {}),
+    buckets,
+  };
+}
+
 /** A host sample's processes for a snapshot; GPU use only where every device was walked. */
 export function hostSnapshotRows(
   sample: NativeTelemetryClient.NativeHostSample,
@@ -958,7 +1088,17 @@ const make = Effect.fn("makeHostProcesses")(function* () {
     return yield* hostSnapshot(input).pipe(Effect.catch(() => subtreeSnapshot(input)));
   });
 
-  return HostProcesses.of({ frames, snapshot });
+  const unbucketed = Effect.fn("HostProcesses.unbucketed")(function* (input: UnbucketedInput) {
+    if (!(yield* supportsHostProcesses(native))) return yield* new HostProcessesUnavailable();
+    const sample = yield* native
+      .hostSampleNow({ processes: true, gpus: false, gpuProcesses: false })
+      .pipe(Effect.mapError(() => new HostProcessesUnavailable()));
+    const owners = yield* ownership.attribute(hostOwnershipRows(sample.sample, sample.statics));
+    const nowMs = yield* Clock.currentTimeMillis;
+    return buildUnbucketed({ ...input, sample, owners, nowMs });
+  });
+
+  return HostProcesses.of({ frames, snapshot, unbucketed });
 });
 
 export const layer = Layer.effect(HostProcesses, make());

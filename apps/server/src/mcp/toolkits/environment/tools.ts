@@ -18,6 +18,7 @@ import {
   NonNegativeInt,
   OrchestratorMcpEnvironmentTarget,
   OrchestratorMcpFailure,
+  PositiveInt,
   ServerSettings,
   ServerSettingsPatch,
   ThreadId,
@@ -89,7 +90,7 @@ const EnvironmentPreferencesTool = Tool.make("t3_environment_preferences_update"
 const MachineReadTool = Tool.make("t3_machine_read", {
   ...shared,
   description:
-    "Read this machine's load: verdict (stressed or not, and why), totals, per-core CPU %, GPUs, bucket totals and running threads' usage. `processes` adds the busiest processes (`limit`, default 20) and `groupBy` totals; `threadId` adds that thread's usage. `show: true` also shows the user a live card.",
+    "Read this machine's load: verdict (stressed or not, and why), totals, per-core CPU %, GPUs, bucket totals and running threads' usage. `processes` adds the busiest processes (`limit`, default 20) and `groupBy` totals, or with `unbucketed: true` those no thread, claim or bucket owns and their share; `threadId` adds that thread's usage. `show: true` also shows the user a live card.",
   parameters: Schema.Struct({
     environmentId: OrchestratorMcpEnvironmentTarget,
     processes: Schema.optionalKey(
@@ -100,6 +101,7 @@ const MachineReadTool = Tool.make("t3_machine_read", {
             Schema.isBetween({ minimum: 1, maximum: MACHINE_PROCESS_SNAPSHOT_MAX_LIMIT }),
           ),
         ),
+        unbucketed: Schema.optionalKey(Schema.Boolean),
       }),
     ),
     threadId: Schema.optionalKey(ThreadId),
@@ -127,6 +129,28 @@ const MachineReadTool = Tool.make("t3_machine_read", {
       Schema.Struct({ threadId: ThreadId, title: Schema.String, usage: ThreadResourceTotals }),
     ),
     processes: Schema.optionalKey(MachineProcessSnapshot),
+    unbucketed: Schema.optionalKey(
+      Schema.Struct({
+        sharePercent: Schema.NullOr(Schema.Number),
+        sampleAgeMs: NonNegativeInt,
+        processes: Schema.Array(
+          Schema.Struct({
+            pid: NonNegativeInt,
+            ppid: NonNegativeInt,
+            name: Schema.String,
+            exe: Schema.String,
+            command: Schema.optionalKey(Schema.String),
+            cwd: Schema.optionalKey(Schema.String),
+            user: Schema.String,
+            container: Schema.optionalKey(Schema.String),
+            parent: Schema.optionalKey(Schema.String),
+            cpuPercent: Schema.Number,
+            rssBytes: NonNegativeInt,
+          }),
+        ),
+        truncated: Schema.optionalKey(PositiveInt),
+      }),
+    ),
     processesUnavailable: Schema.optionalKey(Schema.String),
     thread: Schema.optionalKey(
       Schema.Struct({

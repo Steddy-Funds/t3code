@@ -23,9 +23,13 @@ import {
   type ScheduledTaskRunNowResult,
   type ScheduledTaskSetEnabledInput,
   type ScheduledTaskUpsertInput,
+  BACKGROUNDED_THREAD_TAG,
+  MACHINE_BUCKETS_THREAD_TAG,
+  type ServerSettings,
   managedPolicyDeniedMessage,
   managedRuntimeModeDenial,
 } from "@t3tools/contracts";
+import { MACHINE_BUCKETS_PROMPT, resolveMachineBucketsModel } from "@t3tools/shared/machineBuckets";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Digest from "effect/crypto/Digest";
@@ -270,6 +274,10 @@ export class ScheduledTaskService extends Context.Service<
       id: ScheduledTaskId,
       episode: string,
     ) => Effect.Effect<void, ScheduledTaskError>;
+    /** Keeps built-in rows in step with settings; the server calls it on every settings change. */
+    readonly ensureBuiltInTasks: (
+      settings: ServerSettings,
+    ) => Effect.Effect<void, ScheduledTaskError>;
     readonly rotateWebhookToken: (
       input: ScheduledTaskRotateWebhookTokenInput,
     ) => Effect.Effect<ScheduledTaskMutationResult, ScheduledTaskError>;
@@ -365,10 +373,23 @@ function webhookEndpoint(
   };
 }
 
+export const MACHINE_BUCKETS_TASK_ID = ScheduledTaskId.make("builtin:machine-buckets");
+const MACHINE_BUCKETS_TITLE = "Machine buckets";
+const NO_PROVIDER = "No provider available";
+const BUILT_IN_REJECTED =
+  "This task is built in. Turn it on or off with Auto-buckets in this machine's settings.";
+
 /** Built-in rows are known by id, so they need no column. */
 const BUILT_IN_TASKS: ReadonlyMap<string, NonNullable<ScheduledTask["builtIn"]>> = new Map([
-  ["builtin:machine-buckets", "machine-buckets"],
+  [MACHINE_BUCKETS_TASK_ID, "machine-buckets"],
 ]);
+
+/** Fires once the unbucketed share reaches 25 % and re-arms once it falls to 15 %. */
+const MACHINE_BUCKETS_SCHEDULE: ScheduledTask["schedule"] = {
+  type: "load",
+  condition: { metric: "unbucketedSharePercent", op: ">=", threshold: 25, sustainSeconds: 0 },
+  clear: { metric: "unbucketedSharePercent", op: "<=", threshold: 15, sustainSeconds: 0 },
+};
 
 // Runs per task row; list and lookup operations already own the span.
 const decodeRow = Effect.fnUntraced(
@@ -468,10 +489,14 @@ export const layer = Layer.effect(
       webhookPolicyOrganization === undefined
         ? undefined
         : managedPolicyDeniedMessage(webhookPolicyOrganization, "webhook tasks");
+    // Set only by ensureBuiltInTasks: why the built-in row cannot run now.
+    let machineBucketsBlock: string | undefined;
     const withPolicy = (task: ScheduledTask): ScheduledTask =>
       webhookPolicyBlock !== undefined && task.schedule.type === "webhook"
         ? { ...task, blockedByPolicy: webhookPolicyBlock }
-        : task;
+        : task.id === MACHINE_BUCKETS_TASK_ID && machineBucketsBlock !== undefined
+          ? { ...task, blockedByPolicy: machineBucketsBlock }
+          : task;
     const webhookPermits = yield* Ref.make<ReadonlyMap<ScheduledTaskId, Semaphore.Semaphore>>(
       new Map(),
     );
@@ -953,29 +978,67 @@ export const layer = Layer.effect(
               }),
             );
 
+        const launchInput = {
+          commandId,
+          projectId: active.projectId,
+          title: active.title,
+          modelSelection: active.modelSelection,
+          runtimeMode: active.runtimeMode,
+          interactionMode: active.interactionMode,
+          workspaceStrategy: active.workspaceStrategy,
+          createdBy: active.createdBy,
+          creationSource: active.creationSource,
+        };
+        // Bucket writes are `auto` only from a tagged thread, so the tags land before the prompt.
+        const launchMachineBuckets = threadLaunch.launch(launchInput).pipe(
+          Effect.map((launched) => launched.threadId),
+          Effect.tap((threadId) =>
+            Effect.forEach(
+              [BACKGROUNDED_THREAD_TAG, MACHINE_BUCKETS_THREAD_TAG],
+              (tag) =>
+                threadManagement.dispatch({
+                  type: "thread.tag.set",
+                  commandId: CommandId.make(`${commandId}:tag:${tag}`),
+                  threadId,
+                  tag,
+                  tagged: true,
+                }),
+              { discard: true },
+            ),
+          ),
+          Effect.tap((threadId) =>
+            threadManagement.sendToThread({
+              projectId: active.projectId,
+              commandId: CommandId.make(`${commandId}:message`),
+              threadId,
+              messageId,
+              scheduledTaskId: active.id,
+              text: prompt,
+              attachments: [],
+              mode: "queue",
+              createdBy: active.createdBy,
+              creationSource: active.creationSource,
+            }),
+          ),
+        );
+
         // Capture defects and interrupts too so dispatch failures still reach markCompleted.
         const result =
           active.threadId === null
             ? yield* Effect.exit(
-                threadLaunch
-                  .launch({
-                    commandId,
-                    projectId: active.projectId,
-                    title: active.title,
-                    modelSelection: active.modelSelection,
-                    runtimeMode: active.runtimeMode,
-                    interactionMode: active.interactionMode,
-                    workspaceStrategy: active.workspaceStrategy,
-                    initialMessage: {
-                      messageId,
-                      scheduledTaskId: active.id,
-                      text: prompt,
-                      attachments: [],
-                    },
-                    createdBy: active.createdBy,
-                    creationSource: active.creationSource,
-                  })
-                  .pipe(Effect.map((launched) => launched.threadId)),
+                active.builtIn === "machine-buckets"
+                  ? launchMachineBuckets
+                  : threadLaunch
+                      .launch({
+                        ...launchInput,
+                        initialMessage: {
+                          messageId,
+                          scheduledTaskId: active.id,
+                          text: prompt,
+                          attachments: [],
+                        },
+                      })
+                      .pipe(Effect.map((launched) => launched.threadId)),
               )
             : yield* Effect.exit(
                 // The stored selection only seeds fresh threads. A bound run
@@ -1233,6 +1296,9 @@ export const layer = Layer.effect(
     const upsert: ScheduledTaskService["Service"]["upsert"] = Effect.fn(
       "ScheduledTaskService.upsert",
     )(function* (input) {
+      if (input.id !== undefined && BUILT_IN_TASKS.has(input.id)) {
+        return yield* taskError(BUILT_IN_REJECTED, { taskId: input.id });
+      }
       // A webhook task the policy blocks can still be edited while it is off.
       if (input.enabled && input.schedule.type === "webhook" && webhookPolicyBlock !== undefined) {
         return yield* taskError(
@@ -1388,6 +1454,9 @@ export const layer = Layer.effect(
     const setEnabled: ScheduledTaskService["Service"]["setEnabled"] = Effect.fn(
       "ScheduledTaskService.setEnabled",
     )(function* (input) {
+      if (BUILT_IN_TASKS.has(input.id)) {
+        return yield* taskError(BUILT_IN_REJECTED, { taskId: input.id });
+      }
       const existing = yield* loadTask(input.id);
       if (existing.enabled === input.enabled) return { task: existing };
       if (
@@ -1467,11 +1536,13 @@ export const layer = Layer.effect(
       );
 
     const deleteTask: ScheduledTaskService["Service"]["delete"] = (input) =>
-      deleteRow(input.id).pipe(
-        Effect.andThen(forgetWebhookTask(input.id)),
-        Effect.andThen(notifyChanged),
-        Effect.as({ id: input.id }),
-      );
+      BUILT_IN_TASKS.has(input.id)
+        ? Effect.fail(taskError(BUILT_IN_REJECTED, { taskId: input.id }))
+        : deleteRow(input.id).pipe(
+            Effect.andThen(forgetWebhookTask(input.id)),
+            Effect.andThen(notifyChanged),
+            Effect.as({ id: input.id }),
+          );
 
     const deleteForThread = Effect.fn("ScheduledTaskService.deleteForThread")(function* (
       threadId: ThreadId,
@@ -1547,6 +1618,68 @@ export const layer = Layer.effect(
             : taskError("Could not run schedule task.", { taskId: id, cause }),
         ),
       );
+    });
+
+    const ensureBuiltInTasks: ScheduledTaskService["Service"]["ensureBuiltInTasks"] = Effect.fn(
+      "ScheduledTaskService.ensureBuiltInTasks",
+    )(function* (settings) {
+      const model = resolveMachineBucketsModel(settings);
+      const block =
+        model === null ? NO_PROVIDER : managedRuntimeModeDenial(managedPolicy.summary, "auto");
+      const { projectId } = yield* managedFolders.ensureScratchProject.pipe(
+        Effect.mapError((cause) =>
+          taskError("Could not prepare the scratch project for auto-buckets.", {
+            taskId: MACHINE_BUCKETS_TASK_ID,
+            cause,
+          }),
+        ),
+      );
+      const existing = yield* findTask(MACHINE_BUCKETS_TASK_ID);
+      const desired = {
+        title: MACHINE_BUCKETS_TITLE,
+        prompt: MACHINE_BUCKETS_PROMPT,
+        enabled: settings.machineResources.autoBuckets.enabled && block === undefined,
+        schedule: MACHINE_BUCKETS_SCHEDULE,
+        projectId,
+        threadId: null,
+        workspaceStrategy: { type: "root" },
+        // The row needs some model while blocked; it never runs with it.
+        modelSelection: model ?? existing?.modelSelection ?? settings.textGenerationModelSelection,
+        runtimeMode: "auto",
+        interactionMode: "default",
+      } satisfies Partial<ScheduledTask>;
+      const blockChanged = machineBucketsBlock !== block;
+      machineBucketsBlock = block;
+      const unchanged =
+        existing !== null &&
+        Object.entries(desired).every(
+          ([key, value]) =>
+            JSON.stringify(existing[key as keyof typeof desired]) === JSON.stringify(value),
+        );
+      if (unchanged) {
+        if (blockChanged) yield* notifyChanged;
+        return;
+      }
+      const now = iso(yield* localNow);
+      yield* saveTask(
+        {
+          id: MACHINE_BUCKETS_TASK_ID,
+          ...desired,
+          createdBy: "system",
+          creationSource: "server",
+          createdAt: existing?.createdAt ?? now,
+          updatedAt: now,
+          nextRunAt: null,
+          lastRunAt: existing?.lastRunAt ?? null,
+          lastRunStatus: existing?.lastRunStatus ?? "never",
+          lastRunError: existing?.lastRunError ?? null,
+          runCount: existing?.runCount ?? 0,
+        },
+        false,
+        existing?.schedule ?? null,
+        { token: null, secret: null, secretChanged: true },
+      );
+      yield* notifyChanged;
     });
 
     const rotateWebhookToken: ScheduledTaskService["Service"]["rotateWebhookToken"] = Effect.fn(
@@ -2467,6 +2600,7 @@ export const layer = Layer.effect(
       moveThreadTasks,
       runNow,
       triggerLoad,
+      ensureBuiltInTasks,
       rotateWebhookToken,
       listWebhookDeliveries,
       getWebhookDelivery,

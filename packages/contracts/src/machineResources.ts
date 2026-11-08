@@ -11,6 +11,7 @@ import {
   ThreadId,
   TrimmedNonEmptyString,
 } from "./baseSchemas.ts";
+import { ModelSelection } from "./modelSelection.ts";
 import { ProviderDriverKind } from "./providerInstance.ts";
 
 export const GpuVendor = Schema.Literals(["nvidia", "intel"]);
@@ -321,11 +322,21 @@ const ReceivedBuckets = Schema.Record(Schema.String, Schema.Unknown).pipe(
   ),
 );
 
+/** The built-in task that groups unbucketed processes. A null model means the cheapest available. */
+export const MachineAutoBucketsSettings = Schema.Struct({
+  enabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  modelSelection: Schema.NullOr(ModelSelection).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
+});
+export type MachineAutoBucketsSettings = typeof MachineAutoBucketsSettings.Type;
+
 export const MachineResourcesSettings = Schema.Struct({
   thresholds: MachineThresholds.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_MACHINE_THRESHOLDS)),
   ),
   buckets: ReceivedBuckets.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+  autoBuckets: MachineAutoBucketsSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
 });
 export type MachineResourcesSettings = typeof MachineResourcesSettings.Type;
 
@@ -336,6 +347,13 @@ export const MachineResourcesSettingsPatch = Schema.Struct({
     Schema.Record(MachineBucketId, Schema.NullOr(MachineBucketPatchEntry)).check(
       Schema.isMaxProperties(MACHINE_BUCKETS_MAX),
     ),
+  ),
+  /** `modelSelection` replaces the stored one whole; null returns to automatic. */
+  autoBuckets: Schema.optionalKey(
+    Schema.Struct({
+      enabled: Schema.optionalKey(Schema.Boolean),
+      modelSelection: Schema.optionalKey(Schema.NullOr(ModelSelection)),
+    }),
   ),
 });
 export type MachineResourcesSettingsPatch = typeof MachineResourcesSettingsPatch.Type;

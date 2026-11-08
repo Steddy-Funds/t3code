@@ -1556,11 +1556,13 @@ function EnvironmentTasks({
   const canToggleBuiltIn =
     canWriteSettings &&
     environment.serverConfig?.environment.capabilities.machineAutoBuckets === true;
-  const toggleBuiltIn = async (task: ScheduledTask) => {
+  // The built-in row follows this setting; a block shown in the row can keep the task off.
+  const autoBucketsEnabled = environment.serverConfig.settings.machineResources.autoBuckets.enabled;
+  const toggleBuiltIn = async () => {
     if (!readEnvironmentScope(environmentId, AuthSettingsWriteScope)) return;
     const result = await updateSettings({
       environmentId,
-      input: { patch: { machineResources: { autoBuckets: { enabled: !task.enabled } } } },
+      input: { patch: { machineResources: { autoBuckets: { enabled: !autoBucketsEnabled } } } },
     });
     failure("Could not update task", result);
   };
@@ -1653,7 +1655,7 @@ function EnvironmentTasks({
                       { id: "setting", title: "Machine settings" },
                       {
                         id: "toggle",
-                        title: task.enabled ? "Pause" : "Resume",
+                        title: autoBucketsEnabled ? "Pause" : "Resume",
                         attributes: { disabled: !canToggleBuiltIn },
                       },
                       { id: "run", title: "Run now", attributes: { disabled: !canOperate } },
@@ -1691,7 +1693,7 @@ function EnvironmentTasks({
                     },
                   ]);
                 } else if (action === "toggle" && task.builtIn) {
-                  void toggleBuiltIn(task);
+                  void toggleBuiltIn();
                 } else if (action === "toggle" || action === "run") {
                   void act(task, action);
                 }

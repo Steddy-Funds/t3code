@@ -14,6 +14,7 @@ import { describe, expect, it, vi } from "vite-plus/test";
 
 import {
   GUARD_EXIT_KILLED,
+  GUARD_FORWARD_DELAY_MS,
   GUARD_KILL_GRACE_MS,
   GUARD_SAMPLE_INTERVAL_MS,
   canSignalChild,
@@ -295,6 +296,7 @@ async function withChild(
     readonly kills: ReturnType<typeof spyKill>;
     readonly stderr: ReturnType<typeof spyStderr>;
     readonly addedTermListeners: ReadonlyArray<NodeJS.SignalsListener>;
+    readonly addedIntListeners: ReadonlyArray<NodeJS.SignalsListener>;
   }) => Promise<void>,
 ) {
   const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-guard-test-"));
@@ -302,10 +304,13 @@ async function withChild(
   NodeChildProcess.execFileSync("mkfifo", [fifo]);
   const configPath = NodePath.join(dir, "guard.json");
   if (config !== null) NodeFS.writeFileSync(configPath, config);
-  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
+  vi.useFakeTimers({
+    toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date"],
+  });
   const kills = spyKill();
   const stderr = spyStderr();
   const termBefore = process.listeners("SIGTERM");
+  const intBefore = process.listeners("SIGINT");
   let pids: Array<number> = [];
   try {
     const ready = NodeFS.promises.readFile(fifo, "utf8");
@@ -325,6 +330,9 @@ async function withChild(
     const addedTermListeners = process
       .listeners("SIGTERM")
       .filter((listener) => !termBefore.includes(listener));
+    const addedIntListeners = process
+      .listeners("SIGINT")
+      .filter((listener) => !intBefore.includes(listener));
     await body({
       childPid: pids[0]!,
       otherPids: pids.slice(1),
@@ -334,6 +342,7 @@ async function withChild(
       kills,
       stderr,
       addedTermListeners,
+      addedIntListeners,
     });
   } finally {
     kills.mockRestore();
@@ -376,6 +385,8 @@ describe.skipIf(!NodeFS.existsSync("/proc/self/stat"))("runGuard", () => {
 
           expect(addedTermListeners).toHaveLength(1);
           addedTermListeners[0]!("SIGTERM");
+          expect(kills).not.toHaveBeenCalled();
+          await vi.advanceTimersByTimeAsync(GUARD_FORWARD_DELAY_MS);
           expect(await result).toBe(128 + NodeOS.constants.signals.SIGTERM);
           expect(kills.mock.calls).toEqual([[childPid, "SIGTERM"]]);
           expect(stderr).not.toHaveBeenCalled();
@@ -392,6 +403,7 @@ describe.skipIf(!NodeFS.existsSync("/proc/self/stat"))("runGuard", () => {
       async ({ childPid, addedTermListeners, result }) => {
         expect(processGroupOf(childPid)).toBe(processGroupOf("self"));
         addedTermListeners[0]!("SIGTERM");
+        await vi.advanceTimersByTimeAsync(GUARD_FORWARD_DELAY_MS);
         await result;
       },
     );
@@ -483,8 +495,82 @@ describe.skipIf(!NodeFS.existsSync("/proc/self/stat"))("runGuard", () => {
         expect(kills).not.toHaveBeenCalled();
 
         addedTermListeners[0]!("SIGTERM");
+        await vi.advanceTimersByTimeAsync(GUARD_FORWARD_DELAY_MS);
         expect(await result).toBe(128 + NodeOS.constants.signals.SIGTERM);
         expect(stderr).not.toHaveBeenCalled();
+      },
+    );
+  });
+  it("does not double a SIGTERM aimed at the guard's group: the command already got it", async () => {
+    await withChild(
+      'echo $$ > "$0"; exec sleep 45',
+      null,
+      async ({ childPid, commandExited, result, kills, addedTermListeners }) => {
+        // A group kill lands on the command and the guard at once.
+        process.kill(childPid, "SIGTERM");
+        addedTermListeners[0]!("SIGTERM");
+        await commandExited;
+        await vi.advanceTimersByTimeAsync(GUARD_FORWARD_DELAY_MS);
+        expect(await result).toBe(128 + NodeOS.constants.signals.SIGTERM);
+        expect(signalsTo(kills, childPid)).toEqual(["SIGTERM"]);
+      },
+    );
+  });
+
+  it("forwards SIGTERM once however often the guard gets it within the wait", async () => {
+    await withChild(
+      'echo $$ > "$0"; exec sleep 45',
+      null,
+      async ({ childPid, result, kills, addedTermListeners }) => {
+        addedTermListeners[0]!("SIGTERM");
+        addedTermListeners[0]!("SIGTERM");
+        await vi.advanceTimersByTimeAsync(GUARD_FORWARD_DELAY_MS);
+        await result;
+        expect(signalsTo(kills, childPid)).toEqual(["SIGTERM"]);
+      },
+    );
+  });
+
+  it("on Ctrl-C waits for the command and exits with its code, without forwarding", async () => {
+    await withChild(
+      'echo $$ > "$0"; exec sleep 45',
+      guardJson({ guardHoldSeconds: 600 }),
+      async ({ childPid, result, kills, addedIntListeners }) => {
+        let settled = false;
+        void result.then(() => {
+          settled = true;
+        });
+        expect(addedIntListeners).toHaveLength(1);
+        addedIntListeners[0]!("SIGINT");
+        await vi.advanceTimersByTimeAsync(GUARD_SAMPLE_INTERVAL_MS);
+        expect(settled).toBe(false);
+
+        // The tty's SIGINT to the foreground group.
+        process.kill(childPid, "SIGINT");
+        expect(await result).toBe(128 + NodeOS.constants.signals.SIGINT);
+        expect(kills.mock.calls).toEqual([[childPid, "SIGINT"]]);
+        expect(process.listeners("SIGINT")).not.toContain(addedIntListeners[0]);
+      },
+    );
+  });
+
+  it("keeps guarding with the last good config when a guard.json read fails mid-run", async () => {
+    stressedSample();
+    await withChild(
+      'echo $$ > "$0"; exec sleep 45',
+      guardJson({ guardHoldSeconds: 600 }),
+      async ({ configPath, addedTermListeners, result }) => {
+        await vi.advanceTimersByTimeAsync(GUARD_SAMPLE_INTERVAL_MS);
+        expect(readHostTotals).toHaveBeenCalledTimes(1);
+        // A failed read (EMFILE, ENOENT) and a torn write both read as "no answer".
+        NodeFS.rmSync(configPath);
+        await vi.advanceTimersByTimeAsync(GUARD_SAMPLE_INTERVAL_MS);
+        NodeFS.writeFileSync(configPath, '{ "enabled": fal');
+        await vi.advanceTimersByTimeAsync(GUARD_SAMPLE_INTERVAL_MS);
+        expect(readHostTotals).toHaveBeenCalledTimes(3);
+        addedTermListeners[0]!("SIGTERM");
+        await vi.advanceTimersByTimeAsync(GUARD_FORWARD_DELAY_MS);
+        await result;
       },
     );
   });

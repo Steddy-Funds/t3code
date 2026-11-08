@@ -121,7 +121,10 @@ therefore its own `guard.mjs` bundle of `node:*` plus our packages only
 and reads a resolved `guard.json` rather than calling the server
 ([`LoadGuard`](../../apps/server/src/resourceTelemetry/LoadGuard.ts)). The command stays in the guard's
 process group, so a provider or a thread interrupt that kills that group stops both; a detached
-command would outlive the guard and keep loading the machine. At kill time the guard walks the
+command would outlive the guard and keep loading the machine. Sharing the group means a group
+signal already reached the command, and Node cannot tell it from a `kill <guard pid>`: the guard
+forwards SIGTERM only to a command still running 1 s later (a slower graceful shutdown still sees
+a second SIGTERM), and never forwards SIGINT, which the tty sends to the whole group. At kill time the guard walks the
 command's descendants by ppid and rechecks each start time right before signalling, never itself,
 its ancestors or pid 1, and still SIGKILLs stragglers after the command exits on SIGTERM. The
 limit follows: a double-forked daemon reparented to init, or a process in another container

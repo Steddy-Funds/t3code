@@ -10,6 +10,8 @@ import { initialVerdictState, stepVerdict, type VerdictState } from "@t3tools/sh
 export const GUARD_EXIT_KILLED = 75;
 export const GUARD_SAMPLE_INTERVAL_MS = 5_000;
 export const GUARD_KILL_GRACE_MS = 10_000;
+/** How long a SIGTERM to the guard waits before it goes on to a command that is still running. */
+export const GUARD_FORWARD_DELAY_MS = 1_000;
 
 export const GUARD_HELP = `Usage: t3 guard [--hold <duration>] -- <command> [args...]
 
@@ -77,6 +79,19 @@ export function parseGuardConfig(text: string | undefined): GuardConfig | null {
 }
 
 /** `90`, `90s` or `2m`; null when it is not one of those. */
+/** True only when guard.json reads and parses and the lane is off; a failed read says nothing. */
+function guardConfigTurnedOff(text: string | undefined): boolean {
+  if (text === undefined) return false;
+  try {
+    const raw: unknown = JSON.parse(text);
+    return (
+      typeof raw === "object" && raw !== null && (raw as { enabled?: unknown }).enabled !== true
+    );
+  } catch {
+    return false;
+  }
+}
+
 export function parseHoldDuration(value: string): number | null {
   const match = /^(\d+)(s|m)?$/.exec(value.trim());
   if (match === null) return null;
@@ -403,8 +418,12 @@ export async function runGuard(input: {
     }
   };
 
-  // An outside SIGTERM to the guard alone goes to the command, which decides what to do.
-  const onTerm = () => {
+  // The command shares the guard's group, so a SIGTERM aimed at the group already reached it, and
+  // Node cannot tell who sent ours. Forward only to a command still running after a short wait,
+  // so a group signal is not doubled into a force quit and `kill <guard pid>` still reaches it.
+  let forwardTimer: ReturnType<typeof setTimeout> | undefined;
+  const forwardTerm = () => {
+    forwardTimer = undefined;
     const target = { pid: child.pid, exited: leaderExited, selfPid };
     if (!canSignalChild(target)) return;
     try {
@@ -418,7 +437,13 @@ export async function runGuard(input: {
       }
     } catch {}
   };
+  const onTerm = () => {
+    forwardTimer ??= setTimeout(forwardTerm, GUARD_FORWARD_DELAY_MS);
+  };
+  // Ctrl-C already reached the whole foreground group; wait for the command and exit with its code.
+  const onInt = () => {};
   process.on("SIGTERM", onTerm);
+  process.on("SIGINT", onInt);
 
   let resolveResult!: (code: number) => void;
   const result = new Promise<number>((resolve) => {
@@ -431,7 +456,9 @@ export async function runGuard(input: {
     if (resolved) return;
     resolved = true;
     if (timer !== undefined) clearInterval(timer);
+    if (forwardTimer !== undefined) clearTimeout(forwardTimer);
     process.off("SIGTERM", onTerm);
+    process.off("SIGINT", onInt);
     const { phase } = state;
     if (phase.type === "terminating" || phase.type === "killed") {
       process.stderr.write(`${formatKillReason(phase.reason)}\n`);
@@ -464,14 +491,14 @@ export async function runGuard(input: {
         step(null);
         return;
       }
-      const latest = parseGuardConfig(readConfigFile(configPath));
-      if (latest === null) {
-        // Load management was turned off: stop watching and just wait for the command.
+      const text = readConfigFile(configPath);
+      if (guardConfigTurnedOff(text)) {
         clearInterval(timer);
         timer = undefined;
         return;
       }
-      config = latest;
+      // A failed or partial read under stress keeps the last good config.
+      config = parseGuardConfig(text) ?? config;
       sampling = true;
       void readHostTotals(counters, { platform })
         .then(

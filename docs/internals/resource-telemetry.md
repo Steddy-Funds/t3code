@@ -119,10 +119,13 @@ sandboxes and pod containers, often with no access to the server's `node_modules
 therefore its own `guard.mjs` bundle of `node:*` plus our packages only
 ([`vite.config.ts`](../../apps/server/vite.config.ts) fails the build if a dependency sneaks in),
 and reads a resolved `guard.json` rather than calling the server
-([`LoadGuard`](../../apps/server/src/resourceTelemetry/LoadGuard.ts)). It spawns the command
-`detached` and signals the negative pid, so a kill reaches the whole group and never the guard.
-The limit follows: anything the command moves into a new session (`setsid`, a daemonising
-double fork) or another container (`docker exec`) escapes the kill.
+([`LoadGuard`](../../apps/server/src/resourceTelemetry/LoadGuard.ts)). The command stays in the guard's
+process group, so a provider or a thread interrupt that kills that group stops both; a detached
+command would outlive the guard and keep loading the machine. At kill time the guard walks the
+command's descendants by ppid and rechecks each start time right before signalling, never itself,
+its ancestors or pid 1, and still SIGKILLs stragglers after the command exits on SIGTERM. The
+limit follows: a double-forked daemon reparented to init, or a process in another container
+(`docker exec`), escapes the kill.
 
 **Pauses** ([`LoadPauseWorker`](../../apps/server/src/orchestration-v2/LoadPauseWorker.ts),
 policy in [`LoadPausePolicy`](../../apps/server/src/orchestration-v2/LoadPausePolicy.ts)) interrupt

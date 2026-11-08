@@ -17,10 +17,14 @@ import {
   GUARD_KILL_GRACE_MS,
   GUARD_SAMPLE_INTERVAL_MS,
   canSignalChild,
+  descendantsOf,
   formatKillReason,
   initialGuardState,
   parseGuardArgs,
   parseGuardConfig,
+  parseProcStat,
+  parsePsTable,
+  protectedPids,
   runGuard,
   stepGuard,
   type GuardAction,
@@ -230,18 +234,63 @@ it("formatKillReason is one line naming the rule, value, threshold and held seco
   for (const part of ["memory", "96.4", "92.5", "121"]) expect(line).toContain(part);
 });
 
+describe("process tree", () => {
+  it("parses /proc stat with spaces and parentheses in the command name", () => {
+    const stat =
+      "4242 (a (b) c) S 4200 4242 4200 0 -1 4194560 100 0 0 0 1 2 0 0 20 0 1 0 987654 1000 10";
+    expect(parseProcStat(4242, stat)).toEqual({ pid: 4242, ppid: 4200, start: "987654" });
+    expect(parseProcStat(1, "garbage")).toBeNull();
+  });
+
+  it("parses ps lstart rows", () => {
+    expect(
+      parsePsTable("  10     1 Mon Nov  8 02:40:03 2026\n  11    10 Mon Nov  8 02:41:00 2026\n\n"),
+    ).toEqual([
+      { pid: 10, ppid: 1, start: "Mon Nov  8 02:40:03 2026" },
+      { pid: 11, ppid: 10, start: "Mon Nov  8 02:41:00 2026" },
+    ]);
+  });
+
+  const entry = (pid: number, ppid: number) => ({ pid, ppid, start: `t${pid}` });
+  const table = [
+    entry(1, 0),
+    entry(5, 1),
+    entry(10, 5),
+    entry(20, 10),
+    entry(21, 20),
+    entry(30, 5),
+  ];
+
+  it("walks every descendant once, and nothing outside the roots", () => {
+    expect(descendantsOf([entry(10, 5)], [...table, entry(10, 5)]).map((e) => e.pid)).toEqual([
+      10, 20, 21,
+    ]);
+  });
+
+  it("protects the guard and its ancestors", () => {
+    expect([...protectedPids(10, table)].toSorted()).toEqual([10, 5]);
+  });
+});
+
 /**
- * The child writes its pid into a FIFO once it is ready (after any trap), so the test knows
- * the pid and never races the child's startup. `exec` keeps that pid for the sleep.
+ * The child writes its pid (and any helper pids) into a FIFO once it is ready, so the test
+ * knows them and never races the child's startup. `exec` keeps that pid for the sleep.
  */
 const spyKill = () => vi.spyOn(process, "kill");
 const spyStderr = () => vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+
+const processGroupOf = (pid: number | "self") =>
+  NodeFS.readFileSync(`/proc/${pid}/stat`, "utf8").split(") ")[1]!.split(" ")[2];
 
 async function withChild(
   script: string,
   config: string | null,
   body: (input: {
     readonly childPid: number;
+    readonly otherPids: ReadonlyArray<number>;
+    readonly configPath: string;
+    /** Resolves after the guard has handled the command's exit. */
+    readonly commandExited: Promise<unknown>;
     readonly result: Promise<number>;
     readonly kills: ReturnType<typeof spyKill>;
     readonly stderr: ReturnType<typeof spyStderr>;
@@ -257,33 +306,53 @@ async function withChild(
   const kills = spyKill();
   const stderr = spyStderr();
   const termBefore = process.listeners("SIGTERM");
-  let childPid: number | undefined;
+  let pids: Array<number> = [];
   try {
     const ready = NodeFS.promises.readFile(fifo, "utf8");
+    let spawned: NodeChildProcess.ChildProcess | undefined;
     const result = runGuard({
       argv: ["sh", "-c", script, fifo],
       platform: "linux",
       env: { T3CODE_GUARD_CONFIG: configPath },
+      spawn: (command, args, options) => {
+        spawned = NodeChildProcess.spawn(command, [...args], options);
+        return spawned;
+      },
     });
-    childPid = Number((await ready).trim());
+    // Registered after the guard's own listener, so it fires after the guard handled the exit.
+    const commandExited = new Promise((resolve) => spawned!.once("exit", resolve));
+    pids = (await ready).trim().split(/\s+/).map(Number);
     const addedTermListeners = process
       .listeners("SIGTERM")
       .filter((listener) => !termBefore.includes(listener));
-    await body({ childPid, result, kills, stderr, addedTermListeners });
+    await body({
+      childPid: pids[0]!,
+      otherPids: pids.slice(1),
+      configPath,
+      commandExited,
+      result,
+      kills,
+      stderr,
+      addedTermListeners,
+    });
   } finally {
     kills.mockRestore();
     stderr.mockRestore();
     vi.useRealTimers();
-    if (childPid !== undefined) {
+    for (const pid of pids) {
       try {
-        process.kill(childPid, "SIGKILL");
+        process.kill(pid, "SIGKILL");
       } catch {}
     }
     NodeFS.rmSync(dir, { recursive: true, force: true });
   }
 }
 
-describe.skipIf(process.platform === "win32")("runGuard", () => {
+const signalsTo = (kills: ReturnType<typeof spyKill>, pid: number) =>
+  kills.mock.calls.filter(([target]) => target === pid).map(([, signal]) => signal);
+
+// The tests read /proc to check process groups and descendants.
+describe.skipIf(!NodeFS.existsSync("/proc/self/stat"))("runGuard", () => {
   const stressedSample = () => {
     vi.mocked(readHostTotals).mockReset();
     vi.mocked(readHostTotals).mockResolvedValue({ totals: STRESSED, next: [] });
@@ -305,7 +374,6 @@ describe.skipIf(process.platform === "win32")("runGuard", () => {
           expect(readHostTotals).not.toHaveBeenCalled();
           expect(kills).not.toHaveBeenCalled();
 
-          // A SIGTERM to the guard reaches the ungrouped child by its own pid.
           expect(addedTermListeners).toHaveLength(1);
           addedTermListeners[0]!("SIGTERM");
           expect(await result).toBe(128 + NodeOS.constants.signals.SIGTERM);
@@ -316,28 +384,40 @@ describe.skipIf(process.platform === "win32")("runGuard", () => {
     },
   );
 
-  it("SIGTERMs the child's group when stress holds, SIGKILLs only after the grace, exits 75 with one stderr line", async () => {
+  it("keeps the command in the guard's process group, so a kill aimed at that group reaches it", async () => {
     stressedSample();
     await withChild(
-      `trap '' TERM; echo $$ > "$0"; exec sleep 45`,
-      guardJson({ guardHoldSeconds: 0 }),
-      async ({ childPid, result, kills, stderr }) => {
-        await vi.advanceTimersByTimeAsync(GUARD_SAMPLE_INTERVAL_MS);
-        expect(kills.mock.calls).toEqual([[-childPid, "SIGTERM"]]);
+      'echo $$ > "$0"; exec sleep 45',
+      guardJson({ guardHoldSeconds: 600 }),
+      async ({ childPid, addedTermListeners, result }) => {
+        expect(processGroupOf(childPid)).toBe(processGroupOf("self"));
+        addedTermListeners[0]!("SIGTERM");
+        await result;
+      },
+    );
+  });
 
-        // The child ignores TERM; inside the grace it is left alone.
+  it("SIGTERMs the command and its descendants when stress holds, SIGKILLs only after the grace, exits 75 with one stderr line", async () => {
+    stressedSample();
+    await withChild(
+      `trap '' TERM; (trap '' TERM; exec sleep 45) & echo "$$ $!" > "$0"; exec sleep 45`,
+      guardJson({ guardHoldSeconds: 0 }),
+      async ({ childPid, otherPids: [grandchild], result, kills, stderr }) => {
+        await vi.advanceTimersByTimeAsync(GUARD_SAMPLE_INTERVAL_MS);
+        expect(signalsTo(kills, childPid)).toEqual(["SIGTERM"]);
+        expect(signalsTo(kills, grandchild!)).toEqual(["SIGTERM"]);
+
+        // Both ignore TERM; inside the grace they are left alone.
         await vi.advanceTimersByTimeAsync(GUARD_KILL_GRACE_MS - GUARD_SAMPLE_INTERVAL_MS);
-        expect(kills.mock.calls).toEqual([[-childPid, "SIGTERM"]]);
+        expect(kills).toHaveBeenCalledTimes(2);
 
         await vi.advanceTimersByTimeAsync(GUARD_SAMPLE_INTERVAL_MS);
         expect(await result).toBe(GUARD_EXIT_KILLED);
-        expect(kills.mock.calls).toEqual([
-          [-childPid, "SIGTERM"],
-          [-childPid, "SIGKILL"],
-        ]);
+        expect(signalsTo(kills, childPid)).toEqual(["SIGTERM", "SIGKILL"]);
+        expect(signalsTo(kills, grandchild!)).toEqual(["SIGTERM", "SIGKILL"]);
         for (const [target] of kills.mock.calls) {
-          expect(Math.abs(target)).toBeGreaterThan(1);
-          expect(Math.abs(target)).not.toBe(process.pid);
+          expect(target).toBeGreaterThan(1);
+          expect(target).not.toBe(process.pid);
         }
         expect(stderr).toHaveBeenCalledTimes(1);
         const written = String(stderr.mock.calls[0]![0]);
@@ -347,7 +427,7 @@ describe.skipIf(process.platform === "win32")("runGuard", () => {
     );
   });
 
-  it("does not SIGKILL a child that exited on SIGTERM", async () => {
+  it("does not SIGKILL a command that exited on SIGTERM with nothing left behind", async () => {
     stressedSample();
     await withChild(
       'echo $$ > "$0"; exec sleep 45',
@@ -356,8 +436,55 @@ describe.skipIf(process.platform === "win32")("runGuard", () => {
         await vi.advanceTimersByTimeAsync(GUARD_SAMPLE_INTERVAL_MS);
         expect(await result).toBe(GUARD_EXIT_KILLED);
         await vi.advanceTimersByTimeAsync(GUARD_KILL_GRACE_MS * 3);
-        expect(kills.mock.calls).toEqual([[-childPid, "SIGTERM"]]);
+        expect(kills.mock.calls).toEqual([[childPid, "SIGTERM"]]);
         expect(stderr).toHaveBeenCalledTimes(1);
+      },
+    );
+  });
+
+  it("still SIGKILLs a descendant that ignored SIGTERM after the command itself exited on it", async () => {
+    stressedSample();
+    await withChild(
+      `(trap '' TERM; exec sleep 45) & echo "$$ $!" > "$0"; wait`,
+      guardJson({ guardHoldSeconds: 0 }),
+      async ({ childPid, otherPids: [straggler], commandExited, result, kills }) => {
+        let settled = false;
+        void result.then(() => {
+          settled = true;
+        });
+        await vi.advanceTimersByTimeAsync(GUARD_SAMPLE_INTERVAL_MS);
+        expect(signalsTo(kills, childPid)).toEqual(["SIGTERM"]);
+        expect(signalsTo(kills, straggler!)).toEqual(["SIGTERM"]);
+        // The command is gone, but its straggler is not, so the guard waits out the grace.
+        await commandExited;
+        await vi.advanceTimersByTimeAsync(0);
+        expect(settled).toBe(false);
+
+        await vi.advanceTimersByTimeAsync(GUARD_KILL_GRACE_MS);
+        expect(await result).toBe(GUARD_EXIT_KILLED);
+        expect(signalsTo(kills, straggler!)).toEqual(["SIGTERM", "SIGKILL"]);
+        expect(signalsTo(kills, childPid)).toEqual(["SIGTERM"]);
+      },
+    );
+  });
+
+  it("stops watching when load management is turned off mid-run", async () => {
+    stressedSample();
+    await withChild(
+      'echo $$ > "$0"; exec sleep 45',
+      guardJson({ guardHoldSeconds: 30 }),
+      async ({ configPath, result, kills, stderr, addedTermListeners }) => {
+        await vi.advanceTimersByTimeAsync(GUARD_SAMPLE_INTERVAL_MS);
+        expect(readHostTotals).toHaveBeenCalledTimes(1);
+        NodeFS.writeFileSync(configPath, guardJson({ enabled: false, guardHoldSeconds: 30 }));
+
+        await vi.advanceTimersByTimeAsync(GUARD_SAMPLE_INTERVAL_MS * 30);
+        expect(readHostTotals).toHaveBeenCalledTimes(1);
+        expect(kills).not.toHaveBeenCalled();
+
+        addedTermListeners[0]!("SIGTERM");
+        expect(await result).toBe(128 + NodeOS.constants.signals.SIGTERM);
+        expect(stderr).not.toHaveBeenCalled();
       },
     );
   });

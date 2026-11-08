@@ -123,7 +123,7 @@ This API replay measures routing and recovery decisions. Screenshots return prod
 
 ## Load guard cases
 
-`cases/load-guard.ndjson` checks the `t3 guard` line. With `T3CODE_GUARD` in the world's environment, as T3 sets it while load management is on, an agent asked for the full test suite runs it as `"$T3CODE_GUARD" -- <command>`. The controls run the suite bare when the variable is unset, and read code without the guard.
+`cases/load-guard.ndjson` checks the `t3 guard` line. With `T3CODE_GUARD` in the world's environment, as T3 sets it while load management is on, an agent asked for the full test suite runs it as `"$T3CODE_GUARD" -- <command>`. The controls run the suite bare when the variable is unset, and read code without the guard. Its priority case asks to keep a backgrounded thread from being load-paused, which needs `t3_thread_organize` `set_priority` `normal` rather than bringing the thread back; the control only backgrounds and leaves priority alone.
 
 ## Threads vs tasks cases
 

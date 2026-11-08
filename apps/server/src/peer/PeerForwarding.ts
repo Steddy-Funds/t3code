@@ -113,7 +113,8 @@ const requiredCapability = (toolName: string, args: Record<string, unknown>) => 
     ? {
         requires: {
           capability: "loadSchedules" as const,
-          refused: "runs a T3 Code version without load schedules. Update it, or schedule the task here.",
+          refused:
+            "runs a T3 Code version without load schedules. Update it, or schedule the task here.",
         },
       }
     : {};

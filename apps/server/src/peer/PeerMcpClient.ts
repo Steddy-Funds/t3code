@@ -165,7 +165,10 @@ const make = Effect.gen(function* () {
         .resolve(input.environmentId)
         .pipe(Effect.mapError(fromLinkError));
       // An older peer would reject the call as a decode error the agent cannot act on.
-      if (input.requires !== undefined && resolved.capabilities[input.requires.capability] !== true) {
+      if (
+        input.requires !== undefined &&
+        resolved.capabilities[input.requires.capability] !== true
+      ) {
         return yield* new OrchestratorMcpFailure({
           code: "invalid_request",
           message: `${resolved.link.label} ${input.requires.refused}`,

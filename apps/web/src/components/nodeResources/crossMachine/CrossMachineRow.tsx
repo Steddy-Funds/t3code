@@ -21,6 +21,7 @@ import { AsyncResult, Atom } from "effect/reactivity";
 import { Link } from "@tanstack/react-router";
 
 import { EnvironmentMachineIcon } from "~/components/EnvironmentMachineIcon";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
 import { cn } from "~/lib/utils";
 import { useEnvironmentMachines } from "~/state/environments";
 import { machineIndicator, machineResources } from "~/state/machineResources";
@@ -251,12 +252,16 @@ function TopConsumerCell({
           ? ({ type: "thread", threadId: ThreadId.make(share.key) } as const)
           : ({ type: "bucket", bucketId: MachineBucketId.make(share.key) } as const);
       return (
-        <span
-          className="flex min-w-0 items-baseline gap-1.5"
-          title={`At least this much, from the ${TOP_OWNER_ROWS} busiest processes`}
-        >
+        <span className="flex min-w-0 items-baseline gap-1.5">
           <OwnerChip label={ownerLabel(owner, names)} />
-          <span className="shrink-0 font-mono text-2xs tabular-nums">{share.text}</span>
+          <Tooltip>
+            <TooltipTrigger render={<span className="shrink-0 font-mono text-2xs tabular-nums" />}>
+              {share.text}
+            </TooltipTrigger>
+            <TooltipPopup side="top">
+              At least this much, from the {TOP_OWNER_ROWS} busiest processes
+            </TooltipPopup>
+          </Tooltip>
         </span>
       );
     }

@@ -144,8 +144,10 @@ function ClaimList({
                 const ageMs = nowMs - DateTime.toEpochMillis(claim.createdAt);
                 return (
                   <TableRow key={claim.id}>
-                    <TableCell className="max-w-56 truncate font-mono">
-                      {targetText(claim.target)}
+                    <TableCell>
+                      <span className="block max-w-56 truncate font-mono">
+                        {targetText(claim.target)}
+                      </span>
                     </TableCell>
                     <TableCell>{claim.target.type}</TableCell>
                     <TableCell>
@@ -154,23 +156,33 @@ function ClaimList({
                         color={color === undefined ? undefined : `var(${color})`}
                       />
                     </TableCell>
-                    <TableCell className="tabular-nums">
-                      {ageMs < 60_000 ? "< 1 m" : formatAge(ageMs)}
+                    <TableCell>
+                      <span className="tabular-nums">
+                        {ageMs < 60_000 ? "< 1 m" : formatAge(ageMs)}
+                      </span>
                     </TableCell>
-                    <TableCell className="text-muted-foreground">
-                      {endsWhen(claim.target)} · or thread deleted
+                    <TableCell>
+                      <span className="text-muted-foreground">
+                        {endsWhen(claim.target)} · or thread deleted
+                      </span>
                     </TableCell>
-                    <TableCell className="text-end tabular-nums">
-                      {measured ? formatPercent(claimTotals?.cpu ?? 0) : UNMEASURED}
+                    <TableCell className="text-end">
+                      <span className="tabular-nums">
+                        {measured ? formatPercent(claimTotals?.cpu ?? 0) : UNMEASURED}
+                      </span>
                     </TableCell>
-                    <TableCell className="text-end tabular-nums">
-                      {measured ? formatProcessMemory(claimTotals?.rss ?? 0) : UNMEASURED}
+                    <TableCell className="text-end">
+                      <span className="tabular-nums">
+                        {measured ? formatProcessMemory(claimTotals?.rss ?? 0) : UNMEASURED}
+                      </span>
                     </TableCell>
                     {showGpu ? (
-                      <TableCell className="text-end tabular-nums">
-                        {!measured || claimTotals?.gpuUtil === null
-                          ? UNMEASURED
-                          : formatPercent(claimTotals?.gpuUtil ?? 0)}
+                      <TableCell className="text-end">
+                        <span className="tabular-nums">
+                          {!measured || claimTotals?.gpuUtil === null
+                            ? UNMEASURED
+                            : formatPercent(claimTotals?.gpuUtil ?? 0)}
+                        </span>
                       </TableCell>
                     ) : null}
                     {canRelease ? (

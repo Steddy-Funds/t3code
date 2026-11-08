@@ -29,7 +29,7 @@ function lineText(row: MachineProcessRow): string {
   const args = row.command.trim().split(/\s+/).slice(1).join(" ");
   const base = args.length > 0 ? `${row.name} · ${args}` : row.name;
   const owner = row.owner;
-  if (owner?.type === "shared") return `${row.name} — ${sharedText(owner.threadCount)}`;
+  if (owner?.type === "shared") return `${row.name} · ${sharedText(owner.threadCount)}`;
   if (owner?.type === "thread" && owner.terminalId !== undefined) return `terminal · ${base}`;
   return base;
 }

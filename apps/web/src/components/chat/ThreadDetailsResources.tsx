@@ -15,7 +15,7 @@ import {
 } from "@t3tools/contracts";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/reactivity";
-import { useEffect, useMemo } from "react";
+import { useEffect } from "react";
 
 import { useQuietThreadShell, useServerConfigs } from "../../state/entities";
 import { machineResources } from "../../state/machineResources";
@@ -139,11 +139,8 @@ function ResourcesBody({
   readonly cursor: boolean;
 }) {
   // Seeded once per answer, so the sparklines draw on arrival and stay still in between.
-  const ring = useMemo(() => {
-    const next = SeriesRing.create({ columns: READERS.length, capacity: RESOURCE_WINDOW_POINTS });
-    seedSparkline(next, resources.history, READERS, RESOURCE_STEP_MS, updatedAt);
-    return next;
-  }, [resources.history, updatedAt]);
+  const ring = SeriesRing.create({ columns: READERS.length, capacity: RESOURCE_WINDOW_POINTS });
+  seedSparkline(ring, resources.history, READERS, RESOURCE_STEP_MS, updatedAt);
   const current = resources.current;
   const rows = processes?.rows ?? [];
 
@@ -183,7 +180,7 @@ function ResourcesBody({
       label: "CPU",
       column: 0,
       // Null when an idle read had no earlier sample to measure against.
-      value: current.cpuPercent === null ? "—" : formatPercent(current.cpuPercent),
+      value: current.cpuPercent === null ? "unmeasured" : formatPercent(current.cpuPercent),
     },
     { label: "Mem", column: 1, value: formatProcessMemory(current.memoryBytes) },
     ...(current.gpuUtilPercent === null

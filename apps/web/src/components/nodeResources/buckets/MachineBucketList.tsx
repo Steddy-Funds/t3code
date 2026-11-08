@@ -110,8 +110,8 @@ export function MachineBucketList({
   const updateSettings = useUpdateEnvironmentSettings(environmentId);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [deleting, setDeleting] = useState<MachineBucket | null>(null);
-  const buckets = Object.values(config?.settings.machineResources.buckets ?? {}).toSorted(
-    (a, b) => a.name.localeCompare(b.name),
+  const buckets = Object.values(config?.settings.machineResources.buckets ?? {}).toSorted((a, b) =>
+    a.name.localeCompare(b.name),
   );
   const full = buckets.length >= MACHINE_BUCKETS_MAX;
 
@@ -188,9 +188,11 @@ export function MachineBucketList({
                     color={cssVar(live?.colorOf(bucket.id))}
                   />
                 </TableCell>
-                <TableCell className="max-w-64 truncate">{rulesText(bucket, names)}</TableCell>
-                <TableCell className="font-mono text-muted-foreground">
-                  {pinsText(bucket) ?? "—"}
+                <TableCell>
+                  <span className="block max-w-64 truncate">{rulesText(bucket, names)}</span>
+                </TableCell>
+                <TableCell>
+                  <span className="font-mono text-muted-foreground">{pinsText(bucket)}</span>
                 </TableCell>
                 <TableCell>
                   <ActorLabel actor={bucket.provenance.createdBy} names={names} />
@@ -201,7 +203,11 @@ export function MachineBucketList({
                     <Button size="xs" variant="ghost" onClick={() => setDraft(editDraft(bucket))}>
                       Edit
                     </Button>
-                    <Button size="xs" variant="ghost-destructive" onClick={() => setDeleting(bucket)}>
+                    <Button
+                      size="xs"
+                      variant="ghost-destructive"
+                      onClick={() => setDeleting(bucket)}
+                    >
                       Delete
                     </Button>
                   </TableCell>
@@ -266,7 +272,9 @@ function ActorLabel({
   readonly names: MachineOwnerNames;
 }) {
   if (actor.type === "user") return <span>You</span>;
-  const chip = <OwnerChip label={ownerLabel({ type: "thread", threadId: actor.threadId }, names)} />;
+  const chip = (
+    <OwnerChip label={ownerLabel({ type: "thread", threadId: actor.threadId }, names)} />
+  );
   if (actor.type === "agent") return chip;
   return (
     <span className="inline-flex min-w-0 items-center gap-1">
@@ -284,7 +292,11 @@ function BucketTotalsCells({
   readonly bucketId: MachineBucketId;
 }) {
   const totals = live.totals.get(bucketId);
-  const cell = (value: string) => <TableCell className="text-end tabular-nums">{value}</TableCell>;
+  const cell = (value: string) => (
+    <TableCell className="text-end">
+      <span className="tabular-nums">{value}</span>
+    </TableCell>
+  );
   if (live.unmeasured) {
     return (
       <>

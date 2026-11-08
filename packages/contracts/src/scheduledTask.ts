@@ -222,11 +222,11 @@ export const ScheduledTaskLoadSchedule = Schema.Struct({
   type: Schema.Literal("load"),
   condition: LoadCondition,
   clear: Schema.optional(LoadCondition).annotate({
-    description: "Re-arms after this. Default: condition no longer holds.",
+    description: "Re-arms after this. Default: condition fails for max(sustainSeconds, 60) s.",
   }),
 }).annotate({
   description:
-    "Run once when this machine's metric meets the condition; again only after it clears, at most once a minute. '<=' monitors start one at a time, 20 to 40 s apart.",
+    "Runs each time this machine's metric meets the condition, again after it clears, at most once a minute, and after a restart. For a one-time wake, the run deletes the task. '<=' monitors start one at a time, 20 to 40 s apart.",
 });
 export type ScheduledTaskLoadSchedule = typeof ScheduledTaskLoadSchedule.Type;
 

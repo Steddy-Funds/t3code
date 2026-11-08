@@ -91,9 +91,19 @@ export const linkedEnvironmentsOff = new OrchestratorMcpFailure({
 export const remoteTarget = (scope: Scope, environmentId: EnvironmentId | undefined) =>
   environmentId === scope.environmentId ? undefined : environmentId;
 
+// OpenCode sends the schedule as JSON text; see OrchestratorMcpSchedule.
+const parsedSchedule = (schedule: unknown): unknown => {
+  if (typeof schedule !== "string") return schedule;
+  try {
+    return JSON.parse(schedule);
+  } catch {
+    return undefined;
+  }
+};
+
 /** Calls only some peers can take; the rest are refused here with the reason. */
 const requiredCapability = (toolName: string, args: Record<string, unknown>) => {
-  const schedule = args.schedule;
+  const schedule = parsedSchedule(args.schedule);
   const isLoad =
     typeof schedule === "object" &&
     schedule !== null &&

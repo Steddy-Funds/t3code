@@ -476,7 +476,8 @@ condition, even when no turn is active.
 Without a signature, anyone with the webhook URL can trigger a run.
 A `load` task has no next run time. `LoadMonitor` checks it on the 5 s host
 tick and fires once per episode: it re-arms only after the clear condition
-(`clear`, else the condition no longer holding) and a fixed 60 s cooldown.
+(`clear`, else the condition failing for max(`sustainSeconds`, 60) s) and a
+fixed 60 s cooldown. It recurs, so a one-time wake deletes the task from its run.
 Monitors that wait for load to drop (`op: "<="`) start one at a time, 20–40 s
 apart, each re-checked first, so a drop does not start every waiting agent at
 once. Episodes live in memory, so a restart mid-episode may fire once more. A

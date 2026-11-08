@@ -20,6 +20,7 @@ import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
 import { useEnvironmentScope } from "../../state/session";
 import { SeriesRing } from "../nodeResources/charts/SeriesRing";
+import { documentVisibleAtom } from "../nodeResources/documentVisible";
 import { Sparkline } from "../nodeResources/primitives/Sparkline";
 import { Unmeasured } from "../nodeResources/primitives/Unmeasured";
 import { seedSparkline } from "../nodeResources/primitives/SparklineSeries";
@@ -61,14 +62,14 @@ function ResourcesSection({
 }) {
   const query = useEnvironmentQuery(machineResources.threadResources(environmentId, threadId));
   const shell = useQuietThreadShell({ environmentId, threadId });
-  const running = shell?.runtime?.activeRunId != null;
+  const visible = useAtomValue(documentVisibleAtom);
   const { refresh } = query;
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- the server rolls up every 30 s while a turn runs
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- polls the server's 30 s measurements, which also cover terminals outside a turn
   useEffect(() => {
-    if (!running) return;
+    if (!visible) return;
     const timer = setInterval(refresh, RESOURCE_STEP_MS);
     return () => clearInterval(timer);
-  }, [running, refresh]);
+  }, [visible, refresh]);
 
   const driver = useAtomValue(serverEnvironment.providersValueAtom(environmentId), (providers) =>
     shell === null
@@ -162,12 +163,14 @@ function ResourcesBody({
       ? []
       : [{ label: "GPU", column: 2, value: formatPercent(current.gpuUtilPercent) }]),
   ];
+  const count = current.processCount === 1 ? "1 process" : `${current.processCount} processes`;
   const summary = [
-    current.processCount === 1 ? "1 process" : `${current.processCount} processes`,
+    count,
     ...metrics.map((metric) => `${metric.label} ${metric.value ?? "unmeasured"}`),
   ].join(", ");
   return (
     <OpenMachineButton summary={summary} onOpen={onOpen}>
+      <span className="text-muted-foreground">{count}</span>
       <span className="grid grid-cols-[2.25rem_minmax(0,1fr)_3.25rem] items-center gap-x-2 gap-y-1">
         {metrics.map((metric) => (
           <MetricRow key={metric.label} ring={ring} {...metric} />

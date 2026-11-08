@@ -133,6 +133,7 @@ it("lists no processes and opens no process stream, even with diagnostics:read",
   });
   await using screen = await render(ui);
   await expect.element(screen.getByText("42%")).toBeVisible();
+  await expect.element(screen.getByText("3 processes", { exact: true })).toBeVisible();
   expect(screen.getByText(/Processes/).elements()).toHaveLength(0);
   expect(state.machineProcesses).not.toHaveBeenCalled();
 });

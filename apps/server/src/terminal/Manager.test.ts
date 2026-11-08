@@ -11,6 +11,7 @@ import {
   ProjectId,
   TerminalProviderInstanceNotFoundError,
 } from "@t3tools/contracts";
+import { GuardEnvironment } from "@t3tools/shared/GuardEnvironment";
 import { AgentScope } from "@t3tools/shared/AgentScope";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import {
@@ -1928,6 +1929,22 @@ it.layer(
       expect(spawnInput.env.ZELLIJ_SESSION_NAME).toBeUndefined();
       expect(spawnInput.env.ZELLIJ_CONFIG_DIR).toBe("/home/user/.config/zellij");
       expect(ptyAdapter.spawnInputs[1]?.env.TMUX_PANE).toBe("%9");
+      // An inherited guard path is stripped; only the server's own, while the lane is on, reaches the shell.
+      expect(spawnInput.env.T3CODE_GUARD).toBeUndefined();
+
+      const guarded = yield* createManager(5, {
+        env: { T3CODE_PORT: "3773", T3CODE_GUARD: "/inherited/t3-guard" },
+      }).pipe(
+        Effect.provideService(GuardEnvironment, {
+          env: () => ({ T3CODE_GUARD: "/state/t3-guard", T3CODE_GUARD_CONFIG: "/state/guard.json" }),
+        }),
+      );
+      yield* guarded.manager.open(openInput());
+      expect(guarded.ptyAdapter.spawnInputs[0]?.env).toMatchObject({
+        T3CODE_GUARD: "/state/t3-guard",
+        T3CODE_GUARD_CONFIG: "/state/guard.json",
+      });
+      expect(guarded.ptyAdapter.spawnInputs[0]?.env.T3CODE_PORT).toBeUndefined();
     }),
   );
 

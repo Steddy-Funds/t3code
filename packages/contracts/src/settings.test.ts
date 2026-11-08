@@ -359,6 +359,14 @@ describe("ServerSettings machine resource thresholds", () => {
       DEFAULT_MACHINE_THRESHOLDS,
     );
     expect(DEFAULT_SERVER_SETTINGS.machineResources.thresholds).toEqual(DEFAULT_MACHINE_THRESHOLDS);
+    // The load management lane is off until the user turns it on.
+    for (const stored of [{}, { machineResources: {} }, { machineResources: { loadManagement: {} } }]) {
+      expect(decodeServerSettings(stored).machineResources.loadManagement).toEqual({
+        enabled: false,
+        guardHoldSeconds: 120,
+        pauseHoldSeconds: 60,
+      });
+    }
     expect(DEFAULT_MACHINE_THRESHOLDS).toEqual({
       loadPerCore: 12.5,
       memoryUsedPercent: 92.5,

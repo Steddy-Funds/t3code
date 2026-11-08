@@ -18,6 +18,12 @@ import {
   type WebhookFilterDraft,
 } from "@t3tools/client-runtime/scheduled-task-webhook";
 import {
+  DEFAULT_LOAD_SCHEDULE_DRAFT,
+  loadScheduleDraft,
+  loadScheduleFromDraft,
+  type LoadScheduleDraft,
+} from "@t3tools/client-runtime/scheduled-task-schedule";
+import {
   resolveProjectSettings,
   type LegacyProjectSettingsFields,
 } from "@t3tools/shared/projectSettings";
@@ -51,7 +57,7 @@ export function scheduledTaskDefaultModel(
 }
 
 export type ScheduleDraft = {
-  readonly mode: "fixed_time" | "once" | "interval" | "webhook";
+  readonly mode: "fixed_time" | "once" | "interval" | "webhook" | "load";
   readonly timeOfDay: string;
   /** ISO time for a one-time run. Empty until the user picks the "Once" mode. */
   readonly runAt: string;
@@ -65,6 +71,7 @@ export type ScheduleDraft = {
   readonly filters: ReadonlyArray<WebhookFilterDraft>;
   /** The filter rows the form opened with. */
   readonly savedFilters: ReadonlyArray<WebhookFilterDraft>;
+  readonly load: LoadScheduleDraft;
 };
 
 export const DEFAULT_SCHEDULE: ScheduleDraft = {
@@ -80,6 +87,7 @@ export const DEFAULT_SCHEDULE: ScheduleDraft = {
   coalesceWindowSeconds: "",
   filters: [],
   savedFilters: [],
+  load: DEFAULT_LOAD_SCHEDULE_DRAFT,
 };
 
 export function scheduleDraftForTask(task: Pick<ScheduledTask, "schedule">): ScheduleDraft {
@@ -118,6 +126,8 @@ export function scheduleDraftForTask(task: Pick<ScheduledTask, "schedule">): Sch
         filters: webhookFilterDrafts(task.schedule.filters),
         savedFilters: webhookFilterDrafts(task.schedule.filters),
       };
+    case "load":
+      return { ...DEFAULT_SCHEDULE, mode: "load", load: loadScheduleDraft(task.schedule) };
   }
 }
 
@@ -171,6 +181,7 @@ export function scheduleFromDraft(draft: ScheduleDraft): ScheduledTaskUpsertSche
         : {}),
     };
   }
+  if (draft.mode === "load") return loadScheduleFromDraft(draft.load);
   if (draft.mode === "once") {
     const runAt = new Date(draft.runAt);
     return Number.isNaN(runAt.getTime()) ? null : { type: "once", runAt: runAt.toISOString() };
@@ -232,6 +243,7 @@ function draftSignature(draft: ScheduledTaskDraft): string {
     draft.schedule.coalesceKey,
     draft.schedule.coalesceWindowSeconds,
     draft.schedule.filters.map(({ path, op, value }) => [path, op, value]),
+    draft.schedule.load,
     draft.workspace,
     draft.baseRef,
     draft.checkoutPath,

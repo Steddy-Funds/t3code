@@ -1234,6 +1234,13 @@ svg[data-machine-icon="unreachable-stressed"] {
   --warning-surface: color-mix(in srgb, var(--warning) 8%, transparent);
   /* Light red, reserved for the stressed machine verdict. */
   --machine-stress: var(--color-red-400);
+  /* Owner colours: resource views only (the memory pool and owner dots). */
+  --owner-1: var(--color-indigo-500);
+  --owner-2: var(--color-sky-500);
+  --owner-3: var(--color-teal-500);
+  --owner-4: var(--color-fuchsia-500);
+  --owner-5: var(--color-amber-500);
+  --owner-other: var(--color-zinc-400);
   --update: var(--primary);
   --update-foreground: var(--primary);
   /* Keep every sidebar primitive on the same light surface hierarchy, including

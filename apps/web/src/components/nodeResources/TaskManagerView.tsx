@@ -1,5 +1,6 @@
 import { useAtomValue } from "@effect/atom-react";
 import {
+  AuthDiagnosticsReadScope,
   AuthTerminalOperateScope,
   type EnvironmentId,
   type MachineStatusSnapshot,
@@ -20,6 +21,10 @@ import { useKnownTerminalSessions } from "~/state/terminalSessions";
 import { documentVisibleAtom } from "./documentVisible";
 import { MachineSectionMessage } from "./primitives/MachineSection";
 import type { ProcessViewMode } from "./primitives/ProcessViewToggle";
+import {
+  machineProcessesSource,
+  useMachineProcessListState,
+} from "./processTable/MachineProcessList";
 import { TaskManagerGraphs } from "./taskManager/TaskManagerGraphs";
 import { TaskManagerGrids } from "./taskManager/TaskManagerGrids";
 import { TaskManagerHeader } from "./taskManager/TaskManagerHeader";
@@ -130,6 +135,17 @@ function TaskManagerOverview({
   // Without a GPU flag the process list waits for one; say why when no sample is coming.
   const processesUnavailable =
     hasGpu !== null ? null : view.unreachable ? "Machine unreachable" : failure;
+  // One process stream for the list, the memory pool's owner colours and Buckets & claims. A
+  // hidden tab passes no GPU flag, so it closes too; sort, columns and filter stay.
+  const processListState = useMachineProcessListState();
+  const canReadDiagnostics = useEnvironmentScope(environmentId, AuthDiagnosticsReadScope);
+  const processes = machineProcessesSource({
+    environmentId,
+    tick,
+    hasGpu: visible ? hasGpu : null,
+    canReadDiagnostics,
+    hidden: processListState.hidden,
+  });
 
   const canOperateTerminal = useEnvironmentScope(environmentId, AuthTerminalOperateScope);
   const terminalSessions = useKnownTerminalSessions({
@@ -173,13 +189,19 @@ function TaskManagerOverview({
             thresholds={config?.settings.machineResources.thresholds}
             windows={config?.environment.platform.os === "windows"}
           />
-          <TaskManagerGrids series={series} source={source} rule={rule} />
+          <TaskManagerGrids
+            environmentId={environmentId}
+            series={series}
+            source={source}
+            processes={processes}
+            rule={rule}
+          />
         </>
       )}
-      {/* A hidden tab passes no GPU flag, so the process stream closes too; sort and columns stay. */}
       <TaskManagerLists
         environmentId={environmentId}
-        tick={tick}
+        processes={processes}
+        processListState={processListState}
         hasGpu={visible ? hasGpu : null}
         processesUnavailable={processesUnavailable}
         viewMode={viewMode}

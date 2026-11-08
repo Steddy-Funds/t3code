@@ -22,7 +22,7 @@ export function OwnerChip({
 }: {
   readonly label: OwnerLabel;
   /** A CSS colour for the dot; omitted, the neutral "other" gray. */
-  readonly color?: string;
+  readonly color?: string | undefined;
   readonly className?: string;
 }) {
   const Icon = KIND_ICON[label.kind];

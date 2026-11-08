@@ -2,7 +2,8 @@ import { memoryUsedPercent } from "@t3tools/client-runtime/state/machineFormat";
 import { decodeMachineHistory } from "@t3tools/client-runtime/state/machineHistory";
 import type { GpuDeviceSample, MachineStatusSnapshot } from "@t3tools/contracts";
 
-import { CellPool } from "../charts/CellPool";
+import { CellPool, type CellPoolSegment } from "../charts/CellPool";
+import { OTHER_OWNER_COLOR } from "../ownership/processOwners";
 import { SeriesRing } from "../charts/SeriesRing";
 import { resampleSeries, vramTotal } from "../crossMachine/crossMachineModel";
 
@@ -28,6 +29,16 @@ export interface MachineSeries {
   readonly vramPool: CellPool;
   /** The history last seeded; a shared stream repeats it on every snapshot. */
   seededFrom: MachineStatusSnapshot["history"];
+  /** The latest memory totals, so a process frame can recolour the pool between snapshots. */
+  memoryUsage: { readonly totalBytes: number; readonly usedBytes: number } | null;
+  /** The top memory owners from the process stream; null draws used memory in one colour. */
+  memoryOwners: ReadonlyArray<MemoryOwnerShare> | null;
+}
+
+export interface MemoryOwnerShare {
+  readonly bytes: number;
+  /** A CSS custom property, such as `--owner-1`. */
+  readonly color: string;
 }
 
 /** Graph rings hold `rangeMs / tickMs` points, so the graphs span the chosen range at any tick. */
@@ -44,6 +55,8 @@ export function createMachineSeries(tickMs: number, rangeMs: number, cores: numb
     memoryPool: CellPool.create(),
     vramPool: CellPool.create(),
     seededFrom: undefined,
+    memoryUsage: null,
+    memoryOwners: null,
   };
 }
 
@@ -147,11 +160,11 @@ export function receiveMachineSnapshot(
   const perCore = snapshot.sample?.perCore;
   if (perCore && perCore.length === series.cores.columns) series.cores.push(perCore, atMs);
 
-  const memoryUsed = Math.max(0, totals.memoryTotalBytes - totals.memoryAvailableBytes);
-  const memoryCell = poolCellBytes(totals.memoryTotalBytes, GIB);
-  series.memoryPool.set(totals.memoryTotalBytes / memoryCell, [
-    { cells: Math.round(memoryUsed / memoryCell), color: "--primary" },
-  ]);
+  series.memoryUsage = {
+    totalBytes: totals.memoryTotalBytes,
+    usedBytes: Math.max(0, totals.memoryTotalBytes - totals.memoryAvailableBytes),
+  };
+  fillMemoryPool(series);
   const vram = vramTotal(snapshot.sample?.gpus);
   if (vram) {
     const vramCell = poolCellBytes(vram.totalBytes, VRAM_CELL_BYTES);
@@ -159,6 +172,48 @@ export function receiveMachineSnapshot(
       { cells: Math.round(vram.usedBytes / vramCell), color: "--primary" },
     ]);
   }
+}
+
+/** Recolours used memory by owner from a process frame; null returns it to one colour. */
+export function setMemoryOwners(
+  series: MachineSeries,
+  owners: ReadonlyArray<MemoryOwnerShare> | null,
+): void {
+  series.memoryOwners = owners;
+  fillMemoryPool(series);
+}
+
+function fillMemoryPool(series: MachineSeries): void {
+  if (series.memoryUsage === null) return;
+  const { totalBytes, usedBytes } = series.memoryUsage;
+  const cell = poolCellBytes(totalBytes, GIB);
+  series.memoryPool.set(totalBytes / cell, memorySegments(usedBytes, cell, series.memoryOwners));
+}
+
+/**
+ * Used memory split by owner: each top owner, then "other" for everything else in use (other
+ * processes, the kernel, shared pages). Resident sizes count shared pages once per process, so
+ * owners that sum past used memory are scaled down to fit it.
+ */
+export function memorySegments(
+  usedBytes: number,
+  cellBytes: number,
+  owners: ReadonlyArray<MemoryOwnerShare> | null,
+): CellPoolSegment[] {
+  const usedCells = Math.round(usedBytes / cellBytes);
+  if (owners === null || owners.length === 0) return [{ cells: usedCells, color: "--primary" }];
+  const ownerBytes = owners.reduce((sum, owner) => sum + owner.bytes, 0);
+  const scale = ownerBytes > usedBytes ? usedBytes / ownerBytes : 1;
+  const segments: CellPoolSegment[] = [];
+  let assigned = 0;
+  for (const owner of owners) {
+    const cells = Math.min(Math.round((owner.bytes * scale) / cellBytes), usedCells - assigned);
+    if (cells <= 0) continue;
+    segments.push({ cells, color: owner.color });
+    assigned += cells;
+  }
+  if (usedCells > assigned) segments.push({ cells: usedCells - assigned, color: OTHER_OWNER_COLOR });
+  return segments;
 }
 
 /** The core count a snapshot reports, from history or the live sample; 0 before either. */

@@ -12,7 +12,9 @@ import type { MachineProcessTable } from "@t3tools/client-runtime/state/machineP
 import {
   AuthDiagnosticsReadScope,
   type EnvironmentId,
+  MachineBucketId,
   type MachineStatusSnapshot,
+  ThreadId,
 } from "@t3tools/contracts";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/reactivity";
@@ -25,6 +27,10 @@ import { machineIndicator, machineResources } from "~/state/machineResources";
 import { useEnvironmentScope } from "~/state/session";
 
 import { documentVisibleAtom } from "../documentVisible";
+import { ownerNamesAtom } from "../ownership/ownerNames";
+import { ownerBucketId, ownerThreadId, totalsBy } from "../ownership/processOwners";
+import { OwnerChip } from "../primitives/OwnerChip";
+import { ownerLabel } from "../primitives/OwnerLabel";
 import { runningThreadCountAtom } from "../runningThreads";
 import { CORE_HISTORY_MS, CrossMachineCores } from "./CrossMachineCores";
 import { loadPerCore, vramTotal } from "./crossMachineModel";
@@ -36,6 +42,11 @@ const NO_SNAPSHOT: Atom.Atom<SnapshotResult> = Atom.make(AsyncResult.initial());
 const NO_PROCESSES: Atom.Atom<ProcessesResult> = Atom.make(AsyncResult.initial());
 const POOL_CELLS = 20;
 const TOP_PROCESSES = 3;
+// Owner sums are over the busiest rows only; ten keeps the stream small and rarely misses the top.
+const TOP_OWNER_ROWS = 10;
+
+/** What the "Top consumer" column sums by; owner modes fall back to processes on older servers. */
+export type TopConsumerBy = "thread" | "bucket" | "process";
 
 /** Shared by the row and the view's ordering, so both read one stream per machine. */
 export function crossMachineSnapshotAtom(
@@ -59,10 +70,12 @@ export function CrossMachineRow({
   environmentId,
   label,
   tickMs,
+  topBy,
 }: {
   readonly environmentId: EnvironmentId;
   readonly label: string;
   readonly tickMs: number;
+  readonly topBy: TopConsumerBy;
 }) {
   const view = useAtomValue(machineIndicator.machineIndicatorAtom(environmentId));
   const kind = useEnvironmentMachines().get(environmentId) ?? "server";
@@ -74,7 +87,7 @@ export function CrossMachineRow({
     canReadDiagnostics && !view.unreachable && visible
       ? machineResources.machineProcesses(environmentId, {
           intervalMs: tickMs,
-          top: TOP_PROCESSES,
+          top: topBy === "process" ? TOP_PROCESSES : TOP_OWNER_ROWS,
         })
       : NO_PROCESSES,
   );
@@ -115,7 +128,12 @@ export function CrossMachineRow({
           <Empty />
         )}
         <VramCell snapshot={view.unreachable ? null : snapshot} tripped={rule === "gpuVram"} />
-        <TopProcessCell processes={processes} canRead={canReadDiagnostics} />
+        <TopConsumerCell
+          environmentId={environmentId}
+          processes={processes}
+          canRead={canReadDiagnostics}
+          topBy={topBy}
+        />
         <span className="text-end tabular-nums">{threads}</span>
       </Link>
     </li>
@@ -197,13 +215,18 @@ function VramCell({
   );
 }
 
-function TopProcessCell({
+function TopConsumerCell({
+  environmentId,
   processes,
   canRead,
+  topBy,
 }: {
+  readonly environmentId: EnvironmentId;
   readonly processes: ProcessesResult;
   readonly canRead: boolean;
+  readonly topBy: TopConsumerBy;
 }) {
+  const names = useAtomValue(ownerNamesAtom(environmentId));
   if (!canRead)
     return <span className="truncate text-muted-foreground">No diagnostics access</span>;
   const table = Option.getOrNull(AsyncResult.value(processes));
@@ -217,6 +240,27 @@ function TopProcessCell({
   // The T3 subtree always holds the server itself, so an empty table means no monitor.
   if (table.rows.length === 0) {
     return <span className="truncate text-muted-foreground">Needs the resource monitor</span>;
+  }
+  if (topBy !== "process") {
+    const totals = totalsBy(table.rows, (row) =>
+      topBy === "thread" ? ownerThreadId(row.owner) : ownerBucketId(row.owner),
+    );
+    const [topKey, topTotals] =
+      [...totals].toSorted(([, a], [, b]) => b.cpu - a.cpu)[0] ?? [];
+    if (topKey !== undefined && topTotals !== undefined) {
+      const owner =
+        topBy === "thread"
+          ? ({ type: "thread", threadId: ThreadId.make(topKey) } as const)
+          : ({ type: "bucket", bucketId: MachineBucketId.make(topKey) } as const);
+      return (
+        <span className="flex min-w-0 items-baseline gap-1.5">
+          <OwnerChip label={ownerLabel(owner, names)} />
+          <span className="shrink-0 font-mono text-2xs tabular-nums">
+            {formatPercent(topTotals.cpu)}
+          </span>
+        </span>
+      );
+    }
   }
   const top = topProcessesByName(table.rows, "cpu", 1)[0];
   if (top === undefined) return <Empty />;

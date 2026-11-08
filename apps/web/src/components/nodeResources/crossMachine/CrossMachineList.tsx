@@ -11,7 +11,12 @@ import { machineIndicator } from "~/state/machineResources";
 
 import { capableMachinesAtom } from "../capableMachines";
 import { documentVisibleAtom } from "../documentVisible";
-import { CROSS_MACHINE_GRID, CrossMachineRow, crossMachineSnapshotAtom } from "./CrossMachineRow";
+import {
+  CROSS_MACHINE_GRID,
+  CrossMachineRow,
+  crossMachineSnapshotAtom,
+  type TopConsumerBy,
+} from "./CrossMachineRow";
 import {
   CROSS_MACHINE_GROUPS,
   type CrossMachineGroup,
@@ -22,6 +27,11 @@ import {
 
 const TICKS = [2000, 5000, 10_000] as const;
 const DEFAULT_TICK_MS = 5000;
+const TOP_BY = [
+  { value: "thread", label: "Thread" },
+  { value: "bucket", label: "Bucket" },
+  { value: "process", label: "Process" },
+] as const satisfies ReadonlyArray<{ value: TopConsumerBy; label: string }>;
 
 const GROUP_LABELS: Record<CrossMachineGroup, string> = {
   stressed: "Stressed",
@@ -71,6 +81,7 @@ const orderedMachinesAtom = Atom.family((tickMs: number) =>
 /** Every machine that reports resources, one dense row each, worst first. */
 export function CrossMachineList() {
   const [tickMs, setTickMs] = useState(DEFAULT_TICK_MS);
+  const [topBy, setTopBy] = useState<TopConsumerBy>("thread");
   const machines = useAtomValue(orderedMachinesAtom(tickMs));
   const stressed = machines.filter((machine) => machine.group === "stressed").length;
   const unreachable = machines.filter((machine) => machine.unreachable).length;
@@ -84,7 +95,23 @@ export function CrossMachineList() {
         {stressed > 0 ? <Badge variant="error">{stressed} stressed</Badge> : null}
         {unreachable > 0 ? <Badge variant="outline">{unreachable} unreachable</Badge> : null}
         {unknown > 0 ? <Badge variant="outline">{unknown} unknown</Badge> : null}
-        <span className="ms-auto text-xs text-muted-foreground">Tick</span>
+        <span className="ms-auto text-xs text-muted-foreground">Top consumer by</span>
+        <ToggleGroup
+          aria-label="Top consumer by"
+          variant="segmented"
+          value={[topBy]}
+          onValueChange={(next) => {
+            const option = TOP_BY.find((value) => value.value === next[0]);
+            if (option !== undefined) setTopBy(option.value);
+          }}
+        >
+          {TOP_BY.map((option) => (
+            <ToggleGroupItem key={option.value} value={option.value}>
+              {option.label}
+            </ToggleGroupItem>
+          ))}
+        </ToggleGroup>
+        <span className="text-xs text-muted-foreground">Tick</span>
         <ToggleGroup
           aria-label="Tick"
           variant="segmented"
@@ -116,7 +143,7 @@ export function CrossMachineList() {
             <span>Cores · 5 m</span>
             <span>Memory</span>
             <span>VRAM</span>
-            <span>Top process</span>
+            <span>Top consumer</span>
             <span className="text-end">Threads</span>
           </li>
           {CROSS_MACHINE_GROUPS.map((group) => {
@@ -133,6 +160,7 @@ export function CrossMachineList() {
                     environmentId={machine.environmentId}
                     label={machine.label}
                     tickMs={tickMs}
+                    topBy={topBy}
                   />
                 ))}
               </Fragment>

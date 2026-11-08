@@ -2739,6 +2739,18 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
         },
       );
 
+      const outbox = yield* EffectOutbox.EffectOutboxV2;
+      const machineClaimCleanups = (commandId: string) =>
+        outbox
+          .listByCommandId(CommandId.make(commandId))
+          .pipe(
+            Effect.map((effects) =>
+              effects.filter((effect) => effect.request.type === "machine-claims.cleanup"),
+            ),
+          );
+      assert.lengthOf(yield* machineClaimCleanups("runtime-layer-lifecycle-archive"), 0);
+      assert.lengthOf(yield* machineClaimCleanups("runtime-layer-lifecycle-delete"), 1);
+
       const projection = yield* orchestrator.getThreadProjection(threadId);
       assert.equal(projection.thread.title, "Renamed lifecycle thread");
       assert.equal(projection.thread.branch, "feature/v2");

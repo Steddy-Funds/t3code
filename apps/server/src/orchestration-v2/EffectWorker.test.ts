@@ -30,6 +30,7 @@ import * as RunFinalizationService from "./RunFinalizationService.ts";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
 import * as ProviderTurnControlService from "./ProviderTurnControlService.ts";
 import * as ProviderTurnStartService from "./ProviderTurnStartService.ts";
+import * as ResourceCleanupService from "./ResourceCleanupService.ts";
 import * as RuntimeRequestService from "./RuntimeRequestService.ts";
 import * as ThreadTitleRegenerationService from "./ThreadTitleRegenerationService.ts";
 import * as ThreadManagementService from "./ThreadManagementService.ts";
@@ -283,6 +284,38 @@ it.effect.each([
       yield* Effect.flip(executor.execute(rollback, { willRetry: false }));
     }).pipe(Effect.provide(layer));
     assert.deepEqual(yield* Ref.get(failures), [message]);
+  }),
+);
+
+it.effect("releases a deleted thread's machine claims, and replays that after process loss", () =>
+  Effect.gen(function* () {
+    const now = yield* DateTime.now;
+    const released = yield* Ref.make<ReadonlyArray<ThreadId>>([]);
+    const layer = layerExecutorFor({ events: yield* Ref.make<ReadonlyArray<string>>([]) }).pipe(
+      Layer.provide(
+        Layer.succeed(ResourceCleanupService.ResourceCleanupService, {
+          ...ResourceCleanupService.ResourceCleanupService.defaultValue(),
+          cleanupMachineClaims: (deleted) =>
+            Ref.update(released, (existing) => [...existing, deleted]),
+        }),
+      ),
+    );
+    yield* Effect.gen(function* () {
+      const executor = yield* EffectWorker.OrchestrationEffectExecutorV2;
+      yield* executor.execute(
+        {
+          ...restartEffect(now, { type: "detach" }),
+          id: "effect:delete:machine-claims.cleanup",
+          request: { type: "machine-claims.cleanup" },
+        },
+        { willRetry: false },
+      );
+    }).pipe(Effect.provide(layer));
+    assert.deepEqual(yield* Ref.get(released), [threadId]);
+    assert.include(
+      EffectOutbox.REPLAY_SAFE_EFFECT_TYPES_AFTER_PROCESS_LOSS,
+      "machine-claims.cleanup",
+    );
   }),
 );
 

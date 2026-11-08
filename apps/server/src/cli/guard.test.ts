@@ -234,15 +234,18 @@ it("formatKillReason is one line naming the rule, value, threshold and held seco
  * The child writes its pid into a FIFO once it is ready (after any trap), so the test knows
  * the pid and never races the child's startup. `exec` keeps that pid for the sleep.
  */
+const spyKill = () => vi.spyOn(process, "kill");
+const spyStderr = () => vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+
 async function withChild(
   script: string,
   config: string | null,
   body: (input: {
     readonly childPid: number;
     readonly result: Promise<number>;
-    readonly kills: ReturnType<typeof vi.spyOn<typeof process, "kill">>;
-    readonly stderr: ReturnType<typeof vi.spyOn<typeof process.stderr, "write">>;
-    readonly addedTermListeners: ReadonlyArray<(...args: ReadonlyArray<unknown>) => void>;
+    readonly kills: ReturnType<typeof spyKill>;
+    readonly stderr: ReturnType<typeof spyStderr>;
+    readonly addedTermListeners: ReadonlyArray<NodeJS.SignalsListener>;
   }) => Promise<void>,
 ) {
   const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-guard-test-"));
@@ -251,8 +254,8 @@ async function withChild(
   const configPath = NodePath.join(dir, "guard.json");
   if (config !== null) NodeFS.writeFileSync(configPath, config);
   vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
-  const kills = vi.spyOn(process, "kill");
-  const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+  const kills = spyKill();
+  const stderr = spyStderr();
   const termBefore = process.listeners("SIGTERM");
   let childPid: number | undefined;
   try {
@@ -283,9 +286,7 @@ async function withChild(
 describe.skipIf(process.platform === "win32")("runGuard", () => {
   const stressedSample = () => {
     vi.mocked(readHostTotals).mockReset();
-    vi.mocked(readHostTotals).mockResolvedValue({ totals: STRESSED, next: null } as Awaited<
-      ReturnType<typeof readHostTotals>
-    >);
+    vi.mocked(readHostTotals).mockResolvedValue({ totals: STRESSED, next: [] });
   };
 
   it.each([
@@ -306,7 +307,7 @@ describe.skipIf(process.platform === "win32")("runGuard", () => {
 
           // A SIGTERM to the guard reaches the ungrouped child by its own pid.
           expect(addedTermListeners).toHaveLength(1);
-          addedTermListeners[0]!();
+          addedTermListeners[0]!("SIGTERM");
           expect(await result).toBe(128 + NodeOS.constants.signals.SIGTERM);
           expect(kills.mock.calls).toEqual([[childPid, "SIGTERM"]]);
           expect(stderr).not.toHaveBeenCalled();

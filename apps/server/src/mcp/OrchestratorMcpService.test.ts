@@ -3426,7 +3426,10 @@ describe("OrchestratorMcpService thread list", () => {
         containersPaused: [],
       },
     },
-    { ...shell("thread:c-pinned-normal", "project:c", false), tags: ["backgrounded", "priority:normal"] },
+    {
+      ...shell("thread:c-pinned-normal", "project:c", false),
+      tags: ["backgrounded", "priority:normal"],
+    },
   ];
   const service = layerOrchestratorService.pipe(
     Layer.provide(
@@ -3484,9 +3487,13 @@ describe("OrchestratorMcpService thread list", () => {
           effectivePriority,
         })),
         [
-          { threadId: "thread:c-paused", loadPaused: true, effectivePriority: "low" },
           {
-            threadId: "thread:c-pinned-normal",
+            threadId: ThreadId.make("thread:c-paused"),
+            loadPaused: true,
+            effectivePriority: "low",
+          },
+          {
+            threadId: ThreadId.make("thread:c-pinned-normal"),
             loadPaused: undefined,
             effectivePriority: "normal",
           },

@@ -364,11 +364,9 @@ it.effect(
       yield* Effect.gen(function* () {
         const executor = yield* EffectWorker.OrchestrationEffectExecutorV2;
         for (const continueRun of [true, false]) {
+          const { id, commandId, request } = cleanup(continueRun);
           yield* executor.execute(
-            {
-              ...restartEffect(now, { type: "detach" }),
-              ...cleanup(continueRun),
-            },
+            { ...restartEffect(now, { type: "detach" }), id, commandId, request },
             { willRetry: false },
           );
         }
@@ -401,7 +399,10 @@ it.effect(
           continueRun: false,
         }),
       );
-      assert.include(EffectOutbox.REPLAY_SAFE_EFFECT_TYPES_AFTER_PROCESS_LOSS, "load-pause.cleanup");
+      assert.include(
+        EffectOutbox.REPLAY_SAFE_EFFECT_TYPES_AFTER_PROCESS_LOSS,
+        "load-pause.cleanup",
+      );
     }),
 );
 

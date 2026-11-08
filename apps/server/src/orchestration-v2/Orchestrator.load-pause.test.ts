@@ -38,7 +38,7 @@ import * as ProviderReplayHarness from "./testkit/ProviderReplayHarness.ts";
 class Unpaused extends Context.Service<
   Unpaused,
   Ref.Ref<ReadonlyArray<ReadonlyArray<OrchestrationV2LoadPausedContainer>>>
->()("test/LoadPauseUnpaused") {}
+>()("t3/orchestration-v2/Orchestrator.load-pause.test/Unpaused") {}
 
 const instanceId = ProviderInstanceId.make("codex");
 const modelSelection = { instanceId, model: "gpt-5.1-codex" };
@@ -50,7 +50,10 @@ const adapter = {
   openSession: () => Effect.die("Runs here never reach a provider"),
 } as ProviderAdapter.ProviderAdapterV2["Service"];
 const layerDatabase = SqlitePersistence.layerMemory;
-const layerUnpaused = Layer.effect(Unpaused, Ref.make([]));
+const layerUnpaused = Layer.effect(
+  Unpaused,
+  Ref.make<ReadonlyArray<ReadonlyArray<OrchestrationV2LoadPausedContainer>>>([]),
+);
 const layerCleanup = Layer.effect(
   ResourceCleanupService.ResourceCleanupService,
   Effect.gen(function* () {
@@ -257,9 +260,7 @@ const queueOrder = (threadId: ThreadId) =>
         (left, right) =>
           (left.queuePosition ?? left.ordinal) - (right.queuePosition ?? right.ordinal),
       )
-      .map(
-        (run) => projection.messages.find((message) => message.id === run.userMessageId)?.text,
-      );
+      .map((run) => projection.messages.find((message) => message.id === run.userMessageId)?.text);
   });
 
 const outbox = (commandId: CommandId) =>
@@ -458,7 +459,9 @@ it.effect(
         (yield* orchestrator.getThreadProjection(threadId)).thread.loadPause?.episodeId,
         "episode:1",
       );
-      assert.isTrue(Exit.isFailure(yield* Effect.exit(pause(threadId, RunId.make("run:unknown"), "episode:3"))));
+      assert.isTrue(
+        Exit.isFailure(yield* Effect.exit(pause(threadId, RunId.make("run:unknown"), "episode:3"))),
+      );
     }).pipe(Effect.provide(layerTest)),
 );
 
@@ -554,23 +557,25 @@ it.effect("clearing a pause whose run already ended releases the queue now, idem
   }).pipe(Effect.provide(layerTest)),
 );
 
-it.effect("archiving a paused thread ends the pause and unpauses its containers, without a continuation", () =>
-  Effect.gen(function* () {
-    const orchestrator = yield* Orchestrator.OrchestratorV2;
-    const threadId = ThreadId.make("thread:load-pause-archive");
-    yield* createThread(threadId);
-    yield* userSend(threadId, "active", "start_immediately");
-    const runId = yield* makeRunLive(threadId);
-    yield* pause(threadId, runId);
-    yield* settleRun(threadId, runId, "interrupted");
-    const archiveId = CommandId.make("archive:load-pause");
-    yield* orchestrator.dispatch({ type: "thread.archive", commandId: archiveId, threadId });
-    const archived = yield* orchestrator.getThreadProjection(threadId);
-    assert.isNotNull(archived.thread.archivedAt);
-    assert.isNull(archived.thread.loadPause ?? null);
-    assert.deepInclude(
-      (yield* outbox(archiveId)).find(({ type }) => type === "load-pause.cleanup"),
-      { payload: { type: "load-pause.cleanup", containersPaused: containers } },
-    );
-  }).pipe(Effect.provide(layerTest)),
+it.effect(
+  "archiving a paused thread ends the pause and unpauses its containers, without a continuation",
+  () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const threadId = ThreadId.make("thread:load-pause-archive");
+      yield* createThread(threadId);
+      yield* userSend(threadId, "active", "start_immediately");
+      const runId = yield* makeRunLive(threadId);
+      yield* pause(threadId, runId);
+      yield* settleRun(threadId, runId, "interrupted");
+      const archiveId = CommandId.make("archive:load-pause");
+      yield* orchestrator.dispatch({ type: "thread.archive", commandId: archiveId, threadId });
+      const archived = yield* orchestrator.getThreadProjection(threadId);
+      assert.isNotNull(archived.thread.archivedAt);
+      assert.isNull(archived.thread.loadPause ?? null);
+      assert.deepInclude(
+        (yield* outbox(archiveId)).find(({ type }) => type === "load-pause.cleanup"),
+        { payload: { type: "load-pause.cleanup", containersPaused: containers } },
+      );
+    }).pipe(Effect.provide(layerTest)),
 );

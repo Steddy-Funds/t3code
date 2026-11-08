@@ -363,6 +363,9 @@ describe("ServerSettings machine resource thresholds", () => {
       enterHoldMs: 10_000,
       exitHoldMs: 60_000,
       exitFactor: 0.85,
+      gpuVramUsedPercent: 92.5,
+      gpuUtilPercent: 95,
+      gpuUtilHoldMs: 300_000,
     });
   });
 

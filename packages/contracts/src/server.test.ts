@@ -5,6 +5,7 @@ import { ExecutionEnvironmentDescriptor } from "./environment.ts";
 import {
   OtlpEndpointCheckInput,
   resolveEnvironmentMachineKind,
+  ServerConfig,
   ServerObservability,
   ServerProvider,
   ServerProviders,
@@ -69,6 +70,29 @@ describe("server config forward compatibility", () => {
     expect(parsed.usageLimits?.windows).toEqual([
       { id: "primary", kind: "session", label: "Session", usedPercent: 12 },
     ]);
+  });
+});
+
+describe("ServerConfig homeDirectory", () => {
+  const { cwd, homeDirectory } = ServerConfig.fields;
+  const decode = Schema.decodeUnknownSync(Schema.Struct({ cwd, homeDirectory }));
+  // A client built before the field: same struct without it.
+  const decodeStock = Schema.decodeUnknownSync(Schema.Struct({ cwd }));
+
+  it("is optional, trimmed and non-empty", () => {
+    expect(decode({ cwd: "/srv", homeDirectory: "/home/me" })).toEqual({
+      cwd: "/srv",
+      homeDirectory: "/home/me",
+    });
+    expect(decode({ cwd: "/srv", homeDirectory: " /home/me\n" }).homeDirectory).toBe("/home/me");
+    expect(decode({ cwd: "/srv" })).toEqual({ cwd: "/srv" });
+    for (const homeDirectory of ["", "   "]) {
+      expect(() => decode({ cwd: "/srv", homeDirectory })).toThrow();
+    }
+  });
+
+  it("does not break a client that predates it", () => {
+    expect(decodeStock({ cwd: "/srv", homeDirectory: "/home/me" })).toEqual({ cwd: "/srv" });
   });
 });
 

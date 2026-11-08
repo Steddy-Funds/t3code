@@ -1,7 +1,11 @@
 import {
   DEFAULT_MACHINE_THRESHOLDS,
+  type GpuDeviceSample,
+  MACHINE_HISTORY_MAX_MS,
+  MACHINE_HISTORY_STEP_MS,
   MACHINE_SAMPLE_MIN_INTERVAL_MS,
   type HostResourcesSnapshot,
+  type MachineHistory,
   type MachineStatusSample,
   type MachineStatusSnapshot,
   type MachineTotalsSummary,
@@ -10,11 +14,12 @@ import {
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import {
   cpuDeltas,
+  hostGpuTotals,
   readCpuCounters,
   readHostTotals,
-  startDarwinPressureReader,
   type CpuCounters,
   type HostTotals,
+  type NativeHostTotals,
 } from "@t3tools/shared/hostTotals";
 import {
   initialVerdictState,
@@ -27,6 +32,7 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
 import * as Scope from "effect/Scope";
@@ -34,9 +40,114 @@ import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 
 import { Scheduler } from "../scheduling/Scheduler.ts";
+import * as NativeTelemetryClient from "./NativeTelemetryClient.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
 
 const HEARTBEAT_INTERVAL = "30 seconds";
+
+const HISTORY_CAPACITY = MACHINE_HISTORY_MAX_MS / MACHINE_HISTORY_STEP_MS;
+const HISTORY_MAX_BYTES = 512 * 1024;
+const HISTORY_MAX_GPUS = 8;
+// cpu, memory, swap and load, plus two columns per GPU; per-core gets what is left.
+const HISTORY_MAX_CORES =
+  Math.floor(HISTORY_MAX_BYTES / (HISTORY_CAPACITY * Float32Array.BYTES_PER_ELEMENT)) -
+  4 -
+  2 * HISTORY_MAX_GPUS;
+
+const toPermille = (percent: number) =>
+  Number.isNaN(percent) ? -1 : Math.min(1000, Math.max(0, Math.round(percent * 10)));
+
+const share = (part: number, total: number) => (total > 0 ? (part / total) * 100 : Number.NaN);
+
+const nanColumn = (length: number) => new Float32Array(length).fill(Number.NaN);
+
+/**
+ * One hour of base ticks in Float32Array columns (percent; NaN where a tick had no reading).
+ * Every tick writes a row, so row index maps to time.
+ */
+export class MachineHistoryRing {
+  private head = 0;
+  private count = 0;
+  private endAtMs: number | null = null;
+  private cores = 0;
+  private readonly cpu = nanColumn(HISTORY_CAPACITY);
+  private readonly memory = nanColumn(HISTORY_CAPACITY);
+  private readonly swap = nanColumn(HISTORY_CAPACITY);
+  private readonly load1 = nanColumn(HISTORY_CAPACITY);
+  private perCore = new Float32Array(0);
+  private readonly gpus = new Map<string, { util: Float32Array; vram: Float32Array }>();
+
+  record(totals: HostTotals | null, atMs: number): void {
+    const slot = this.head;
+    if (totals !== null && this.cores === 0 && totals.perCore.length > 0) {
+      this.cores = Math.min(totals.perCore.length, HISTORY_MAX_CORES);
+      this.perCore = nanColumn(HISTORY_CAPACITY * this.cores);
+    }
+    this.cpu[slot] = totals?.cpuUtilization == null ? Number.NaN : totals.cpuUtilization * 100;
+    this.memory[slot] =
+      totals === null
+        ? Number.NaN
+        : share(totals.memoryTotalBytes - totals.memoryAvailableBytes, totals.memoryTotalBytes);
+    this.swap[slot] =
+      totals === null ? Number.NaN : share(totals.swapUsedBytes, totals.swapTotalBytes);
+    this.load1[slot] = totals?.load == null ? Number.NaN : totals.load.one;
+    for (let core = 0; core < this.cores; core++) {
+      this.perCore[slot * this.cores + core] = totals?.perCore[core] ?? Number.NaN;
+    }
+    for (const columns of this.gpus.values()) {
+      columns.util[slot] = Number.NaN;
+      columns.vram[slot] = Number.NaN;
+    }
+    for (const gpu of totals?.gpus ?? []) {
+      let columns = this.gpus.get(gpu.id);
+      if (columns === undefined) {
+        if (this.gpus.size >= HISTORY_MAX_GPUS) continue;
+        columns = { util: nanColumn(HISTORY_CAPACITY), vram: nanColumn(HISTORY_CAPACITY) };
+        this.gpus.set(gpu.id, columns);
+      }
+      columns.util[slot] = gpu.utilPercent ?? Number.NaN;
+      columns.vram[slot] = gpu.vramUsedPercent ?? Number.NaN;
+    }
+    this.head = (this.head + 1) % HISTORY_CAPACITY;
+    this.count = Math.min(this.count + 1, HISTORY_CAPACITY);
+    this.endAtMs = atMs;
+  }
+
+  /** The newest `historyMs` of ticks, permille-quantised; every column has `count` entries. */
+  read(historyMs: number, nowMs: number): MachineHistory {
+    const count = Math.min(this.count, Math.floor(historyMs / MACHINE_HISTORY_STEP_MS));
+    const slots = Array.from(
+      { length: count },
+      (_, index) => (this.head - count + index + HISTORY_CAPACITY) % HISTORY_CAPACITY,
+    );
+    const column = (values: Float32Array) => slots.map((slot) => toPermille(values[slot]!));
+    const perCore: Array<number> = [];
+    for (const slot of slots) {
+      for (let core = 0; core < this.cores; core++) {
+        perCore.push(toPermille(this.perCore[slot * this.cores + core]!));
+      }
+    }
+    return {
+      stepMs: MACHINE_HISTORY_STEP_MS,
+      count,
+      endAgeMs: this.endAtMs === null ? 0 : Math.max(0, Math.round(nowMs - this.endAtMs)),
+      cpu: column(this.cpu),
+      perCore,
+      cores: this.cores,
+      memoryUsed: column(this.memory),
+      swapUsed: column(this.swap),
+      load1: slots.map((slot) => {
+        const load = this.load1[slot]!;
+        return Number.isNaN(load) ? -1 : Math.round(load * 100) / 100;
+      }),
+      gpus: [...this.gpus].map(([id, columns]) => ({
+        id,
+        util: column(columns.util),
+        vramUsed: column(columns.vram),
+      })),
+    };
+  }
+}
 
 export class HostResources extends Context.Service<
   HostResources,
@@ -49,11 +160,14 @@ export class HostResources extends Context.Service<
     readonly statusChanges: Stream.Stream<MachineStatusSnapshot>;
     /** Every 5 s base tick. */
     readonly ticks: Stream.Stream<HostTotals>;
-    /** Per-core samples at `intervalMs` (at least 500 ms), shared by subscribers to one interval. */
+    /** Per-core and GPU device samples at `intervalMs` (at least 500 ms), shared per interval. */
     readonly samples: (
       intervalMs: number,
     ) => Effect.Effect<Stream.Stream<MachineStatusSample>, never, Scope.Scope>;
-    /** `subscribeMachine`: status alone, or status plus a sample at each interval. */
+    /**
+     * `subscribeMachine`: status alone, or status plus a sample at each interval. With
+     * `historyMs`, the first snapshot carries that much history.
+     */
     readonly subscribe: (input: SubscribeMachineInput) => Stream.Stream<MachineStatusSnapshot>;
   }
 >()("t3/resourceTelemetry/HostResources") {}
@@ -109,15 +223,9 @@ const make = Effect.fn("makeHostResources")(function* () {
   const platform = yield* HostProcess.Platform;
   const settings = yield* ServerSettingsService;
   const scheduler = yield* Scheduler;
+  const native = yield* NativeTelemetryClient.NativeTelemetryClient;
   const layerScope = yield* Effect.scope;
-
-  const darwin =
-    platform === "darwin"
-      ? yield* Effect.acquireRelease(
-          Effect.sync(() => startDarwinPressureReader()),
-          (reader) => Effect.sync(() => reader.stop()),
-        )
-      : undefined;
+  const history = new MachineHistoryRing();
 
   const state = yield* Ref.make<TickState>({
     counters: null,
@@ -128,11 +236,25 @@ const make = Effect.fn("makeHostResources")(function* () {
   const changes = yield* PubSub.sliding<MachineStatusSnapshot>(16);
   const tickTotals = yield* PubSub.sliding<HostTotals>(1);
 
-  const readTotals = (prev: CpuCounters | null) =>
+  const readTotals = (prev: CpuCounters | null, nativeTotals: NativeHostTotals | null = null) =>
     Effect.tryPromise({
-      try: () => readHostTotals(prev, { platform, darwin }),
+      try: () => readHostTotals(prev, { platform, native: nativeTotals }),
       catch: () => "unavailable" as const,
     }).pipe(Effect.option);
+
+  // Only macOS needs the monitor for memory; without it (or mid-restart) memory reads unknown.
+  const readNativeTotals: Effect.Effect<NativeHostTotals | null> =
+    platform === "darwin"
+      ? native.hostTotals.pipe(
+          Effect.map((totals): NativeHostTotals | null => totals),
+          Effect.orElseSucceed(() => null),
+        )
+      : Effect.succeed(null);
+
+  // Device totals only, never a process walk; absent without a v4 monitor, so GPU rules skip.
+  const readGpus = native.gpuTotals.pipe(Effect.option);
+  // Live samples reuse the base tick's reading: GPU queries stay at 5 s however many views are open.
+  const latestGpus = yield* Ref.make<Option.Option<ReadonlyArray<GpuDeviceSample>>>(Option.none());
 
   const thresholds = settings.getSettings.pipe(
     Effect.map((current) => current.machineResources.thresholds),
@@ -143,9 +265,21 @@ const make = Effect.fn("makeHostResources")(function* () {
   const tick = Effect.fnUntraced(function* () {
     const th = yield* thresholds;
     const prev = yield* Ref.get(state);
-    const read = yield* readTotals(prev.counters);
+    const [nativeTotals, gpus] = yield* Effect.all([readNativeTotals, readGpus], {
+      concurrency: "unbounded",
+    });
+    yield* Ref.set(latestGpus, gpus);
+    const read = yield* readTotals(prev.counters, nativeTotals);
     const now = yield* Clock.currentTimeMillis;
-    const totals = read._tag === "Some" ? { ...read.value.totals, sampledAt: now } : null;
+    const totals: HostTotals | null =
+      read._tag === "Some"
+        ? {
+            ...read.value.totals,
+            sampledAt: now,
+            ...(Option.isSome(gpus) ? { gpus: hostGpuTotals(gpus.value) } : {}),
+          }
+        : null;
+    history.record(totals, now);
     const verdict = stepVerdict(prev.verdict, totals, th, now);
     const changed = verdictChanged(prev.verdict, verdict);
     const next: TickState = {
@@ -203,7 +337,11 @@ const make = Effect.fn("makeHostResources")(function* () {
     while (true) {
       yield* Effect.sleep(intervalMs);
       const next = readCpuCounters();
-      yield* PubSub.publish(pubsub, { perCore: cpuDeltas(prev, next).perCore });
+      const gpus = yield* Ref.get(latestGpus);
+      yield* PubSub.publish(pubsub, {
+        perCore: cpuDeltas(prev, next).perCore,
+        ...(Option.isSome(gpus) ? { gpus: gpus.value } : {}),
+      });
       prev = next;
     }
   });
@@ -238,8 +376,25 @@ const make = Effect.fn("makeHostResources")(function* () {
     return Stream.fromPubSub(source.pubsub);
   });
 
+  const withHistoryOnFirst = (
+    snapshots: Stream.Stream<MachineStatusSnapshot>,
+    historyMs: number | undefined,
+  ) => {
+    if (historyMs === undefined || historyMs === 0) return snapshots;
+    let sent = false;
+    return snapshots.pipe(
+      Stream.mapEffect((snapshot) => {
+        if (sent) return Effect.succeed(snapshot);
+        sent = true;
+        return Clock.currentTimeMillis.pipe(
+          Effect.map((now) => ({ ...snapshot, history: history.read(historyMs, now) })),
+        );
+      }),
+    );
+  };
+
   const subscribe = Effect.fn("HostResources.subscribe")(function* (input: SubscribeMachineInput) {
-    if (input.intervalMs === undefined) return status;
+    if (input.intervalMs === undefined) return withHistoryOnFirst(status, input.historyMs);
     const live = yield* samples(input.intervalMs);
     // Heartbeats and verdict changes keep the last sample, so an open view never loses per-core.
     let lastSample: MachineStatusSample | undefined;
@@ -254,7 +409,7 @@ const make = Effect.fn("makeHostResources")(function* () {
         lastSample === undefined ? snapshot : { ...snapshot, sample: lastSample },
       ),
     );
-    return Stream.merge(statusWithLastSample, withSample);
+    return withHistoryOnFirst(Stream.merge(statusWithLastSample, withSample), input.historyMs);
   });
 
   return HostResources.of({

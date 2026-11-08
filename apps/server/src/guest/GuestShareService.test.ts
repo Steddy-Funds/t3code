@@ -101,6 +101,7 @@ const layerCleanup = Layer.effect(
       cleanupTerminals: () => Effect.void,
       cleanupPreviews: () => Effect.void,
       cleanupMachineClaims: () => Effect.void,
+      unpauseLoadPausedContainers: () => Effect.void,
       cleanupAttachments: (attachmentIds) =>
         Effect.forEach(
           attachmentIds,

@@ -1,4 +1,5 @@
-import type { ContextMenuItem } from "@t3tools/contracts";
+import type { ContextMenuItem, ThreadPriority } from "@t3tools/contracts";
+import type { ThreadPriorityChoice } from "@t3tools/client-runtime/state/loadPause";
 import type { SnoozePreset } from "@t3tools/client-runtime/state/thread-settled";
 
 export type ThreadActionMenuId =
@@ -19,6 +20,11 @@ export type ThreadActionMenuId =
   | "unsnooze"
   | "background"
   | "unbackground"
+  | "priority"
+  | "priority:low"
+  | "priority:normal"
+  | "priority:default"
+  | "resume-load-pause"
   | "rename"
   | "regenerate-title"
   | "mark-unread"
@@ -99,6 +105,12 @@ export interface ThreadActionMenuState {
   readonly canShareWithGuest?: boolean;
   /** A No project thread with its own folder, on a server that can promote it. */
   readonly canTurnIntoProject?: boolean;
+  /** Undefined unless the server pauses for load and the lane is on. */
+  readonly priority?:
+    | { readonly choice: ThreadPriorityChoice; readonly effective: ThreadPriority }
+    | undefined;
+  /** The server load-paused this thread. */
+  readonly loadPaused?: boolean;
 }
 
 /** Local navigation, read markers, and copying remain available to read-only clients. */
@@ -177,6 +189,10 @@ export function buildThreadActionMenuItems(
             ? { id: "unbackground" as const, label: "Bring to foreground", icon: "sun" }
             : { id: "background" as const, label: "Background", icon: "moon" },
         ]),
+    ...(state.loadPaused
+      ? [{ id: "resume-load-pause" as const, label: "Resume now", icon: "play" }]
+      : []),
+    ...(state.priority === undefined ? [] : [priorityMenuItem(state.priority)]),
     { id: "rename", label: "Rename thread", icon: "pencil", separatorBefore: true },
     ...(state.supports.titleRegeneration
       ? [
@@ -276,4 +292,22 @@ export function buildThreadActionMenuItems(
             }
           : item,
       );
+}
+
+function priorityMenuItem(priority: NonNullable<ThreadActionMenuState["priority"]>) {
+  return {
+    id: "priority" as const,
+    label: `Priority: ${priority.effective === "low" ? "Low" : "Normal"}`,
+    icon: "gauge",
+    children: [
+      { id: "priority:low" as const, label: "Low", checked: priority.choice === "low" },
+      { id: "priority:normal" as const, label: "Normal", checked: priority.choice === "normal" },
+      {
+        id: "priority:default" as const,
+        label: "Default (low when backgrounded)",
+        checked: priority.choice === "default",
+        separatorBefore: true,
+      },
+    ],
+  };
 }

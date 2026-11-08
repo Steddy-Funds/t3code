@@ -143,6 +143,8 @@ import * as CodexManagedTokenBroker from "./provider/CodexManagedTokenBroker.ts"
 import * as WebhookRoute from "./scheduledTasks/webhookRoute.ts";
 import * as RelayDeliveryProof from "./scheduledTasks/RelayDeliveryProof.ts";
 import * as LoadMonitor from "./scheduledTasks/LoadMonitor.ts";
+import * as LoadPauseDocker from "./orchestration-v2/LoadPauseDocker.ts";
+import * as LoadPauseWorker from "./orchestration-v2/LoadPauseWorker.ts";
 import * as HeldHooksWaker from "./relay/HeldHooksWaker.ts";
 import * as McpOAuth from "./auth/McpOAuth.ts";
 import * as McpOAuthHttp from "./auth/mcpOAuthHttp.ts";
@@ -188,6 +190,7 @@ import * as ResourceAttribution from "./resourceTelemetry/ResourceAttribution.ts
 import * as ResourceMonitorBinary from "./resourceTelemetry/ResourceMonitorBinary.ts";
 import * as ProcessGroupMetrics from "./resourceTelemetry/ProcessGroupMetrics.ts";
 import * as ProcessOwnership from "./resourceTelemetry/ProcessOwnership.ts";
+import * as LoadGuard from "./resourceTelemetry/LoadGuard.ts";
 import * as ThreadResources from "./resourceTelemetry/ThreadResources.ts";
 import * as ResourceTelemetry from "./resourceTelemetry/ResourceTelemetry.ts";
 import * as AntigravityUsage from "./provider/Drivers/AntigravityUsage.ts";
@@ -656,6 +659,7 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   layerThreadSettlementWorker,
   layerIdleCompactionWorker,
   LoadMonitor.layer,
+  LoadPauseWorker.layer.pipe(Layer.provide(ProjectionStoreV2.layer)),
   StorageCleanup.layer.pipe(Layer.provide(ProjectionStoreV2.layer)),
   DatabaseStorage.layer.pipe(Layer.provide(ProjectionMaintenance.layer)),
   layerThreadPullRequestWorker,
@@ -1222,6 +1226,10 @@ const layerMakeServer = Layer.unwrap(
       Layer.provideMerge(AgentScopeLive.layer),
       // Every spawn site registers into this one registry; the default is a no-op.
       Layer.provideMerge(ProcessOwnership.layerRegistry),
+      // Spawn sites read the guard env at spawn; the default injects nothing.
+      Layer.provideMerge(LoadGuard.layer.pipe(Layer.provide(layerServerSettings))),
+      // One instance, so the pause worker and resume cleanups share its per-container locks.
+      Layer.provideMerge(LoadPauseDocker.layer),
       Layer.provideMerge(layerPlatformServices),
     );
   }),

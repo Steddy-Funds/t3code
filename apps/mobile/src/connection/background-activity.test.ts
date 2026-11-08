@@ -1,4 +1,4 @@
-import { EnvironmentId, WS_METHODS } from "@t3tools/contracts";
+import { EnvironmentId, ThreadId, WS_METHODS } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 
@@ -6,6 +6,7 @@ import {
   onRetainedMobileBackgroundScopesChange,
   observeMobileBackgroundActivitySubscription,
   retainedMobileBackgroundScopes,
+  retainMobileBackgroundScope,
 } from "./background-activity-scopes";
 
 describe("mobile background activity", () => {
@@ -116,4 +117,36 @@ describe("mobile background activity", () => {
       removeListener();
     }),
   );
+
+  it("refcounts a retained thread focus scope and notifies only on first retain and last release", () => {
+    const environmentId = EnvironmentId.make("focus-lease-environment");
+    const scope = { type: "thread" as const, threadId: ThreadId.make("thread:focused") };
+    let changes = 0;
+    const removeListener = onRetainedMobileBackgroundScopesChange(() => {
+      changes += 1;
+    });
+
+    const releaseFirst = retainMobileBackgroundScope(environmentId, scope);
+    expect([retainedMobileBackgroundScopes(environmentId), changes]).toEqual([[scope], 1]);
+    const releaseSecond = retainMobileBackgroundScope(environmentId, { ...scope });
+    expect([retainedMobileBackgroundScopes(environmentId), changes]).toEqual([[scope], 1]);
+
+    // Releasing one handle twice must not drop the other holder's retain.
+    releaseFirst();
+    releaseFirst();
+    expect([retainedMobileBackgroundScopes(environmentId), changes]).toEqual([[scope], 1]);
+    releaseSecond();
+    expect([retainedMobileBackgroundScopes(environmentId), changes]).toEqual([[], 2]);
+
+    // A release after the scope is gone is a no-op: no negative count, no second notify,
+    // and a fresh retain starts again from one.
+    releaseSecond();
+    releaseFirst();
+    expect([retainedMobileBackgroundScopes(environmentId), changes]).toEqual([[], 2]);
+    const releaseThird = retainMobileBackgroundScope(environmentId, scope);
+    expect([retainedMobileBackgroundScopes(environmentId), changes]).toEqual([[scope], 3]);
+    releaseThird();
+    expect([retainedMobileBackgroundScopes(environmentId), changes]).toEqual([[], 4]);
+    removeListener();
+  });
 });

@@ -5752,6 +5752,7 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
             settledOverride: sqlShell.settledOverride,
             pendingRuntimeRequest: null,
             limitRecovery: sqlShell.limitRecovery,
+            loadPause: null,
             snoozedUntil: sqlShell.snoozedUntil,
           });
         } else assert.isUndefined(candidate);

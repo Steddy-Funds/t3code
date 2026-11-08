@@ -234,6 +234,7 @@ import {
 import { ProjectFavicon } from "./ProjectFavicon";
 import { deriveProviderEntriesByEnvironment } from "../providerInstances";
 import { useStableCallback } from "../hooks/useStableCallback";
+import { threadLoadMenuState, useThreadLoadMenuActions } from "../hooks/useThreadLoadMenuActions";
 import {
   resolveSidebarRouteReveal,
   type SidebarRouteReveal,
@@ -1020,6 +1021,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   const updateThreadMetadata = useOrchestrationCommand(threadEnvironment.updateMetadata, {
     reportFailure: false,
   });
+  const runLoadMenuAction = useThreadLoadMenuActions();
   const { copyToClipboard: copyPathToClipboard } = useCopyToClipboard<{ path: string }>({
     onCopy: ({ path }) => {
       toastManager.add({
@@ -2781,12 +2783,14 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                 titleRegeneration: configLoaded,
               },
               snoozePresets,
+              ...threadLoadMenuState(serverConfigs.get(thread.environmentId), thread),
             }),
             position,
           ),
         );
         if (clicked._tag === "Failure" || clicked.value === null) return;
         if (threadActionRequiresOperate(clicked.value) && !checkThreadOperations([thread])) return;
+        if (await runLoadMenuAction(clicked.value, threadRef)) return;
         if (clicked.value?.startsWith("snooze:")) {
           const preset =
             clicked.value === "snooze:custom"

@@ -297,5 +297,35 @@ it.effect("queues provider and resource cleanup and preserves an earlier deletio
         { type: "attachment.cleanup", attachmentIds: ["shared_file"] },
       ],
     );
+
+    // A paused thread is unpaused for good: its containers come back, nothing continues.
+    for (const containersPaused of [[{ id: "container:busy" }], []]) {
+      const paused = yield* planThreadDeletion({
+        command,
+        projection: {
+          ...projection,
+          thread: {
+            ...projection.thread,
+            loadPause: {
+              runId: RunId.make("run:paused"),
+              episodeId: "episode:1",
+              pausedAt: "2026-01-01T00:00:00.000Z",
+              reason: { rule: "loadPerCore", value: 4, threshold: 3, shareOfLoad: 0.8 },
+              containersPaused,
+            },
+          },
+        },
+        attachmentIds: [],
+        now: deletedAt,
+        idAllocator: yield* IdAllocator.IdAllocatorV2,
+      });
+      assert.isNull(paused.events.reduce(applyToProjection, projection).thread.loadPause ?? null);
+      assert.deepEqual(
+        paused.effects
+          .map((effect) => effect.request)
+          .filter((request) => request.type === "load-pause.cleanup"),
+        containersPaused.length === 0 ? [] : [{ type: "load-pause.cleanup", containersPaused }],
+      );
+    }
   }).pipe(Effect.provide(IdAllocator.layer)),
 );

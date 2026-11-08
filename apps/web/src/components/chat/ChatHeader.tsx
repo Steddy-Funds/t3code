@@ -11,7 +11,7 @@ import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
-import { ChevronDownIcon } from "lucide-react";
+import { ChevronDownIcon, PauseIcon } from "lucide-react";
 import {
   memo,
   useEffect,
@@ -46,6 +46,8 @@ import { textDirection } from "~/textDirection";
 import { useClientSettings } from "../../hooks/useSettings";
 import { MachineHoverTarget } from "../nodeResources/MachineHoverTarget";
 import { GuestShareIndicator } from "./GuestShareControls";
+import { LOAD_PAUSE_TITLE, useLoadPauseActions } from "./LoadPauseBanner";
+import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
 
 interface ChatHeaderProps {
   activeThreadEnvironmentId: EnvironmentId;
@@ -60,6 +62,8 @@ interface ChatHeaderProps {
   onNewThreadInProject: () => void;
   onOpenProjectSettings?: (() => void) | undefined;
   onFindInThread?: ((threadRef: ScopedThreadRef) => void) | undefined;
+  loadPaused?: boolean;
+  loadPauseOfferNormal?: boolean;
 }
 
 function resolveRenameCommit(input: {
@@ -87,6 +91,8 @@ export const ChatHeader = memo(function ChatHeader({
   onNewThreadInProject,
   onOpenProjectSettings,
   onFindInThread,
+  loadPaused = false,
+  loadPauseOfferNormal = false,
 }: ChatHeaderProps) {
   const activeProjectName = activeProject?.isScratch ? "No project" : activeProject?.title;
   const activeProjectCwd = activeProject?.workspaceRoot ?? null;
@@ -449,6 +455,13 @@ export const ChatHeader = memo(function ChatHeader({
               <TooltipPopup side="top">{activeThreadTitle}</TooltipPopup>
             </Tooltip>
           )}
+          {renamingTitle === null && loadPaused ? (
+            <LoadPauseBadge
+              environmentId={activeThreadEnvironmentId}
+              threadId={activeThreadId}
+              offerNormal={loadPauseOfferNormal}
+            />
+          ) : null}
           {renamingTitle === null && activeThreadLinkOrigin ? (
             <Tooltip>
               <TooltipTrigger render={<Badge variant="info" size="sm" />}>
@@ -465,3 +478,29 @@ export const ChatHeader = memo(function ChatHeader({
     </div>
   );
 });
+
+function LoadPauseBadge(props: {
+  environmentId: EnvironmentId;
+  threadId: ThreadId;
+  offerNormal: boolean;
+}) {
+  const { pending, resume, setNormal } = useLoadPauseActions(props.environmentId, props.threadId);
+  return (
+    <Menu>
+      <MenuTrigger render={<Badge variant="warning" size="sm" render={<button type="button" />} />}>
+        <PauseIcon aria-hidden className="size-3" />
+        {LOAD_PAUSE_TITLE}
+      </MenuTrigger>
+      <MenuPopup align="start">
+        <MenuItem disabled={pending} onClick={() => void resume()}>
+          Resume now
+        </MenuItem>
+        {props.offerNormal ? (
+          <MenuItem disabled={pending} onClick={() => void setNormal()}>
+            Set priority Normal
+          </MenuItem>
+        ) : null}
+      </MenuPopup>
+    </Menu>
+  );
+}

@@ -1205,6 +1205,15 @@ export const SETTINGS_SEARCH_ITEMS = [
     ],
   },
   {
+    id: "machine-load-management",
+    title: "Load management",
+    to: "/settings/access",
+    targetId: "connections-environment",
+    searchTerms: [
+      "load management guard t3 guard pause priority low normal stressed kill hold machine resources",
+    ],
+  },
+  {
     id: "machine-auto-buckets",
     title: "Auto-buckets",
     to: "/settings/access",

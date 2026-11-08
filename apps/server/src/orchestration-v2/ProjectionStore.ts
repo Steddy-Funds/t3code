@@ -186,6 +186,7 @@ export type ProjectionLimitRecoveryCandidate = Pick<
   | "latestRunCompletedAt"
   | "updatedAt"
   | "limitRecovery"
+  | "loadPause"
   | "snoozedUntil"
 >;
 
@@ -222,6 +223,7 @@ export type ProjectionSettlementCandidate = Pick<
   | "pendingRuntimeRequest"
   | "pendingBackgroundTasks"
   | "pendingGuestMessageCount"
+  | "loadPause"
 > &
   Pick<OrchestrationV2AppThread, "lastSnoozeWakeAt"> & {
     readonly latestUserAuthoredMessageAt: DateTime.Utc | null;
@@ -1712,6 +1714,7 @@ export function threadShellFromProjection(
     opens: projection.thread.opens ?? null,
     titleRegeneration: projection.thread.titleRegeneration ?? null,
     limitRecovery: projection.thread.limitRecovery ?? null,
+    loadPause: projection.thread.loadPause ?? null,
     deletedAt: projection.thread.deletedAt,
   };
 }
@@ -1978,6 +1981,7 @@ function shellFromState(input: {
     opens: input.state.thread.opens ?? null,
     titleRegeneration: input.state.thread.titleRegeneration ?? null,
     limitRecovery: input.state.thread.limitRecovery ?? null,
+    loadPause: input.state.thread.loadPause ?? null,
     deletedAt: input.state.thread.deletedAt,
   };
 }
@@ -4098,6 +4102,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             settledOverride: thread.settledOverride,
             pendingRuntimeRequest: null,
             limitRecovery: thread.limitRecovery ?? null,
+            loadPause: thread.loadPause ?? null,
             snoozedUntil: thread.snoozedUntil ?? null,
           });
         }
@@ -6621,6 +6626,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                   autoSettleDisabledAt: thread.autoSettleDisabledAt ?? null,
                   snoozedUntil: thread.snoozedUntil ?? null,
                   snoozedAt: thread.snoozedAt ?? null,
+                  loadPause: thread.loadPause ?? null,
                   status,
                   latestRunId,
                   latestRunRequestedAt:

@@ -7,6 +7,7 @@ import {
   type GpuDeviceSample,
   type MachineStatusSnapshot,
   type MachineVerdictReason,
+  ThreadId,
 } from "@t3tools/contracts";
 import { type Atom, AtomRegistry } from "effect/reactivity";
 import { useState } from "react";
@@ -31,6 +32,11 @@ const state = vi.hoisted(() => ({
   machineError: null as Error | null,
   /** Every GPU flag and unavailable reason the lists were rendered with, in order. */
   lists: [] as Array<{ hasGpu: boolean | null; unavailable: string | null }>,
+  /** The focused lineage each lists render got. */
+  focuses: [] as Array<ReadonlyArray<string> | null>,
+  /** The focused thread's resources answer; null leaves the query empty. */
+  lineage: null as { readonly threadIds?: ReadonlyArray<string> } | null,
+  threadResourceRequests: [] as Array<string>,
   /** Times the lists mounted; view state such as sort and columns lives across renders, not mounts. */
   listMounts: 0,
   /** Renders of the chart leaves, which re-render only when their graph or grid does. */
@@ -58,6 +64,14 @@ vi.mock(import("~/state/machineResources"), async () => {
       machineCapableAtom: () => capable,
     } as never,
     machineResources: {
+      threadResources: (_id: string, threadId: string) => {
+        state.threadResourceRequests.push(threadId);
+        return Atom.make(() =>
+          state.lineage === null
+            ? AsyncResult.initial()
+            : AsyncResult.success({ current: null, history: [], ...state.lineage }),
+        );
+      },
       machine: (_id: string, input: { intervalMs: number; historyMs: number }) => {
         const key = `machine:${input.intervalMs}:${input.historyMs}`;
         state.requested.add(key);
@@ -108,6 +122,10 @@ vi.mock(import("./charts/CellGrid"), () => ({
     return null;
   }) as never,
 }));
+vi.mock(import("~/state/entities"), async (original) => ({
+  ...(await original()),
+  useQuietThreadShell: (() => ({ title: "Fix login" })) as never,
+}));
 vi.mock(import("~/state/terminalSessions"), async (original) => ({
   ...(await original()),
   useKnownTerminalSessions: (() => state.sessions) as never,
@@ -117,13 +135,16 @@ vi.mock(import("./taskManager/TaskManagerLists"), () => ({
   TaskManagerLists: (({
     hasGpu,
     processesUnavailable,
+    focus,
   }: {
     hasGpu: boolean | null;
     processesUnavailable: string | null;
+    focus: ReadonlySet<string> | null;
   }) => {
     // Render-time only: the component body runs after every import has resolved.
     useState(() => (state.listMounts += 1));
     state.lists.push({ hasGpu, unavailable: processesUnavailable });
+    state.focuses.push(focus === null ? null : [...focus]);
     return null;
   }) as never,
 }));
@@ -245,6 +266,9 @@ function setup({
   state.canvases = 0;
   state.grids = 0;
   state.commands.length = 0;
+  state.lineage = null;
+  state.focuses.length = 0;
+  state.threadResourceRequests.length = 0;
   localStorage.removeItem(PREFERENCES_KEY);
   return {
     [Symbol.dispose]: () => {
@@ -265,11 +289,11 @@ function setTabVisible(visible: boolean) {
   });
 }
 
-async function renderView() {
+async function renderView(focus: { focusThreadId?: ThreadId; onClearFocus?: () => void } = {}) {
   const registry = AtomRegistry.make();
   const screen = await render(
     <RegistryContext value={registry}>
-      <TaskManagerView environmentId={environmentId} />
+      <TaskManagerView environmentId={environmentId} {...focus} />
     </RegistryContext>,
   );
   return Object.assign(screen, {
@@ -591,6 +615,44 @@ describe("TaskManagerView", () => {
             ]
           : [],
       );
+    });
+  });
+
+  describe("focused on a thread", () => {
+    const thread = ThreadId.make("thread-1");
+    const lastFocus = () => state.focuses.at(-1);
+
+    it("passes the server's lineage, the thread first, to the lists, and clears on request", async () => {
+      using _setup = setup();
+      state.lineage = { threadIds: [thread, "child-1", "child-2"] };
+      const onClearFocus = vi.fn();
+      await using screen = await renderView({ focusThreadId: thread, onClearFocus });
+      await expect.element(screen.getByRole("button", { name: "Clear focus" })).toBeVisible();
+      expect(lastFocus()).toEqual([thread, "child-1", "child-2"]);
+      expect(state.threadResourceRequests.every((id) => id === thread)).toBe(true);
+      await screen.getByRole("button", { name: "Clear focus" }).click();
+      expect(onClearFocus).toHaveBeenCalledOnce();
+    });
+
+    it.each([
+      { label: "an older server's answer without threadIds", lineage: {} },
+      { label: "no answer yet", lineage: null },
+    ])("focuses just the thread with $label", async ({ lineage }) => {
+      using _setup = setup();
+      state.lineage = lineage;
+      await using screen = await renderView({ focusThreadId: thread, onClearFocus: () => {} });
+      await expect.element(screen.getByRole("button", { name: "Clear focus" })).toBeVisible();
+      expect(lastFocus()).toEqual([thread]);
+    });
+
+    it("is unfocused without a focus thread, reading no thread resources", async () => {
+      using _setup = setup();
+      await using screen = await renderView();
+      await expect.element(screen.getByRole("link", { name: "All machines" })).toBeVisible();
+      expect(screen.getByRole("button", { name: "Clear focus" }).elements()).toHaveLength(0);
+      expect(state.focuses.length).toBeGreaterThan(0);
+      expect(state.focuses.every((focus) => focus === null)).toBe(true);
+      expect(state.threadResourceRequests).toEqual([]);
     });
   });
 });

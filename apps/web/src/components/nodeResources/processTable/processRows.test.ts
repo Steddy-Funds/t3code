@@ -80,6 +80,22 @@ describe("processTableItems", () => {
         shape(processTableItems({ rows, mode: "grouped", sort: byCpu, toggled: new Set() })),
       ).toEqual(["2@0", "3@0", "1@0"]);
     });
+
+    it("lists pinned rows first, sorted within the pinned and unpinned parts", () => {
+      const items = processTableItems({
+        rows,
+        mode: "raw",
+        sort: byCpu,
+        toggled: new Set(),
+        pinned: (process) => process.pid !== 2,
+      });
+      expect(shape(items)).toEqual(["3@0", "1@0", "2@0"]);
+      expect(items.map((item) => item.kind === "process" && item.pinned)).toEqual([
+        true,
+        true,
+        false,
+      ]);
+    });
   });
 
   describe("tree", () => {
@@ -92,6 +108,20 @@ describe("processTableItems", () => {
       const items = processTableItems({ rows, mode: "tree", sort: byCpu, toggled: new Set() });
       expect(shape(items)).toEqual(["9@0", "1@0", "3@1", "2@1", "4@2"]);
       expect(items.filter((item) => item.kind === "process" && item.expandable)).toHaveLength(2);
+    });
+
+    it("raises the branch holding a pinned row at every level, marking only that row", () => {
+      const items = processTableItems({
+        rows,
+        mode: "tree",
+        sort: byCpu,
+        toggled: new Set(),
+        pinned: (process) => process.pid === 4,
+      });
+      expect(shape(items)).toEqual(["1@0", "2@1", "4@2", "3@1", "9@0"]);
+      expect(
+        items.flatMap((item) => (item.kind === "process" && item.pinned ? [item.row.pid] : [])),
+      ).toEqual([4]);
     });
 
     it("hides every descendant of a collapsed row, not just its children", () => {
@@ -130,6 +160,22 @@ describe("processTableItems", () => {
       const pids = shape(items).map((entry) => entry.split("@")[0]);
       expect(pids.toSorted()).toEqual(["5", "6", "7", "8"]);
       expect(items[0]).toMatchObject({ depth: 0 });
+    });
+
+    it("lists every row of a ppid loop exactly once with a pinned row inside it", () => {
+      const loop = [row(5, 7, 1), row(6, 5, 2), row(7, 6, 3), row(8, 6, 4)];
+      const items = processTableItems({
+        rows: loop,
+        mode: "tree",
+        sort: byCpu,
+        toggled: new Set(),
+        pinned: (process) => process.pid === 8,
+      });
+      expect(
+        shape(items)
+          .map((entry) => entry.split("@")[0])
+          .toSorted(),
+      ).toEqual(["5", "6", "7", "8"]);
     });
 
     it("keeps a collapsed loop's descendants hidden", () => {
@@ -193,6 +239,21 @@ describe("processTableItems", () => {
         groupOf,
       });
       expect(shape(items)).toEqual(["[codex]", "[claude]+", "3@1", "1@1", "5@1", "[other]"]);
+    });
+
+    it("lists groups holding a pinned row first, and pinned rows first inside an open one", () => {
+      const items = processTableItems({
+        rows,
+        mode: "grouped",
+        sort: byCpu,
+        toggled: new Set(["claude"]),
+        groupOf,
+        pinned: (process) => process.pid === 4 || process.pid === 5,
+      });
+      expect(shape(items)).toEqual(["[claude]+", "5@1", "3@1", "1@1", "[other]", "[codex]"]);
+      expect(
+        items.flatMap((item) => (item.kind === "group" && item.pinned ? [item.group.id] : [])),
+      ).toEqual(["claude", "other"]);
     });
   });
 });

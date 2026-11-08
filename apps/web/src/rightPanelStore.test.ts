@@ -705,6 +705,29 @@ describe("rightPanelStore", () => {
     ]);
   });
 
+  it("focuses a machine tab only for the opener that asks, replacing the open tab in place", () => {
+    const store = useRightPanelStore.getState();
+    const studio = "studio" as EnvironmentId;
+    const machineTabs = () =>
+      selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA).surfaces;
+    store.openMachine(refA, studio, ThreadId.make("thread-A"));
+    store.open(refA, "diff");
+    expect(machineTabs()).toEqual([
+      { id: "machine:studio", kind: "machine", environmentId: studio, focusThreadId: "thread-A" },
+      { id: "diff", kind: "diff" },
+    ]);
+
+    store.openMachine(refA, studio, ThreadId.make("thread-B"));
+    expect(machineTabs()[0]).toEqual(machineSurface(studio, ThreadId.make("thread-B")));
+
+    store.openMachine(refA, studio);
+    expect(machineTabs()).toEqual([machineSurface(studio), { id: "diff", kind: "diff" }]);
+    expect(machineTabs()[0]).not.toHaveProperty("focusThreadId");
+    expect(
+      selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA).activeSurfaceId,
+    ).toBe("machine:studio");
+  });
+
   describe("saved machine tabs", () => {
     const studio = "studio" as EnvironmentId;
     const savedPanel = (machine: unknown) => ({
@@ -737,6 +760,18 @@ describe("rightPanelStore", () => {
       expect(migratePersistedRightPanelState(savedPanel(machine)).byThreadKey).toEqual({
         "env-1:thread-A": diffOnly,
       });
+    });
+
+    it("keeps a saved focus and drops a malformed one", () => {
+      const focused = machineSurface(studio, ThreadId.make("thread-A"));
+      expect(
+        migratePersistedRightPanelState(savedPanel(focused)).byThreadKey["env-1:thread-A"]
+          ?.surfaces,
+      ).toEqual([{ id: "diff", kind: "diff" }, focused]);
+      expect(
+        migratePersistedRightPanelState(savedPanel({ ...machineSurface(studio), focusThreadId: 7 }))
+          .byThreadKey["env-1:thread-A"]?.surfaces,
+      ).toEqual([{ id: "diff", kind: "diff" }, machineSurface(studio)]);
     });
 
     it("keeps a valid one through a same-version load and through a migration", async () => {

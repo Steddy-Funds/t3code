@@ -232,8 +232,9 @@ container an agent started counts toward that thread. Agents make claims. A clai
 process exits, its container or cgroup is removed, or its thread is deleted, and when the server
 restarts; archiving a thread keeps them. Removing a claim stops nothing.
 
-To see one thread's use, open the thread's details: **Resources** shows its CPU and memory now,
-the last 10 minutes, and its processes. T3 records this while a turn runs, even with nothing open.
+To see one thread's use, open the thread's details: **Resources** shows the CPU and memory of the
+thread and its subagents, now and over the last 10 minutes. Click it to see their processes on the
+machine tab. T3 records this while a turn runs, even with nothing open.
 
 Agents can read the machine too: ask one what is using it, and it can show the machine's state
 as a card in the chat. The card stays live until the next turn starts, then keeps the reading it

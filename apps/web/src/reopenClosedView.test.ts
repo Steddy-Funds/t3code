@@ -64,20 +64,21 @@ describe("reopenClosedView", () => {
     expect(openPreview).not.toHaveBeenCalled();
   });
 
-  it("restores a machine tab without a workspace or browser session", async () => {
+  it("restores a machine tab, unfocused, without a workspace or browser session", async () => {
     const openPreview = vi.fn();
     const environmentId = "studio" as ScopedThreadRef["environmentId"];
     const reopened = await reopenClosedView(
-      { kind: "panel-tab", threadRef, surface: machineSurface(environmentId) },
+      {
+        kind: "panel-tab",
+        threadRef,
+        surface: machineSurface(environmentId, threadRef.threadId),
+      },
       { openPreview, workspaceAvailable: false },
     );
     expect(reopened).toBe(true);
     const state = selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, threadRef);
-    expect(state).toMatchObject({
-      isOpen: true,
-      activeSurfaceId: "machine:studio",
-      surfaces: [{ id: "machine:studio", kind: "machine", environmentId }],
-    });
+    expect(state).toMatchObject({ isOpen: true, activeSurfaceId: "machine:studio" });
+    expect(state.surfaces).toEqual([{ id: "machine:studio", kind: "machine", environmentId }]);
     expect(openPreview).not.toHaveBeenCalled();
   });
 

@@ -28,6 +28,10 @@ import * as Stream from "effect/Stream";
 import * as NativeTelemetryClient from "./NativeTelemetryClient.ts";
 import { ownerThreadId, ProcessOwnership, type OwnershipRow } from "./ProcessOwnership.ts";
 import * as ResourceTelemetry from "./ResourceTelemetry.ts";
+import * as ThreadResources from "./ThreadResources.ts";
+
+/** How long a thread-filtered stream keeps its lineage before rereading it for new subagents. */
+const LINEAGE_TTL = "5 seconds";
 
 export class HostProcesses extends Context.Service<
   HostProcesses,
@@ -145,8 +149,8 @@ export interface FrameInput {
   /** By process key; rows without one are sent without an owner. */
   readonly owners?: ReadonlyMap<string, ProcessOwner>;
   readonly claims?: ReadonlyArray<Claim>;
-  /** Only rows this thread owns, directly or through a claim. */
-  readonly threadId?: ThreadId;
+  /** Only rows these threads own, directly or through a claim. */
+  readonly threadIds?: ReadonlySet<ThreadId>;
 }
 
 const identityOf = (process: ResourceTelemetryProcess) =>
@@ -200,8 +204,10 @@ function staticFields(
   };
 }
 
-const isOwnedBy = (owner: ProcessOwner | undefined, threadId: ThreadId | undefined) =>
-  owner !== undefined && ownerThreadId(owner) === threadId;
+const isOwnedBy = (owner: ProcessOwner | undefined, threadIds: ReadonlySet<ThreadId>) => {
+  const threadId = owner === undefined ? null : ownerThreadId(owner);
+  return threadId !== null && threadIds.has(threadId);
+};
 
 function isSameOwner(a: ProcessOwner | undefined, b: ProcessOwner | undefined): boolean {
   if (a === b) return true;
@@ -242,11 +248,12 @@ export function nextFrame(
   if (!full && input.readAtMs === state.lastReadAtMs) return [null, state];
 
   const previousKeys = full ? new Map<string, number>() : state.keys;
+  const { threadIds } = input;
   const processes =
-    input.threadId === undefined
+    threadIds === undefined
       ? input.processes
       : input.processes.filter((process) =>
-          isOwnedBy(input.owners?.get(identityOf(process)), input.threadId),
+          isOwnedBy(input.owners?.get(identityOf(process)), threadIds),
         );
   const { selected, truncated } = input.monitorAvailable
     ? selectProcesses(processes, input.top)
@@ -352,8 +359,8 @@ export interface HostFrameInput {
   /** By process key, over every process in the sample. */
   readonly owners?: ReadonlyMap<string, ProcessOwner>;
   readonly claims?: ReadonlyArray<Claim>;
-  /** Only rows this thread owns, directly or through a claim. */
-  readonly threadId?: ThreadId;
+  /** Only rows these threads own, directly or through a claim. */
+  readonly threadIds?: ReadonlySet<ThreadId>;
 }
 
 interface HostRow {
@@ -512,12 +519,11 @@ export function nextHostFrames(
     return [[], state];
   }
 
+  const { threadIds } = input;
   const rows =
-    input.threadId === undefined
+    threadIds === undefined
       ? hostRows(sample)
-      : hostRows(sample).filter((row) =>
-          isOwnedBy(input.owners?.get(row.identity), input.threadId),
-        );
+      : hostRows(sample).filter((row) => isOwnedBy(input.owners?.get(row.identity), threadIds));
   const { selected, truncated } = selectTop(rows, input.top, hostByCpu, hostByRss);
   // The columns follow the request; a sample without GPU rows sends null (unmeasured) once, so
   // the client never keeps a stale value after GPUs turn off.
@@ -969,11 +975,22 @@ const make = Effect.fn("makeHostProcesses")(function* () {
   const telemetry = yield* ResourceTelemetry.ResourceTelemetry;
   const native = yield* NativeTelemetryClient.NativeTelemetryClient;
   const ownership = yield* ProcessOwnership;
+  const threadResources = yield* ThreadResources.ThreadResources;
+
+  /** The thread filter: the thread's lineage, as one set, or undefined for every process. */
+  const lineageFilter = (threadId: ThreadId | undefined) =>
+    threadId === undefined
+      ? Effect.succeed(Effect.undefined)
+      : threadResources.lineage(threadId).pipe(
+          Effect.map((threadIds): ReadonlySet<ThreadId> => new Set(threadIds)),
+          Effect.cachedWithTTL(LINEAGE_TTL),
+        );
 
   const hostFrames = (input: SubscribeMachineProcessesInput) =>
     Stream.unwrap(
       Effect.gen(function* () {
         const builder = yield* Ref.make(initialHostFrameBuilderState);
+        const lineage = yield* lineageFilter(input.threadId);
         const intervalMs = Math.max(MACHINE_PROCESSES_MIN_INTERVAL_MS, input.intervalMs);
         const gpuProcesses = input.gpuProcesses === true;
         return native
@@ -985,6 +1002,7 @@ const make = Effect.fn("makeHostProcesses")(function* () {
                   hostOwnershipRows(sample.sample, sample.statics),
                 );
                 const claims = yield* ownership.claims;
+                const threadIds = yield* lineage;
                 const nowMs = yield* Clock.currentTimeMillis;
                 return yield* Ref.modify(builder, (state) =>
                   nextHostFrames(state, {
@@ -995,7 +1013,7 @@ const make = Effect.fn("makeHostProcesses")(function* () {
                     gpuProcesses,
                     owners,
                     claims,
-                    ...(input.threadId === undefined ? {} : { threadId: input.threadId }),
+                    ...(threadIds === undefined ? {} : { threadIds }),
                   }),
                 );
               }),
@@ -1013,6 +1031,7 @@ const make = Effect.fn("makeHostProcesses")(function* () {
         // Holding the subscription keeps the native monitor sampling; releasing it lets it idle.
         yield* telemetry.subscribe;
         const builder = yield* Ref.make(initialFrameBuilderState);
+        const lineage = yield* lineageFilter(input.threadId);
         const intervalMs = Math.max(MACHINE_PROCESSES_MIN_INTERVAL_MS, input.intervalMs);
         return Stream.tick(intervalMs).pipe(
           Stream.mapEffect(() =>
@@ -1021,6 +1040,7 @@ const make = Effect.fn("makeHostProcesses")(function* () {
               const nowMs = yield* Clock.currentTimeMillis;
               const owners = yield* ownership.attribute(subtreeOwnershipRows(snapshot.processes));
               const claims = yield* ownership.claims;
+              const threadIds = yield* lineage;
               return yield* Ref.modify(builder, (state) =>
                 nextFrame(state, {
                   generation: snapshot.health.restartCount,
@@ -1031,7 +1051,7 @@ const make = Effect.fn("makeHostProcesses")(function* () {
                   top: input.top,
                   owners,
                   claims,
-                  ...(input.threadId === undefined ? {} : { threadId: input.threadId }),
+                  ...(threadIds === undefined ? {} : { threadIds }),
                 }),
               );
             }),

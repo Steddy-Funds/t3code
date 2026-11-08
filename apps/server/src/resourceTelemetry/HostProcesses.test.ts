@@ -884,21 +884,23 @@ describe("frame owners and claims", () => {
     ]);
   });
 
-  it("keeps only the rows a thread owns, directly or through a claim, when asked", () => {
-    const claimedByA: ProcessOwner = {
+  it("keeps only the rows a lineage owns, directly or through a claim, when asked", () => {
+    const child = ThreadId.make("thread-a-child");
+    const claimedByChild: ProcessOwner = {
       type: "claimed",
       claimId: ClaimId.make("claim-1"),
-      threadId: threadA,
+      threadId: child,
     };
-    const ownerOther: ProcessOwner = { type: "thread", threadId: ThreadId.make("thread-b") };
+    const ownerSibling: ProcessOwner = { type: "thread", threadId: ThreadId.make("thread-b") };
+    const lineage = new Set([threadA, child]);
     const [[host]] = nextHostFrames(
       initialHostFrameBuilderState,
       hostInput(hostSample(threeRows), {
-        threadId: threadA,
+        threadIds: lineage,
         owners: owners([
           ["1:10", ownerA],
-          ["2:20", claimedByA],
-          ["3:30", ownerOther],
+          ["2:20", claimedByChild],
+          ["3:30", ownerSibling],
         ]),
       }),
     );
@@ -907,15 +909,17 @@ describe("frame owners and claims", () => {
     const [subtree] = nextFrame(
       initialFrameBuilderState,
       input({
-        processes: [proc(10, 5, 100), proc(11, 1, 200), proc(12, 1, 300)],
-        threadId: threadA,
+        processes: [proc(10, 5, 100), proc(11, 1, 200), proc(12, 1, 300), proc(13, 1, 400)],
+        threadIds: lineage,
         owners: owners([
           ["10:100", ownerB],
-          ["11:110", claimedByA],
+          ["11:110", claimedByChild],
+          ["12:120", ownerA],
+          ["13:130", ownerSibling],
         ]),
       }),
     );
-    expect(subtree!.added.map((added) => added.pid)).toEqual([11]);
+    expect(subtree!.added.map((added) => added.pid)).toEqual([11, 12]);
   });
 
   it("does the same for subtree frames", () => {

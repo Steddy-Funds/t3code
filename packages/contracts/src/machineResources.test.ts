@@ -11,6 +11,7 @@ import {
 // Frames cross the websocket as JSON.
 const decodeWire = Schema.decodeUnknownSync(Schema.toCodecJson(MachineProcessFrame));
 const encodeWire = Schema.encodeSync(Schema.toCodecJson(MachineProcessFrame));
+const decodeSettings = Schema.decodeSync(Schema.toCodecJson(MachineResourcesSettings));
 
 const base = {
   generation: 0,
@@ -89,7 +90,7 @@ describe("MachineProcessFrame", () => {
     });
     expect(frame.claims?.map((entry) => entry.id)).toEqual(["claim-1"]);
 
-    const settings = Schema.decodeSync(Schema.toCodecJson(MachineResourcesSettings))({
+    const settings = decodeSettings({
       buckets: {
         builds: {
           id: "builds",

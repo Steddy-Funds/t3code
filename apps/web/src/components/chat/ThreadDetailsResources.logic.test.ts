@@ -82,7 +82,7 @@ describe("threadProcessTree", () => {
         },
       }),
     ]).lines;
-    expect(line).toMatchObject({ cpu: null, shared: true, text: "codex — shared (3 threads)" });
+    expect(line).toMatchObject({ cpu: null, shared: true, text: "codex · shared (3 threads)" });
   });
 
   it.each<[string, Partial<MachineProcessRow>, string]>([

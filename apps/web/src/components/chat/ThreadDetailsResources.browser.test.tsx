@@ -31,6 +31,9 @@ vi.mock("../../state/session", async (importOriginal) => ({
 }));
 vi.mock("../../state/entities", () => ({
   useQuietThreadShell: () => ({ providerInstanceId: "instance-1", runtime: null }),
+  useServerConfigs: () => ({
+    get: () => ({ environment: { capabilities: { machineOwnership: true } } }),
+  }),
 }));
 vi.mock("../../state/server", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../state/server")>();

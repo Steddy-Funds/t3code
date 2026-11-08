@@ -1,4 +1,4 @@
-import { ThreadId } from "@t3tools/contracts";
+import { type OrchestrationV2LoadPausedContainer, ThreadId } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -29,6 +29,10 @@ export class ResourceCleanupService extends Context.Reference<{
   readonly cleanupPreviews: (threadId: string) => Effect.Effect<void, ResourceCleanupError>;
   /** Releases a deleted thread's machine claims; archiving keeps them. */
   readonly cleanupMachineClaims: (threadId: ThreadId) => Effect.Effect<void>;
+  /** Unpauses containers a load pause paused; must succeed when one is already running or gone. */
+  readonly unpauseLoadPausedContainers: (
+    containers: ReadonlyArray<OrchestrationV2LoadPausedContainer>,
+  ) => Effect.Effect<void>;
   readonly cleanupAttachments: (
     attachmentIds: ReadonlyArray<string>,
   ) => Effect.Effect<void, ResourceCleanupError>;
@@ -38,6 +42,7 @@ export class ResourceCleanupService extends Context.Reference<{
     cleanupTerminals: () => Effect.void,
     cleanupPreviews: () => Effect.void,
     cleanupMachineClaims: () => Effect.void,
+    unpauseLoadPausedContainers: () => Effect.void,
     cleanupAttachments: () => Effect.void,
   }),
 }) {}
@@ -53,6 +58,10 @@ export const layer = Layer.effect(
     const ownership = yield* ProcessOwnership;
     return {
       cleanupMachineClaims: ownership.releaseThread,
+      // The load pause worker (PR5 layer 2) supplies the docker unpause.
+      unpauseLoadPausedContainers: Effect.fn("ResourceCleanupService.unpauseLoadPausedContainers")(
+        function* () {},
+      ),
       cleanupScheduledTasks: Effect.fn("ResourceCleanupService.cleanupScheduledTasks")(function (
         threadId: ThreadId,
       ) {

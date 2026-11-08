@@ -421,6 +421,32 @@ export const OrchestrationV2LimitRecoveryUpdate = Schema.Struct({
 );
 export type OrchestrationV2LimitRecoveryUpdate = typeof OrchestrationV2LimitRecoveryUpdate.Type;
 
+export const OrchestrationV2LoadPausedContainer = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  dockerHost: Schema.optional(TrimmedNonEmptyString),
+});
+export type OrchestrationV2LoadPausedContainer = typeof OrchestrationV2LoadPausedContainer.Type;
+
+export const OrchestrationV2LoadPauseReason = Schema.Struct({
+  // A MachineVerdictRule; a string so a rule added later still decodes on older servers.
+  rule: Schema.String,
+  value: Schema.Finite,
+  threshold: Schema.Finite,
+  /** This thread's owned plus claimed share of the machine's load, 0 to 1. */
+  shareOfLoad: Schema.Finite,
+});
+export type OrchestrationV2LoadPauseReason = typeof OrchestrationV2LoadPauseReason.Type;
+
+/** Set and cleared only by the server; `runId` is the run the pause interrupted. */
+export const OrchestrationV2LoadPause = Schema.Struct({
+  runId: RunId,
+  episodeId: TrimmedNonEmptyString,
+  pausedAt: IsoDateTime,
+  reason: OrchestrationV2LoadPauseReason,
+  containersPaused: Schema.Array(OrchestrationV2LoadPausedContainer),
+});
+export type OrchestrationV2LoadPause = typeof OrchestrationV2LoadPause.Type;
+
 /**
  * `score` is an open count that halves every two weeks, as of `openedAt`.
  * `picks` stores lowercase palette queries, newest first.
@@ -485,6 +511,7 @@ export const OrchestrationV2AppThread = Schema.Struct({
   snoozedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   lastSnoozeWakeAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   limitRecovery: Schema.optional(Schema.NullOr(OrchestrationV2LimitRecovery)),
+  loadPause: Schema.optional(Schema.NullOr(OrchestrationV2LoadPause)),
   guestShare: Schema.optional(Schema.NullOr(ThreadGuestShare)),
   pinnedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   autoSettleDisabledAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
@@ -2131,6 +2158,7 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
   snoozedUntil: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   snoozedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   limitRecovery: Schema.optional(Schema.NullOr(OrchestrationV2LimitRecovery)),
+  loadPause: Schema.optional(Schema.NullOr(OrchestrationV2LoadPause)),
   pinnedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   autoSettleDisabledAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   pinOrderKey: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
@@ -3055,6 +3083,8 @@ export const OrchestrationV2Command = Schema.Union([
     /** Reject unless no message or run has landed on this thread. */
     expectedEmpty: Schema.optional(Schema.Boolean),
     limitRecovery: Schema.optional(Schema.NullOr(OrchestrationV2LimitRecoveryUpdate)),
+    /** The only load-pause change a client can make: resume now. */
+    loadPause: Schema.optional(Schema.Struct({ resume: Schema.Literal(true) })),
     /** Link (object) or unlink (null) a pull request; absent leaves it unchanged. */
     linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
   }),
@@ -3165,6 +3195,7 @@ export const OrchestrationV2Command = Schema.Union([
     usageLimitContinuationOfRunId: Schema.optional(RunId),
     manualContinuationOfRunId: Schema.optional(RunId),
     usageLimitRecoveryRequestId: Schema.optional(CommandId),
+    loadPauseContinuationOfRunId: Schema.optional(RunId),
     deliveryIntent: Schema.optional(Schema.Literals(["auto", "steer", "restart"])),
     delegatedCompletion: Schema.optional(
       Schema.Struct({
@@ -3374,6 +3405,22 @@ export type OrchestrationV2Command = typeof OrchestrationV2Command.Type;
 
 // Excluded from dispatchCommand so only the server can send these.
 const OrchestrationV2InternalCommand = Schema.Union([
+  Schema.Struct({
+    type: Schema.Literal("thread.load-pause.set"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    runId: RunId,
+    episodeId: TrimmedNonEmptyString,
+    reason: OrchestrationV2LoadPauseReason,
+    containersPaused: Schema.Array(OrchestrationV2LoadPausedContainer),
+  }),
+  /** Idempotent; with `episodeId` it clears only that episode. */
+  Schema.Struct({
+    type: Schema.Literal("thread.load-pause.clear"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    episodeId: Schema.optional(TrimmedNonEmptyString),
+  }),
   // Guest share commands the server issues after checking T3 Connect and the guest token.
   Schema.Struct({
     type: Schema.Literal("thread.guest-share.open"),

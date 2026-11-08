@@ -65,6 +65,7 @@ import {
   resolveProjectProviderInstanceEnabled,
   SECRET_REQUEST_UNSAVED_NOTE,
   isBackgroundedThread,
+  effectiveThreadPriority,
 } from "@t3tools/contracts";
 import { getProviderOptionCurrentValue } from "@t3tools/shared/model";
 import { runRanAfter } from "@t3tools/shared/orchestrationV2ThreadError";
@@ -817,11 +818,19 @@ function listItemFromShell(
     ...threadSettlement(shell),
     ...threadSnooze(shell, nowMs),
     ...(isBackgroundedThread(shell) ? { backgrounded: true as const } : {}),
+    ...threadLoadState(shell),
     parentThreadId: shell.lineage.parentThreadId,
     relationshipToParent: shell.lineage.relationshipToParent,
     itemCount: shell.visibleItemCount,
     createdAt: DateTime.formatIso(shell.createdAt),
     updatedAt: DateTime.formatIso(shell.updatedAt),
+  };
+}
+
+function threadLoadState(shell: OrchestrationV2ThreadShell) {
+  return {
+    ...(shell.loadPause == null ? {} : { loadPaused: true as const }),
+    effectivePriority: effectiveThreadPriority(shell),
   };
 }
 
@@ -871,6 +880,7 @@ function threadDetail(
     ...threadSettlement(projection.thread),
     ...threadSnooze(shell, nowMs),
     ...(isBackgroundedThread(shell) ? { backgrounded: true as const } : {}),
+    ...threadLoadState(shell),
     createdAt: DateTime.formatIso(projection.thread.createdAt),
     updatedAt: DateTime.formatIso(projection.thread.updatedAt),
   };

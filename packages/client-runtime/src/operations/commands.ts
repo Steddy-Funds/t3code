@@ -2,6 +2,8 @@ import { remapComposerContextAttachments } from "@t3tools/shared/composerContext
 import {
   type ThreadLinkedPullRequest,
   CommandId,
+  LOW_PRIORITY_THREAD_TAG,
+  NORMAL_PRIORITY_THREAD_TAG,
   CheckpointId,
   CheckpointScopeId,
   ORCHESTRATION_V2_WS_METHODS,
@@ -522,6 +524,41 @@ export const setThreadTag = Effect.fn("EnvironmentCommands.setThreadTag")(functi
     tagged: input.tagged,
   });
 });
+
+export interface SetThreadPriorityInput extends ThreadCommandInput {
+  /** `default` removes both tags, so a backgrounded thread reads as low again. */
+  readonly priority: "low" | "normal" | "default";
+}
+export const setThreadPriority = Effect.fn("EnvironmentCommands.setThreadPriority")(function* (
+  input: SetThreadPriorityInput,
+) {
+  const commandId = yield* allocateCommandId(input);
+  yield* dispatch({
+    type: "thread.tag.set",
+    commandId: CommandId.make(`${commandId}:low`),
+    threadId: input.threadId,
+    tag: LOW_PRIORITY_THREAD_TAG,
+    tagged: input.priority === "low",
+  });
+  return yield* dispatch({
+    type: "thread.tag.set",
+    commandId: CommandId.make(`${commandId}:normal`),
+    threadId: input.threadId,
+    tag: NORMAL_PRIORITY_THREAD_TAG,
+    tagged: input.priority === "normal",
+  });
+});
+
+export const resumeThreadLoadPause = Effect.fn("EnvironmentCommands.resumeThreadLoadPause")(
+  function* (input: ThreadCommandInput) {
+    return yield* dispatch({
+      type: "thread.metadata.update",
+      commandId: yield* allocateCommandId(input),
+      threadId: input.threadId,
+      loadPause: { resume: true },
+    });
+  },
+);
 
 export interface SetThreadAutoSettleInput extends ThreadCommandInput {
   readonly enabled: boolean;

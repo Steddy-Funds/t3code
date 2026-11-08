@@ -374,6 +374,10 @@ export const OrchestratorMcpThreadListItem = Schema.Struct({
   snoozedUntil: Schema.NullOr(IsoDateTime),
   /** Present only on backgrounded threads. */
   backgrounded: Schema.optional(Schema.Literal(true)),
+  /** Present only while load management has the thread paused. */
+  loadPaused: Schema.optional(Schema.Literal(true)),
+  /** Load management may pause only low-priority threads. Absent from older servers. */
+  effectivePriority: Schema.optional(Schema.Literals(["low", "normal"])),
   parentThreadId: Schema.NullOr(ThreadId),
   relationshipToParent: Schema.NullOr(Schema.Literals(["fork", "subagent"])),
   itemCount: NonNegativeInt,
@@ -456,6 +460,10 @@ export const OrchestratorMcpThreadDetail = Schema.Struct({
   snoozedUntil: Schema.NullOr(IsoDateTime),
   /** Present only on backgrounded threads. */
   backgrounded: Schema.optional(Schema.Literal(true)),
+  /** Present only while load management has the thread paused. */
+  loadPaused: Schema.optional(Schema.Literal(true)),
+  /** Load management may pause only low-priority threads. Absent from older servers. */
+  effectivePriority: Schema.optional(Schema.Literals(["low", "normal"])),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });

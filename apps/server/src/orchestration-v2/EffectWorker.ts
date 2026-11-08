@@ -1,4 +1,4 @@
-import { CommandId } from "@t3tools/contracts";
+import { CommandId, MessageId } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -529,6 +529,39 @@ export const layerExecutor: Layer.Layer<
             );
           case "machine-claims.cleanup":
             return resourceCleanup.cleanupMachineClaims(effect.threadId);
+          case "load-pause.cleanup": {
+            const { containersPaused, continuation } = effect.request;
+            return resourceCleanup.unpauseLoadPausedContainers(containersPaused).pipe(
+              Effect.andThen(
+                continuation === undefined
+                  ? Effect.void
+                  : threads.dispatch({
+                      type: "message.dispatch",
+                      commandId: CommandId.make(
+                        `load-pause-continue:${effect.threadId}:${continuation.episodeId}`,
+                      ),
+                      messageId: MessageId.make(
+                        `load-pause-continue:${effect.threadId}:${continuation.episodeId}`,
+                      ),
+                      threadId: effect.threadId,
+                      loadPauseContinuationOfRunId: continuation.runId,
+                      text: "Continue where you left off.",
+                      attachments: [],
+                      dispatchMode: { type: "start_immediately" },
+                      createdBy: "agent",
+                      creationSource: "server",
+                    }),
+              ),
+              Effect.mapError(
+                (cause) =>
+                  new OrchestrationEffectExecutionError({
+                    effectId: effect.id,
+                    effectType: effect.request.type,
+                    cause,
+                  }),
+              ),
+            );
+          }
           case "attachment.cleanup":
             return resourceCleanup.cleanupAttachments(effect.request.attachmentIds).pipe(
               Effect.mapError(

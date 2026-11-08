@@ -67,6 +67,7 @@ import { useNowMinute } from "../../hooks/useNowMinute";
 import {
   useEnvironment,
   useEnvironmentHttpBaseUrl,
+  usePrimaryEnvironmentId,
   type EnvironmentPresentation,
 } from "../../state/environments";
 import { useProjects, useThreadShell } from "../../state/entities";
@@ -91,6 +92,7 @@ import { ManagedNotice } from "../ManagedPolicy";
 import { readEnvironmentScope, useEnvironmentScope } from "~/state/session";
 import { useSettingsScope } from "./SettingsScopeContext";
 import { EnvironmentRow, useEnvironmentTransportLabel } from "./EnvironmentRow";
+import { environmentSettingsTargetId } from "./SavedEnvironmentRows";
 import { SettingsGroup } from "./SettingsGroup";
 import { settingsScopeEnvironmentLabel, settingsScopeEnvironmentLabels } from "./settingsScopeAxis";
 import {
@@ -723,6 +725,7 @@ function ScheduledTaskRow({
   const [deliveriesOpen, setDeliveriesOpen] = useState(false);
   const isWebhook = task.schedule.type === "webhook";
   const builtIn = task.builtIn !== undefined;
+  const primaryEnvironmentId = usePrimaryEnvironmentId();
   const toggle = useAtomCommand(serverEnvironment.setScheduledTaskEnabled, {
     label: "scheduled task enabled",
   });
@@ -783,8 +786,12 @@ function ScheduledTaskRow({
           {task.lastRunError ? <span className="text-destructive">{task.lastRunError}</span> : null}
           {builtIn ? (
             <Link
-              to="/settings/access"
-              hash="connections-environment"
+              {...(environmentId === primaryEnvironmentId
+                ? { to: "/settings/access", hash: "connections-environment" }
+                : {
+                    to: "/settings/connections",
+                    hash: environmentSettingsTargetId(environmentId),
+                  })}
               className="text-foreground underline-offset-4 hover:underline"
             >
               Machine settings

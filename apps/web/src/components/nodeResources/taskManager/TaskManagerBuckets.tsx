@@ -26,10 +26,12 @@ import {
 } from "~/components/ui/table";
 import { useNowMinute } from "~/hooks/useNowMinute";
 import { machineResources } from "~/state/machineResources";
+import { serverEnvironment } from "~/state/server";
 import { useEnvironmentScope } from "~/state/session";
 import { useAtomCommand } from "~/state/use-atom-command";
 
 import { type BucketLiveTotals, MachineBucketList } from "../buckets/MachineBucketList";
+import { ownershipWrites } from "../buckets/ownershipWrites";
 import { ownerNamesAtom } from "../ownership/ownerNames";
 import { ownerPaletteAtom, type ProcessesResult } from "../ownership/ownerPalette";
 import { type OwnerTotals, ownerBucketId, totalsBy } from "../ownership/processOwners";
@@ -103,7 +105,12 @@ function ClaimList({
   readonly colorOf: (threadId: Claim["threadId"]) => string | undefined;
 }) {
   const names = useAtomValue(ownerNamesAtom(environmentId));
-  const canRelease = useAtomValue(machineResources.releaseClaim.permissionAtom(environmentId));
+  const config = useAtomValue(serverEnvironment.configValueAtom(environmentId));
+  const writes = ownershipWrites({
+    config,
+    canWrite: useAtomValue(machineResources.releaseClaim.permissionAtom(environmentId)),
+  });
+  const canRelease = writes === "allowed";
   const releaseClaim = useAtomCommand(machineResources.releaseClaim);
   // The tick is a UTC "YYYY-MM-DDTHH:mm"; without a zone Date.parse would read it as local time.
   const nowMs = Date.parse(`${useNowMinute()}:00Z`);
@@ -187,6 +194,10 @@ function ClaimList({
           {canRelease ? (
             <p className="text-xs text-muted-foreground">
               Removing a claim returns its load to Other; it doesn't stop the process.
+            </p>
+          ) : writes === "olderServer" ? (
+            <p className="text-xs text-muted-foreground">
+              This server is older and can't remove claims.
             </p>
           ) : null}
         </>

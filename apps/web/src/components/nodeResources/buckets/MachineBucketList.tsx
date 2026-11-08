@@ -46,9 +46,10 @@ import {
   normalizedRules,
 } from "../primitives/BucketRuleLogic";
 import { BucketRuleList } from "../primitives/BucketRuleFields";
-import { MachineSection } from "../primitives/MachineSection";
+import { MachineSection, MachineSectionMessage } from "../primitives/MachineSection";
 import { OwnerChip } from "../primitives/OwnerChip";
 import { ownerLabel } from "../primitives/OwnerLabel";
+import { ownershipWrites } from "./ownershipWrites";
 
 /** Live totals per bucket, from the task manager's process stream. */
 export interface BucketLiveTotals {
@@ -100,7 +101,11 @@ export function MachineBucketList({
   readonly live?: BucketLiveTotals;
 }) {
   const config = useAtomValue(serverEnvironment.configValueAtom(environmentId));
-  const canWrite = useEnvironmentScope(environmentId, AuthSettingsWriteScope);
+  const writes = ownershipWrites({
+    config,
+    canWrite: useEnvironmentScope(environmentId, AuthSettingsWriteScope),
+  });
+  const canWrite = writes === "allowed";
   const names = useAtomValue(ownerNamesAtom(environmentId));
   const updateSettings = useUpdateEnvironmentSettings(environmentId);
   const [draft, setDraft] = useState<Draft | null>(null);
@@ -148,6 +153,9 @@ export function MachineBucketList({
         ) : undefined
       }
     >
+      {writes === "olderServer" ? (
+        <MachineSectionMessage>This server is older and can't save buckets.</MachineSectionMessage>
+      ) : null}
       {buckets.length === 0 ? null : (
         <Table>
           <TableHeader>

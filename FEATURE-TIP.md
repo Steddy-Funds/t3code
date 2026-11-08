@@ -36,6 +36,7 @@ upstream; a feature can, from its own branch, when Akiva decides.
 | Load management: guarded runs, auto-pause of low-priority agents and their containers, thread priorities; off by default (node resources 5/5) | #65 | 59cd8f9 |
 | Thread cost as one lineage total, last pull cached | #66 | 6a6c02a |
 | Thread cost in three digits with K and M; turns as an icon | #67 | 6023b1b |
+| Thread resources cover subagents; `-` for unmeasured; thread details opens a focused machine tab (node resources 6) | #68 | 04bf4fe |
 
 Held: #38 (pods notes in the t3-orchestration skill). It edits
 `.agents/skills/t3-orchestration/`, which exists only on
@@ -54,6 +55,7 @@ The Mac runs this tip, which already has them all.
 - #63 Ownership, claims, buckets, per-thread resources, MCP tools: server half only (`8256ecc`), with the provider packages' spawn sites
 - #64 `t3_machine_read`, load trigger, auto-buckets built-in: server half only (`8177ce2`)
 - #65 Load guard (`t3 guard`), load pause with docker pause and startup reconcile, priorities: server half only (`6ea90d5`), with the provider packages' guard env injection
+- #68 Thread resources cover the subagent lineage: server half only (`680f646`)
 
 A feature that changes `apps/server`, or a contract the server reads, is
 merged there too: its branch head with `--no-ff`, never this tip.

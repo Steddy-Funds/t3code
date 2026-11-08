@@ -88,7 +88,7 @@ export function loadMetricValue(condition: LoadCondition, reading: LoadReading):
 }
 
 /** A missing value holds no condition, so an unmeasurable metric neither fires nor clears. */
-export function conditionHolds(condition: LoadCondition, reading: LoadReading): boolean {
+function conditionHolds(condition: LoadCondition, reading: LoadReading): boolean {
   const value = loadMetricValue(condition, reading);
   if (value === null) return false;
   return condition.op === ">=" ? value >= condition.threshold : value <= condition.threshold;
@@ -112,7 +112,7 @@ function clearHolds(schedule: ScheduledTaskLoadSchedule, reading: LoadReading): 
  * Monitors waiting for load to drop. Starting them all the moment it drops
  * would bring the load straight back, so they are released one at a time.
  */
-export const isClearDirection = (schedule: ScheduledTaskLoadSchedule) =>
+const isClearDirection = (schedule: ScheduledTaskLoadSchedule) =>
   schedule.condition.op === "<=";
 
 /**

@@ -100,7 +100,7 @@ const MachineBucketsTool = Tool.make("t3_machine_buckets", {
 const ResourceClaimTool = Tool.make("t3_resource_claim", {
   ...shared,
   description:
-    "Count a process tree, container or cgroup you started (a dev server, a test stack) as a thread's CPU and memory. `claim` takes `target` (a process needs its start time in epoch ms), `release` takes `claimId`, `list` shows the thread's claims. `threadId` defaults to this thread. Claims end when the target exits or the server restarts.",
+    "Count a process tree, container or cgroup you started (a dev server, a test stack) as a thread's CPU and memory. `claim` takes `target` (a process needs its start time in epoch ms: `ps -o lstart= -p <pid>` converted; within 1 s matches), `release` takes `claimId`, `list` shows the thread's claims. `threadId` defaults to this thread. Claims end when the target exits or the server restarts.",
   parameters: Schema.Struct({
     action: Schema.Literals(["claim", "release", "list"]),
     target: Schema.optionalKey(ClaimTarget),

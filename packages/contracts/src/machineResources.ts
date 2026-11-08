@@ -1,7 +1,10 @@
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import * as SchemaTransformation from "effect/SchemaTransformation";
 
 import {
+  ForwardCompatibleArray,
   ForwardCompatibleUnion,
   NonNegativeInt,
   PositiveInt,
@@ -255,8 +258,8 @@ export type ThreadResourceSource = typeof ThreadResourceSource.Type;
 
 /** What one thread's processes, its claims included, use now. Each process counts once. */
 export const ThreadResourceTotals = Schema.Struct({
-  /** Percent of one core. */
-  cpuPercent: Schema.Number,
+  /** Percent of one core; null when an on-demand read has no reading under 10 s old to compare. */
+  cpuPercent: Schema.NullOr(Schema.Number),
   memoryBytes: NonNegativeInt,
   gpuUtilPercent: Schema.NullOr(Schema.Number),
   vramBytes: Schema.NullOr(NonNegativeInt),
@@ -291,13 +294,37 @@ export type ThreadResources = typeof ThreadResources.Type;
 export const MachineClaimsReleaseInput = Schema.Struct({ claimId: ClaimId });
 export type MachineClaimsReleaseInput = typeof MachineClaimsReleaseInput.Type;
 
+/**
+ * A bucket a newer writer stored with a rule or actor this version lacks is dropped whole, not
+ * shown without that rule: saving it back would erase the rule. Writes are per entry, so a
+ * dropped bucket is never rewritten. The encoded side is untyped because `withDecodingDefault`
+ * validates it before any per-entry recovery could run.
+ */
+const decodesAsBucket = Schema.decodeUnknownOption(MachineBucket);
+const ReceivedBuckets = Schema.Record(Schema.String, Schema.Unknown).pipe(
+  Schema.decodeTo(
+    Schema.Record(MachineBucketId, MachineBucket),
+    SchemaTransformation.transform<
+      Readonly<Record<string, (typeof MachineBucket)["Encoded"]>>,
+      Readonly<Record<string, unknown>>
+    >({
+      decode: (buckets) => {
+        const kept: Record<string, (typeof MachineBucket)["Encoded"]> = {};
+        for (const [id, bucket] of Object.entries(buckets)) {
+          if (Option.isSome(decodesAsBucket(bucket))) kept[id] = bucket as (typeof MachineBucket)["Encoded"];
+        }
+        return kept;
+      },
+      encode: (buckets) => buckets,
+    }),
+  ),
+);
+
 export const MachineResourcesSettings = Schema.Struct({
   thresholds: MachineThresholds.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_MACHINE_THRESHOLDS)),
   ),
-  buckets: Schema.Record(MachineBucketId, MachineBucket).pipe(
-    Schema.withDecodingDefault(Effect.succeed({})),
-  ),
+  buckets: ReceivedBuckets.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
 });
 export type MachineResourcesSettings = typeof MachineResourcesSettings.Type;
 
@@ -469,8 +496,11 @@ export const MachineProcessFrame = Schema.Struct({
   removed: Schema.Array(NonNegativeInt),
   rows: MachineProcessRows,
   gpus: Schema.optionalKey(Schema.Array(GpuDeviceSample)),
-  /** Every claim on this machine; on full frames and whenever the list changes, else absent. */
-  claims: Schema.optionalKey(Schema.Array(Claim)),
+  /**
+   * Every claim on this machine; on full frames and whenever the list changes, else absent.
+   * A claim with a target or actor kind this version lacks is dropped on its own.
+   */
+  claims: Schema.optionalKey(ForwardCompatibleArray(Claim)),
   /** Rows left out past the row cap. */
   truncated: Schema.optionalKey(PositiveInt),
 });

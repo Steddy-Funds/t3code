@@ -46,13 +46,32 @@ export interface ProcessOwnershipRegistryIo {
   readonly readPidCgroup: (pid: number) => string | undefined;
   readonly selfCgroup: string | undefined;
   readonly now: () => number;
+  /**
+   * Start time of the pid in clock ticks since boot (`/proc/<pid>/stat` field 22); undefined
+   * when unreadable. With it, a pending root re-reads its cgroup only while the pid is the same
+   * process; a reused pid drops the root's pid.
+   */
+  readonly readPidStartTicks?: (pid: number) => number | undefined;
+}
+
+/** Field 22 of `/proc/<pid>/stat`, counted after the command name's last `)`. */
+export function parseProcStatStartTicks(contents: string): number | undefined {
+  const start = Number(contents.slice(contents.lastIndexOf(")") + 2).split(" ")[19]);
+  return Number.isFinite(start) ? start : undefined;
 }
 
 export function makeProcessOwnershipRegistry(
   io: ProcessOwnershipRegistryIo,
 ): ProcessOwnershipRegistryShape {
   const entries = new Map<number, RegisteredRoot>();
+  const startTicks = new Map<number, number | undefined>();
   let nextId = 0;
+
+  const samePid = (entry: RegisteredRoot) => {
+    if (io.readPidStartTicks === undefined || entry.root.pid === undefined) return true;
+    const registered = startTicks.get(entry.id);
+    return registered !== undefined && io.readPidStartTicks(entry.root.pid) === registered;
+  };
 
   const resolveCgroup = (root: ProcessRoot) =>
     pickRootCgroup({
@@ -64,14 +83,21 @@ export function makeProcessOwnershipRegistry(
   return {
     registerRoot: (root) => {
       const id = nextId++;
+      if (root.pid !== undefined) startTicks.set(id, io.readPidStartTicks?.(root.pid));
       entries.set(id, { id, root, registeredAtMs: io.now(), cgroup: resolveCgroup(root) });
       return () => {
         entries.delete(id);
+        startTicks.delete(id);
       };
     },
     roots: () => {
       for (const entry of entries.values()) {
         if (entry.cgroup.type !== "pending") continue;
+        if (!samePid(entry)) {
+          const { pid: _reused, ...root } = entry.root;
+          entries.set(entry.id, { ...entry, root, cgroup: resolveCgroup(root) });
+          continue;
+        }
         entries.set(entry.id, { ...entry, cgroup: resolveCgroup(entry.root) });
       }
       return [...entries.values()];

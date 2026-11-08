@@ -35,6 +35,7 @@ import {
 import { processProviderGroup } from "@t3tools/shared/processProviderGroup";
 import {
   makeProcessOwnershipRegistry,
+  parseProcStatStartTicks,
   ProcessOwnershipRegistry,
   type RegisteredRoot,
 } from "@t3tools/shared/ProcessOwnershipRegistry";
@@ -566,6 +567,12 @@ const readLivePidCgroup = (platform: NodeJS.Platform) => (pid: number) => {
   return contents === undefined ? undefined : parseUnifiedCgroupPath(contents);
 };
 
+const readLivePidStartTicks = (platform: NodeJS.Platform) => (pid: number) => {
+  if (platform !== "linux") return undefined;
+  const stat = readFileOrUndefined(`/proc/${pid}/stat`);
+  return stat === undefined ? undefined : parseProcStatStartTicks(stat);
+};
+
 export const makeLiveIo = Effect.fn("ProcessOwnership.makeLiveIo")(function* () {
   const platform = yield* HostProcess.Platform;
   const runner = yield* ProcessRunner.ProcessRunner;
@@ -731,9 +738,11 @@ export const makeWith = Effect.fn("ProcessOwnership.make")(function* (io: Proces
   const claimsLock = yield* Semaphore.make(1);
   const bucketLock = yield* Semaphore.make(1);
   const lastPruneAt = yield* Ref.make<number | null>(null);
-  const envMemo = new Map<string, ThreadId | null>();
   // Host rows carry exe, cwd and user; subtree and sample rows do not, and would miss rules on
-  // them, so each kind keeps its own memo.
+  // them, so each kind keeps its own memos. Each call evicts only its own kind's dead keys, so a
+  // subtree call never makes the next host call re-read every environment.
+  const detailedEnvMemo = new Map<string, ThreadId | null>();
+  const liteEnvMemo = new Map<string, ThreadId | null>();
   let detailedMemo = new Map<string, MachineBucketId | null>();
   let liteMemo = new Map<string, MachineBucketId | null>();
   // Settings hand back the same record until buckets change, so its identity keys the memo.
@@ -970,6 +979,7 @@ export const makeWith = Effect.fn("ProcessOwnership.make")(function* (io: Proces
       const live = new Set(rows.map((row) => processKey(row.pid, row.startTimeMs)));
       const detailed = rows.some((row) => row.exe !== "" || row.cwd !== "" || row.user !== "");
       const bucketMemo = detailed ? detailedMemo : liteMemo;
+      const envMemo = detailed ? detailedEnvMemo : liteEnvMemo;
       for (const key of bucketMemo.keys()) if (!live.has(key)) bucketMemo.delete(key);
       for (const key of envMemo.keys()) if (!live.has(key)) envMemo.delete(key);
 
@@ -1017,10 +1027,12 @@ export const makeWith = Effect.fn("ProcessOwnership.make")(function* (io: Proces
 export const layerRegistry = Layer.effect(
   ProcessOwnershipRegistry,
   Effect.gen(function* () {
-    const readPidCgroup = readLivePidCgroup(yield* HostProcess.Platform);
+    const platform = yield* HostProcess.Platform;
+    const readPidCgroup = readLivePidCgroup(platform);
     const clock = yield* Clock.Clock;
     return makeProcessOwnershipRegistry({
       readPidCgroup,
+      readPidStartTicks: readLivePidStartTicks(platform),
       selfCgroup: readPidCgroup(process.pid),
       now: () => clock.currentTimeMillisUnsafe(),
     });

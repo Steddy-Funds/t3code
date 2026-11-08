@@ -140,6 +140,19 @@ export function cpuPercentBetween(
   return ((cpuMs - previous.cpuMs) / (atMs - previous.atMs)) * 100;
 }
 
+/** An on-demand read reports CPU only when every reading it rests on had a predecessor this young. */
+const CPU_CURRENT_MAX_AGE_MS = 10_000;
+
+/** Whether `cpuPercentBetween` measured a real interval short enough to call current. */
+export function cpuIsCurrent(
+  previous: { readonly atMs: number } | undefined,
+  atMs: number,
+): boolean {
+  if (previous === undefined) return false;
+  const elapsed = atMs - previous.atMs;
+  return elapsed >= 1_000 && elapsed < CPU_CURRENT_MAX_AGE_MS;
+}
+
 interface Point {
   readonly atMs: number;
   readonly cpuPercent: number;
@@ -179,6 +192,8 @@ export const historyPoints = (
 
 interface Totals {
   cpuPercent: number;
+  /** Every CPU reading summed here rests on a recent predecessor. */
+  cpuCurrent: boolean;
   memoryBytes: number;
   processCount: number;
   cgroup: boolean;
@@ -187,14 +202,22 @@ interface Totals {
 
 const emptyTotals = (): Totals => ({
   cpuPercent: 0,
+  cpuCurrent: true,
   memoryBytes: 0,
   processCount: 0,
   cgroup: false,
   sample: false,
 });
 
-const toTotals = (totals: Totals, sampleAgeMs: number): ThreadResourceTotals => ({
-  cpuPercent: Math.round(totals.cpuPercent * 10) / 10,
+const roundCpu = (cpuPercent: number) => Math.round(cpuPercent * 10) / 10;
+
+/** On demand, CPU is null unless it is current; a rollup's 30 s average is always a number. */
+const toTotals = (
+  totals: Totals,
+  sampleAgeMs: number,
+  onDemand: boolean,
+): ThreadResourceTotals => ({
+  cpuPercent: onDemand && !totals.cpuCurrent ? null : roundCpu(totals.cpuPercent),
   memoryBytes: Math.round(totals.memoryBytes),
   // Per-thread GPU use needs the host process walk, which the rollup never runs.
   gpuUtilPercent: null,
@@ -302,7 +325,9 @@ export const makeWith = Effect.fn("ThreadResources.make")(function* (io: ThreadR
     if (usage === undefined) return undefined;
     const procs = readProcs(directory);
     const cpuMs = usage / 1_000;
-    const cpuPercent = cpuPercentBetween(cgroupCpu.get(unit), cpuMs, atMs);
+    const previous = cgroupCpu.get(unit);
+    const cpuPercent = cpuPercentBetween(previous, cpuMs, atMs);
+    const cpuCurrent = cpuIsCurrent(previous, atMs);
     cgroupCpu.set(unit, { cpuMs, atMs });
     const current = Number(io.readFile(`${directory}/memory.current`));
     // Without memory delegation there is no memory.current; sum the members' resident pages.
@@ -314,7 +339,7 @@ export const makeWith = Effect.fn("ThreadResources.make")(function* (io: ThreadR
             (parseStatmResidentPages(io.readFile(`/proc/${pid}/statm`) ?? "") ?? 0) * io.pageSize,
           0,
         );
-    return { cpuPercent, memoryBytes, procs };
+    return { cpuPercent, cpuCurrent, memoryBytes, procs };
   };
 
   /** A shared unit's members, each read once for its thread, then by `stat` and `statm`. */
@@ -322,7 +347,7 @@ export const makeWith = Effect.fn("ThreadResources.make")(function* (io: ThreadR
     procs: ReadonlyArray<number>,
     atMs: number,
     seen: Set<string>,
-    add: (threadId: ThreadId, cpu: number, memory: number) => void,
+    add: (threadId: ThreadId, cpu: number, cpuCurrent: boolean, memory: number) => void,
   ) => {
     for (const pid of procs) {
       const stat = parseProcStat(io.readFile(`/proc/${pid}/stat`) ?? "");
@@ -336,11 +361,13 @@ export const makeWith = Effect.fn("ThreadResources.make")(function* (io: ThreadR
         memberThreads.set(key, threadId);
       }
       const cpuMs = (stat.cpuTicks * 1_000) / CLOCK_TICKS_PER_SECOND;
-      const cpuPercent = cpuPercentBetween(processCpu.get(key), cpuMs, atMs);
+      const previous = processCpu.get(key);
+      const cpuPercent = cpuPercentBetween(previous, cpuMs, atMs);
+      const cpuCurrent = cpuIsCurrent(previous, atMs);
       processCpu.set(key, { cpuMs, atMs });
       if (threadId === null) continue;
       const pages = parseStatmResidentPages(io.readFile(`/proc/${pid}/statm`) ?? "") ?? 0;
-      add(threadId, cpuPercent, pages * io.pageSize);
+      add(threadId, cpuPercent, cpuCurrent, pages * io.pageSize);
     }
   };
 
@@ -391,10 +418,11 @@ export const makeWith = Effect.fn("ThreadResources.make")(function* (io: ThreadR
       const reading = readings.get(unit.cgroup);
       if (reading === undefined) continue;
       if (unit.split) {
-        readSplitMembers(reading.procs, atMs, seen, (threadId, cpu, memory) => {
+        readSplitMembers(reading.procs, atMs, seen, (threadId, cpu, cpuCurrent, memory) => {
           if (!wanted(threadId)) return;
           const entry = totalsOf(threadId);
           entry.cpuPercent += cpu;
+          entry.cpuCurrent &&= cpuCurrent;
           entry.memoryBytes += memory;
           entry.processCount += 1;
           entry.cgroup = true;
@@ -411,6 +439,7 @@ export const makeWith = Effect.fn("ThreadResources.make")(function* (io: ThreadR
         0,
         reading.cpuPercent - nested.reduce((sum, inner) => sum + inner.cpuPercent, 0),
       );
+      entry.cpuCurrent &&= reading.cpuCurrent && nested.every((inner) => inner.cpuCurrent);
       entry.memoryBytes += Math.max(
         0,
         reading.memoryBytes - nested.reduce((sum, inner) => sum + inner.memoryBytes, 0),
@@ -427,8 +456,23 @@ export const makeWith = Effect.fn("ThreadResources.make")(function* (io: ThreadR
         (platform !== "linux" || entry.cgroup.type !== "adopted") &&
         entry.root.owner.type !== "t3",
     );
-    const processClaims = claims.some((resolved) => resolved.claim.target.type === "process");
-    if (threadRoots || processClaims) {
+    const processClaimIds = new Set(
+      claims.flatMap((resolved) =>
+        resolved.claim.target.type === "process" ? [resolved.claim.id] : [],
+      ),
+    );
+    /** The innermost unit holding the row's cgroup, which already counted the row. */
+    const unitOf = (row: ResourceMonitorProcessSample) => {
+      const cgroup = pidCgroupOf(row);
+      if (cgroup === null) return undefined;
+      let inner: PlannedUnit | undefined;
+      for (const unit of units) {
+        if (!isCgroupWithin(cgroup, unit.cgroup)) continue;
+        if (inner === undefined || unit.cgroup.length > inner.cgroup.length) inner = unit;
+      }
+      return inner;
+    };
+    if (threadRoots || processClaimIds.size > 0) {
       const sample = yield* native.sampleNow.pipe(Effect.option);
       if (Option.isSome(sample)) {
         const processes = sample.value.snapshot.processes;
@@ -436,19 +480,33 @@ export const makeWith = Effect.fn("ThreadResources.make")(function* (io: ThreadR
         for (const row of processes) {
           const key = processKey(row.pid, row.startTimeMs);
           seen.add(key);
-          const cpuPercent = cpuPercentBetween(processCpu.get(key), row.cpuTimeMs, atMs);
+          const previous = processCpu.get(key);
+          const cpuPercent = cpuPercentBetween(previous, row.cpuTimeMs, atMs);
+          const cpuCurrent = cpuIsCurrent(previous, atMs);
           processCpu.set(key, { cpuMs: row.cpuTimeMs, atMs });
           const owner = owners.get(key);
           const threadId = owner === undefined ? null : ownerThreadId(owner);
-          if (!wanted(threadId)) continue;
-          if (units.length > 0) {
-            const cgroup = pidCgroupOf(row);
-            if (cgroup !== null && units.some((unit) => isCgroupWithin(cgroup, unit.cgroup))) {
-              continue;
+          const processClaimed = owner?.type === "claimed" && processClaimIds.has(owner.claimId);
+          if (!wanted(threadId) && !processClaimed) continue;
+          const unit = units.length > 0 ? unitOf(row) : undefined;
+          if (unit !== undefined) {
+            // A process claim inside another thread's claimed cgroup belongs to the process
+            // claim, as attribution says, so it moves out of that cgroup's totals.
+            const movesOut =
+              processClaimed && !unit.split && unit.threadId !== null && unit.threadId !== threadId;
+            if (!movesOut) continue;
+            const from = totals.get(unit.threadId);
+            if (from !== undefined) {
+              from.cpuPercent = Math.max(0, from.cpuPercent - cpuPercent);
+              from.cpuCurrent &&= cpuCurrent;
+              from.memoryBytes = Math.max(0, from.memoryBytes - row.residentBytes);
+              from.processCount = Math.max(0, from.processCount - 1);
             }
           }
+          if (!wanted(threadId)) continue;
           const entry = totalsOf(threadId);
           entry.cpuPercent += cpuPercent;
+          entry.cpuCurrent &&= cpuCurrent;
           entry.memoryBytes += row.residentBytes;
           entry.processCount += 1;
           entry.sample = true;
@@ -473,13 +531,13 @@ export const makeWith = Effect.fn("ThreadResources.make")(function* (io: ThreadR
     for (const threadId of running) {
       const entry = totals.get(threadId);
       if (entry === undefined) continue;
-      const value = toTotals(entry, 0);
+      const value = toTotals(entry, 0, false);
       byThread.set(threadId, value);
       next.set(
         threadId,
         appendPoint(next.get(threadId) ?? [], {
           atMs,
-          cpuPercent: value.cpuPercent,
+          cpuPercent: roundCpu(entry.cpuPercent),
           memoryBytes: value.memoryBytes,
           gpuUtilPercent: value.gpuUtilPercent,
         }),
@@ -515,7 +573,7 @@ export const makeWith = Effect.fn("ThreadResources.make")(function* (io: ThreadR
         : yield* lock.withPermits(1)(
             Effect.map(measure(new Set([threadId])), ({ totals }) => {
               const entry = totals.get(threadId);
-              return entry === undefined ? null : toTotals(entry, 0);
+              return entry === undefined ? null : toTotals(entry, 0, true);
             }),
           );
     return { current, history: historyPoints(rings.get(threadId) ?? [], nowMs) };

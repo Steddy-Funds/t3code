@@ -17,12 +17,13 @@ import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/reactivity";
 import { useEffect, useMemo } from "react";
 
-import { useQuietThreadShell } from "../../state/entities";
+import { useQuietThreadShell, useServerConfigs } from "../../state/entities";
 import { machineResources } from "../../state/machineResources";
 import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
 import { useEnvironmentScope } from "../../state/session";
 import { SeriesRing } from "../nodeResources/charts/SeriesRing";
+import { documentVisibleAtom } from "../nodeResources/documentVisible";
 import { Sparkline } from "../nodeResources/primitives/Sparkline";
 import { seedSparkline } from "../nodeResources/primitives/SparklineSeries";
 import { Badge } from "../ui/badge";
@@ -54,7 +55,10 @@ export function ThreadDetailsResources({
   readonly threadId: ThreadId;
 }) {
   const canRead = useEnvironmentScope(environmentId, AuthOrchestrationReadScope);
-  if (!canRead) return null;
+  // An older server has no thread resources and would stream its whole process table.
+  const supported =
+    useServerConfigs().get(environmentId)?.environment.capabilities.machineOwnership === true;
+  if (!canRead || !supported) return null;
   return <ResourcesSection environmentId={environmentId} threadId={threadId} />;
 }
 
@@ -82,10 +86,11 @@ function ResourcesSection({
       : providers?.find((provider) => provider.instanceId === shell.providerInstanceId)?.driver,
   );
   const canReadProcesses = useEnvironmentScope(environmentId, AuthDiagnosticsReadScope);
+  const visible = useAtomValue(documentVisibleAtom);
   const processes = Option.getOrNull(
     AsyncResult.value(
       useAtomValue(
-        canReadProcesses
+        canReadProcesses && visible
           ? machineResources.machineProcesses(environmentId, {
               intervalMs: PROCESS_INTERVAL_MS,
               threadId,
@@ -174,7 +179,12 @@ function ResourcesBody({
   const count =
     claims > 0 ? `${current.processCount - claims} + ${claims} claimed` : current.processCount;
   const metrics = [
-    { label: "CPU", column: 0, value: formatPercent(current.cpuPercent) },
+    {
+      label: "CPU",
+      column: 0,
+      // Null when an idle read had no earlier sample to measure against.
+      value: current.cpuPercent === null ? "—" : formatPercent(current.cpuPercent),
+    },
     { label: "Mem", column: 1, value: formatProcessMemory(current.memoryBytes) },
     ...(current.gpuUtilPercent === null
       ? []

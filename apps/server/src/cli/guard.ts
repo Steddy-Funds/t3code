@@ -15,7 +15,7 @@ export const GUARD_HELP = `Usage: t3 guard [--hold <duration>] -- <command> [arg
 
 Runs <command> and stops it when this machine stays stressed, so a heavy build or test
 cannot take the machine down. Every 5 s it checks CPU load and RAM (not GPUs) against the
-thresholds in T3 Code's Settings > Machine resources. When the machine has been stressed
+machine's load thresholds in T3 Code's settings. When the machine has been stressed
 for the hold time, it sends SIGTERM to the command's process group, SIGKILL 10 s later if it
 is still running, and exits 75 with one line on stderr naming the reason.
 

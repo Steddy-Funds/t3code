@@ -35,6 +35,8 @@ export const GpuDeviceSample = Schema.Struct({
 export type GpuDeviceSample = typeof GpuDeviceSample.Type;
 
 export const MACHINE_HOLD_MAX_MS = 3_600_000;
+/** Load management resumes a paused thread after this long, even if the machine is still stressed. */
+export const LOAD_PAUSE_MAX_MS = 30 * 60_000;
 export const MACHINE_SAMPLE_MIN_INTERVAL_MS = 500;
 export const MACHINE_HISTORY_MAX_MS = 3_600_000;
 export const MACHINE_HISTORY_STEP_MS = 5_000;

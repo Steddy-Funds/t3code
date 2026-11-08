@@ -131,7 +131,10 @@ function scopeForSubscription(
   return typeof input.cwd === "string" ? { type: "vcs-status", cwd: input.cwd } : null;
 }
 
-function retainBackgroundScope(environmentId: EnvironmentId, scope: BackgroundScope): () => void {
+export function retainBackgroundScope(
+  environmentId: EnvironmentId,
+  scope: BackgroundScope,
+): () => void {
   const key = stableScopeKey(environmentId, scope);
   const existing = retainedScopes.get(key);
   if (existing) {

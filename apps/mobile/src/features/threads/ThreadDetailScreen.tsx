@@ -14,6 +14,8 @@ import { parseThreadKey, threadKey } from "@t3tools/client-runtime/state/entitie
 import { createThreadVisitTracker } from "@t3tools/client-runtime/state/thread-visits";
 import { useChildThreadInputs, useThreadReportedModelSelection } from "../../state/entities";
 import { UsageLimitRecoveryCard } from "./UsageLimitRecoveryCard";
+import { LoadPauseCard } from "./LoadPauseCard";
+import { retainMobileBackgroundScope } from "../../connection/background-activity-scopes";
 import { useFocusEffect, useNavigation } from "@react-navigation/native";
 import {
   effectiveSnoozed,
@@ -437,6 +439,15 @@ function ThreadDetailBody(
   // Android can lose IME hide callbacks on backgrounding. Quarantine translation on resume unless focused input retained its keyboard.
   const [keyboardStateSuspect, setKeyboardStateSuspect] = useState(false);
   const ownedInputFocusedRef = useRef(false);
+  const focusedThreadId = props.draftMode ? null : props.selectedThread.id;
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- holds the server's focus lease, which exempts this thread from load pauses
+  useEffect(() => {
+    if (focusedThreadId === null) return;
+    return retainMobileBackgroundScope(props.environmentId, {
+      type: "thread",
+      threadId: focusedThreadId,
+    });
+  }, [props.environmentId, focusedThreadId]);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- subscribes to AppState on Android to mark keyboard state suspect when the app resumes
   useEffect(() => {
     if (Platform.OS !== "android") {
@@ -1612,6 +1623,11 @@ function ThreadDetailBody(
                         />
                       </Animated.View>
                     ) : null}
+                    <LoadPauseCard
+                      thread={props.selectedThread}
+                      environmentId={props.environmentId}
+                      serverConfig={props.serverConfig}
+                    />
                     <UsageLimitRecoveryCard
                       key={props.selectedThread.latestRun?.runId}
                       thread={props.selectedThread}

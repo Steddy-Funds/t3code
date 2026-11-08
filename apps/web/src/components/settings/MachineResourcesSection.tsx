@@ -150,7 +150,9 @@ const THRESHOLD_FIELDS: ReadonlyArray<ThresholdField> = [
 
 const formatShown = (stored: number, scale: number) => String(Number((stored * scale).toFixed(3)));
 
-function toStored(field: ThresholdField, shown: number): number {
+type NumberField = Pick<ThresholdField, "title" | "unit" | "scale" | "boundsMessage">;
+
+function toStored(field: NumberField, shown: number): number {
   const stored = shown / field.scale;
   return field.unit === "s" ? Math.round(stored) : stored;
 }
@@ -234,6 +236,7 @@ export function MachineResourcesSection({
             <ThresholdInput
               field={field}
               stored={thresholds[field.key]}
+              isValid={(next) => isPatchValid({ [field.key]: next })}
               disabled={!canWrite}
               onCommit={(stored, onFailed) => saveThresholds({ [field.key]: stored }, onFailed)}
             />
@@ -244,6 +247,14 @@ export function MachineResourcesSection({
         <SettingsRow
           title="Memory"
           description="macOS counts cache as used, so memory pressure reaching critical replaces the RAM rule."
+        />
+      ) : null}
+      {config.environment.capabilities.loadGuard === true ? (
+        <LoadManagementSettings
+          environmentId={environmentId}
+          settings={config.settings}
+          pauses={config.environment.capabilities.loadPause === true}
+          canWrite={canWrite}
         />
       ) : null}
       {config.environment.capabilities.machineAutoBuckets === true ? (
@@ -257,6 +268,84 @@ export function MachineResourcesSection({
         <MachineBucketList environmentId={environmentId} />
       </div>
     </div>
+  );
+}
+
+const LOAD_HOLD_MAX_SECONDS = 3600;
+const isLoadHoldSeconds = (seconds: number) =>
+  Number.isInteger(seconds) && seconds >= 0 && seconds <= LOAD_HOLD_MAX_SECONDS;
+
+function LoadManagementSettings({
+  environmentId,
+  settings,
+  pauses,
+  canWrite,
+}: {
+  readonly environmentId: EnvironmentId;
+  readonly settings: ServerSettings;
+  readonly pauses: boolean;
+  readonly canWrite: boolean;
+}) {
+  const updateSettings = useUpdateEnvironmentSettings(environmentId);
+  const loadManagement = settings.machineResources.loadManagement;
+  const save = (
+    patch: { enabled?: boolean; guardHoldSeconds?: number; pauseHoldSeconds?: number },
+    onFailed?: () => void,
+  ) =>
+    updateSettings(
+      { machineResources: { loadManagement: patch } },
+      onFailed ? { onFailed } : undefined,
+    );
+
+  return (
+    <>
+      <SettingsRow
+        title={searchableSetting("machine-load-management").title}
+        description={
+          pauses
+            ? "While this machine is stressed, t3 guard stops heavy commands and low-priority threads pause until it clears. Reaches only agent sessions and terminals started after the change."
+            : "While this machine is stressed, t3 guard stops heavy commands. Reaches only agent sessions and terminals started after the change."
+        }
+        control={
+          <Switch
+            checked={loadManagement.enabled}
+            disabled={!canWrite}
+            onCheckedChange={(enabled) => save({ enabled })}
+            aria-label="Load management"
+          />
+        }
+      />
+      {loadManagement.enabled ? (
+        <SettingsRow
+          title="Guard hold"
+          description="How long the machine must stay stressed before t3 guard stops its command. The guard checks CPU and RAM only, not GPUs."
+          control={
+            <ThresholdInput
+              field={{ title: "Guard hold", unit: "s", scale: 1, boundsMessage: HOLD_BOUNDS }}
+              stored={loadManagement.guardHoldSeconds}
+              isValid={isLoadHoldSeconds}
+              disabled={!canWrite}
+              onCommit={(guardHoldSeconds, onFailed) => save({ guardHoldSeconds }, onFailed)}
+            />
+          }
+        />
+      ) : null}
+      {loadManagement.enabled && pauses ? (
+        <SettingsRow
+          title="Pause hold"
+          description="How long the machine must stay stressed before low-priority threads pause."
+          control={
+            <ThresholdInput
+              field={{ title: "Pause hold", unit: "s", scale: 1, boundsMessage: HOLD_BOUNDS }}
+              stored={loadManagement.pauseHoldSeconds}
+              isValid={isLoadHoldSeconds}
+              disabled={!canWrite}
+              onCommit={(pauseHoldSeconds, onFailed) => save({ pauseHoldSeconds }, onFailed)}
+            />
+          }
+        />
+      ) : null}
+    </>
   );
 }
 
@@ -342,11 +431,13 @@ function AutoBucketsSettings({
 function ThresholdInput({
   field,
   stored,
+  isValid,
   disabled,
   onCommit,
 }: {
-  readonly field: ThresholdField;
+  readonly field: NumberField;
   readonly stored: number;
+  readonly isValid: (stored: number) => boolean;
   readonly disabled: boolean;
   readonly onCommit: (stored: number, onFailed: () => void) => void;
 }) {
@@ -362,7 +453,7 @@ function ThresholdInput({
   const commit = () => {
     const shown = draft.text.trim() === "" ? Number.NaN : Number(draft.text);
     const next = toStored(field, shown);
-    if (!Number.isFinite(shown) || !isPatchValid({ [field.key]: next })) {
+    if (!Number.isFinite(shown) || !isValid(next)) {
       setDraft((current) => ({ ...current, error: field.boundsMessage }));
       return;
     }

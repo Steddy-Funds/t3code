@@ -33,6 +33,8 @@ import { ThreadFind, ThreadFindCanvas } from "./chat/ThreadFindProvider";
 import { closeThreadFind, openThreadFind, useThreadFindOpen } from "./chat/threadFindStore";
 import { THREAD_FIND_BAR_RESERVED_HEIGHT } from "./chat/ThreadFindBar";
 import { usageLimitRecoveryBannerItem } from "./chat/UsageLimitRecoveryBanner";
+import { loadPauseBannerItem } from "./chat/LoadPauseBanner";
+import { retainBackgroundScope } from "../lib/backgroundActivityReporter";
 import { resolveDraftHeroState } from "./ChatView.logic";
 import { useQueuedRunEdit } from "./chat/useQueuedRunEdit";
 import { recallCheckoutIsRepo, rememberCheckoutIsRepo } from "./ChatView.logic";
@@ -44,6 +46,10 @@ import { usePendingThreadRequests } from "./chat/usePendingThreadRequests";
 import { isScratchProject } from "@t3tools/client-runtime/state/projects";
 import { visibleThreadPullRequests } from "@t3tools/shared/threadPullRequests";
 import type { UsageLimitSourceSnapshots } from "@t3tools/contracts";
+import {
+  loadPauseResumeShown,
+  loadPriorityControlsShown,
+} from "@t3tools/client-runtime/state/loadPause";
 import { feedbackBannerItem } from "./chat/ComposerFeedback";
 import { useUsageLimitsPanel } from "./chat/useUsageLimitsPanel";
 import { useWorktreeSetup } from "./chat/useWorktreeSetup";
@@ -70,6 +76,7 @@ import {
   ProviderInteractionMode,
   resolveIdleCompaction,
   RuntimeMode,
+  effectiveThreadPriority,
 } from "@t3tools/contracts";
 import {
   deriveProviderSubagentStatus,
@@ -832,6 +839,11 @@ export default function ChatView(props: ChatViewProps) {
     : undefined;
   const isServerThread = serverThread !== null;
   const activeThread = isServerThread ? serverThread : localDraftThread;
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- holds the server's focus lease, which exempts this thread from load pauses
+  useEffect(() => {
+    if (!isServerThread) return;
+    return retainBackgroundScope(environmentId, { type: "thread", threadId });
+  }, [environmentId, threadId, isServerThread]);
   const serverLatestRun =
     serverProjection === null ? null : deriveLatestThreadRun(serverProjection);
   const serverActivityRun =
@@ -2609,6 +2621,22 @@ export default function ChatView(props: ChatViewProps) {
           },
         })
       : null;
+  const activeLoadPause = activeThreadShell?.loadPause ?? null;
+  const loadPauseOfferNormal =
+    activeThreadShell !== null &&
+    loadPriorityControlsShown(serverConfig) &&
+    effectiveThreadPriority(activeThreadShell.source) === "low";
+  const loadPauseBanner =
+    activeThreadShell && loadPauseResumeShown(serverConfig, activeLoadPause)
+      ? loadPauseBannerItem({
+          environmentId,
+          threadId: activeThreadShell.id,
+          pause: activeLoadPause,
+          heldRuns: serverProjection?.runs.filter((run) => run.status === "queued").length ?? 0,
+          offerNormal: loadPauseOfferNormal,
+          timestampFormat,
+        })
+      : null;
   const composerBannerItems = (() => {
     const fallbackSelection = draftFallback?.selection;
     const defaultSelection =
@@ -2655,7 +2683,10 @@ export default function ChatView(props: ChatViewProps) {
             }),
           ]
         : [];
-    const limitRecoveryItems = limitRecoveryBanner === null ? [] : [limitRecoveryBanner];
+    const limitRecoveryItems = [
+      ...(loadPauseBanner === null ? [] : [loadPauseBanner]),
+      ...(limitRecoveryBanner === null ? [] : [limitRecoveryBanner]),
+    ];
     const usageLimitsItems = usageLimitsBanner === null ? [] : [usageLimitsBanner];
     const projectCloneItems = projectCloneBannerItem === null ? [] : [projectCloneBannerItem];
     if (!localCheckoutBranchMismatch || !showBranchMismatchBanner || !activeBranchMismatchKey) {
@@ -3592,6 +3623,8 @@ export default function ChatView(props: ChatViewProps) {
                 ? { onOpenProjectSettings: handleOpenDraftProjectSettingsStable }
                 : {})}
               {...(threadFindEnabled ? { onFindInThread: openThreadFindStable } : {})}
+              loadPaused={loadPauseBanner !== null}
+              loadPauseOfferNormal={loadPauseOfferNormal}
             />
           </header>
         )}

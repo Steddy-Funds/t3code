@@ -239,6 +239,28 @@ Agents can read the machine too: ask one what is using it, and it can show the m
 as a card in the chat. The card stays live until the next turn starts, then keeps the reading it
 had.
 
+#### Load management
+
+Load management keeps background agents from overloading a machine. It is off by default; turn
+on **Load management** in the machine's settings. The switch reaches only agent sessions and
+terminals started after you change it, so restart a running agent to include it.
+
+While it is on, agents run heavy builds and test suites through `t3 guard`, which stops the
+command if the machine stays stressed for the **Guard hold** time. The guard looks at CPU and
+RAM only, not GPUs.
+
+T3 also pauses low-priority threads whose work makes up a real share of the load while the machine
+is stressed. A paused thread shows **Paused for load** in its header and a pause mark in the
+sidebar, and continues on its own when the machine clears, or after 30 minutes at most. Use
+**Resume now** to continue it at once, or **Set priority Normal** so it is never paused. Sending
+the thread a message also resumes it. Threads you are looking at, threads waiting on you, and
+threads coordinating other agents are never paused. Turning load management off resumes every
+paused thread.
+
+Backgrounded threads are low priority by default. To change a thread's priority on web and
+desktop, use **Priority** in the thread's ⋯ menu or its details. The task manager lists each
+thread's priority, and paused threads with it.
+
 ### Tailscale HTTPS
 
 Join both devices to the same tailnet. In the desktop app, enable **Tailscale

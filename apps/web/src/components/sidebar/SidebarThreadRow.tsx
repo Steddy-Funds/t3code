@@ -44,6 +44,7 @@ import {
   GitBranchIcon,
   MessageCircleQuestionIcon,
   MoonIcon,
+  PauseIcon,
   PinIcon,
   PinOffIcon,
   ShieldQuestionIcon,
@@ -1359,6 +1360,19 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
               {title}
               {multiline ? titleLineIcons : null}
               {pinIndicator}
+              {thread.loadPause ? (
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <PauseIcon
+                        aria-label="Paused for load"
+                        className="size-3 shrink-0 text-warning-foreground"
+                      />
+                    }
+                  />
+                  <TooltipPopup side="top">Paused for load</TooltipPopup>
+                </Tooltip>
+              ) : null}
               {multiline ? null : terminalStatusIcon}
               {isRegeneratingTitle ? (
                 <span role="status" className="sr-only">

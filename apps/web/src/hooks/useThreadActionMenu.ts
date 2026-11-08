@@ -10,6 +10,7 @@ import {
 import { canSnooze, effectiveSnoozed } from "@t3tools/client-runtime/state/thread-settled";
 import {
   AuthOrchestrationOperateScope,
+  effectiveThreadPriority,
   isBackgroundedThread,
   type ScopedThreadRef,
   type ThreadId,
@@ -28,6 +29,13 @@ import { threadChipCopyTarget } from "@t3tools/client-runtime/thread-reference";
 import { threadEnvironment } from "../state/threads";
 import { useOrchestrationCommand } from "../state/use-orchestration-command";
 import { readEnvironmentScope } from "../state/session";
+import { appAtomRegistry } from "../rpc/atomRegistry";
+import { environmentServerConfigsAtom } from "../state/server";
+import {
+  loadPauseResumeShown,
+  loadPriorityControlsShown,
+  threadPriorityChoice,
+} from "@t3tools/client-runtime/state/loadPause";
 import {
   readEnvironmentServerConfigLoaded,
   readEnvironmentSupportsAutoSettleOptOut,
@@ -93,6 +101,12 @@ export function useThreadActionMenu(input: {
   const updateThreadMetadata = useOrchestrationCommand(threadEnvironment.updateMetadata, {
     reportFailure: false,
   });
+  const setThreadPriority = useOrchestrationCommand(threadEnvironment.setPriority, {
+    reportFailure: false,
+  });
+  const resumeLoadPause = useOrchestrationCommand(threadEnvironment.resumeLoadPause, {
+    reportFailure: false,
+  });
   const handleNewThread = useNewThreadHandler();
   const confirmThreadDelete = useClientSettings((s) => s.confirmThreadDelete);
   const confirmThreadArchive = useClientSettings((s) => s.confirmThreadArchive);
@@ -135,6 +149,9 @@ export function useThreadActionMenu(input: {
         titleRegeneration: configLoaded,
       };
       const isRegeneratingTitle = thread.titleRegeneration != null;
+      const serverConfig = appAtomRegistry
+        .get(environmentServerConfigsAtom)
+        .get(threadRef.environmentId);
       const snoozePresets = resolveSnoozePresets(now, timestampFormat, threadRef.environmentId);
       const items = buildThreadActionMenuItems({
         canOperate: readEnvironmentScope(threadRef.environmentId, AuthOrchestrationOperateScope),
@@ -153,6 +170,13 @@ export function useThreadActionMenu(input: {
         snoozePresets,
         canShareWithGuest,
         canTurnIntoProject: canTurnThreadIntoProject(threadRef),
+        priority: loadPriorityControlsShown(serverConfig)
+          ? {
+              choice: threadPriorityChoice(thread.source),
+              effective: effectiveThreadPriority(thread.source),
+            }
+          : undefined,
+        loadPaused: loadPauseResumeShown(serverConfig, thread.loadPause),
       });
       const clicked = await settlePromise(() => api.contextMenu.show(items, position));
       if (clicked._tag === "Failure" || clicked.value === null) return;
@@ -252,6 +276,32 @@ export function useThreadActionMenu(input: {
         case "auto-settle:disabled":
           await reportFailure("Failed to update auto-settle", () =>
             setThreadAutoSettle(threadRef, action === "auto-settle:enabled"),
+          );
+          return;
+        case "priority:low":
+        case "priority:normal":
+        case "priority:default":
+          await reportFailure("Failed to set priority", () =>
+            setThreadPriority({
+              environmentId: threadRef.environmentId,
+              input: {
+                threadId: threadRef.threadId,
+                priority:
+                  action === "priority:low"
+                    ? "low"
+                    : action === "priority:normal"
+                      ? "normal"
+                      : "default",
+              },
+            }),
+          );
+          return;
+        case "resume-load-pause":
+          await reportFailure("Failed to resume thread", () =>
+            resumeLoadPause({
+              environmentId: threadRef.environmentId,
+              input: { threadId: threadRef.threadId },
+            }),
           );
           return;
         case "rename":

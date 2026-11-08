@@ -31,6 +31,7 @@ import { describe, expect } from "vite-plus/test";
 import { createMachineProcessFrameApplier } from "../../../../packages/client-runtime/src/state/machineProcessFrames.ts";
 import {
   buildProcessSnapshot,
+  buildUnbucketed,
   type FrameInput,
   type HostFrameInput,
   HostProcesses,
@@ -47,6 +48,7 @@ import {
   type SnapshotRow,
   subtreeOwnershipRows,
   subtreeSnapshotRows,
+  unbucketedSharePercent,
 } from "./HostProcesses.ts";
 import * as NativeTelemetryClient from "./NativeTelemetryClient.ts";
 import { ResourceTelemetry, ResourceTelemetryRefreshFailed } from "./ResourceTelemetry.ts";
@@ -1569,5 +1571,174 @@ describe("HostProcesses.snapshot", () => {
         const error = yield* processes.snapshot(snapshotInput).pipe(Effect.flip);
         expect(error).toBeInstanceOf(HostProcessesUnavailable);
       }),
+  );
+});
+
+describe("unbucketed processes", () => {
+  const threadA = ThreadId.make("thread-a");
+  const bucketDev = MachineBucketId.make("bucket:dev");
+  const owned = new Map<string, ProcessOwner>([
+    ["1:10", { type: "thread", threadId: threadA }],
+    ["2:20", { type: "claimed", claimId: ClaimId.make("claim-1"), threadId: threadA }],
+    ["3:30", { type: "bucket", bucketId: bucketDev }],
+    ["4:40", { type: "provider", provider: ProviderDriverKind.make("codex") }],
+    ["5:50", { type: "t3", label: "server" }],
+    ["6:60", { type: "other" }],
+    ["7:70", { type: "container", id: "0123456789abcdef0123" }],
+  ]);
+  const shareRow = (pid: number, cpu: number, rss: number) => ({
+    identity: `${pid}:${pid * 10}`,
+    cpu,
+    rss,
+  });
+
+  it("counts only other, container and unowned processes, by the larger of CPU and memory", () => {
+    const rows = [
+      shareRow(1, 40, 1_000),
+      shareRow(2, 10, 1_000),
+      shareRow(3, 10, 1_000),
+      shareRow(4, 10, 1_000),
+      shareRow(5, 5, 500),
+      shareRow(6, 20, 100),
+      shareRow(7, 5, 4_400),
+      shareRow(8, 0, 0),
+    ];
+    expect(unbucketedSharePercent(rows, owned)).toBe(50);
+    expect(
+      unbucketedSharePercent(
+        rows.map((row) => ({ ...row, rss: 0 })),
+        owned,
+      ),
+    ).toBe(25);
+    expect(
+      unbucketedSharePercent(
+        rows.map((row) => ({ ...row, cpu: 0 })),
+        owned,
+      ),
+    ).toBe(50);
+    expect(unbucketedSharePercent([shareRow(1, 2, 0), shareRow(6, 1, 0)], owned)).toBe(33.3);
+  });
+
+  it("has no share when no process measured CPU or memory", () => {
+    expect(unbucketedSharePercent([], owned)).toBeNull();
+    expect(unbucketedSharePercent([shareRow(6, 0, 0), shareRow(9, 0, 0)], owned)).toBeNull();
+  });
+
+  const sample = hostSample(
+    [
+      { pid: 1, cpu: 90, rss: 9_000 },
+      { pid: 3, cpu: 80, rss: 8_000 },
+      { pid: 6, cpu: 50, rss: 100 },
+      { pid: 7, cpu: 1, rss: 5_000 },
+      { pid: 8, cpu: 30, rss: 200 },
+      { pid: 9, cpu: 2, rss: 300 },
+      { pid: 10, cpu: 3, rss: 50 },
+    ],
+    {
+      sampledAtUnixMs: 10_000,
+      statics: [
+        hostStatic(1, { name: "zsh" }),
+        hostStatic(3),
+        hostStatic(6, { command: `node ${"x".repeat(5_000)}`, cwd: "/srv/web" }),
+        hostStatic(7, { containerId: "0123456789abcdef0123" }),
+        hostStatic(8),
+        hostStatic(9),
+        hostStatic(10),
+      ],
+    },
+  );
+  const unbucketed = (limit: number, commands = true) =>
+    buildUnbucketed({
+      sample,
+      owners: owned,
+      nowMs: 12_500,
+      limit,
+      commands,
+      bucketNames: new Map([[bucketDev, "Dev"]]),
+    });
+
+  it("lists the busiest unbucketed by CPU together with the largest by memory", () => {
+    const top = unbucketed(2);
+    expect(top.processes.map((process) => process.pid)).toEqual([6, 7]);
+    expect(top.truncated).toBe(3);
+
+    const four = unbucketed(4);
+    expect(four.processes.map((process) => process.pid)).toEqual([6, 8, 9, 7]);
+    expect(four.truncated).toBe(1);
+
+    const all = unbucketed(20);
+    expect(all.processes.map((process) => process.pid)).toEqual([6, 8, 10, 9, 7]);
+    expect(all).not.toHaveProperty("truncated");
+    expect(all.sampleAgeMs).toBe(2_500);
+    expect(all.buckets).toEqual([
+      { bucketId: bucketDev, name: "Dev", cpuPercent: 80, rssBytes: 8_000, count: 1 },
+    ]);
+
+    const shareOnly = unbucketed(0);
+    expect(shareOnly.processes).toEqual([]);
+    expect(shareOnly).not.toHaveProperty("truncated");
+    expect(shareOnly.sharePercent).toBe(all.sharePercent);
+  });
+
+  it("fills the fields bucket rules match on, and command and cwd only when asked", () => {
+    const [node, container] = unbucketed(2).processes;
+    expect(node).toEqual({
+      pid: 6,
+      ppid: 1,
+      name: "p6",
+      exe: "/usr/bin/p6",
+      command: `node ${"x".repeat(5_000)}`.slice(0, 4_096),
+      cwd: "/srv/web",
+      user: "dev",
+      parent: "zsh",
+      cpuPercent: 50,
+      rssBytes: 100,
+    });
+    expect(container).toMatchObject({ pid: 7, container: "0123456789abcdef0123" });
+    expect(node).not.toHaveProperty("container");
+
+    for (const process of unbucketed(20, false).processes) {
+      expect(process).not.toHaveProperty("command");
+      expect(process).not.toHaveProperty("cwd");
+    }
+  });
+});
+
+describe("HostProcesses.unbucketed", () => {
+  const unbucketedInput = { limit: 20, commands: true, bucketNames: new Map() };
+
+  it.effect("walks the host once without the GPU, and lists every process nothing owns", () =>
+    Effect.gen(function* () {
+      const requests = yield* Ref.make<ReadonlyArray<unknown>>([]);
+      const { processes } = yield* makeHostProcesses(nativeHealth("healthy", true), Stream.empty, {
+        hostSampleNow: (options) =>
+          Ref.update(requests, (all) => [...all, options]).pipe(
+            Effect.as(hostSample(threeRows, { sampledAtUnixMs: 0 })),
+          ),
+      });
+      yield* TestClock.adjust("1500 millis");
+      const result = yield* processes.unbucketed(unbucketedInput);
+      expect(result).toMatchObject({ sharePercent: 100, sampleAgeMs: 1_500 });
+      expect(result.processes.map((process) => process.pid)).toEqual([3, 2, 1]);
+      expect(yield* Ref.get(requests)).toEqual([
+        { processes: true, gpus: false, gpuProcesses: false },
+      ]);
+    }),
+  );
+
+  it.effect("is unavailable off host mode or when the walk fails", () =>
+    Effect.gen(function* () {
+      const failing: NativeTelemetryClient.NativeTelemetryClient["Service"]["hostSampleNow"] = () =>
+        Effect.fail(
+          new NativeTelemetryClient.NativeTelemetryUnavailable({ reason: "monitor restarting" }),
+        );
+      for (const health of [nativeHealth("healthy", false), nativeHealth("healthy", true)]) {
+        const { processes } = yield* makeHostProcesses(health, Stream.empty, {
+          hostSampleNow: failing,
+        });
+        const error = yield* processes.unbucketed(unbucketedInput).pipe(Effect.flip);
+        expect(error).toBeInstanceOf(HostProcessesUnavailable);
+      }
+    }),
   );
 });

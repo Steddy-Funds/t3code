@@ -229,15 +229,65 @@ it.each([
   ],
   ["a file that is not an object", null, null, []],
 ] as const)("dropInvalidMachineThresholds with %s", (_name, file, expected, dropped) => {
-  expect(ServerSettingsModule.dropInvalidMachineThresholds(file)).toEqual({
-    file: expected,
-    dropped,
+  const { unreadableBuckets, ...rest } = ServerSettingsModule.dropInvalidMachineThresholds(file);
+  expect(rest).toEqual({ file: expected, dropped });
+  const droppedBuckets = dropped.flatMap((path) =>
+    path.startsWith("machineResources.buckets.")
+      ? [path.slice("machineResources.buckets.".length)]
+      : [],
+  );
+  expect(Object.keys(unreadableBuckets)).toEqual(droppedBuckets);
+});
+
+it("returns each unreadable bucket as the file held it", () => {
+  const odd = { ...storedBucket("odd"), rules: [{ field: "gpu", value: "0" }] };
+  const result = ServerSettingsModule.dropInvalidMachineThresholds({
+    machineResources: { buckets: { builds: storedBucket("builds"), odd } },
   });
+  expect(result.unreadableBuckets).toStrictEqual({ odd });
 });
 
 it("keeps an unknown threshold key a newer server saved", () => {
   const file = { machineResources: { thresholds: { gpuVramPercent: 90 } } };
-  expect(ServerSettingsModule.dropInvalidMachineThresholds(file)).toEqual({ file, dropped: [] });
+  expect(ServerSettingsModule.dropInvalidMachineThresholds(file)).toEqual({
+    file,
+    dropped: [],
+    unreadableBuckets: {},
+  });
+});
+
+it("keepUnreadableBuckets puts unreadable buckets back unless a readable one took the id", () => {
+  const odd = { ...storedBucket("odd"), rules: [{ field: "gpu", value: "0" }] };
+  const json = JSON.stringify({ enableProviderUpdateChecks: false }, null, 2);
+  expect(ServerSettingsModule.keepUnreadableBuckets(json, {})).toBe(json);
+  expect(JSON.parse(ServerSettingsModule.keepUnreadableBuckets(json, { odd }))).toStrictEqual({
+    enableProviderUpdateChecks: false,
+    machineResources: { buckets: { odd } },
+  });
+
+  const readable = {
+    machineResources: {
+      thresholds: { loadPerCore: 4 },
+      buckets: { builds: storedBucket("builds"), odd: storedBucket("odd") },
+    },
+  };
+  expect(
+    JSON.parse(
+      ServerSettingsModule.keepUnreadableBuckets(JSON.stringify(readable), {
+        odd,
+        other: { id: "other", rules: [{ field: "gpu" }] },
+      }),
+    ),
+  ).toStrictEqual({
+    machineResources: {
+      thresholds: { loadPerCore: 4 },
+      buckets: {
+        other: { id: "other", rules: [{ field: "gpu" }] },
+        builds: storedBucket("builds"),
+        odd: storedBucket("odd"),
+      },
+    },
+  });
 });
 
 it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("server settings", (it) => {
@@ -2295,6 +2345,36 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("server settings"
         [MachineBucketId.make("builds")]: { ...bucket, provenance },
       });
     }),
+  );
+
+  it.effect("keeps a bucket it cannot read through an unrelated settings write", () =>
+    Effect.gen(function* () {
+      const config = yield* ServerConfig.ServerConfig;
+      const fs = yield* FileSystem.FileSystem;
+      const service = yield* ServerSettingsModule.ServerSettingsService;
+      const unknown = {
+        ...storedBucket("gpu-jobs"),
+        name: "GPU jobs",
+        rules: [{ field: "gpu", value: "0" }],
+      };
+      yield* fs.writeFileString(
+        config.settingsPath,
+        JSON.stringify({
+          machineResources: { buckets: { builds: storedBucket("builds"), "gpu-jobs": unknown } },
+        }),
+      );
+
+      const updated = yield* service.updateSettings({ enableProviderUpdateChecks: false });
+      assert.deepEqual(Object.keys(updated.machineResources.buckets), ["builds"]);
+
+      const onDisk = JSON.parse(yield* fs.readFileString(config.settingsPath));
+      assert.isFalse(onDisk.enableProviderUpdateChecks);
+      assert.deepEqual(onDisk.machineResources.buckets.builds, storedBucket("builds"));
+      assert.equal(
+        JSON.stringify(onDisk.machineResources.buckets["gpu-jobs"]),
+        JSON.stringify(unknown),
+      );
+    }).pipe(Effect.provide(layerServerSettings())),
   );
 
   it.effect("rejects a zero load-per-core threshold in a settings patch", () =>

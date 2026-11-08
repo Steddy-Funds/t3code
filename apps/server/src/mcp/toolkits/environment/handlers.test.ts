@@ -623,3 +623,94 @@ it.effect("fails as unavailable when no status arrives, and reads an empty per-c
     expect(yield* noSample.call("t3_machine_read", {})).toMatchObject({ perCore: [] });
   }),
 );
+
+describe("t3_machine_read unbucketed", () => {
+  /** A machine whose unbucketed walk records its input and lists one process. */
+  const unbucketedHarness = (client?: McpInvocationContext.McpClientCaller) =>
+    Effect.gen(function* () {
+      const walks = yield* Ref.make<ReadonlyArray<unknown>>([]);
+      const record = (kind: string) => (input: object) =>
+        Ref.update(walks, (all) => [...all, { kind, ...input }]);
+      const harness = yield* machineHarness(
+        liveThreadShell(ownerThreadId),
+        {},
+        {
+          ...(client === undefined ? {} : { client }),
+          hostResources: {
+            status: Stream.make(stressedStatus),
+            samples: () => Effect.succeed(Stream.make({ perCore: [50] })),
+          },
+          hostProcesses: {
+            snapshot: (input) =>
+              record("snapshot")(input).pipe(
+                Effect.as({
+                  buckets: [],
+                  snapshot: { source: "host", sampleAgeMs: 0, processes: [] },
+                } as never),
+              ),
+            unbucketed: (input) =>
+              record("unbucketed")(input).pipe(
+                Effect.as({
+                  sharePercent: 40,
+                  sampleAgeMs: 100,
+                  processes: [
+                    {
+                      pid: 7,
+                      ppid: 1,
+                      name: "postgres",
+                      exe: "/usr/bin/postgres",
+                      ...(input.commands
+                        ? { command: "postgres --password=PRIVATE", cwd: "/srv/PRIVATE" }
+                        : {}),
+                      user: "dev",
+                      cpuPercent: 30,
+                      rssBytes: 500,
+                    },
+                  ],
+                  truncated: 3,
+                  buckets: [{ bucketId, name: "Builds", cpuPercent: 5, rssBytes: 10, count: 1 }],
+                }),
+              ),
+          },
+        },
+      );
+      return { ...harness, walks: Ref.get(walks) };
+    });
+
+  it.effect("returns the unbucketed processes and share in place of the process table", () =>
+    Effect.gen(function* () {
+      const harness = yield* unbucketedHarness();
+      const result = yield* harness.call("t3_machine_read", {
+        processes: { unbucketed: true, limit: 50 },
+      });
+      expect(result).toMatchObject({
+        buckets: [{ bucketId, name: "Builds", count: 1 }],
+        unbucketed: {
+          sharePercent: 40,
+          sampleAgeMs: 100,
+          truncated: 3,
+          processes: [{ pid: 7, name: "postgres", command: "postgres --password=PRIVATE" }],
+        },
+      });
+      expect(result).not.toHaveProperty("processes");
+      expect(result).not.toHaveProperty("unbucketed.buckets");
+      expect(yield* harness.walks).toEqual([
+        expect.objectContaining({ kind: "unbucketed", limit: 50, commands: true }),
+      ]);
+    }),
+  );
+
+  it.effect("gives a linked caller no command lines or working directories", () =>
+    Effect.gen(function* () {
+      const harness = yield* unbucketedHarness(peerClient);
+      const result = yield* harness.call("t3_machine_read", {
+        processes: { unbucketed: true },
+      });
+      expect(result).toMatchObject({ unbucketed: { processes: [{ pid: 7, name: "postgres" }] } });
+      expect(JSON.stringify(result)).not.toContain("PRIVATE");
+      expect(yield* harness.walks).toEqual([
+        expect.objectContaining({ kind: "unbucketed", limit: 20, commands: false }),
+      ]);
+    }),
+  );
+});

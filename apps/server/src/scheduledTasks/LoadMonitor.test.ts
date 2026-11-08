@@ -738,6 +738,28 @@ describe("LoadMonitor layer", () => {
     ),
   );
 
+  it.effect("reads the share again on the first tick after a paused task is switched back on", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const monitor = yield* monitorHarness();
+        const shareTask = loadTask(
+          "share",
+          load({ metric: "unbucketedSharePercent", threshold: 30 }),
+        );
+        yield* monitor.setTotals(cpu(10));
+        yield* monitor.setTasks([shareTask]);
+        yield* monitor.advance(2 * TICK_MS);
+        expect(yield* monitor.walks).toHaveLength(1);
+
+        yield* monitor.setTasks([{ ...shareTask, enabled: false }]);
+        yield* monitor.advance(10 * 60_000);
+        yield* monitor.setTasks([shareTask]);
+        yield* monitor.advance(2 * TICK_MS);
+        expect(yield* monitor.walks).toHaveLength(2);
+      }),
+    ),
+  );
+
   it.effect(
     "reads no share where processes cannot be listed, then fires once a later walk reads one",
     () =>

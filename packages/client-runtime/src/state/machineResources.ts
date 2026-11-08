@@ -3,6 +3,7 @@ import {
   type MachineStatusSnapshot,
   type SubscribeMachineInput,
   type SubscribeMachineProcessesInput,
+  type ThreadId,
   WS_METHODS,
 } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
@@ -18,6 +19,7 @@ import {
 import { markMachineHistoryArrival } from "./machineHistory.ts";
 import {
   createEnvironmentRpcCommand,
+  createEnvironmentRpcQueryAtomFamily,
   createEnvironmentRpcSubscriptionAtomFamily,
 } from "./runtime.ts";
 
@@ -88,5 +90,14 @@ export function createMachineResourcesAtoms<R, E>(
     tag: WS_METHODS.machineClaimsRelease,
   });
 
-  return { machine, machineProcesses, releaseClaim };
+  // The server samples at most every 30 s; an idle thread's `current` is read when asked.
+  const threadResourcesQuery = createEnvironmentRpcQueryAtomFamily(runtime, {
+    label: "machine:thread-resources",
+    tag: WS_METHODS.serverGetThreadResources,
+    staleTimeMs: 30_000,
+  });
+  const threadResources = (environmentId: EnvironmentId, threadId: ThreadId) =>
+    threadResourcesQuery({ environmentId, input: { threadId } });
+
+  return { machine, machineProcesses, releaseClaim, threadResources };
 }

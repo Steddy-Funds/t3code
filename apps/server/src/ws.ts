@@ -238,6 +238,7 @@ import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts
 import * as ResourceTelemetry from "./resourceTelemetry/ResourceTelemetry.ts";
 import * as HostProcesses from "./resourceTelemetry/HostProcesses.ts";
 import * as ProcessOwnership from "./resourceTelemetry/ProcessOwnership.ts";
+import * as ThreadResources from "./resourceTelemetry/ThreadResources.ts";
 import * as HostResources from "./resourceTelemetry/HostResources.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import { commandFeatureUsage, featureUsage } from "./telemetry/FeatureUsage.ts";
@@ -1513,6 +1514,7 @@ export const layerWsRpc = (
       const hostResources = yield* HostResources.HostResources;
       const hostProcesses = yield* HostProcesses.HostProcesses;
       const processOwnership = yield* ProcessOwnership.ProcessOwnership;
+      const threadResources = yield* ThreadResources.ThreadResources;
       const processResourceMonitor = yield* ProcessResourceMonitor.ProcessResourceMonitor;
       const resourceTelemetry = yield* ResourceTelemetry.ResourceTelemetry;
       const relayClient = yield* RelayClient.RelayClient;
@@ -2689,6 +2691,7 @@ export const layerWsRpc = (
         [WS_METHODS.serverGetUsageSummary]: (input) => usage.readSummary(input),
         [WS_METHODS.serverRefreshUsageRates]: (_input) => usage.refreshRates,
         [WS_METHODS.serverGetThreadUsage]: ({ threadId }) => threadUsage.read(threadId),
+        [WS_METHODS.serverGetThreadResources]: ({ threadId }) => threadResources.read(threadId),
         [WS_METHODS.serverRetryResourceTelemetry]: (_input) => resourceTelemetry.retry,
         [WS_METHODS.serverCheckOtlpEndpoint]: (input) => otlpEndpointCheck.check(input),
         [WS_METHODS.serverPrepareTriage]: (input) => triage.prepare(input),

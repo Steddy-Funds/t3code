@@ -187,6 +187,7 @@ import * as ResourceAttribution from "./resourceTelemetry/ResourceAttribution.ts
 import * as ResourceMonitorBinary from "./resourceTelemetry/ResourceMonitorBinary.ts";
 import * as ProcessGroupMetrics from "./resourceTelemetry/ProcessGroupMetrics.ts";
 import * as ProcessOwnership from "./resourceTelemetry/ProcessOwnership.ts";
+import * as ThreadResources from "./resourceTelemetry/ThreadResources.ts";
 import * as ResourceTelemetry from "./resourceTelemetry/ResourceTelemetry.ts";
 import * as AntigravityUsage from "./provider/Drivers/AntigravityUsage.ts";
 import { MuseUsageHome } from "@t3tools/provider-muse/server";
@@ -320,6 +321,11 @@ const layerResourceDiagnostics = Layer.mergeAll(
     Layer.provide(layerProcessOwnership),
   ),
   layerProcessOwnership,
+  ThreadResources.layer.pipe(
+    Layer.provide(layerProcessOwnership),
+    Layer.provide(layerNativeTelemetry),
+    Layer.provide(ProjectionStoreV2.layer.pipe(Layer.provide(layerServerSettings))),
+  ),
   layerResourceTelemetry,
   ProcessDiagnostics.layer.pipe(Layer.provide(layerResourceTelemetry)),
   ProcessResourceMonitor.layer.pipe(Layer.provide(layerResourceTelemetry)),

@@ -9,6 +9,7 @@ import {
   type ResourceTelemetryProcess,
   type ResourceTelemetrySnapshot,
   type SubscribeMachineProcessesInput,
+  type ThreadId,
 } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
@@ -20,7 +21,7 @@ import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 
 import * as NativeTelemetryClient from "./NativeTelemetryClient.ts";
-import { ProcessOwnership, type OwnershipRow } from "./ProcessOwnership.ts";
+import { ownerThreadId, ProcessOwnership, type OwnershipRow } from "./ProcessOwnership.ts";
 import * as ResourceTelemetry from "./ResourceTelemetry.ts";
 
 export class HostProcesses extends Context.Service<
@@ -67,6 +68,8 @@ export interface FrameInput {
   /** By process key; rows without one are sent without an owner. */
   readonly owners?: ReadonlyMap<string, ProcessOwner>;
   readonly claims?: ReadonlyArray<Claim>;
+  /** Only rows this thread owns, directly or through a claim. */
+  readonly threadId?: ThreadId;
 }
 
 const identityOf = (process: ResourceTelemetryProcess) =>
@@ -120,6 +123,9 @@ function staticFields(
   };
 }
 
+const isOwnedBy = (owner: ProcessOwner | undefined, threadId: ThreadId | undefined) =>
+  owner !== undefined && ownerThreadId(owner) === threadId;
+
 function isSameOwner(a: ProcessOwner | undefined, b: ProcessOwner | undefined): boolean {
   if (a === b) return true;
   if (a === undefined || b === undefined || a.type !== b.type) return false;
@@ -159,8 +165,14 @@ export function nextFrame(
   if (!full && input.readAtMs === state.lastReadAtMs) return [null, state];
 
   const previousKeys = full ? new Map<string, number>() : state.keys;
+  const processes =
+    input.threadId === undefined
+      ? input.processes
+      : input.processes.filter((process) =>
+          isOwnedBy(input.owners?.get(identityOf(process)), input.threadId),
+        );
   const { selected, truncated } = input.monitorAvailable
-    ? selectProcesses(input.processes, input.top)
+    ? selectProcesses(processes, input.top)
     : { selected: [], truncated: 0 };
 
   let nextKey = full ? 0 : state.nextKey;
@@ -263,6 +275,8 @@ export interface HostFrameInput {
   /** By process key, over every process in the sample. */
   readonly owners?: ReadonlyMap<string, ProcessOwner>;
   readonly claims?: ReadonlyArray<Claim>;
+  /** Only rows this thread owns, directly or through a claim. */
+  readonly threadId?: ThreadId;
 }
 
 interface HostRow {
@@ -421,7 +435,11 @@ export function nextHostFrames(
     return [[], state];
   }
 
-  const { selected, truncated } = selectTop(hostRows(sample), input.top, hostByCpu, hostByRss);
+  const rows =
+    input.threadId === undefined
+      ? hostRows(sample)
+      : hostRows(sample).filter((row) => isOwnedBy(input.owners?.get(row.identity), input.threadId));
+  const { selected, truncated } = selectTop(rows, input.top, hostByCpu, hostByRss);
   // The columns follow the request; a sample without GPU rows sends null (unmeasured) once, so
   // the client never keeps a stale value after GPUs turn off.
   const gpuColumns = input.gpuProcesses;
@@ -588,6 +606,7 @@ const make = Effect.fn("makeHostProcesses")(function* () {
                     gpuProcesses,
                     owners,
                     claims,
+                    ...(input.threadId === undefined ? {} : { threadId: input.threadId }),
                   }),
                 );
               }),
@@ -623,6 +642,7 @@ const make = Effect.fn("makeHostProcesses")(function* () {
                   top: input.top,
                   owners,
                   claims,
+                  ...(input.threadId === undefined ? {} : { threadId: input.threadId }),
                 }),
               );
             }),

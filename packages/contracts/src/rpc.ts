@@ -352,8 +352,10 @@ import {
   MachineClaimsReleaseInput,
   MachineProcessFrame,
   MachineStatusSnapshot,
+  ServerGetThreadResourcesInput,
   SubscribeMachineInput,
   SubscribeMachineProcessesInput,
+  ThreadResources,
 } from "./machineResources.ts";
 import {
   UsageLimitSourceError,
@@ -555,6 +557,7 @@ export const WS_METHODS = {
   serverGetUsageSummary: "server.getUsageSummary",
   serverRefreshUsageRates: "server.refreshUsageRates",
   serverGetThreadUsage: "server.getThreadUsage",
+  serverGetThreadResources: "server.getThreadResources",
 
   scheduledTasksSubscribe: "scheduledTasks.subscribe",
   scheduledTasksUpsert: "scheduledTasks.upsert",
@@ -994,6 +997,12 @@ const WsServerGetThreadUsageRpc = Rpc.make(WS_METHODS.serverGetThreadUsage, {
   payload: ThreadUsageInput,
   success: ThreadUsage,
   error: Schema.Union([EnvironmentAuthorizationError, UsageReadError]),
+});
+
+const WsServerGetThreadResourcesRpc = Rpc.make(WS_METHODS.serverGetThreadResources, {
+  payload: ServerGetThreadResourcesInput,
+  success: ThreadResources,
+  error: EnvironmentAuthorizationError,
 });
 
 const WsServerRefreshUsageRatesRpc = Rpc.make(WS_METHODS.serverRefreshUsageRates, {
@@ -2101,6 +2110,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerGetUsageSummaryRpc,
   WsServerRefreshUsageRatesRpc,
   WsServerGetThreadUsageRpc,
+  WsServerGetThreadResourcesRpc,
   WsServerSignalProcessRpc,
   WsMachineClaimsReleaseRpc,
   WsScheduledTasksSubscribeRpc,

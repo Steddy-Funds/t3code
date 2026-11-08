@@ -239,6 +239,44 @@ export const ProcessOwner = Schema.Union([
 ]);
 export type ProcessOwner = typeof ProcessOwner.Type;
 
+export const ThreadResourceSource = Schema.Literals(["cgroup", "sample", "none"]);
+export type ThreadResourceSource = typeof ThreadResourceSource.Type;
+
+/** What one thread's processes, its claims included, use now. Each process counts once. */
+export const ThreadResourceTotals = Schema.Struct({
+  /** Percent of one core. */
+  cpuPercent: Schema.Number,
+  memoryBytes: NonNegativeInt,
+  gpuUtilPercent: Schema.NullOr(Schema.Number),
+  vramBytes: Schema.NullOr(NonNegativeInt),
+  processCount: NonNegativeInt,
+  sampleAgeMs: NonNegativeInt,
+  source: ThreadResourceSource,
+});
+export type ThreadResourceTotals = typeof ThreadResourceTotals.Type;
+
+/** One 30 s rollup. Two points more than 30 s apart mean no turn ran between them. */
+export const ThreadResourcePoint = Schema.Struct({
+  ageMs: NonNegativeInt,
+  cpuPercent: Schema.Number,
+  memoryBytes: NonNegativeInt,
+  gpuUtilPercent: Schema.NullOr(Schema.Number),
+});
+export type ThreadResourcePoint = typeof ThreadResourcePoint.Type;
+
+export const THREAD_RESOURCE_HISTORY_POINTS = 240;
+
+export const ServerGetThreadResourcesInput = Schema.Struct({ threadId: ThreadId });
+export type ServerGetThreadResourcesInput = typeof ServerGetThreadResourcesInput.Type;
+
+export const ThreadResources = Schema.Struct({
+  /** Null when nothing is known to belong to the thread. */
+  current: Schema.NullOr(ThreadResourceTotals),
+  /** Oldest first, at most 240 points. */
+  history: Schema.Array(ThreadResourcePoint),
+});
+export type ThreadResources = typeof ThreadResources.Type;
+
 export const MachineClaimsReleaseInput = Schema.Struct({ claimId: ClaimId });
 export type MachineClaimsReleaseInput = typeof MachineClaimsReleaseInput.Type;
 
@@ -436,5 +474,7 @@ export const SubscribeMachineProcessesInput = Schema.Struct({
   ),
   /** Per-process GPU columns; the host walks DRM fdinfo or asks NVML for them. */
   gpuProcesses: Schema.optionalKey(Schema.Boolean),
+  /** Only processes this thread owns, directly or through a claim. */
+  threadId: Schema.optionalKey(ThreadId),
 });
 export type SubscribeMachineProcessesInput = typeof SubscribeMachineProcessesInput.Type;

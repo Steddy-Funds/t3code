@@ -527,6 +527,8 @@ export const layerExecutor: Layer.Layer<
                   }),
               ),
             );
+          case "machine-claims.cleanup":
+            return resourceCleanup.cleanupMachineClaims(effect.threadId);
           case "attachment.cleanup":
             return resourceCleanup.cleanupAttachments(effect.request.attachmentIds).pipe(
               Effect.mapError(

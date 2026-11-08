@@ -220,6 +220,29 @@ describe("buildResourceTelemetryHistory", () => {
     expect(child?.ioWriteBytes).toBe(4_000);
   });
 
+  it("leaves a claimed process out of the history", () => {
+    const claimed = (sample: ResourceMonitorSnapshotEvent) => ({
+      ...sample,
+      claimedPids: [CHILD_PID],
+    });
+    const history = buildResourceTelemetryHistory({
+      readAt: DateTime.makeUnsafe(STARTED_AT_MS + 2_000),
+      windowMs: 10_000,
+      bucketMs: 10_000,
+      sampleIntervalMs: 1_000,
+      serverPid: SERVER_PID,
+      sidecarPid: Option.none(),
+      desktopSnapshot: Option.none(),
+      snapshots: [
+        claimed(snapshot(1, STARTED_AT_MS, 100, 1_000)),
+        claimed(snapshot(2, STARTED_AT_MS + 1_000, 350, 5_000)),
+      ],
+      health,
+    });
+
+    expect(history.topProcesses.map((process) => process.identity.pid)).not.toContain(CHILD_PID);
+  });
+
   it("uses the preceding sample as a baseline without attributing pre-window deltas", () => {
     const readAtMs = STARTED_AT_MS + 10_000;
     const history = buildResourceTelemetryHistory({

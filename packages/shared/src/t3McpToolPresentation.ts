@@ -55,6 +55,8 @@ export type T3McpToolSummaryAction =
   | "environment-link"
   | "environment-unlink"
   | "environment-update"
+  | "machine-buckets"
+  | "resource-claims"
   | "attachment-prepare"
   | "attachment-discard"
   | "attachment-send"
@@ -354,6 +356,8 @@ const T3_MCP_TOOLS: Readonly<Record<string, T3McpToolDefinition>> = {
     ["Update", "Updating", "Updated", "environment preferences"],
     "environment-update",
   ),
+  t3_machine_buckets: tool(["Use", "Using", "Used", "machine buckets"], "machine-buckets"),
+  t3_resource_claim: tool(["Use", "Using", "Used", "resource claims"], "resource-claims"),
   t3_thread_launch: tool(["Launch", "Launching", "Launched", "a project thread"], "thread-create"),
   t3_project_list: tool(["List", "Listing", "Listed", "projects"], "project-list"),
   t3_project_read: tool(["Read", "Reading", "Read", "a project"], "project-read"),

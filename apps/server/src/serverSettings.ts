@@ -1,5 +1,6 @@
 import {
   DEFAULT_SERVER_SETTINGS,
+  MachineBucket,
   MachineThresholds,
   ModelSelection,
   ProjectId,
@@ -381,6 +382,7 @@ const PersistedServerSettings = Schema.Struct({
 const decodeSettingsFileJsonExit = Schema.decodeUnknownExit(fromLenientJson(Schema.Unknown));
 const decodePersistedServerSettingsExit = Schema.decodeUnknownExit(PersistedServerSettings);
 const decodeMachineThresholdsExit = Schema.decodeUnknownExit(MachineThresholds);
+const decodeMachineBucketExit = Schema.decodeUnknownExit(MachineBucket);
 
 const isPlainRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
@@ -389,6 +391,7 @@ const isPlainRecord = (value: unknown): value is Record<string, unknown> =>
  * A hand-edited threshold out of bounds must not reset every other setting, so invalid
  * `machineResources.thresholds` keys are dropped (back to their defaults) before decoding.
  */
+/** Drops invalid machine thresholds and buckets entry by entry, so one bad entry keeps the rest. */
 export function dropInvalidMachineThresholds(file: unknown): {
   readonly file: unknown;
   readonly dropped: ReadonlyArray<string>;
@@ -399,26 +402,33 @@ export function dropInvalidMachineThresholds(file: unknown): {
     const { machineResources: _invalid, ...rest } = file;
     return { file: rest, dropped: ["machineResources"] };
   }
-  const thresholds = machineResources.thresholds;
-  if (thresholds === undefined) return { file, dropped: [] };
-  if (!isPlainRecord(thresholds)) {
-    const { thresholds: _invalid, ...restResources } = machineResources;
-    return {
-      file: { ...file, machineResources: restResources },
-      dropped: ["machineResources.thresholds"],
-    };
-  }
-  const kept: Record<string, unknown> = {};
+  const next: Record<string, unknown> = { ...machineResources };
   const dropped: Array<string> = [];
-  for (const [key, value] of Object.entries(thresholds)) {
-    if (Exit.isSuccess(decodeMachineThresholdsExit({ [key]: value }))) kept[key] = value;
-    else dropped.push(`machineResources.thresholds.${key}`);
-  }
-  if (dropped.length === 0) return { file, dropped };
-  return {
-    file: { ...file, machineResources: { ...machineResources, thresholds: kept } },
-    dropped,
+  const sanitize = (field: string, isValid: (key: string, value: unknown) => boolean) => {
+    const entries = machineResources[field];
+    if (entries === undefined) return;
+    if (!isPlainRecord(entries)) {
+      delete next[field];
+      dropped.push(`machineResources.${field}`);
+      return;
+    }
+    const kept: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(entries)) {
+      if (isValid(key, value)) kept[key] = value;
+      else dropped.push(`machineResources.${field}.${key}`);
+    }
+    next[field] = kept;
   };
+  sanitize("thresholds", (key, value) =>
+    Exit.isSuccess(decodeMachineThresholdsExit({ [key]: value })),
+  );
+  sanitize(
+    "buckets",
+    (key, value) =>
+      Exit.isSuccess(decodeMachineBucketExit(value)) && isPlainRecord(value) && value.id === key,
+  );
+  if (dropped.length === 0) return { file, dropped };
+  return { file: { ...file, machineResources: next }, dropped };
 }
 const LegacyProviderSettingsJson = fromLenientJson(
   Schema.Struct({
@@ -834,10 +844,13 @@ const make = Effect.gen(function* () {
       const parsed = decodeSettingsFileJsonExit(raw);
       const sanitized = dropInvalidMachineThresholds(Exit.isSuccess(parsed) ? parsed.value : null);
       if (sanitized.dropped.length > 0) {
-        yield* Effect.logWarning("ignoring invalid machine thresholds in settings.json", {
-          path: settingsPath,
-          keys: sanitized.dropped,
-        });
+        yield* Effect.logWarning(
+          "ignoring invalid machine thresholds or buckets in settings.json",
+          {
+            path: settingsPath,
+            keys: sanitized.dropped,
+          },
+        );
       }
       const decoded = Exit.isFailure(parsed)
         ? parsed

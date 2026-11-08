@@ -1,10 +1,15 @@
-import type {
-  MachineProcessAdded,
-  MachineProcessFrame,
-  MachineProcessSource,
+import {
+  isUnknownUnionMember,
+  type Claim,
+  type MachineProcessAdded,
+  type MachineProcessFrame,
+  type MachineProcessSource,
+  type ProcessOwner,
 } from "@t3tools/contracts";
 
-export interface MachineProcessRow extends MachineProcessAdded {
+export interface MachineProcessRow extends Omit<MachineProcessAdded, "owner"> {
+  /** Absent when unattributed: from a server before ownership, or an owner kind this client predates. */
+  readonly owner?: ProcessOwner;
   /** Percent of one core. */
   readonly cpu: number;
   /** Resident bytes. */
@@ -22,6 +27,8 @@ export interface MachineProcessTable {
   readonly rows: ReadonlyArray<MachineProcessRow>;
   /** Rows the server left out past its row cap. */
   readonly truncated: number;
+  /** The machine's claims; absent from a server without ownership. */
+  readonly claims?: ReadonlyArray<Claim>;
 }
 
 interface KeyedTable {
@@ -30,12 +37,20 @@ interface KeyedTable {
   sampleAgeMs: number;
   source: MachineProcessSource;
   truncated: number;
+  claims: ReadonlyArray<Claim> | undefined;
   readonly entries: Map<number, MachineProcessRow>;
 }
 
 function foldFrame(table: KeyedTable, frame: MachineProcessFrame): void {
   for (const key of frame.removed) table.entries.delete(key);
-  for (const added of frame.added) table.entries.set(added.key, { ...added, cpu: 0, rss: 0 });
+  for (const { owner, ...added } of frame.added) {
+    table.entries.set(added.key, {
+      ...added,
+      ...(owner === undefined || isUnknownUnionMember(owner) ? {} : { owner }),
+      cpu: 0,
+      rss: 0,
+    });
+  }
   const { key, cpu, rss, gpuUtil, vram } = frame.rows;
   for (let index = 0; index < key.length; index++) {
     const entry = table.entries.get(key[index]!);
@@ -53,6 +68,7 @@ function foldFrame(table: KeyedTable, frame: MachineProcessFrame): void {
   table.sampleAgeMs = frame.sampleAgeMs;
   table.source = frame.source;
   table.truncated = frame.truncated ?? 0;
+  if (frame.claims !== undefined) table.claims = frame.claims;
 }
 
 function toTable(table: KeyedTable): MachineProcessTable {
@@ -63,6 +79,7 @@ function toTable(table: KeyedTable): MachineProcessTable {
     source: table.source,
     rows: [...table.entries.values()],
     truncated: table.truncated,
+    ...(table.claims === undefined ? {} : { claims: table.claims }),
   };
 }
 
@@ -73,6 +90,7 @@ function emptyTable(frame: MachineProcessFrame): KeyedTable {
     sampleAgeMs: frame.sampleAgeMs,
     source: frame.source,
     truncated: 0,
+    claims: undefined,
     entries: new Map(),
   };
 }

@@ -70,6 +70,9 @@ describe("RPC authorization scopes", () => {
 
   it("lets any reader see the machine verdict but keeps process tables behind diagnostics", () => {
     expect(requiredScopeForRpcMethod(WS_METHODS.subscribeMachine)).toBe(AuthOrchestrationReadScope);
+    expect(requiredScopeForRpcMethod(WS_METHODS.serverGetThreadResources)).toBe(
+      AuthOrchestrationReadScope,
+    );
     expect(requiredScopeForRpcMethod(WS_METHODS.subscribeMachineProcesses)).toBe(
       AuthDiagnosticsReadScope,
     );

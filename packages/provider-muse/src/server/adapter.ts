@@ -25,6 +25,7 @@ import {
 } from "@t3tools/contracts";
 import type { MuseSettings } from "../settings.ts";
 import { AgentScope } from "@t3tools/shared/AgentScope";
+import { ProcessOwnershipRegistry } from "@t3tools/shared/ProcessOwnershipRegistry";
 import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
 import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
@@ -271,6 +272,7 @@ export const makeMuseAdapterV2 = Effect.fn("makeMuseAdapterV2")(function* (
   const fileSystem = yield* FileSystem.FileSystem;
   const mcpSessions = yield* McpProviderSessions.McpProviderSessions;
   const agentScope = yield* AgentScope;
+  const ownership = yield* ProcessOwnershipRegistry;
 
   const protocolError = (detail: string, payload?: unknown) =>
     new ProviderAdapter.ProviderAdapterProtocolError({
@@ -1699,6 +1701,20 @@ export const makeMuseAdapterV2 = Effect.fn("makeMuseAdapterV2")(function* (
         const processExited = yield* Deferred.make<ProcessExit>();
         // Observe raw exit before acquisition: inherited stdout can also block startup cleanup.
         yield* Deferred.await(processExited).pipe(Effect.andThen(stopScope), Effect.forkIn(scope));
+        // The SDK hides the pid, so the root is the scope's cgroup alone.
+        const cgroup =
+          scopeUnit === undefined ? undefined : yield* agentScope.controlGroup(scopeUnit);
+        if (cgroup !== undefined) {
+          const releaseRoot = ownership.registerRoot({
+            cgroup,
+            owner: { type: "thread", threadId: input.threadId },
+          });
+          yield* Scope.addFinalizer(scope, Effect.sync(releaseRoot));
+          yield* Deferred.await(processExited).pipe(
+            Effect.andThen(Effect.sync(releaseRoot)),
+            Effect.forkIn(scope),
+          );
+        }
         const created = yield* Effect.acquireRelease(
           createMuseSdkHostEffect(
             {

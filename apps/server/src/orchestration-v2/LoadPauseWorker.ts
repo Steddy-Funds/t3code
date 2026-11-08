@@ -46,9 +46,6 @@ const readServerCgroup = (platform: NodeJS.Platform): string | undefined => {
   }
 };
 
-const containerKey = (container: OrchestrationV2LoadPausedContainer) =>
-  `${container.dockerHost ?? ""}\u0000${container.id}`;
-
 /**
  * Pauses low-priority threads while the machine stays stressed, by interrupting them and later
  * sending "Continue where you left off.", plus `docker pause` of containers only they claim.
@@ -63,7 +60,7 @@ export const make = Effect.gen(function* () {
   const threadResources = yield* ThreadResources;
   const ownership = yield* ProcessOwnership;
   const background = yield* BackgroundPolicy.BackgroundPolicy;
-  const docker = yield* LoadPauseDocker.make;
+  const docker = yield* LoadPauseDocker.LoadPauseDocker;
   const serverCgroup = readServerCgroup(yield* HostProcess.Platform);
 
   // The Scheduler runs one sweep at a time, so this state needs no lock.
@@ -156,7 +153,7 @@ export const make = Effect.gen(function* () {
     return candidates;
   });
 
-  /** Re-reads the claims and the pause right before `docker pause`; any change skips it. */
+  /** Re-read under the container's lock around `docker pause`; any change skips or undoes it. */
   const stillOnlyVictims = Effect.fnUntraced(function* (
     container: OrchestrationV2LoadPausedContainer,
     episodeId: string,
@@ -208,12 +205,16 @@ export const make = Effect.gen(function* () {
       );
       if (!set) continue;
       paused.set(victim.threadId, episodeId);
-      for (const container of containersPaused) toPause.set(containerKey(container), container);
+      for (const container of containersPaused) {
+        toPause.set(LoadPauseDocker.containerKey(container), container);
+      }
     }
     for (const container of toPause.values()) {
-      if (!(yield* stillOnlyVictims(container, episodeId))) continue;
+      const stillWanted = stillOnlyVictims(container, episodeId).pipe(
+        Effect.orElseSucceed(() => false),
+      );
       yield* docker
-        .pause(container)
+        .pause(container, stillWanted)
         .pipe(
           Effect.catch((error) =>
             Effect.logWarning("Could not pause a load-paused thread's container", { error }),
@@ -233,10 +234,11 @@ export const make = Effect.gen(function* () {
       nowMs,
       nextResumeAtMs,
     })) {
-      yield* dispatch(command);
+      // A failed clear keeps the thread tracked for the next gap; the gap still advances.
+      nextResumeAtMs = nowMs + LOAD_RESUME_GAP_MS;
+      if (!(yield* dispatch(command))) continue;
       paused.delete(command.threadId);
       resumedAtMs.set(command.threadId, nowMs);
-      nextResumeAtMs = nowMs + LOAD_RESUME_GAP_MS;
     }
   });
 

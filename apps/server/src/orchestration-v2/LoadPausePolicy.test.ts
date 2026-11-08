@@ -278,6 +278,7 @@ const claim = (
 
 const FULL_A = "a".repeat(64);
 const FULL_B = "b".repeat(64);
+const ROOTLESS = "unix:///run/user/1000/docker.sock";
 
 const containersOf = (
   victims: ReadonlyArray<string>,
@@ -297,9 +298,9 @@ describe("loadPauseContainers", () => {
     expect(
       containersOf(
         ["v"],
-        [claim("v", { containerId: FULL_A, prefix: "web", dockerHost: "ssh://box" })],
+        [claim("v", { containerId: FULL_A, prefix: "web", dockerHost: ROOTLESS })],
       ),
-    ).toEqual({ v: [{ id: FULL_A, dockerHost: "ssh://box" }] });
+    ).toEqual({ v: [{ id: FULL_A, dockerHost: ROOTLESS }] });
   });
 
   it("skips a container any non-victim also claims (F4)", () => {
@@ -326,11 +327,38 @@ describe("loadPauseContainers", () => {
         ["v"],
         [
           claim("v", { containerId: FULL_A }),
-          claim("other", { containerId: FULL_A, dockerHost: "ssh://box" }),
+          claim("other", { containerId: FULL_A, dockerHost: ROOTLESS }),
         ],
       ),
     ).toEqual({ v: [{ id: FULL_A }] });
   });
+
+  it.each([
+    ["the default daemon", undefined, true],
+    ["a unix socket", ROOTLESS, true],
+    ["a Windows named pipe", "npipe:////./pipe/docker_engine", true],
+    ["a tcp daemon", "tcp://10.0.0.5:2375", false],
+    ["an ssh daemon", "ssh://builder@box", false],
+  ] as const)(
+    "a container on %s (%s) is recorded only on a local daemon",
+    (_name, dockerHost, recorded) => {
+      expect(
+        containersOf(
+          ["v"],
+          [
+            claim("v", {
+              containerId: FULL_A,
+              ...(dockerHost === undefined ? {} : { dockerHost }),
+            }),
+          ],
+        ),
+      ).toEqual(
+        recorded
+          ? { v: [{ id: FULL_A, ...(dockerHost === undefined ? {} : { dockerHost }) }] }
+          : {},
+      );
+    },
+  );
 
   it("never acts on unresolved containers or on process and cgroup claims", () => {
     const processClaim: ResolvedClaim = {

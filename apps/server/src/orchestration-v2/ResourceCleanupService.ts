@@ -17,7 +17,13 @@ import * as LoadPauseDocker from "./LoadPauseDocker.ts";
 export class ResourceCleanupError extends Schema.TaggedError<ResourceCleanupError>()(
   "ResourceCleanupError",
   {
-    operation: Schema.Literals(["terminal", "preview", "attachment", "scheduled-tasks"]),
+    operation: Schema.Literals([
+      "terminal",
+      "preview",
+      "attachment",
+      "scheduled-tasks",
+      "load-pause-containers",
+    ]),
     threadId: Schema.optional(Schema.String),
     attachmentId: Schema.optional(Schema.String),
     cause: Schema.Defect(),
@@ -30,10 +36,13 @@ export class ResourceCleanupService extends Context.Reference<{
   readonly cleanupPreviews: (threadId: string) => Effect.Effect<void, ResourceCleanupError>;
   /** Releases a deleted thread's machine claims; archiving keeps them. */
   readonly cleanupMachineClaims: (threadId: ThreadId) => Effect.Effect<void>;
-  /** Unpauses containers a load pause paused; must succeed when one is already running or gone. */
+  /**
+   * Unpauses containers a load pause paused. Succeeds when one is already running or gone; any
+   * other failure fails it after every container was tried, so the outbox retries.
+   */
   readonly unpauseLoadPausedContainers: (
     containers: ReadonlyArray<OrchestrationV2LoadPausedContainer>,
-  ) => Effect.Effect<void>;
+  ) => Effect.Effect<void, ResourceCleanupError>;
   readonly cleanupAttachments: (
     attachmentIds: ReadonlyArray<string>,
   ) => Effect.Effect<void, ResourceCleanupError>;
@@ -57,19 +66,23 @@ export const layer = Layer.effect(
     const config = yield* ServerConfig.ServerConfig;
     const scheduledTasks = yield* ScheduledTaskService.ScheduledTaskService;
     const ownership = yield* ProcessOwnership;
-    const docker = yield* LoadPauseDocker.make;
+    const docker = yield* LoadPauseDocker.LoadPauseDocker;
     return {
       cleanupMachineClaims: ownership.releaseThread,
       unpauseLoadPausedContainers: Effect.fn("ResourceCleanupService.unpauseLoadPausedContainers")(
         function* (containers: ReadonlyArray<OrchestrationV2LoadPausedContainer>) {
+          const failures: Array<LoadPauseDocker.LoadPauseDockerError> = [];
           for (const container of containers) {
-            yield* docker
-              .unpause(container)
-              .pipe(
-                Effect.catch((error) =>
-                  Effect.logWarning("Could not unpause a load-paused container", { error }),
-                ),
-              );
+            const result = yield* Effect.result(docker.unpause(container));
+            if (result._tag === "Failure" && result.failure.reason !== "not-found") {
+              failures.push(result.failure);
+            }
+          }
+          if (failures.length > 0) {
+            return yield* new ResourceCleanupError({
+              operation: "load-pause-containers",
+              cause: failures,
+            });
           }
         },
       ),

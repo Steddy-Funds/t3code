@@ -71,7 +71,11 @@ const transition = (
 ) => {
   const docker = fakeDocker(script);
   return LoadPauseDocker.make.pipe(
-    Effect.flatMap((service) => service[command](container)),
+    Effect.flatMap((service) =>
+      command === "pause"
+        ? service.pause(container, Effect.succeed(true))
+        : service.unpause(container),
+    ),
     Effect.provideService(ProcessRunner.ProcessRunner, docker.runner),
     Effect.result,
     Effect.map((result) => ({ result, calls: docker.calls })),
@@ -197,7 +201,7 @@ describe("LoadPauseDocker", () => {
     }),
   );
 
-  it.effect("cleanup unpauses every recorded container past one that fails", () =>
+  it.effect("cleanup tries every recorded container, then fails on all but a gone one", () =>
     Effect.gen(function* () {
       const failures: Record<string, string> = {
         ["a".repeat(64)]: "Error response from daemon: No such container: aaa",
@@ -236,7 +240,9 @@ describe("LoadPauseDocker", () => {
                 Layer.mock(TerminalManager.TerminalManager)({}),
                 Layer.mock(PreviewManager.PreviewManager)({}),
                 Layer.mock(ScheduledTaskService.ScheduledTaskService)({}),
-                Layer.succeed(ProcessRunner.ProcessRunner, runner),
+                LoadPauseDocker.layer.pipe(
+                  Layer.provide(Layer.succeed(ProcessRunner.ProcessRunner, runner)),
+                ),
               ),
             ),
             Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "t3-load-pause-" })),
@@ -245,8 +251,20 @@ describe("LoadPauseDocker", () => {
         ),
         Effect.result,
       );
-      assert.equal(result._tag, "Success");
       assert.deepEqual(unpaused, ids);
+      const failure = result._tag === "Failure" ? result.failure : null;
+      assert.instanceOf(failure, ResourceCleanupService.ResourceCleanupError);
+      assert.equal(failure.operation, "load-pause-containers");
+      assert.deepEqual(
+        (failure.cause as ReadonlyArray<LoadPauseDocker.LoadPauseDockerError>).map((error) => [
+          error.containerId[0],
+          error.reason,
+        ]),
+        [
+          ["b", "permission"],
+          ["c", "failed"],
+        ],
+      );
     }),
   );
 });

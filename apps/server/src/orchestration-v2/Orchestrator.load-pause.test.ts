@@ -472,14 +472,12 @@ it.effect("while paused the queue waits for the user; a user send resumes it", (
     yield* createThread(threadId);
     yield* userSend(threadId, "active", "start_immediately");
     const runId = yield* makeRunLive(threadId);
-    yield* settleRun(threadId, runId, "completed");
-
-    // A pause on an ended run holds without an interrupt.
     yield* pause(threadId, runId);
-    assert.deepEqual(yield* outbox(CommandId.make(`pause:${threadId}:episode:1`)), []);
+    yield* settleRun(threadId, runId, "interrupted");
+
     // Nothing is running, yet even an agent's start_immediately waits, held.
     yield* agentSend(threadId, "agent nudge", "start_immediately");
-    assert.deepEqual(yield* runState(threadId), ["active:completed", "agent nudge:queued:held"]);
+    assert.deepEqual(yield* runState(threadId), ["active:interrupted", "agent nudge:queued:held"]);
     const resumeQueue = yield* Effect.exit(
       orchestrator.dispatch({
         type: "queue.resume",
@@ -501,7 +499,7 @@ it.effect("while paused the queue waits for the user; a user send resumes it", (
       payload: { ...nudge, queueHeld: false },
     });
     yield* orchestrator.resumeQueuedRuns;
-    assert.deepEqual(yield* runState(threadId), ["active:completed", "agent nudge:queued"]);
+    assert.deepEqual(yield* runState(threadId), ["active:interrupted", "agent nudge:queued"]);
 
     yield* userSend(threadId, "back", "start_immediately");
     const resumed = yield* orchestrator.getThreadProjection(threadId);
@@ -554,6 +552,23 @@ it.effect("clearing a pause whose run already ended releases the queue now, idem
     yield* orchestrator.dispatch({ type: "thread.load-pause.clear", commandId: again, threadId });
     assert.deepEqual(yield* outbox(again), []);
     assert.deepEqual(yield* runState(threadId), state);
+  }).pipe(Effect.provide(layerTest)),
+);
+
+it.effect("a set for a run that already ended is rejected and leaves the thread unpaused", () =>
+  Effect.gen(function* () {
+    const orchestrator = yield* Orchestrator.OrchestratorV2;
+    const threadId = ThreadId.make("thread:load-pause-set-ended");
+    yield* createThread(threadId);
+    yield* userSend(threadId, "active", "start_immediately");
+    const runId = yield* makeRunLive(threadId);
+    yield* userSend(threadId, "user follow-up", "queue_after_active");
+    yield* settleRun(threadId, runId, "completed");
+    const before = yield* runState(threadId);
+
+    assert.isTrue(Exit.isFailure(yield* Effect.exit(pause(threadId, runId))));
+    assert.isNull((yield* orchestrator.getThreadProjection(threadId)).thread.loadPause ?? null);
+    assert.deepEqual(yield* runState(threadId), before);
   }).pipe(Effect.provide(layerTest)),
 );
 

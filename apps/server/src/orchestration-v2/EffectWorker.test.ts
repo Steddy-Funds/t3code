@@ -320,12 +320,13 @@ it.effect("releases a deleted thread's machine claims, and replays that after pr
 );
 
 it.effect(
-  "load pause cleanup unpauses its containers before it sends the continuation, and replays after process loss",
+  "load pause cleanup unpauses its containers before it sends the continuation, fails a failed unpause for a retry, and replays after process loss",
   () =>
     Effect.gen(function* () {
       const now = yield* DateTime.now;
       const events = yield* Ref.make<ReadonlyArray<string>>([]);
       const dispatched = yield* Ref.make<ReadonlyArray<unknown>>([]);
+      const unpauseFails = yield* Ref.make(false);
       const layer = layerExecutorFor({
         events,
         threads: {
@@ -343,7 +344,19 @@ it.effect(
               Ref.update(events, (existing) => [
                 ...existing,
                 `unpause:${containers.map(({ id }) => id).join(",")}`,
-              ]),
+              ]).pipe(
+                Effect.andThen(Ref.get(unpauseFails)),
+                Effect.flatMap((fails) =>
+                  fails
+                    ? Effect.fail(
+                        new ResourceCleanupService.ResourceCleanupError({
+                          operation: "load-pause-containers",
+                          cause: "still paused",
+                        }),
+                      )
+                    : Effect.void,
+                ),
+              ),
           }),
         ),
       );
@@ -390,6 +403,36 @@ it.effect(
           createdBy: "agent",
           creationSource: "server",
         },
+      ]);
+
+      // A container left paused fails the attempt so the outbox retries it; the continuation
+      // waits for the last attempt, which sends it regardless.
+      yield* Ref.set(unpauseFails, true);
+      yield* Ref.set(events, []);
+      const failed = yield* Effect.gen(function* () {
+        const executor = yield* EffectWorker.OrchestrationEffectExecutorV2;
+        const { id, commandId, request } = cleanup(true);
+        const attempts = [];
+        for (const willRetry of [true, false]) {
+          attempts.push(
+            yield* Effect.result(
+              executor.execute(
+                { ...restartEffect(now, { type: "detach" }), id, commandId, request },
+                { willRetry },
+              ),
+            ),
+          );
+        }
+        return attempts;
+      }).pipe(Effect.provide(layer));
+      assert.deepEqual(
+        failed.map((attempt) => attempt._tag),
+        ["Failure", "Failure"],
+      );
+      assert.deepEqual(yield* Ref.get(events), [
+        "unpause:container:busy",
+        "unpause:container:busy",
+        "dispatch",
       ]);
       assert.isNull(
         EffectOutbox.loadPauseCleanupEffect({

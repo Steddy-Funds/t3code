@@ -11415,6 +11415,14 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         cause: `Thread ${command.threadId} has no run ${command.runId} to pause.`,
       });
     }
+    // A run that ended between victim selection and the set has nothing left to pause.
+    if (!isLiveRun(run)) {
+      return yield* new OrchestratorDispatchError({
+        commandId: command.commandId,
+        commandType: command.type,
+        cause: `Run ${command.runId} on thread ${command.threadId} is no longer live.`,
+      });
+    }
     const now = yield* DateTime.now;
     const emitEvent = emit(events, command);
     // One pause at a time; the worker clears an episode before it starts another.
@@ -11427,33 +11435,19 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       });
       return undefined;
     }
-    const cancelUnsettledEffects = isLiveRun(run)
-      ? yield* dispatchRunInterrupt(
-          {
-            type: "run.interrupt",
-            commandId: command.commandId,
-            threadId: command.threadId,
-            runId: run.id,
-            reason: LOAD_PAUSE_INTERRUPT_REASON,
-            holdQueue: true,
-          },
-          events,
-          effects,
-          { loadPause: true },
-        )
-      : yield* Effect.forEach(
-          runs.filter((queued) => queued.status === "queued" && !queued.queueHeld),
-          (queued) =>
-            emitEvent({
-              type: "run.updated",
-              threadId: thread.id,
-              runId: queued.id,
-              providerInstanceId: queued.providerInstanceId,
-              occurredAt: now,
-              payload: { ...queued, queueHeld: true },
-            }),
-          { discard: true },
-        ).pipe(Effect.as(undefined));
+    const cancelUnsettledEffects = yield* dispatchRunInterrupt(
+      {
+        type: "run.interrupt",
+        commandId: command.commandId,
+        threadId: command.threadId,
+        runId: run.id,
+        reason: LOAD_PAUSE_INTERRUPT_REASON,
+        holdQueue: true,
+      },
+      events,
+      effects,
+      { loadPause: true },
+    );
     const current = (yield* getProjectionWithPendingEvents(thread.id, events)).thread;
     yield* emitEvent({
       type: "thread.metadata-updated",

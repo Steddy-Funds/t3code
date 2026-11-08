@@ -22,6 +22,7 @@ import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import type * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as Ref from "effect/Ref";
@@ -41,6 +42,7 @@ import * as CommandReceiptStore from "./CommandReceiptStore.ts";
 import * as EffectOutbox from "./EffectOutbox.ts";
 import * as EffectWorker from "./EffectWorker.ts";
 import * as EventStore from "./EventStore.ts";
+import * as LoadPauseDocker from "./LoadPauseDocker.ts";
 import {
   LOAD_PAUSE_FOCUS_WINDOW_MS,
   LOAD_PAUSE_REPAUSE_COOLDOWN_MS,
@@ -164,9 +166,14 @@ interface World {
   claims: Array<ResolvedClaim>;
   focus: Array<ThreadId>;
   failSet: Set<ThreadId>;
+  failClear: Set<ThreadId>;
   dockerFails: boolean;
+  /** Docker state by full id; a container not in it is running. */
+  containerState: Map<string, string>;
   /** Runs right after a load pause set commits, before the worker re-checks claims. */
   afterSet: (threadId: ThreadId) => Effect.Effect<void>;
+  /** Runs as `docker pause` starts, after the worker's check passed. */
+  duringDockerPause: (id: string) => Effect.Effect<void>;
   /** The worker's committed commands and docker calls, in order. */
   log: Array<string>;
 }
@@ -177,8 +184,11 @@ const makeWorld = (): World => ({
   claims: [],
   focus: [],
   failSet: new Set(),
+  failClear: new Set(),
   dockerFails: false,
+  containerState: new Map(),
   afterSet: () => Effect.void,
+  duringDockerPause: () => Effect.void,
   log: [],
 });
 
@@ -199,10 +209,10 @@ const startWorker = (world: World) =>
     const orchestrator = yield* Orchestrator.OrchestratorV2;
     const ownership = yield* ProcessOwnership;
     const threadResources = yield* ThreadResources;
-    const containerState = new Map<string, string>();
+    const containerState = world.containerState;
     const runner: ProcessRunner.ProcessRunner["Service"] = {
       run: (input) =>
-        Effect.sync(() => {
+        Effect.gen(function* () {
           const [action, ...rest] = input.args;
           const id = rest.at(-1)!;
           if (action === "inspect") {
@@ -210,17 +220,22 @@ const startWorker = (world: World) =>
             return output(`${id} ${containerState.get(id) ?? "running"} 4242`);
           }
           world.log.push(`docker ${action} ${id}`);
+          if (action === "pause") yield* world.duringDockerPause(id);
           if (world.dockerFails) return output("", 1, "permission denied");
           containerState.set(id, action === "pause" ? "paused" : "running");
           return output("");
         }),
     };
-    return yield* LoadPauseWorker.make.pipe(
+    const docker = yield* LoadPauseDocker.make.pipe(
+      Effect.provideService(ProcessRunner.ProcessRunner, runner),
+    );
+    const worker = yield* LoadPauseWorker.make.pipe(
       Effect.provideService(Orchestrator.OrchestratorV2, {
         ...orchestrator,
         dispatch: (command) =>
-          command.type === "thread.load-pause.set" && world.failSet.has(command.threadId)
-            ? Effect.die("injected set failure")
+          (command.type === "thread.load-pause.set" && world.failSet.has(command.threadId)) ||
+          (command.type === "thread.load-pause.clear" && world.failClear.has(command.threadId))
+            ? Effect.die("injected load pause failure")
             : orchestrator.dispatch(command).pipe(
                 Effect.tap(() =>
                   Effect.sync(() =>
@@ -259,10 +274,11 @@ const startWorker = (world: World) =>
           ],
         })),
       } as never),
-      Effect.provideService(ProcessRunner.ProcessRunner, runner),
+      Effect.provideService(LoadPauseDocker.LoadPauseDocker, docker),
       // Skips reading this test process's own cgroup.
       Effect.provideService(HostProcess.Platform, "darwin"),
     );
+    return { ...worker, docker };
   });
 
 const setLane = (enabled: boolean) =>
@@ -626,6 +642,44 @@ describe("LoadPauseWorker", () => {
     }).pipe(Effect.provide(layerTest)),
   );
 
+  it.effect.each([
+    ["the user resumes and its cleanup unpauses", "resume"],
+    ["another thread claims the container", "claim"],
+  ] as const)("a container is left running when, as docker pauses it, %s", ([_name, race]) =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const victim = yield* liveThread("pause-race");
+      yield* pastFocusWindow;
+      const world = makeWorld();
+      world.status = stressed();
+      world.usage.set(victim, usage(0.5));
+      world.claims = [containerClaim(victim, FULL_A)];
+      const { sweep, docker } = yield* startWorker(world);
+      const cleanups: Array<Fiber.Fiber<unknown, LoadPauseDocker.LoadPauseDockerError>> = [];
+      world.duringDockerPause = (id) =>
+        race === "claim"
+          ? Effect.sync(() => world.claims.push(containerClaim(ThreadId.make("thread:late"), id)))
+          : Effect.gen(function* () {
+              yield* orchestrator
+                .dispatch({
+                  type: "thread.metadata.update",
+                  commandId: CommandId.make(`user-resume:${victim}`),
+                  threadId: victim,
+                  loadPause: { resume: true },
+                })
+                .pipe(Effect.orDie);
+              // The resume's cleanup, run by the effect worker while docker is still pausing.
+              cleanups.push(
+                yield* Effect.forkChild(docker.unpause({ id }), { startImmediately: true }),
+              );
+            });
+      yield* sweepThroughHold(sweep);
+      yield* Fiber.joinAll(cleanups);
+      assert.include(world.log, `docker pause ${FULL_A}`);
+      assert.equal(world.containerState.get(FULL_A), "running");
+    }).pipe(Effect.provide(layerTest)),
+  );
+
   it.effect("a failed docker pause leaves the thread paused and the sweep going", () =>
     Effect.gen(function* () {
       const threadId = yield* liveThread("docker-refused");
@@ -680,6 +734,33 @@ describe("LoadPauseWorker", () => {
         `thread.load-pause.clear ${first}`,
         `thread.load-pause.clear ${second}`,
       ]);
+    }).pipe(Effect.provide(layerTest)),
+  );
+
+  it.effect("a failed resume keeps the thread tracked and retries it after the gap", () =>
+    Effect.gen(function* () {
+      const threadId = yield* liveThread("clear-fails");
+      yield* pastFocusWindow;
+      const world = makeWorld();
+      world.status = stressed();
+      world.usage.set(threadId, usage(0.5));
+      const { sweep } = yield* startWorker(world);
+      yield* sweepThroughHold(sweep);
+      assert.isNotNull(yield* loadPauseOf(threadId));
+
+      world.status = calm;
+      world.failClear.add(threadId);
+      world.log.length = 0;
+      yield* sweep;
+      assert.isNotNull(yield* loadPauseOf(threadId));
+      world.failClear.clear();
+      yield* TestClock.adjust(LOAD_RESUME_GAP_MS - 1);
+      yield* sweep;
+      assert.isNotNull(yield* loadPauseOf(threadId));
+      yield* TestClock.adjust(1);
+      yield* sweep;
+      assert.deepEqual(world.log, [`thread.load-pause.clear ${threadId}`]);
+      assert.isNull(yield* loadPauseOf(threadId));
     }).pipe(Effect.provide(layerTest)),
   );
 

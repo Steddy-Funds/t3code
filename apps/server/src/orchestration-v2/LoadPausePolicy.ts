@@ -148,9 +148,12 @@ export function selectLoadPauseVictims(input: {
   return victims;
 }
 
+const isLocalDockerHost = (dockerHost: string | undefined) =>
+  dockerHost === undefined || dockerHost.startsWith("unix://") || dockerHost.startsWith("npipe://");
+
 /**
  * The containers each victim's pause stops: only containers every live claim of which belongs
- * to a victim, and never one the server itself runs in. A container claimed by several victims
+ * to a victim, on a local daemon, and never one the server itself runs in. A container claimed by several victims
  * is recorded on each, so whichever resumes first unpauses it.
  */
 export function loadPauseContainers(input: {
@@ -161,6 +164,8 @@ export function loadPauseContainers(input: {
   const claimsByContainer = new Map<string, Array<ResolvedClaim>>();
   for (const resolved of input.claims) {
     if (resolved.claim.target.type !== "container" || resolved.containerId === undefined) continue;
+    // Stress here says nothing about another machine's daemon.
+    if (!isLocalDockerHost(resolved.claim.target.dockerHost)) continue;
     const key = `${resolved.claim.target.dockerHost ?? ""}\u0000${resolved.containerId}`;
     claimsByContainer.set(key, [...(claimsByContainer.get(key) ?? []), resolved]);
   }

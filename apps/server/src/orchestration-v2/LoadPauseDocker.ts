@@ -1,11 +1,16 @@
 import type { OrchestrationV2LoadPausedContainer } from "@t3tools/contracts";
+import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
+import * as Semaphore from "effect/Semaphore";
 
 import * as ProcessRunner from "../processRunner.ts";
 
-const DOCKER_TIMEOUT = Duration.seconds(10);
+const PAUSE_TIMEOUT = Duration.seconds(10);
+// A loaded daemon can be slow to thaw a container, and a timed-out unpause leaves it frozen.
+const UNPAUSE_TIMEOUT = Duration.seconds(30);
 
 /** A `docker pause`/`unpause` that did not happen; the thread pauses or resumes regardless. */
 export class LoadPauseDockerError extends Schema.TaggedError<LoadPauseDockerError>()(
@@ -24,14 +29,58 @@ const errorReason = (stderr: string): LoadPauseDockerError["reason"] =>
       ? "permission"
       : "failed";
 
+type Outcome = "done" | "skipped";
+
+export class LoadPauseDocker extends Context.Service<
+  LoadPauseDocker,
+  {
+    /** Pauses only while `stillWanted` holds, before and after the pause; false undoes it. */
+    readonly pause: <R>(
+      container: OrchestrationV2LoadPausedContainer,
+      stillWanted: Effect.Effect<boolean, never, R>,
+    ) => Effect.Effect<Outcome, LoadPauseDockerError, R>;
+    readonly unpause: (
+      container: OrchestrationV2LoadPausedContainer,
+    ) => Effect.Effect<Outcome, LoadPauseDockerError>;
+  }
+>()("t3/orchestration-v2/LoadPauseDocker") {}
+
+export const containerKey = (container: OrchestrationV2LoadPausedContainer) =>
+  `${container.dockerHost ?? ""}\u0000${container.id}`;
+
 /**
  * Pause and unpause by recorded full id, each after a fresh `docker inspect` under the claim's
  * `DOCKER_HOST` shows the same container in the expected state. Anything else is skipped.
+ * One lock per container keeps the pause worker and resume cleanups from interleaving.
  */
 export const make = Effect.gen(function* () {
   const runner = yield* ProcessRunner.ProcessRunner;
+  const locks = new Map<string, { readonly lock: Semaphore.Semaphore; holders: number }>();
 
-  const docker = (container: OrchestrationV2LoadPausedContainer, args: ReadonlyArray<string>) =>
+  const withContainerLock = <A, E, R>(
+    container: OrchestrationV2LoadPausedContainer,
+    effect: Effect.Effect<A, E, R>,
+  ) =>
+    Effect.suspend(() => {
+      const key = containerKey(container);
+      const entry = locks.get(key) ?? { lock: Semaphore.makeUnsafe(1), holders: 0 };
+      locks.set(key, entry);
+      entry.holders += 1;
+      return entry.lock.withPermit(effect).pipe(
+        Effect.ensuring(
+          Effect.sync(() => {
+            entry.holders -= 1;
+            if (entry.holders === 0) locks.delete(key);
+          }),
+        ),
+      );
+    });
+
+  const docker = (
+    container: OrchestrationV2LoadPausedContainer,
+    args: ReadonlyArray<string>,
+    timeout = PAUSE_TIMEOUT,
+  ) =>
     runner
       .run({
         command: "docker",
@@ -40,7 +89,7 @@ export const make = Effect.gen(function* () {
           ...process.env,
           ...(container.dockerHost === undefined ? {} : { DOCKER_HOST: container.dockerHost }),
         },
-        timeout: DOCKER_TIMEOUT,
+        timeout,
         maxOutputBytes: 64 * 1024,
       })
       .pipe(
@@ -91,7 +140,11 @@ export const make = Effect.gen(function* () {
     ) {
       return "skipped";
     }
-    const result = yield* docker(container, [command, container.id]);
+    const result = yield* docker(
+      container,
+      [command, container.id],
+      command === "pause" ? PAUSE_TIMEOUT : UNPAUSE_TIMEOUT,
+    );
     if (result.code === 0) return "done";
     if (/is not paused|is already paused|is not running/i.test(result.stderr)) return "skipped";
     return yield* new LoadPauseDockerError({
@@ -101,8 +154,27 @@ export const make = Effect.gen(function* () {
     });
   });
 
-  return {
-    pause: (container: OrchestrationV2LoadPausedContainer) => transition(container, "pause"),
-    unpause: (container: OrchestrationV2LoadPausedContainer) => transition(container, "unpause"),
-  };
+  const pause = Effect.fn("LoadPauseDocker.pause")(
+    function* <R>(
+      container: OrchestrationV2LoadPausedContainer,
+      stillWanted: Effect.Effect<boolean, never, R>,
+    ) {
+      if (!(yield* stillWanted)) return "skipped" as const;
+      const paused = yield* transition(container, "pause");
+      if (paused === "skipped" || (yield* stillWanted)) return paused;
+      // The pause ended, or another thread claimed the container, while docker ran.
+      yield* transition(container, "unpause");
+      return "skipped" as const;
+    },
+    (effect, container) => withContainerLock(container, effect),
+  );
+
+  const unpause = Effect.fn("LoadPauseDocker.unpause")(
+    (container: OrchestrationV2LoadPausedContainer) => transition(container, "unpause"),
+    (effect, container) => withContainerLock(container, effect),
+  );
+
+  return LoadPauseDocker.of({ pause, unpause });
 });
+
+export const layer = Layer.effect(LoadPauseDocker, make);

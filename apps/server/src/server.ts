@@ -143,6 +143,7 @@ import * as CodexManagedTokenBroker from "./provider/CodexManagedTokenBroker.ts"
 import * as WebhookRoute from "./scheduledTasks/webhookRoute.ts";
 import * as RelayDeliveryProof from "./scheduledTasks/RelayDeliveryProof.ts";
 import * as LoadMonitor from "./scheduledTasks/LoadMonitor.ts";
+import * as LoadPauseDocker from "./orchestration-v2/LoadPauseDocker.ts";
 import * as LoadPauseWorker from "./orchestration-v2/LoadPauseWorker.ts";
 import * as HeldHooksWaker from "./relay/HeldHooksWaker.ts";
 import * as McpOAuth from "./auth/McpOAuth.ts";
@@ -1227,6 +1228,8 @@ const layerMakeServer = Layer.unwrap(
       Layer.provideMerge(ProcessOwnership.layerRegistry),
       // Spawn sites read the guard env at spawn; the default injects nothing.
       Layer.provideMerge(LoadGuard.layer.pipe(Layer.provide(layerServerSettings))),
+      // One instance, so the pause worker and resume cleanups share its per-container locks.
+      Layer.provideMerge(LoadPauseDocker.layer),
       Layer.provideMerge(layerPlatformServices),
     );
   }),

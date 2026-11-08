@@ -306,7 +306,19 @@ const threadRoot = (id: number, threadId: ThreadId, cgroup: string) =>
 const makeService = (state: World, platform: "linux" | "darwin" = "linux") =>
   ThreadResources.pipe(
     Effect.provide(
-      layerWith({ readFile: (path) => state.files.get(path), pageSize: PAGE_SIZE }).pipe(
+      layerWith({
+        readFile: (path) => state.files.get(path),
+        readDirectories: (path) => [
+          ...new Set(
+            [...state.files.keys()].flatMap((file) => {
+              if (!file.startsWith(`${path}/`)) return [];
+              const rest = file.slice(path.length + 1).split("/");
+              return rest.length > 1 ? [rest[0]!] : [];
+            }),
+          ),
+        ],
+        pageSize: PAGE_SIZE,
+      }).pipe(
         Layer.provide(
           Layer.succeed(
             Scheduler.Scheduler,

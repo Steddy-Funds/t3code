@@ -1,4 +1,11 @@
-import type { MachineProcessAdded, MachineProcessFrame } from "@t3tools/contracts";
+import {
+  type Claim,
+  ClaimId,
+  type MachineProcessAdded,
+  type MachineProcessFrame,
+  ThreadId,
+} from "@t3tools/contracts";
+import * as DateTime from "effect/DateTime";
 import { describe, expect, it } from "vite-plus/test";
 
 import { createMachineProcessFrameApplier } from "./machineProcessFrames.ts";
@@ -161,6 +168,40 @@ describe("createMachineProcessFrameApplier", () => {
     const table = apply(full(0, [0]));
     expect(table?.rows[0]).not.toHaveProperty("gpuUtil");
     expect(table?.rows[0]).not.toHaveProperty("vram");
+  });
+
+  it("keeps the claims from the last frame that carried them", () => {
+    const threadId = ThreadId.make("thread-a");
+    const claim = (id: string): Claim => ({
+      id: ClaimId.make(id),
+      threadId,
+      target: { type: "container", id: "c".repeat(64) },
+      createdAt: DateTime.makeUnsafe(0),
+      createdBy: { type: "agent", threadId },
+    });
+    const first = [claim("claim-1")];
+    const second = [claim("claim-1"), claim("claim-2")];
+    const { apply } = createMachineProcessFrameApplier();
+
+    expect(apply(full(0, [0]))).not.toHaveProperty("claims");
+    expect(apply({ ...full(1, [0]), claims: first })?.claims).toBe(first);
+    expect(apply(frame({ sequence: 2, values: [[0, 5]] }))?.claims).toBe(first);
+    expect(apply(frame({ sequence: 3, claims: second }))?.claims).toBe(second);
+    expect(apply(frame({ sequence: 4, claims: [] }))?.claims).toEqual([]);
+
+    expect(apply({ ...full(5, [1]), complete: false })).toBeNull();
+    expect(apply({ ...full(5, [2]), complete: true, claims: first })?.claims).toBe(first);
+  });
+
+  it("replaces a row's owner when the server re-adds it", () => {
+    const { apply } = createMachineProcessFrameApplier();
+    const owner = { type: "t3", label: "machine terminal" } as const;
+    expect(apply({ ...full(0, [0]), added: [{ ...added(0), owner }] })?.rows[0]?.owner).toEqual(
+      owner,
+    );
+    const reAdded = apply(frame({ sequence: 1, added: [added(0)], values: [[0, 3]] }));
+    expect(reAdded?.rows[0]).not.toHaveProperty("owner");
+    expect(view(reAdded)).toEqual([[0, 3, 30]]);
   });
 
   it("starts a new generation from its full frame", () => {

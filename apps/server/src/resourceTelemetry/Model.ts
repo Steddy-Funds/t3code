@@ -49,6 +49,8 @@ export interface MergeProcessesInput {
   readonly desktopSnapshot: Option.Option<DesktopHostTelemetrySnapshot>;
   readonly electronRootPids?: ReadonlySet<number>;
   readonly electronRootStartTimes?: ReadonlyMap<number, number>;
+  /** `provider-root` / `terminal-root` for registered spawn roots, by process identity key. */
+  readonly rootCategories?: ReadonlyMap<string, ResourceTelemetryProcessCategory>;
   readonly previous: ReadonlyMap<string, ProcessState>;
   readonly counters: TelemetryCounters;
   readonly updatePrevious: boolean;
@@ -378,7 +380,13 @@ function aggregate(
 export function mergeProcesses(input: MergeProcessesInput): MergeProcessesResult {
   const nativeProcesses = Option.match(input.nativeSnapshot, {
     onNone: () => [] as ReadonlyArray<ResourceMonitorProcessSample>,
-    onSome: (snapshot) => snapshot.processes,
+    onSome: (snapshot) => {
+      // Claimed subtrees belong to their claimant, not to T3.
+      const claimed = new Set(snapshot.claimedPids ?? []);
+      return claimed.size === 0
+        ? snapshot.processes
+        : snapshot.processes.filter((process) => !claimed.has(process.pid));
+    },
   });
   const electronMetrics = Option.match(input.desktopSnapshot, {
     onNone: () => [] as ReadonlyArray<DesktopElectronProcessMetric>,
@@ -512,7 +520,7 @@ export function mergeProcesses(input: MergeProcessesInput): MergeProcessesResult
               ? electronCategory(electronMetric)
               : isElectronDescendant(process.pid, processesByPid, electronPids, input.serverPid)
                 ? inferredElectronCategory(process)
-                : "server-child";
+                : (input.rootCategories?.get(identityKey) ?? "server-child");
     const firstSeenAt = previous?.process.firstSeenAt ?? DateTime.makeUnsafe(sampledAtMs);
     const preservePreviousRates = !input.updatePrevious && previous !== undefined;
     const cpuPercent = preservePreviousRates

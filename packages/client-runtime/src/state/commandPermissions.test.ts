@@ -158,14 +158,15 @@ describe("command permissions", () => {
     ),
   );
 
-  it.effect("requires the destination maintain grant to signal a process", () =>
+  it.effect.each([
+    ["signal a process", WS_METHODS.serverSignalProcess],
+    ["release a machine claim", WS_METHODS.machineClaimsRelease],
+  ] as const)("requires the destination maintain grant to %s", ([, method]) =>
     Effect.scoped(
       Effect.gen(function* () {
-        expect(CLIENT_GUARDED_RPC_SCOPES[WS_METHODS.serverSignalProcess]).toBe(
-          AuthEnvironmentMaintainScope,
-        );
+        expect(CLIENT_GUARDED_RPC_SCOPES[method]).toBe(AuthEnvironmentMaintainScope);
         const registry = yield* setup;
-        const signal = createCommandPermissions(runtime, WS_METHODS.serverSignalProcess);
+        const signal = createCommandPermissions(runtime, method);
         const only = (scope: NonNullable<AuthSessionState["scopes"]>[number]) =>
           AsyncResult.success({ ...grant(false), scopes: [scope], permissions: [scope] });
         registry.set(sessions(env), AsyncResult.success(grant(true)));

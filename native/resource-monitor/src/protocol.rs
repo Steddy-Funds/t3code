@@ -309,6 +309,8 @@ pub(crate) struct HostSampleEvent {
     pub(crate) gpus: Option<Vec<GpuDeviceSample>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) gpu_processes: Option<Vec<GpuProcessSample>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) gpu_process_devices: Option<Vec<String>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -577,6 +579,7 @@ mod tests {
             added: None,
             gpus: None,
             gpu_processes: None,
+            gpu_process_devices: None,
         })
         .expect("bare host sample");
         assert_eq!(
@@ -623,6 +626,7 @@ mod tests {
             }]),
             gpus: Some(Vec::new()),
             gpu_processes: Some(Vec::new()),
+            gpu_process_devices: Some(vec!["0000:01:00.0".to_owned()]),
         })
         .expect("full host sample");
         assert_eq!(full["requestId"], "host-1");
@@ -641,6 +645,10 @@ mod tests {
         assert_eq!(full["added"][0]["startTimeMs"], 3000);
         assert_eq!(full["gpus"], serde_json::json!([]));
         assert_eq!(full["gpuProcesses"], serde_json::json!([]));
+        assert_eq!(
+            full["gpuProcessDevices"],
+            serde_json::json!(["0000:01:00.0"])
+        );
     }
 
     #[test]

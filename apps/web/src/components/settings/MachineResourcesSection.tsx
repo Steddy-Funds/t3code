@@ -14,6 +14,7 @@ import { SettingsIcon } from "lucide-react";
 import { useUpdateEnvironmentSettings } from "../../hooks/useSettings";
 import { serverEnvironment } from "~/state/server";
 import { useEnvironmentScope } from "~/state/session";
+import { MachineBucketList } from "../nodeResources/buckets/MachineBucketList";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { SettingResetButton, SettingsRow } from "./settingsLayout";
@@ -231,6 +232,9 @@ export function MachineResourcesSection({
           description="macOS counts cache as used, so memory pressure reaching critical replaces the RAM rule."
         />
       ) : null}
+      <div className="px-3 pt-2 sm:px-4">
+        <MachineBucketList environmentId={environmentId} />
+      </div>
     </div>
   );
 }

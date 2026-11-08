@@ -18,6 +18,7 @@ import type {
   MachineStatusSnapshot,
   MachineTotalsSummary,
   MachineVerdictReason,
+  ProcessOwner,
 } from "@t3tools/contracts";
 import type { ReactNode } from "react";
 
@@ -25,13 +26,17 @@ import { Skeleton } from "~/components/ui/skeleton";
 import { cn } from "~/lib/utils";
 
 import { MachineVerdictLine } from "./MachineVerdictLine";
+import { ownersSummary } from "./ownership/processOwners";
+import type { OwnerNames } from "./primitives/OwnerLabel";
 
 export type MachineProcessList =
   | { readonly status: "loading" }
   | {
       readonly status: "ready";
       readonly source: "t3" | "host";
-      readonly rows: ReadonlyArray<MachineProcessSummary>;
+      readonly rows: ReadonlyArray<
+        MachineProcessSummary & { readonly owner?: ProcessOwner | undefined }
+      >;
     }
   | { readonly status: "needs-monitor" }
   | { readonly status: "needs-scope" }
@@ -54,6 +59,7 @@ export function MachineCardBody({
   processes,
   limits,
   runningThreadCount,
+  ownerNames,
 }: {
   readonly view: MachineIndicatorView;
   readonly snapshot: MachineStatusSnapshot | null;
@@ -61,6 +67,8 @@ export function MachineCardBody({
   /** The machine's thresholds, when the caller knows them. */
   readonly limits?: MachineLimits;
   readonly runningThreadCount?: number;
+  /** Resolves owner names; rows from a server with ownership then show who owns each top entry. */
+  readonly ownerNames?: OwnerNames;
 }) {
   const totals = snapshot?.totals ?? null;
   const staleAge = view.unreachable && view.lastSeen ? formatAge(view.lastSeen.ageMs) : null;
@@ -94,7 +102,7 @@ export function MachineCardBody({
           ) : null}
         </div>
       ) : null}
-      {view.unreachable ? null : <ProcessesSection processes={processes} />}
+      {view.unreachable ? null : <ProcessesSection processes={processes} ownerNames={ownerNames} />}
       {runningThreadCount === undefined ? null : (
         <div className="px-3 py-2.5 text-muted-foreground">
           {runningThreadCount} T3 {runningThreadCount === 1 ? "thread" : "threads"} running
@@ -290,7 +298,13 @@ function GpuSection({
   );
 }
 
-function ProcessesSection({ processes }: { readonly processes: MachineProcessList }) {
+function ProcessesSection({
+  processes,
+  ownerNames,
+}: {
+  readonly processes: MachineProcessList;
+  readonly ownerNames: OwnerNames | undefined;
+}) {
   switch (processes.status) {
     case "needs-monitor":
       return <ProcessNotice>Process list needs the resource monitor</ProcessNotice>;
@@ -309,6 +323,7 @@ function ProcessesSection({ processes }: { readonly processes: MachineProcessLis
       );
     case "ready": {
       const scope = processes.source === "t3" ? " · T3" : "";
+      const ownerOf = topOwnerSummary(processes.rows, ownerNames);
       return (
         <Section>
           <div className="grid grid-cols-2 gap-3">
@@ -317,6 +332,7 @@ function ProcessesSection({ processes }: { readonly processes: MachineProcessLis
               rows={topProcessesByName(processes.rows, "cpu", TOP_ROWS).map((top) => ({
                 top,
                 value: formatPercent(top.value),
+                owner: ownerOf(top.name),
               }))}
             />
             <TopColumn
@@ -324,6 +340,7 @@ function ProcessesSection({ processes }: { readonly processes: MachineProcessLis
               rows={topProcessesByName(processes.rows, "rss", TOP_ROWS).map((top) => ({
                 top,
                 value: formatProcessMemory(top.value),
+                owner: ownerOf(top.name),
               }))}
             />
           </div>
@@ -331,6 +348,22 @@ function ProcessesSection({ processes }: { readonly processes: MachineProcessLis
       );
     }
   }
+}
+
+type CardProcessRows = Extract<MachineProcessList, { status: "ready" }>["rows"];
+
+function topOwnerSummary(
+  rows: CardProcessRows,
+  names: OwnerNames | undefined,
+): (name: string) => string | null {
+  if (names === undefined || !rows.some((row) => row.owner !== undefined)) return () => null;
+  const ownersByName = new Map<string, Array<ProcessOwner | undefined>>();
+  for (const row of rows) {
+    const owners = ownersByName.get(row.name);
+    if (owners) owners.push(row.owner);
+    else ownersByName.set(row.name, [row.owner]);
+  }
+  return (name) => ownersSummary(ownersByName.get(name) ?? [], names);
 }
 
 function ProcessNotice({ children }: { readonly children: ReactNode }) {
@@ -344,7 +377,11 @@ function TopColumn({
   rows,
 }: {
   readonly title: string;
-  readonly rows: ReadonlyArray<{ readonly top: TopProcess; readonly value: string }> | null;
+  readonly rows: ReadonlyArray<{
+    readonly top: TopProcess;
+    readonly value: string;
+    readonly owner?: string | null;
+  }> | null;
 }) {
   return (
     <div className="min-w-0">
@@ -356,12 +393,15 @@ function TopColumn({
           ))}
         </div>
       ) : (
-        rows.map(({ top, value }) => (
-          <div key={top.name} className="flex items-baseline gap-1.5 py-0.5">
-            <span className="min-w-0 flex-1 truncate">
-              {top.count > 1 ? `${top.name} ×${top.count}` : top.name}
-            </span>
-            <span className="tabular-nums">{value}</span>
+        rows.map(({ top, value, owner }) => (
+          <div key={top.name} className="py-0.5">
+            <div className="flex items-baseline gap-1.5">
+              <span className="min-w-0 flex-1 truncate">
+                {top.count > 1 ? `${top.name} ×${top.count}` : top.name}
+              </span>
+              <span className="tabular-nums">{value}</span>
+            </div>
+            {owner ? <div className="truncate text-muted-foreground">{owner}</div> : null}
           </div>
         ))
       )}

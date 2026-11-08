@@ -20,6 +20,7 @@ import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
+import { ProcessOwnershipRegistry } from "@t3tools/shared/ProcessOwnershipRegistry";
 
 import * as DesktopTelemetryReceiver from "./DesktopTelemetryReceiver.ts";
 import {
@@ -29,6 +30,7 @@ import {
   type TelemetryCounters,
 } from "./Model.ts";
 import * as NativeTelemetryClient from "./NativeTelemetryClient.ts";
+import { rootCategories } from "./ProcessOwnership.ts";
 import * as ResourceAttribution from "./ResourceAttribution.ts";
 import {
   buildResourceTelemetryHistory,
@@ -142,6 +144,7 @@ function buildHealth(input: {
 export const make = Effect.fn("resourceTelemetry.resourceTelemetry.make")(function* () {
   const nativeClient = yield* NativeTelemetryClient.NativeTelemetryClient;
   const desktopReceiver = yield* DesktopTelemetryReceiver.DesktopTelemetryReceiver;
+  const ownershipRegistry = yield* ProcessOwnershipRegistry;
   const attribution = yield* ResourceAttribution.ResourceAttribution;
   const mutex = yield* Semaphore.make(1);
   const changes = yield* PubSub.sliding<ResourceTelemetrySnapshot>(8);
@@ -285,6 +288,13 @@ export const make = Effect.fn("resourceTelemetry.resourceTelemetry.make")(functi
           desktopSnapshot,
           electronRootPids,
           electronRootStartTimes,
+          rootCategories: rootCategories(
+            ownershipRegistry.roots(),
+            Option.match(nativeSnapshot, {
+              onNone: () => [],
+              onSome: (native) => native.processes,
+            }),
+          ),
           previous: current.previous,
           counters: current.counters,
           updatePrevious: input.updatePrevious,

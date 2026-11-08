@@ -20,6 +20,7 @@ import { useEnvironmentScope } from "~/state/session";
 
 import { EnvironmentMachineIcon } from "../EnvironmentMachineIcon";
 import { MachineCardBody, type MachineLimits, type MachineProcessList } from "./MachineCardBody";
+import { ownerNamesAtom } from "./ownership/ownerNames";
 import { runningThreadCountAtom } from "./runningThreads";
 
 const LIVE_SAMPLES = { intervalMs: 1000 } as const;
@@ -95,6 +96,7 @@ function LiveMachineCard({
       : NO_PROCESSES,
   );
   const runningThreadCount = useAtomValue(runningThreadCountAtom(environmentId));
+  const ownerNames = useAtomValue(ownerNamesAtom(environmentId));
   const totals = snapshot?.totals ?? null;
   const details = [
     os,
@@ -114,6 +116,7 @@ function LiveMachineCard({
         snapshot={snapshot}
         processes={canReadDiagnostics ? processList(processesResult) : { status: "needs-scope" }}
         runningThreadCount={runningThreadCount}
+        ownerNames={ownerNames}
         {...(limits ? { limits } : {})}
       />
     </>

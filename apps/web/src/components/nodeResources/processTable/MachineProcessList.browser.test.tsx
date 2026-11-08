@@ -59,7 +59,11 @@ vi.mock(import("~/state/use-atom-command"), async (original) => ({
   useAtomCommand: (() => () => new Promise(() => {})) as never,
 }));
 
-import { MachineProcessList, useMachineProcessListState } from "./MachineProcessList";
+import {
+  MachineProcessList,
+  machineProcessesSource,
+  useMachineProcessListState,
+} from "./MachineProcessList";
 
 const process = (pid: number, gpu?: { gpuUtil: number | null; vram: number | null }) =>
   ({
@@ -95,13 +99,24 @@ function List({
   readonly hasGpu: boolean | null;
   readonly unavailable: string | null;
 }) {
+  const environmentId = EnvironmentId.make("machine-a");
+  const listState = useMachineProcessListState();
+  // Wired as the task manager page wires it, so the request follows the shown columns.
+  const processes = machineProcessesSource({
+    environmentId,
+    tick: 1000,
+    hasGpu,
+    canReadDiagnostics: true,
+    hidden: listState.hidden,
+    tab: listState.tab,
+  });
   return (
     <MachineProcessList
-      environmentId={EnvironmentId.make("machine-a")}
-      tick={1000}
+      environmentId={environmentId}
+      processes={processes}
       hasGpu={hasGpu}
       unavailable={unavailable}
-      state={useMachineProcessListState()}
+      state={listState}
       viewMode="raw"
       onViewModeChange={() => {}}
     />

@@ -186,6 +186,8 @@ import * as NativeTelemetryClient from "./resourceTelemetry/NativeTelemetryClien
 import * as ResourceAttribution from "./resourceTelemetry/ResourceAttribution.ts";
 import * as ResourceMonitorBinary from "./resourceTelemetry/ResourceMonitorBinary.ts";
 import * as ProcessGroupMetrics from "./resourceTelemetry/ProcessGroupMetrics.ts";
+import * as ProcessOwnership from "./resourceTelemetry/ProcessOwnership.ts";
+import * as ThreadResources from "./resourceTelemetry/ThreadResources.ts";
 import * as ResourceTelemetry from "./resourceTelemetry/ResourceTelemetry.ts";
 import * as AntigravityUsage from "./provider/Drivers/AntigravityUsage.ts";
 import { MuseUsageHome } from "@t3tools/provider-muse/server";
@@ -307,9 +309,23 @@ const layerThreadUsage = ThreadUsageService.layer.pipe(
   Layer.provideMerge(layerUsage),
 );
 
+const layerProcessOwnership = ProcessOwnership.layer.pipe(
+  Layer.provide(layerNativeTelemetry),
+  Layer.provide(layerServerSettings),
+);
+
 const layerResourceDiagnostics = Layer.mergeAll(
   HostResources.layer.pipe(Layer.provide(layerServerSettings), Layer.provide(layerNativeTelemetry)),
-  HostProcesses.layer.pipe(Layer.provide(layerResourceTelemetry)),
+  HostProcesses.layer.pipe(
+    Layer.provide(layerResourceTelemetry),
+    Layer.provide(layerProcessOwnership),
+  ),
+  layerProcessOwnership,
+  ThreadResources.layer.pipe(
+    Layer.provide(layerProcessOwnership),
+    Layer.provide(layerNativeTelemetry),
+    Layer.provide(ProjectionStoreV2.layer.pipe(Layer.provide(layerServerSettings))),
+  ),
   layerResourceTelemetry,
   ProcessDiagnostics.layer.pipe(Layer.provide(layerResourceTelemetry)),
   ProcessResourceMonitor.layer.pipe(Layer.provide(layerResourceTelemetry)),
@@ -1202,6 +1218,8 @@ const layerMakeServer = Layer.unwrap(
       Layer.provideMerge(FetchHttpClient.layer),
       Layer.provide(VcsProcess.layer),
       Layer.provideMerge(AgentScopeLive.layer),
+      // Every spawn site registers into this one registry; the default is a no-op.
+      Layer.provideMerge(ProcessOwnership.layerRegistry),
       Layer.provideMerge(layerPlatformServices),
     );
   }),

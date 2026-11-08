@@ -23,6 +23,11 @@ import {
 } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { AgentScope } from "@t3tools/shared/AgentScope";
+import {
+  makeProcessOwnershipRegistry,
+  ProcessOwnershipRegistry,
+  type ProcessRoot,
+} from "@t3tools/shared/ProcessOwnershipRegistry";
 import { MuseSettings } from "../settings.ts";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
@@ -848,6 +853,61 @@ describe("MuseAdapterV2", () => {
         yield* Effect.promise(() => fake.host.exited);
         assert.isTrue(hostExited);
       }).pipe(Effect.provide(testLayer)),
+  );
+
+  it.effect.each([
+    { ends: "the session closes", unit: "t3-muse.scope" as string | undefined },
+    { ends: "the process exits", unit: "t3-muse.scope" as string | undefined },
+    { ends: "the session closes without a scope", unit: undefined },
+  ])("attributes the scope's cgroup to the thread until $ends", ({ ends, unit }) =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakeMuse();
+      const registry = makeProcessOwnershipRegistry({
+        readPidCgroup: () => undefined,
+        selfCgroup: undefined,
+        now: () => 0,
+      });
+      const released = pendingPromise<void>();
+      const registered: Array<unknown> = [];
+      yield* Effect.gen(function* () {
+        yield* makeHarness(fake);
+        const expected: Array<ProcessRoot> =
+          unit === undefined
+            ? []
+            : [{ cgroup: "/agents/t3-muse.scope", owner: { type: "thread", threadId: THREAD_ID } }];
+        assert.deepStrictEqual(registered, expected);
+        assert.deepStrictEqual(
+          registry.roots().map((entry) => entry.root),
+          expected,
+        );
+        if (ends === "the process exits") {
+          yield* fake.exitProcess();
+          yield* Effect.promise(() => released.promise);
+          assert.deepStrictEqual(registry.roots(), []);
+        }
+      }).pipe(
+        Effect.scoped,
+        Effect.provideService(AgentScope, {
+          ...AgentScope.defaultValue(),
+          wrap: ({ command, args }) =>
+            Effect.succeed(unit === undefined ? { command, args } : { command, args, unit }),
+          controlGroup: (scope) =>
+            Effect.succeed(scope === "t3-muse.scope" ? "/agents/t3-muse.scope" : undefined),
+        }),
+        Effect.provideService(ProcessOwnershipRegistry, {
+          registerRoot: (root) => {
+            registered.push(root);
+            const release = registry.registerRoot(root);
+            return () => {
+              release();
+              released.resolve();
+            };
+          },
+          roots: registry.roots,
+        }),
+      );
+      assert.deepStrictEqual(registry.roots(), []);
+    }).pipe(Effect.provide(testLayer)),
   );
 
   it.effect(

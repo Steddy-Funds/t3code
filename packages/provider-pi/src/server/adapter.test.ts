@@ -44,6 +44,10 @@ import * as ProviderHost from "@t3tools/provider-core/server/ProviderHost";
 import { handoffBudget } from "@t3tools/provider-core/server/handoffBudget";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { AgentScope } from "@t3tools/shared/AgentScope";
+import {
+  ProcessOwnershipRegistry,
+  type ProcessRoot,
+} from "@t3tools/shared/ProcessOwnershipRegistry";
 import { toolOutputImages, compactDynamicToolOutput } from "@t3tools/shared/toolOutput";
 import {
   makePiAdapterV2,
@@ -1527,6 +1531,54 @@ describe("PiAdapterV2", () => {
       assert.deepStrictEqual(stopped, [
         { unit: "t3code-pi-test.scope", processReleased: exit === "session" },
       ]);
+    }).pipe(Effect.provide(layerTest)),
+  );
+
+  it.effect.each([
+    {
+      name: "a systemd scope",
+      unit: "t3-pi.scope" as string | undefined,
+      cgroup: { cgroup: "/agents/t3-pi.scope" },
+    },
+    { name: "no scope", unit: undefined, cgroup: {} },
+  ])("attributes Pi to its thread until the session closes ($name)", ({ unit, cgroup }) =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakePi;
+      const roots: Array<{ readonly root: ProcessRoot; releases: number }> = [];
+      yield* Effect.gen(function* () {
+        yield* openRuntime(fake);
+        assert.deepStrictEqual(
+          roots.map((entry) => entry.root),
+          [{ pid: FAKE_PID, ...cgroup, owner: { type: "thread", threadId: THREAD_ID } }],
+        );
+        assert.deepStrictEqual(
+          roots.map((entry) => entry.releases),
+          [0],
+        );
+      }).pipe(
+        Effect.scoped,
+        Effect.provideService(AgentScope, {
+          ...AgentScope.defaultValue(),
+          wrap: ({ command, args }) =>
+            Effect.succeed(unit === undefined ? { command, args } : { command, args, unit }),
+          controlGroup: (scope) =>
+            Effect.succeed(scope === "t3-pi.scope" ? "/agents/t3-pi.scope" : undefined),
+        }),
+        Effect.provideService(ProcessOwnershipRegistry, {
+          registerRoot: (root) => {
+            const entry = { root, releases: 0 };
+            roots.push(entry);
+            return () => {
+              entry.releases += 1;
+            };
+          },
+          roots: () => [],
+        }),
+      );
+      assert.deepStrictEqual(
+        roots.map((entry) => entry.releases),
+        [1],
+      );
     }).pipe(Effect.provide(layerTest)),
   );
 

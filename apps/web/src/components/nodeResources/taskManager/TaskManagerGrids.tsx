@@ -3,14 +3,22 @@ import {
   formatPercent,
   memoryUsedBytes,
 } from "@t3tools/client-runtime/state/machineFormat";
-import type { MachineStatusSnapshot, MachineVerdictRule } from "@t3tools/contracts";
-import type { Atom } from "effect/reactivity";
+import { useAtomSubscribe, useAtomValue } from "@effect/atom-react";
+import type { EnvironmentId, MachineStatusSnapshot, MachineVerdictRule } from "@t3tools/contracts";
+import { AsyncResult, type Atom } from "effect/reactivity";
+
+import { useStableCallback } from "~/hooks/useStableCallback";
 
 import { CellGrid } from "../charts/CellGrid";
 import type { CellPool } from "../charts/CellPool";
 import { vramTotal } from "../crossMachine/crossMachineModel";
+import { ownerNamesAtom } from "../ownership/ownerNames";
+import { ownerPaletteAtom, type ProcessesResult } from "../ownership/ownerPalette";
+import { OTHER_OWNER_COLOR, topMemoryOwners } from "../ownership/processOwners";
 import { MachineSection } from "../primitives/MachineSection";
-import type { MachineSeries } from "./machineSeries";
+import { OwnerChip } from "../primitives/OwnerChip";
+import { ownerLabel } from "../primitives/OwnerLabel";
+import { type MachineSeries, setMemoryOwners } from "./machineSeries";
 import { type SnapshotResult, SnapshotText, useSnapshotValue } from "./snapshotValue";
 
 const POOL_COLUMNS = 16;
@@ -38,17 +46,30 @@ function poolLabel(name: string, pool: CellPool): string {
   return pool.total > 0 ? `${name} ${formatPercent((used / pool.total) * 100)} used` : name;
 }
 
-/** One sparkline cell per core, then the memory pool and, with a GPU that reports it, VRAM. */
+/**
+ * One sparkline cell per core, then the memory pool (used memory coloured by its top owners) and,
+ * with a GPU that reports it, VRAM.
+ */
 export function TaskManagerGrids({
+  environmentId,
   series,
   source,
+  processes,
   rule,
 }: {
+  readonly environmentId: EnvironmentId;
   readonly series: MachineSeries;
   readonly source: Atom.Atom<SnapshotResult>;
+  readonly processes: Atom.Atom<ProcessesResult>;
   readonly rule: MachineVerdictRule | null;
 }) {
   const vram = useSnapshotValue(source, hasVram);
+  // Frames recolour the pool straight from the stream, so a frame redraws the canvas without a render.
+  const receiveProcesses = useStableCallback((result: ProcessesResult) => {
+    const rows = AsyncResult.isSuccess(result) ? result.value.rows : null;
+    setMemoryOwners(series, rows === null ? null : topMemoryOwners(rows));
+  });
+  useAtomSubscribe(processes, receiveProcesses, { immediate: true });
   return (
     <div className="grid grid-cols-1 gap-3 @2xl/task-manager:grid-cols-3">
       <MachineSection
@@ -73,6 +94,7 @@ export function TaskManagerGrids({
           columns={POOL_COLUMNS}
           label={() => poolLabel("Memory", series.memoryPool)}
         />
+        <MemoryOwnerLegend environmentId={environmentId} processes={processes} />
       </MachineSection>
       {vram ? (
         <MachineSection
@@ -88,5 +110,30 @@ export function TaskManagerGrids({
         </MachineSection>
       ) : null}
     </div>
+  );
+}
+
+/** The pool's owner colours; renders only when the top owners or their names change. */
+function MemoryOwnerLegend({
+  environmentId,
+  processes,
+}: {
+  readonly environmentId: EnvironmentId;
+  readonly processes: Atom.Atom<ProcessesResult>;
+}) {
+  const palette = useAtomValue(ownerPaletteAtom(processes));
+  const names = useAtomValue(ownerNamesAtom(environmentId));
+  if (palette.entries.length === 0) return null;
+  return (
+    <ul aria-label="Memory by owner" className="flex min-w-0 flex-wrap gap-1">
+      {palette.entries.map((entry) => (
+        <li key={entry.key} className="min-w-0">
+          <OwnerChip label={ownerLabel(entry.owner, names)} color={`var(${entry.color})`} />
+        </li>
+      ))}
+      <li>
+        <OwnerChip label={{ kind: "other", text: "other" }} color={`var(${OTHER_OWNER_COLOR})`} />
+      </li>
+    </ul>
   );
 }

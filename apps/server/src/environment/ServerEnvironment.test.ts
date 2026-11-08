@@ -227,6 +227,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("ServerEnvironmen
       expect(second.capabilities.projectProviderInstanceOverrides).toBe(true);
       expect(second.capabilities.agentActivityPublishing).toBe(false);
       expect(second.capabilities.processSigterm).toBe(true);
+      expect(second.capabilities.machineOwnership).toBe(true);
     }),
   );
 

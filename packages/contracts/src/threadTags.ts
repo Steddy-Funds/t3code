@@ -25,3 +25,6 @@ export function isBackgroundedThread(thread: {
 }): boolean {
   return thread.tags?.includes(BACKGROUNDED_THREAD_TAG) === true;
 }
+
+/** Bucket writes from a thread with this tag are `auto`: they never change a bucket someone else edited. */
+export const MACHINE_BUCKETS_THREAD_TAG = "machine-buckets";

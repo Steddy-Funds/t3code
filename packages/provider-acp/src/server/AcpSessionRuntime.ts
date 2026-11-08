@@ -32,6 +32,7 @@ import { resolveSpawnCommand } from "@t3tools/shared/shell";
 import { AgentScope, AgentScopeThreadId, RAISE_OOM_SCORE_LINE } from "@t3tools/shared/AgentScope";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { parseUnifiedCgroupPath } from "@t3tools/shared/cgroup";
+import { ProcessOwnershipRegistry } from "@t3tools/shared/ProcessOwnershipRegistry";
 
 import { signalProcessGroup } from "@t3tools/provider-core/server/processGroup";
 import { appendAcpStderrTail, sanitizeAcpStderrExcerpt } from "./stderr.ts";
@@ -1411,6 +1412,8 @@ export const make = Effect.fn("AcpSessionRuntime.make")(function* (
           });
         });
   const agentScope = yield* AgentScope;
+  const threadId = yield* AgentScopeThreadId;
+  const ownership = yield* ProcessOwnershipRegistry;
   const scopedLaunch =
     linuxCgroupLease !== undefined || spawnCommand.shell
       ? undefined
@@ -1418,7 +1421,7 @@ export const make = Effect.fn("AcpSessionRuntime.make")(function* (
           command: spawnCommand.command,
           args: spawnCommand.args,
           name: "acp",
-          threadId: yield* AgentScopeThreadId,
+          threadId,
           env: { ...process.env, ...options.spawn.env },
         });
   const scopedSpawnCommand =
@@ -1465,6 +1468,22 @@ export const make = Effect.fn("AcpSessionRuntime.make")(function* (
           }),
       ),
     );
+
+  const rootCgroup =
+    linuxCgroupLease?.relativePath ??
+    (scopeUnit === undefined ? undefined : yield* agentScope.controlGroup(scopeUnit));
+  if (threadId !== undefined) {
+    yield* Effect.acquireRelease(
+      Effect.sync(() =>
+        ownership.registerRoot({
+          pid: child.pid,
+          ...(rootCgroup === undefined ? {} : { cgroup: rootCgroup }),
+          owner: { type: "thread", threadId },
+        }),
+      ),
+      (release) => Effect.sync(release),
+    ).pipe(Effect.provideService(Scope.Scope, runtimeScope));
+  }
 
   // Detached children can keep stdout open, delaying protocol termination.
   if (scopeUnit !== undefined) {

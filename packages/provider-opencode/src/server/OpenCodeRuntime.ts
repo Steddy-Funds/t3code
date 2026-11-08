@@ -35,6 +35,7 @@ import * as OpenCodeServerLedger from "./OpenCodeServerLedger.ts";
 import { collectStreamAsString } from "@t3tools/provider-core/server/snapshotProbe";
 import * as NetService from "@t3tools/shared/Net";
 import { AgentScope } from "@t3tools/shared/AgentScope";
+import { ProcessOwnershipRegistry } from "@t3tools/shared/ProcessOwnershipRegistry";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { compareSemverVersions, parseSemver } from "@t3tools/shared/semver";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
@@ -249,6 +250,8 @@ export class OpenCodeRuntime extends Context.Service<
       readonly hostname?: string;
       readonly timeoutMs?: number;
       readonly verify?: (url: string) => Effect.Effect<string, OpenCodeRuntimeError>;
+      /** The thread the server is started for, while the caller's scope is open. */
+      readonly threadId?: string;
     }) => Effect.Effect<OpenCodeServerProcess, OpenCodeRuntimeError, Scope.Scope>;
     readonly connectToOpenCodeServer: (input: {
       readonly binaryPath: string;
@@ -259,6 +262,7 @@ export class OpenCodeRuntime extends Context.Service<
       readonly port?: number;
       readonly hostname?: string;
       readonly timeoutMs?: number;
+      readonly threadId?: string;
     }) => Effect.Effect<OpenCodeServerConnection, OpenCodeRuntimeError, Scope.Scope>;
     readonly runOpenCodeCommand: (input: {
       readonly binaryPath: string;
@@ -421,6 +425,27 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
   const hostPlatform = yield* HostProcess.Platform;
   const serverLedger = yield* OpenCodeServerLedger.OpenCodeServerLedger;
   const agentScope = yield* AgentScope;
+  const ownership = yield* ProcessOwnershipRegistry;
+  // A serve is shared by directory, so its root counts every thread working there.
+  const threadsByDirectory = new Map<string, Set<string>>();
+  const serveThreadIn = Effect.fn("OpenCodeRuntime.serveThreadIn")(function* (
+    directory: string,
+    threadId: string,
+  ) {
+    yield* Effect.acquireRelease(
+      Effect.sync(() => {
+        const threads = threadsByDirectory.get(directory) ?? new Set<string>();
+        threads.add(threadId);
+        threadsByDirectory.set(directory, threads);
+      }),
+      () =>
+        Effect.sync(() => {
+          const threads = threadsByDirectory.get(directory);
+          threads?.delete(threadId);
+          if (threads?.size === 0) threadsByDirectory.delete(directory);
+        }),
+    );
+  });
   // npm's Windows shim lets the child escape libuv kill-on-close; run its executable directly.
   const resolveCommand = (command: string, args: ReadonlyArray<string>, env?: NodeJS.ProcessEnv) =>
     resolveSpawnCommand(command, args, { ...(env ? { env } : {}), bypassNpmShim: true });
@@ -571,6 +596,15 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
     // Registered before recording, so an interrupt while the ledger writes
     // still stops the group.
     yield* Scope.addFinalizer(runtimeScope, terminateChild);
+    const cgroup =
+      launch.unit === undefined ? undefined : yield* agentScope.controlGroup(launch.unit);
+    const releaseRoot = ownership.registerRoot({
+      pid: Number(child.pid),
+      ...(cgroup === undefined ? {} : { cgroup }),
+      owner: { type: "shared", provider: "opencode", label: "serve" },
+      threads: () => [...(threadsByDirectory.get(input.directory) ?? [])],
+    });
+    yield* Scope.addFinalizer(runtimeScope, Effect.sync(releaseRoot));
     const forgetServer = yield* serverLedger.track({ pid: Number(child.pid), port, args });
     yield* Scope.addFinalizer(ledgerScope, forgetServer);
 
@@ -706,6 +740,7 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
   const startOpenCodeServerProcess: OpenCodeRuntime["Service"]["startOpenCodeServerProcess"] =
     Effect.fn("OpenCodeRuntime.startOpenCodeServerProcess")(function* (input) {
       const ownerScope = yield* Scope.Scope;
+      if (input.threadId !== undefined) yield* serveThreadIn(input.directory, input.threadId);
       const attempt = Effect.gen(function* () {
         const attemptScope = yield* Scope.fork(ownerScope);
         return yield* startServerAttempt(input).pipe(
@@ -759,6 +794,7 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
       ...(input.port !== undefined ? { port: input.port } : {}),
       ...(input.hostname !== undefined ? { hostname: input.hostname } : {}),
       ...(input.timeoutMs !== undefined ? { timeoutMs: input.timeoutMs } : {}),
+      ...(input.threadId !== undefined ? { threadId: input.threadId } : {}),
     }).pipe(
       Effect.map((server) => ({
         url: server.url,

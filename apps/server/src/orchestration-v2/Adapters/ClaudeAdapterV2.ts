@@ -82,6 +82,7 @@ import {
   mcpAppToolResourceUri,
 } from "@t3tools/shared/mcpApp";
 import { AgentScope } from "@t3tools/shared/AgentScope";
+import { ProcessOwnershipRegistry } from "@t3tools/shared/ProcessOwnershipRegistry";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { applyClaudePromptEffortPrefix } from "@t3tools/shared/model";
 import {
@@ -1165,6 +1166,7 @@ export const layerQueryRunner: Layer.Layer<
     const runFork = Effect.runForkWith(yield* Effect.context<never>());
     const hostEnvironment = yield* HostProcess.Environment;
     const portDiscovery = yield* PortScanner.PortDiscovery;
+    const ownership = yield* ProcessOwnershipRegistry;
 
     return ClaudeAgentSdkQueryRunner.of({
       allocateSessionId: random.uuidV4(),
@@ -1217,6 +1219,7 @@ export const layerQueryRunner: Layer.Layer<
                   executableArgs: [...launch.args, ...(queryOptions.executableArgs ?? [])],
                 };
           const unit = launch?.unit;
+          const cgroup = unit === undefined ? undefined : yield* agentScope.controlGroup(unit);
           const stopScope =
             unit === undefined ? undefined : () => void runFork(agentScope.stop(unit));
           // Only a CLI that fails before its first message explains itself on
@@ -1260,6 +1263,15 @@ export const layerQueryRunner: Layer.Layer<
             const releaseAgent = portDiscovery.trackAgent();
             child.once("exit", releaseAgent);
             child.on("error", releaseAgent);
+            // The SDK's process type hides the pid that Node's child carries.
+            const pid = "pid" in child && typeof child.pid === "number" ? child.pid : undefined;
+            const releaseRoot = ownership.registerRoot({
+              ...(pid === undefined ? {} : { pid }),
+              ...(cgroup === undefined ? {} : { cgroup }),
+              owner: { type: "thread", threadId: input.threadId },
+            });
+            child.once("exit", releaseRoot);
+            child.on("error", releaseRoot);
             processExited = child.exitCode !== null || child.signalCode != null;
             processExit = new Promise<void>((resolve) => {
               if (processExited) resolve();

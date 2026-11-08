@@ -44,6 +44,8 @@ import {
   type PreviewAppearancePreference,
 } from "@t3tools/contracts";
 import { AgentScope, agentScopeLauncherScript } from "@t3tools/shared/AgentScope";
+import { cgroupDirectory } from "@t3tools/shared/cgroup";
+import { ProcessOwnershipRegistry } from "@t3tools/shared/ProcessOwnershipRegistry";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { normalizePreviewUrl } from "@t3tools/shared/preview";
 import { resolvePreviewViewport } from "@t3tools/shared/previewViewport";
@@ -89,6 +91,7 @@ import { installPdfDocumentNavigation, isPdfAssetUrl } from "./PdfDocumentNaviga
 
 const SERVER_HOST_CLIENT_ID = SERVER_BROWSER_AUTOMATION_CLIENT_ID;
 const RENDER_SCALE = 2;
+const BROWSER_ROOT_START_GRACE_MS = 60_000;
 // Chromium allows three unacked frames, so 100 ms pacing caps viewers near 30 fps.
 const SCREENCAST_ACK_PACE_MS = 100;
 const SCREENCAST_SETTLE_MS = 200;
@@ -485,6 +488,32 @@ const make = Effect.gen(function* () {
     config.baseDir,
   ]);
   const agentScope = yield* AgentScope;
+  const ownership = yield* ProcessOwnershipRegistry;
+  // Chrome outlives its launcher script, so each root lives until its scope's cgroup is gone.
+  // A launch still starting has no cgroup yet; give it a minute before it counts as gone.
+  const browserRoots = new Map<string, { readonly release: () => void; readonly at: number }>();
+  const pruneBrowserRoots = async () => {
+    for (const [cgroup, root] of browserRoots) {
+      if (Date.now() - root.at < BROWSER_ROOT_START_GRACE_MS) continue;
+      const exists = await NodeFSP.access(cgroupDirectory(cgroup)).then(
+        () => true,
+        () => false,
+      );
+      if (exists) continue;
+      root.release();
+      browserRoots.delete(cgroup);
+    }
+  };
+  const registerBrowserRoot = async (unit: string | undefined) => {
+    await pruneBrowserRoots();
+    const cgroup = unit === undefined ? undefined : await runPromise(agentScope.controlGroup(unit));
+    if (cgroup === undefined) return;
+    const release = ownership.registerRoot({
+      cgroup,
+      owner: { type: "t3", label: "preview browser" },
+    });
+    browserRoots.set(cgroup, { release, at: Date.now() });
+  };
   const launchersDir = NodePath.join(config.stateDir, "server-browser", "launchers");
 
   const tabs = new Map<string, ServerTab>();
@@ -508,6 +537,7 @@ const make = Effect.gen(function* () {
         agentScope.wrap({ command: executable, args: [], name: "preview-browser" }),
       );
       if (launch.command === executable) return undefined;
+      await registerBrowserRoot(launch.unit);
       await NodeFSP.mkdir(launchersDir, { recursive: true });
       const launcher = NodePath.join(launchersDir, NodeCrypto.randomUUID());
       await NodeFSP.writeFile(launcher, agentScopeLauncherScript(launch), { mode: 0o700 });
@@ -2828,6 +2858,8 @@ const make = Effect.gen(function* () {
   yield* Effect.addFinalizer(() =>
     Effect.promise(async () => {
       await contexts.close();
+      for (const root of browserRoots.values()) root.release();
+      browserRoots.clear();
     }),
   );
 

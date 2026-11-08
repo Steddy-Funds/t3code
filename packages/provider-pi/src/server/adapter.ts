@@ -1,5 +1,6 @@
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { AgentScope } from "@t3tools/shared/AgentScope";
+import { ProcessOwnershipRegistry } from "@t3tools/shared/ProcessOwnershipRegistry";
 import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
 import { readToolOutputImage } from "@t3tools/shared/toolOutput";
 import * as Predicate from "effect/Predicate";
@@ -422,6 +423,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
 ) {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const agentScope = yield* AgentScope;
+  const ownership = yield* ProcessOwnershipRegistry;
   const fileSystem = yield* FileSystem.FileSystem;
   const idAllocator = yield* IdAllocator.IdAllocatorV2;
   const host = yield* ProviderHost.ProviderHost;
@@ -504,6 +506,17 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
               cause,
             }),
         ),
+      );
+      const cgroup = scopeUnit === undefined ? undefined : yield* agentScope.controlGroup(scopeUnit);
+      yield* Effect.acquireRelease(
+        Effect.sync(() =>
+          ownership.registerRoot({
+            pid: connection.pid,
+            ...(cgroup === undefined ? {} : { cgroup }),
+            owner: { type: "thread", threadId: input.threadId },
+          }),
+        ),
+        (release) => Effect.sync(release),
       );
       // Detached children can keep stdout open after Pi exits.
       if (scopeUnit !== undefined) {

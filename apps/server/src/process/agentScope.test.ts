@@ -165,7 +165,7 @@ const launchCodex = (scope: Effect.Success<typeof make>, threadId: string) =>
   makeCodexAppServerSpawnCommand({ command: "agent", args: ["app-server"], threadId }).pipe(
     Effect.provideService(AgentScope, scope),
     Effect.provideService(HostProcess.Platform, "linux"),
-    Effect.map((command) => {
+    Effect.map(({ command }) => {
       assert(ChildProcess.isStandardCommand(command));
       return command;
     }),

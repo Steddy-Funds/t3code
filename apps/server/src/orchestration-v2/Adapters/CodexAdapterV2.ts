@@ -41,6 +41,7 @@ import {
 } from "@t3tools/contracts";
 import { SKILL_MENTION_PATTERN } from "@t3tools/shared/composerInlineTokens";
 import { AgentScope } from "@t3tools/shared/AgentScope";
+import { ProcessOwnershipRegistry } from "@t3tools/shared/ProcessOwnershipRegistry";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import {
   COMPUTER_USE_TOOL_SOURCE,
@@ -1370,6 +1371,8 @@ export interface CodexAppServerClientFactoryShape {
     readonly runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy;
     readonly settings: CodexSettings;
     readonly environment: NodeJS.ProcessEnv;
+    /** The threads this app-server serves right now, for the machine task manager. */
+    readonly threads?: () => ReadonlyArray<ThreadId>;
   }) => Effect.Effect<
     CodexClient.CodexAppServerClient["Service"],
     ProviderAdapter.ProviderAdapterOpenSessionError,
@@ -1472,7 +1475,8 @@ export const makeCodexAppServerSpawnCommand = Effect.fn(
   readonly extendEnv?: boolean | undefined;
   readonly threadId?: string | undefined;
 }) {
-  const launch = yield* (yield* AgentScope).wrap({
+  const agentScope = yield* AgentScope;
+  const launch = yield* agentScope.wrap({
     command: input.command,
     args: input.args,
     name: "codex",
@@ -1480,16 +1484,18 @@ export const makeCodexAppServerSpawnCommand = Effect.fn(
     env: input.env,
     shared: true,
   });
+  const cgroup = launch.unit === undefined ? undefined : yield* agentScope.controlGroup(launch.unit);
   const spawnCommand = yield* resolveSpawnCommand(launch.command, launch.args, {
     ...(input.env === undefined ? {} : { env: input.env }),
     ...(input.extendEnv === undefined ? {} : { extendEnv: input.extendEnv }),
   });
-  return ChildProcess.make(spawnCommand.command, spawnCommand.args, {
+  const command = ChildProcess.make(spawnCommand.command, spawnCommand.args, {
     ...(input.cwd === undefined ? {} : { cwd: input.cwd }),
     ...(input.env === undefined ? {} : { env: input.env }),
     ...(input.extendEnv === undefined ? {} : { extendEnv: input.extendEnv }),
     shell: spawnCommand.shell,
   });
+  return { command, cgroup };
 });
 
 export function makeCodexAppServerProtocolLogger(input: {
@@ -1582,6 +1588,7 @@ export const layerAppServerClientFactory: Layer.Layer<
     const { native: nativeEventLogger } = yield* ProviderEventLoggers.ProviderEventLoggers;
     const agentScope = yield* AgentScope;
     const portDiscovery = yield* PortScanner.PortDiscovery;
+    const ownership = yield* ProcessOwnershipRegistry;
 
     return CodexAppServerClientFactory.of({
       open: Effect.fn("CodexAdapterV2.open")(function* (input) {
@@ -1590,7 +1597,7 @@ export const layerAppServerClientFactory: Layer.Layer<
           ...codexAppServerEnvironment(input.environment),
           ...(input.settings.homePath ? { CODEX_HOME: input.settings.homePath } : {}),
         };
-        const command = yield* makeCodexAppServerSpawnCommand({
+        const { command, cgroup } = yield* makeCodexAppServerSpawnCommand({
           command: input.settings.binaryPath || "codex",
           args: codexAppServerArgs(
             resolveCodexLaunchArgs(input.settings.launchArgs, input.environment),
@@ -1612,6 +1619,19 @@ export const layerAppServerClientFactory: Layer.Layer<
         // Its shells carry each thread's T3CODE_THREAD_ID, so port discovery reads listeners' threads.
         yield* Effect.acquireRelease(Effect.sync(portDiscovery.trackAgent), (release) =>
           Effect.sync(release),
+        );
+        // One app-server serves many threads; its shells carry each thread's id for the split.
+        yield* Effect.acquireRelease(
+          Effect.sync(() =>
+            ownership.registerRoot({
+              pid: handle.pid,
+              ...(cgroup === undefined ? {} : { cgroup }),
+              owner: { type: "shared", provider: CODEX_PROVIDER, label: "app-server" },
+              splitByEnv: true,
+              threads: input.threads ?? (() => [input.threadId]),
+            }),
+          ),
+          (release) => Effect.sync(release),
         );
         const protocolLogger = makeCodexAppServerProtocolLogger({
           nativeEventLogger,
@@ -1746,6 +1766,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                     }),
                 ),
               );
+        const servedThreads = new Set<ThreadId>([input.threadId]);
         const client = yield* clientFactory.open({
           instanceId: adapterOptions.instanceId,
           threadId: input.threadId,
@@ -1753,6 +1774,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           runtimePolicy: input.runtimePolicy,
           settings: resolvedRuntime?.config ?? adapterOptions.settings,
           environment: resolvedRuntime?.environment ?? adapterOptions.environment,
+          threads: () => [...servedThreads],
         });
         const additionalContextByThread = yield* Ref.make(
           new Map<
@@ -7107,6 +7129,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                   }),
                 ),
               ),
+              Effect.tap(() => Effect.sync(() => servedThreads.add(threadInput.threadId))),
               Effect.map((response): OrchestrationV2ProviderThread =>
                 providerThreadFromCodexThread({
                   appThreadId: threadInput.threadId,
@@ -7147,6 +7170,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 Effect.andThen(resume),
                 Effect.flatMap(decodeCodexResumeMetadata),
               );
+              if (appThreadId !== null) servedThreads.add(appThreadId);
               return {
                 ...threadInput.providerThread,
                 providerSessionId: input.providerSessionId,
@@ -7315,6 +7339,8 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               const nativeThreadId = yield* getNativeThreadId(unloadInput.providerThread);
               sessionApprovals.delete(nativeThreadId);
               yield* client.request("thread/unsubscribe", { threadId: nativeThreadId });
+              const appThreadId = unloadInput.providerThread.appThreadId;
+              if (appThreadId !== null) servedThreads.delete(appThreadId);
             },
             (effect, unloadInput) =>
               effect.pipe(

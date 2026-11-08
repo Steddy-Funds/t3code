@@ -399,23 +399,48 @@ it.effect("rejects an unknown organize target instead of archiving the calling t
   );
 });
 
-it.effect("background and unbackground set and clear the backgrounded tag", () => {
+it.effect("background, set_priority and resume_load_pause dispatch tag and resume commands", () => {
   const dispatched: Array<unknown> = [];
   return Effect.gen(function* () {
     const server = yield* McpServer.McpServer;
-    for (const action of ["background", "unbackground"]) {
-      const result = yield* server
-        .callTool({ name: "t3_thread_organize", arguments: { action } })
+    const organize = (args: Record<string, unknown>) =>
+      server
+        .callTool({ name: "t3_thread_organize", arguments: args })
         .pipe(
           Effect.provideService(McpInvocationContext.McpInvocationContext, scope),
           Effect.provideService(McpSchema.McpServerClient, client),
         );
-      expect(result.isError).not.toBe(true);
+    for (const args of [
+      { action: "background" },
+      { action: "unbackground" },
+      { action: "set_priority", priority: "low" },
+      { action: "set_priority", priority: "normal" },
+      { action: "set_priority", priority: "default" },
+      { action: "resume_load_pause" },
+    ]) {
+      expect((yield* organize(args)).isError).not.toBe(true);
     }
+    const tag = (name: string, tagged: boolean) => ({
+      type: "thread.tag.set",
+      threadId,
+      tag: name,
+      tagged,
+    });
     expect(dispatched).toMatchObject([
-      { type: "thread.tag.set", threadId, tag: "backgrounded", tagged: true },
-      { type: "thread.tag.set", threadId, tag: "backgrounded", tagged: false },
+      tag("backgrounded", true),
+      tag("backgrounded", false),
+      tag("priority:low", true),
+      tag("priority:normal", false),
+      tag("priority:low", false),
+      tag("priority:normal", true),
+      tag("priority:low", false),
+      tag("priority:normal", false),
+      { type: "thread.metadata.update", threadId, loadPause: { resume: true } },
     ]);
+    expect(declaredFailure(yield* organize({ action: "set_priority" }))).toMatchObject({
+      code: "invalid_request",
+    });
+    expect(dispatched).toHaveLength(9);
   }).pipe(
     Effect.provide(
       layerThreadToolkit.pipe(

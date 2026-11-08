@@ -8,6 +8,7 @@ import * as TestClock from "effect/testing/TestClock";
 import * as Result from "effect/Result";
 import * as Stream from "effect/Stream";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
+import { GuardEnvironment } from "@t3tools/shared/GuardEnvironment";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import {
   makeProcessOwnershipRegistry,
@@ -72,13 +73,23 @@ describe("AcpClientTerminals", () => {
         const created = yield* terminals.create({
           sessionId,
           command: process.execPath,
-          args: ["-e", "process.stdout.write(process.env.T3_TEST_ACP_SESSION_TOKEN ?? '')"],
+          args: [
+            "-e",
+            "process.stdout.write(`${process.env.T3CODE_GUARD}:${process.env.T3_TEST_ACP_SESSION_TOKEN}`)",
+          ],
         });
         yield* terminals.waitForExit({ sessionId, terminalId: created.terminalId });
         const output = yield* terminals.output({ sessionId, terminalId: created.terminalId });
-        expect(output.output).toBe(expected);
+        // The guard env is injected, and the session's own variables win over it.
+        expect(output.output).toBe(`/state/t3-guard:${expected}`);
       }
-    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    }).pipe(
+      Effect.provideService(GuardEnvironment, {
+        env: () => ({ T3CODE_GUARD: "/state/t3-guard", T3_TEST_ACP_SESSION_TOKEN: "from-guard" }),
+      }),
+      Effect.provide(NodeServices.layer),
+      Effect.scoped,
+    ),
   );
 
   it.live("runs Devin shell source with arguments, pipes, and session fallback variables", () =>

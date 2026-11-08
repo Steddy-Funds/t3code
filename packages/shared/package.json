@@ -343,6 +343,10 @@
       "types": "./src/cgroup.ts",
       "import": "./src/cgroup.ts"
     },
+    "./GuardEnvironment": {
+      "types": "./src/GuardEnvironment.ts",
+      "import": "./src/GuardEnvironment.ts"
+    },
     "./ProcessOwnershipRegistry": {
       "types": "./src/ProcessOwnershipRegistry.ts",
       "import": "./src/ProcessOwnershipRegistry.ts"

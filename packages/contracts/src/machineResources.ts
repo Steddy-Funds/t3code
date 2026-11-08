@@ -35,6 +35,8 @@ export const GpuDeviceSample = Schema.Struct({
 export type GpuDeviceSample = typeof GpuDeviceSample.Type;
 
 export const MACHINE_HOLD_MAX_MS = 3_600_000;
+/** Load management resumes a paused thread after this long, even if the machine is still stressed. */
+export const LOAD_PAUSE_MAX_MS = 30 * 60_000;
 export const MACHINE_SAMPLE_MIN_INTERVAL_MS = 500;
 export const MACHINE_HISTORY_MAX_MS = 3_600_000;
 export const MACHINE_HISTORY_STEP_MS = 5_000;
@@ -47,6 +49,9 @@ const Percent = Schema.Number.check(
 );
 const HoldMs = Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: MACHINE_HOLD_MAX_MS }));
 const LoadPerCore = Schema.Number.check(Schema.isGreaterThan(0));
+const GuardHoldSeconds = Schema.Int.check(
+  Schema.isBetween({ minimum: 0, maximum: MACHINE_HOLD_MAX_MS / 1000 }),
+);
 const ExitFactor = Schema.Number.check(
   Schema.isBetween({ minimum: 0, maximum: 1, exclusiveMinimum: true }),
 );
@@ -331,12 +336,23 @@ export const MachineAutoBucketsSettings = Schema.Struct({
 });
 export type MachineAutoBucketsSettings = typeof MachineAutoBucketsSettings.Type;
 
+/** Off by default: no guard env, unguarded `t3 guard`, no load pauses. */
+export const MachineLoadManagementSettings = Schema.Struct({
+  enabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  guardHoldSeconds: GuardHoldSeconds.pipe(Schema.withDecodingDefault(Effect.succeed(120))),
+  pauseHoldSeconds: GuardHoldSeconds.pipe(Schema.withDecodingDefault(Effect.succeed(60))),
+});
+export type MachineLoadManagementSettings = typeof MachineLoadManagementSettings.Type;
+
 export const MachineResourcesSettings = Schema.Struct({
   thresholds: MachineThresholds.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_MACHINE_THRESHOLDS)),
   ),
   buckets: ReceivedBuckets.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   autoBuckets: MachineAutoBucketsSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+  loadManagement: MachineLoadManagementSettings.pipe(
+    Schema.withDecodingDefault(Effect.succeed({})),
+  ),
 });
 export type MachineResourcesSettings = typeof MachineResourcesSettings.Type;
 
@@ -353,6 +369,13 @@ export const MachineResourcesSettingsPatch = Schema.Struct({
     Schema.Struct({
       enabled: Schema.optionalKey(Schema.Boolean),
       modelSelection: Schema.optionalKey(Schema.NullOr(ModelSelection)),
+    }),
+  ),
+  loadManagement: Schema.optionalKey(
+    Schema.Struct({
+      enabled: Schema.optionalKey(Schema.Boolean),
+      guardHoldSeconds: Schema.optionalKey(GuardHoldSeconds),
+      pauseHoldSeconds: Schema.optionalKey(GuardHoldSeconds),
     }),
   ),
 });

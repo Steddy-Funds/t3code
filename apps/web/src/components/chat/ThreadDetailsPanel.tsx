@@ -23,6 +23,7 @@ import { ThreadDetailsSection } from "./ThreadDetailsSection";
 import { ThreadAutomationsPanel } from "./ThreadAutomationsPanel";
 import { ThreadRelationshipsPanel } from "./ThreadRelationshipsControl";
 import { ThreadServersPanel } from "./ThreadServersPanel";
+import { ThreadDetailsResources } from "./ThreadDetailsResources";
 import {
   ThreadDetailsContext,
   ThreadDetailsCost,
@@ -256,6 +257,13 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
                   threadId={props.threadId}
                   showLineage={visible.lineage}
                   showSideChats={visible.sideChats}
+                />
+              ) : null}
+
+              {density === "full" && !props.draftId && visible.resources ? (
+                <ThreadDetailsResources
+                  environmentId={props.environmentId}
+                  threadId={props.threadId}
                 />
               ) : null}
 

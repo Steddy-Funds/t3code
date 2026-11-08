@@ -367,6 +367,7 @@ interface Fire {
   readonly id: ScheduledTaskId;
   readonly episode: string;
   readonly at: number;
+  readonly unowned?: ReadonlyArray<string> | undefined;
 }
 
 /** The real monitor and Scheduler on TestClock, with tasks and host readings the test sets. */
@@ -380,6 +381,7 @@ const monitorHarness = (options: { readonly triggerFails?: boolean } = {}) =>
     // "fail" stands for a machine without a host-mode monitor.
     const share = yield* Ref.make<number | null | "fail">("fail");
     const walks = yield* Ref.make<ReadonlyArray<HostProcesses.UnbucketedInput>>([]);
+    const processes = yield* Ref.make<ReadonlyArray<HostProcesses.UnbucketedProcess>>([]);
 
     yield* Layer.build(
       loadMonitorLayer.pipe(
@@ -389,9 +391,11 @@ const monitorHarness = (options: { readonly triggerFails?: boolean } = {}) =>
             Layer.mock(ScheduledTaskService.ScheduledTaskService)({
               subscribeList: () =>
                 SubscriptionRef.changes(tasks).pipe(Stream.map((list) => ({ tasks: list }))),
-              triggerLoad: (id, episode) =>
+              triggerLoad: (id, episode, unowned) =>
                 Clock.currentTimeMillis.pipe(
-                  Effect.flatMap((at) => Ref.update(fires, (all) => [...all, { id, episode, at }])),
+                  Effect.flatMap((at) =>
+                    Ref.update(fires, (all) => [...all, { id, episode, at, unowned }]),
+                  ),
                   Effect.andThen(
                     options.triggerFails === true
                       ? Effect.fail(new ScheduledTaskError({ message: "boom", taskId: id }))
@@ -402,14 +406,14 @@ const monitorHarness = (options: { readonly triggerFails?: boolean } = {}) =>
             Layer.mock(HostProcesses.HostProcesses)({
               unbucketed: (input) =>
                 Ref.update(walks, (all) => [...all, input]).pipe(
-                  Effect.andThen(Ref.get(share)),
-                  Effect.flatMap((sharePercent) =>
+                  Effect.andThen(Effect.all([Ref.get(share), Ref.get(processes)])),
+                  Effect.flatMap(([sharePercent, rows]) =>
                     sharePercent === "fail"
                       ? Effect.fail(new HostProcesses.HostProcessesUnavailable())
                       : Effect.succeed({
                           sharePercent,
                           sampleAgeMs: 0,
-                          processes: [],
+                          processes: rows,
                           buckets: [],
                         }),
                   ),
@@ -440,6 +444,8 @@ const monitorHarness = (options: { readonly triggerFails?: boolean } = {}) =>
       setTotals: (value: HostTotals) => SubscriptionRef.set(totals, value),
       setVerdict: (value: MachineVerdict) => SubscriptionRef.set(verdict, value),
       setShare: (value: number | null | "fail") => Ref.set(share, value),
+      setProcesses: (rows: ReadonlyArray<HostProcesses.UnbucketedProcess>) =>
+        Ref.set(processes, rows),
       walks: Ref.get(walks),
       /** Runs the Scheduler's 5 s ticks up to `ms` from now. */
       advance: (ms: number) => TestClock.adjust(ms),
@@ -715,7 +721,10 @@ describe("LoadMonitor layer", () => {
         expect(yield* monitor.walks).toEqual([
           { limit: 0, commands: false, bucketNames: new Map() },
         ]);
-        expect((yield* monitor.fires).map((fire) => fire.id)).toEqual([shareTask.id]);
+        // A user's task gets no unowned set, so its fire costs no second walk.
+        expect((yield* monitor.fires).map(({ id, unowned }) => ({ id, unowned }))).toEqual([
+          { id: shareTask.id, unowned: undefined },
+        ]);
 
         yield* monitor.advance(UNBUCKETED_INTERVAL_MS - 4 * TICK_MS);
         expect(yield* monitor.walks).toHaveLength(1);
@@ -734,6 +743,43 @@ describe("LoadMonitor layer", () => {
         yield* monitor.setTasks([cpuTask, clearsOnShare]);
         yield* monitor.advance(2 * TICK_MS);
         expect(yield* monitor.walks).toHaveLength(3);
+      }),
+    ),
+  );
+
+  it.effect("hands the built-in's fire the unowned top 50, by container or name", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const monitor = yield* monitorHarness();
+        const builtIn = loadTask(
+          "builtin",
+          load({ metric: "unbucketedSharePercent", threshold: 25 }),
+          {
+            id: ScheduledTaskService.MACHINE_BUCKETS_TASK_ID,
+          },
+        );
+        const row = (name: string, container?: string): HostProcesses.UnbucketedProcess => ({
+          pid: 1,
+          ppid: 0,
+          name,
+          exe: `/usr/bin/${name}`,
+          user: "user",
+          ...(container === undefined ? {} : { container }),
+          cpuPercent: 10,
+          rssBytes: 1,
+        });
+        yield* monitor.setTotals(cpu(10));
+        yield* monitor.setShare(40);
+        yield* monitor.setProcesses([row("postgres"), row("node", "acme-api-1"), row("postgres")]);
+        yield* monitor.setTasks([builtIn]);
+        yield* monitor.advance(2 * TICK_MS);
+        expect(yield* monitor.walks).toEqual([
+          { limit: 0, commands: false, bucketNames: new Map() },
+          { limit: 50, commands: false, bucketNames: new Map() },
+        ]);
+        expect((yield* monitor.fires).map((fire) => fire.unowned)).toEqual([
+          ["postgres", "container:acme-api-1", "postgres"],
+        ]);
       }),
     ),
   );

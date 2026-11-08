@@ -12,6 +12,7 @@ import {
   ThreadId,
 } from "@t3tools/contracts";
 import { MACHINE_BUCKETS_PROMPT } from "@t3tools/shared/machineBuckets";
+import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as PubSub from "effect/PubSub";
@@ -38,17 +39,13 @@ type Command =
   | { readonly type: "dispatch"; readonly input: Record<string, unknown> }
   | { readonly type: "send"; readonly input: Record<string, unknown> };
 
-/** The service with every thread command it issues recorded in order. */
-const withService = <A, E>(
-  body: (input: {
-    readonly service: ScheduledTaskService.ScheduledTaskService["Service"];
-    readonly commands: Array<Command>;
-  }) => Effect.Effect<A, E>,
+/** The service, recording every thread command in order; threads in `working` are mid-run. */
+const serviceLayer = (
+  commands: Array<Command>,
+  working: ReadonlySet<string>,
   policy?: ManagedPolicyDocument,
-  /** Also runs the built-in tasks layer against these settings. */
-  serverSettings?: Layer.Layer<ServerSettingsService>,
+  scratch: { calls: number } = { calls: 0 },
 ) => {
-  const commands: Array<Command> = [];
   const record = (type: Command["type"]) => (input: unknown) =>
     Effect.sync(() => {
       commands.push({ type, input: input as Record<string, unknown> });
@@ -64,24 +61,46 @@ const withService = <A, E>(
     Layer.mock(ThreadManagementService.ThreadManagementService)({
       dispatch: (input) => record("dispatch")(input).pipe(Effect.as({} as never)),
       sendToThread: (input) => record("send")(input).pipe(Effect.as({} as never)),
+      getThreadShell: (threadId) =>
+        Effect.succeed({ activeRunId: working.has(threadId) ? "run:1" : null } as never),
     }),
     Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
       namedProjectsRoot: "/projects",
-      ensureScratchProject: Effect.succeed({ projectId: SCRATCH }),
+      ensureScratchProject: Effect.sync(() => {
+        scratch.calls += 1;
+        return { projectId: SCRATCH };
+      }),
       isScratchProject: (projectId) => Effect.succeed(projectId === SCRATCH),
     }),
     Layer.mock(SecretRequests.SecretRequests)({}),
     NodeCrypto.layer,
     Scheduler.layer,
   );
-  const service = ScheduledTaskService.layer.pipe(Layer.provide(dependencies));
+  return ScheduledTaskService.layer.pipe(Layer.provide(dependencies));
+};
+
+const withService = <A, E>(
+  body: (input: {
+    readonly service: ScheduledTaskService.ScheduledTaskService["Service"];
+    readonly commands: Array<Command>;
+    readonly working: Set<string>;
+    readonly scratch: { calls: number };
+  }) => Effect.Effect<A, E>,
+  policy?: ManagedPolicyDocument,
+  /** Also runs the built-in tasks layer against these settings. */
+  serverSettings?: Layer.Layer<ServerSettingsService>,
+) => {
+  const commands: Array<Command> = [];
+  const working = new Set<string>();
+  const scratch = { calls: 0 };
+  const service = serviceLayer(commands, working, policy, scratch);
   const layer =
     serverSettings === undefined
       ? service
       : builtInTasksLayer.pipe(Layer.provideMerge(service), Layer.provide(serverSettings));
   return Effect.gen(function* () {
     const service = yield* ScheduledTaskService.ScheduledTaskService;
-    return yield* body({ service, commands });
+    return yield* body({ service, commands, working, scratch });
   }).pipe(Effect.provide(layer.pipe(Layer.provide(Layer.fresh(SqlitePersistence.layerMemory)))));
 };
 
@@ -129,8 +148,13 @@ const ordinaryTask = {
 } as const;
 
 it.effect("creates the built-in row from settings, follows the switch and writes it once", () =>
-  withService(({ service }) =>
+  withService(({ service, scratch }) =>
     Effect.gen(function* () {
+      // Switched off from the start: no row, and the scratch project is left alone.
+      yield* service.ensureBuiltInTasks(settings({ providers: true, autoBuckets: false }));
+      assert.isUndefined(yield* builtInRow(service));
+      assert.equal(scratch.calls, 0);
+
       yield* service.ensureBuiltInTasks(settings({ providers: true }));
       const created = yield* builtInRow(service);
       assert.deepInclude(created, {
@@ -156,9 +180,12 @@ it.effect("creates the built-in row from settings, follows the switch and writes
       assert.equal(again?.updatedAt, created?.updatedAt);
       assert.lengthOf((yield* service.list()).tasks, 1);
 
+      const callsWhileOn = scratch.calls;
       yield* service.ensureBuiltInTasks(settings({ providers: true, autoBuckets: false }));
       const off = yield* builtInRow(service);
       assert.isFalse(off?.enabled);
+      assert.equal(off?.projectId, SCRATCH);
+      assert.equal(scratch.calls, callsWhileOn);
       assert.notEqual(off?.updatedAt, created?.updatedAt);
       assert.equal(off?.createdAt, created?.createdAt);
 
@@ -322,4 +349,121 @@ it.effect("keeps the built-in row in step with settings from startup on", () =>
       serverSettings,
     );
   }),
+);
+
+const launches = (commands: ReadonlyArray<Command>) =>
+  commands.filter((command) => command.type === "launch").length;
+const PROCESSES = [
+  "postgres",
+  "redis",
+  "next-server",
+  "vite",
+  "esbuild",
+  "tsc",
+  "git",
+  "zsh",
+  "ssh",
+  "make",
+];
+
+it("counts an unowned set as changed once 30 % of its distinct keys are new", () => {
+  const cases: ReadonlyArray<[ReadonlySet<string> | null, ReadonlyArray<string>, boolean]> = [
+    [null, ["postgres"], true],
+    [null, [], false],
+    [new Set(PROCESSES), [...PROCESSES, ...PROCESSES], false],
+    [new Set(PROCESSES), [...PROCESSES.slice(0, 8), "docker-proxy", "containerd"], false],
+    [new Set(PROCESSES), [...PROCESSES.slice(0, 7), "docker-proxy", "containerd", "nginx"], true],
+  ];
+  for (const [previous, next, changed] of cases) {
+    assert.equal(ScheduledTaskService.unownedSetChanged(previous, next), changed, next.join());
+  }
+  assert.equal(
+    ScheduledTaskService.unownedProcessKey({ name: "node", container: "acme-api-1" }),
+    "container:acme-api-1",
+  );
+});
+
+it.effect("runs the built-in in the background at most every 6 hours, across a restart", () =>
+  Effect.gen(function* () {
+    const commands: Array<Command> = [];
+    const database = yield* Layer.build(Layer.fresh(SqlitePersistence.layerMemory));
+    const start = <E>(
+      run: (
+        service: ScheduledTaskService.ScheduledTaskService["Service"],
+      ) => Effect.Effect<void, E>,
+    ) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const context = yield* Layer.build(
+            serviceLayer(commands, new Set()).pipe(Layer.provide(Layer.succeedContext(database))),
+          );
+          yield* run(Context.get(context, ScheduledTaskService.ScheduledTaskService));
+        }),
+      );
+
+    yield* start((service) =>
+      Effect.gen(function* () {
+        yield* service.ensureBuiltInTasks(settings({ providers: true }));
+        yield* service.upsert(ordinaryTask);
+        yield* service.triggerLoad(BUILT_IN, "1", ["postgres"]);
+        yield* service.triggerLoad(ordinaryTask.id, "1");
+        yield* service.triggerLoad(ordinaryTask.id, "2");
+      }),
+    );
+    // The built-in once; a user's load task is never held back.
+    assert.equal(launches(commands), 3);
+
+    yield* TestClock.adjust("1 hour");
+    yield* start((service) =>
+      Effect.gen(function* () {
+        // A restart forgets the episode and the last unowned set, but not the last run.
+        yield* service.triggerLoad(BUILT_IN, "2", ["redis"]);
+        assert.equal(launches(commands), 3);
+        yield* service.runNow({ id: BUILT_IN });
+        assert.equal(launches(commands), 4);
+        yield* TestClock.adjust("5 hours");
+        yield* service.triggerLoad(BUILT_IN, "3", ["redis"]);
+        assert.equal(launches(commands), 4);
+        yield* TestClock.adjust("1 hour");
+        yield* service.triggerLoad(BUILT_IN, "4", ["redis"]);
+        assert.equal(launches(commands), 5);
+      }),
+    );
+  }).pipe(Effect.scoped),
+);
+
+it.effect("skips the built-in while its last run's thread is still working", () =>
+  withService(({ service, commands, working }) =>
+    Effect.gen(function* () {
+      yield* service.ensureBuiltInTasks(settings({ providers: true }));
+      yield* service.triggerLoad(BUILT_IN, "1", ["postgres"]);
+      working.add("thread:launched");
+      yield* TestClock.adjust("7 hours");
+      yield* service.triggerLoad(BUILT_IN, "2", ["redis"]);
+      assert.equal(launches(commands), 1);
+      working.delete("thread:launched");
+      yield* service.triggerLoad(BUILT_IN, "3", ["redis"]);
+      assert.equal(launches(commands), 2);
+    }),
+  ),
+);
+
+it.effect("skips the built-in when the unowned processes are mostly the ones it last saw", () =>
+  withService(({ service, commands }) =>
+    Effect.gen(function* () {
+      yield* service.ensureBuiltInTasks(settings({ providers: true }));
+      yield* service.triggerLoad(BUILT_IN, "1", PROCESSES);
+      yield* TestClock.adjust("7 hours");
+      yield* service.triggerLoad(BUILT_IN, "2", [...PROCESSES.slice(0, 8), "nginx", "caddy"]);
+      yield* service.triggerLoad(BUILT_IN, "3", []);
+      assert.equal(launches(commands), 1);
+      yield* service.triggerLoad(BUILT_IN, "4", [
+        ...PROCESSES.slice(0, 7),
+        "nginx",
+        "caddy",
+        "java",
+      ]);
+      assert.equal(launches(commands), 2);
+    }),
+  ),
 );

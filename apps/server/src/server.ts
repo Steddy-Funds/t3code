@@ -318,18 +318,21 @@ const layerProcessOwnership = ProcessOwnership.layer.pipe(
   Layer.provide(layerServerSettings),
 );
 
+const layerThreadResources = ThreadResources.layer.pipe(
+  Layer.provide(layerProcessOwnership),
+  Layer.provide(layerNativeTelemetry),
+  Layer.provide(ProjectionStoreV2.layer.pipe(Layer.provide(layerServerSettings))),
+);
+
 const layerResourceDiagnostics = Layer.mergeAll(
   HostResources.layer.pipe(Layer.provide(layerServerSettings), Layer.provide(layerNativeTelemetry)),
   HostProcesses.layer.pipe(
     Layer.provide(layerResourceTelemetry),
     Layer.provide(layerProcessOwnership),
+    Layer.provide(layerThreadResources),
   ),
   layerProcessOwnership,
-  ThreadResources.layer.pipe(
-    Layer.provide(layerProcessOwnership),
-    Layer.provide(layerNativeTelemetry),
-    Layer.provide(ProjectionStoreV2.layer.pipe(Layer.provide(layerServerSettings))),
-  ),
+  layerThreadResources,
   layerResourceTelemetry,
   ProcessDiagnostics.layer.pipe(Layer.provide(layerResourceTelemetry)),
   ProcessResourceMonitor.layer.pipe(Layer.provide(layerResourceTelemetry)),

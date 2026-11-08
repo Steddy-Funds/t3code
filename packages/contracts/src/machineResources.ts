@@ -289,11 +289,14 @@ export const THREAD_RESOURCE_HISTORY_POINTS = 240;
 export const ServerGetThreadResourcesInput = Schema.Struct({ threadId: ThreadId });
 export type ServerGetThreadResourcesInput = typeof ServerGetThreadResourcesInput.Type;
 
+/** Totals for the thread's lineage: the thread and its `subagent` descendants on this environment. */
 export const ThreadResources = Schema.Struct({
-  /** Null when nothing is known to belong to the thread. */
+  /** Null when nothing is known to belong to the lineage. */
   current: Schema.NullOr(ThreadResourceTotals),
   /** Oldest first, at most 240 points. */
   history: Schema.Array(ThreadResourcePoint),
+  /** The lineage measured, the thread first; older servers omit it and measure the thread alone. */
+  threadIds: Schema.optionalKey(Schema.Array(ThreadId)),
 });
 export type ThreadResources = typeof ThreadResources.Type;
 

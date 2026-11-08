@@ -2276,6 +2276,60 @@ it.effect("lists only active subagent IDs without loading shell data", () =>
   }).pipe(Effect.provide(layerTest)),
 );
 
+it.effect("lists live subagent links, without forks or deleted threads", () =>
+  Effect.gen(function* () {
+    const store = yield* ProjectionStore.ProjectionStoreV2;
+    const sql = yield* SqlClient.SqlClient;
+    const createdAt = "2026-01-05T00:00:00.000Z";
+    for (const [id, relationship, parent, archivedAt, deletedAt] of [
+      ["parent", null, null, null, null],
+      ["child", "subagent", "parent", null, null],
+      ["grandchild", "subagent", "child", null, null],
+      ["sibling", "subagent", "parent", null, null],
+      ["archived", "subagent", "parent", createdAt, null],
+      ["deleted", "subagent", "parent", null, createdAt],
+      ["under-deleted", "subagent", "deleted", null, null],
+      ["fork", "fork", "parent", null, null],
+      ["under-fork", "subagent", "fork", null, null],
+      ["unrelated", null, null, null, null],
+      ["loop-a", "subagent", "loop-b", null, null],
+      ["loop-b", "subagent", "loop-a", null, null],
+    ] as const) {
+      yield* sql`
+        INSERT INTO orchestration_v2_projection_threads (
+          thread_id, project_id, title, default_provider, runtime_mode, interaction_mode,
+          created_at, updated_at, archived_at, deleted_at, payload_json
+        ) VALUES (
+          ${id}, 'project:test', ${id}, 'codex', 'full-access', 'default',
+          ${createdAt}, ${createdAt}, ${archivedAt}, ${deletedAt},
+          ${JSON.stringify({
+            lineage: { relationshipToParent: relationship, parentThreadId: parent },
+            archivedAt,
+          })}
+        )
+      `;
+    }
+    const link = (threadId: string, parentThreadId: string) => ({
+      threadId: ThreadId.make(threadId),
+      parentThreadId: ThreadId.make(parentThreadId),
+    });
+    // A fork is no link but tops its own tree; a deleted thread loses its links both ways.
+    assert.sameDeepMembers(
+      [...(yield* store.listSubagentLinks())],
+      [
+        link("child", "parent"),
+        link("grandchild", "child"),
+        link("sibling", "parent"),
+        link("archived", "parent"),
+        link("under-fork", "fork"),
+        // A corrupt cycle reads back as is; the lineage walks end on it.
+        link("loop-a", "loop-b"),
+        link("loop-b", "loop-a"),
+      ],
+    );
+  }).pipe(Effect.provide(layerTest)),
+);
+
 // regression: #25621 SQLite rejects statements binding more than 32,766 variables
 it.effect("lists every thread in the shell snapshot past SQLite's bound variable limit", () =>
   Effect.gen(function* () {

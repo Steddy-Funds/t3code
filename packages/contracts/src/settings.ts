@@ -26,7 +26,6 @@ import { SettingsSecretValue } from "./settingsSecretValue.ts";
 import { EnvironmentMachineKind, ThreadEnvMode, WorktreeSubmodules } from "./environment.ts";
 import { KeybindingShortcut } from "./keybindings.ts";
 import {
-  DEFAULT_MACHINE_RESOURCES_SETTINGS,
   MachineResourcesSettings,
   MachineResourcesSettingsPatch,
 } from "./machineResources.ts";
@@ -1406,7 +1405,7 @@ export const ServerSettings = Schema.Struct({
   /** Sent by the Usage tab with each summary request to this environment; edit in settings.json. Invalid values are ignored. */
   usageModelFilter: ForwardCompatibleOptional(UsageModelFilter),
   machineResources: MachineResourcesSettings.pipe(
-    Schema.withDecodingDefault(Effect.succeed(DEFAULT_MACHINE_RESOURCES_SETTINGS)),
+    Schema.withDecodingDefault(Effect.succeed({})),
   ),
 });
 export type ServerSettings = typeof ServerSettings.Type;

@@ -1,7 +1,13 @@
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
-import { NonNegativeInt, PositiveInt, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import {
+  ForwardCompatibleUnion,
+  NonNegativeInt,
+  PositiveInt,
+  ThreadId,
+  TrimmedNonEmptyString,
+} from "./baseSchemas.ts";
 import { ProviderDriverKind } from "./providerInstance.ts";
 
 export const GpuVendor = Schema.Literals(["nvidia", "intel"]);
@@ -125,7 +131,8 @@ export type BucketRule = typeof BucketRule.Type;
 export const BucketProvenance = Schema.Struct({
   createdBy: MachineActor,
   updatedBy: MachineActor,
-  updatedAt: Schema.DateTimeUtc,
+  /** Stored in settings.json, which is decoded from parsed JSON, so the encoded form is a string. */
+  updatedAt: Schema.DateTimeUtcFromString,
 });
 export type BucketProvenance = typeof BucketProvenance.Type;
 
@@ -238,6 +245,10 @@ export const ProcessOwner = Schema.Union([
   Schema.Struct({ type: Schema.Literal("other") }),
 ]);
 export type ProcessOwner = typeof ProcessOwner.Type;
+
+/** An owner kind from a newer server decodes as an unknown member, so the frame still decodes. */
+export const ReceivedProcessOwner = ForwardCompatibleUnion(ProcessOwner.members, "type");
+export type ReceivedProcessOwner = typeof ReceivedProcessOwner.Type;
 
 export const ThreadResourceSource = Schema.Literals(["cgroup", "sample", "none"]);
 export type ThreadResourceSource = typeof ThreadResourceSource.Type;
@@ -423,7 +434,7 @@ export const MachineProcessAdded = Schema.Struct({
   command: Schema.String,
   containerId: Schema.optionalKey(Schema.String),
   /** Re-sent with the row when it changes. Absent from servers before ownership. */
-  owner: Schema.optionalKey(ProcessOwner),
+  owner: Schema.optionalKey(ReceivedProcessOwner),
 });
 export type MachineProcessAdded = typeof MachineProcessAdded.Type;
 

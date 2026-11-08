@@ -1,11 +1,15 @@
-import type {
-  Claim,
-  MachineProcessAdded,
-  MachineProcessFrame,
-  MachineProcessSource,
+import {
+  isUnknownUnionMember,
+  type Claim,
+  type MachineProcessAdded,
+  type MachineProcessFrame,
+  type MachineProcessSource,
+  type ProcessOwner,
 } from "@t3tools/contracts";
 
-export interface MachineProcessRow extends MachineProcessAdded {
+export interface MachineProcessRow extends Omit<MachineProcessAdded, "owner"> {
+  /** Absent when unattributed: from a server before ownership, or an owner kind this client predates. */
+  readonly owner?: ProcessOwner;
   /** Percent of one core. */
   readonly cpu: number;
   /** Resident bytes. */
@@ -39,7 +43,14 @@ interface KeyedTable {
 
 function foldFrame(table: KeyedTable, frame: MachineProcessFrame): void {
   for (const key of frame.removed) table.entries.delete(key);
-  for (const added of frame.added) table.entries.set(added.key, { ...added, cpu: 0, rss: 0 });
+  for (const { owner, ...added } of frame.added) {
+    table.entries.set(added.key, {
+      ...added,
+      ...(owner === undefined || isUnknownUnionMember(owner) ? {} : { owner }),
+      cpu: 0,
+      rss: 0,
+    });
+  }
   const { key, cpu, rss, gpuUtil, vram } = frame.rows;
   for (let index = 0; index < key.length; index++) {
     const entry = table.entries.get(key[index]!);

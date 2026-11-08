@@ -414,8 +414,11 @@ export function attributeRows(input: AttributionInput): Map<string, ProcessOwner
     const key = processKey(row.pid, row.startTimeMs);
     let bucketId = input.bucketMemo.get(key);
     if (bucketId === undefined) {
-      bucketId = matchBucket(input.buckets, row, tree.parent(row), input.envThread(row));
-      input.bucketMemo.set(key, bucketId);
+      const parent = tree.parent(row);
+      bucketId = matchBucket(input.buckets, row, parent, input.envThread(row));
+      // A miss on unread statics (empty name, here or on the parent) may match once they arrive.
+      const settled = row.name !== "" && (parent === undefined || parent.name !== "");
+      if (settled || bucketId !== null) input.bucketMemo.set(key, bucketId);
     }
     return bucketId ?? undefined;
   };
@@ -729,8 +732,13 @@ export const makeWith = Effect.fn("ProcessOwnership.make")(function* (io: Proces
   const bucketLock = yield* Semaphore.make(1);
   const lastPruneAt = yield* Ref.make<number | null>(null);
   const envMemo = new Map<string, ThreadId | null>();
-  let bucketMemo = new Map<string, MachineBucketId | null>();
-  let memoBuckets: ReadonlyArray<MachineBucket> | null = null;
+  // Host rows carry exe, cwd and user; subtree and sample rows do not, and would miss rules on
+  // them, so each kind keeps its own memo.
+  let detailedMemo = new Map<string, MachineBucketId | null>();
+  let liteMemo = new Map<string, MachineBucketId | null>();
+  // Settings hand back the same record until buckets change, so its identity keys the memo.
+  let memoRecord: Readonly<Record<string, MachineBucket>> | null = null;
+  let memoBuckets: ReadonlyArray<MachineBucket> = [];
 
   const setClaims = Effect.fnUntraced(function* (next: ReadonlyArray<ResolvedClaim>) {
     yield* Ref.set(claimsRef, next);
@@ -951,12 +959,17 @@ export const makeWith = Effect.fn("ProcessOwnership.make")(function* (io: Proces
       yield* prune;
       const tree = buildProcessTree(rows);
       const roots = registry.roots();
-      const buckets = Object.values(yield* currentBuckets.pipe(Effect.orElseSucceed(() => ({}))));
-      const live = new Set(rows.map((row) => processKey(row.pid, row.startTimeMs)));
-      if (buckets !== memoBuckets) {
-        bucketMemo = new Map();
-        memoBuckets = buckets;
+      const record = yield* currentBuckets.pipe(Effect.orElseSucceed(() => memoRecord ?? {}));
+      if (record !== memoRecord) {
+        detailedMemo = new Map();
+        liteMemo = new Map();
+        memoRecord = record;
+        memoBuckets = Object.values(record);
       }
+      const buckets = memoBuckets;
+      const live = new Set(rows.map((row) => processKey(row.pid, row.startTimeMs)));
+      const detailed = rows.some((row) => row.exe !== "" || row.cwd !== "" || row.user !== "");
+      const bucketMemo = detailed ? detailedMemo : liteMemo;
       for (const key of bucketMemo.keys()) if (!live.has(key)) bucketMemo.delete(key);
       for (const key of envMemo.keys()) if (!live.has(key)) envMemo.delete(key);
 

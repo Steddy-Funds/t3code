@@ -7,17 +7,31 @@ import {
   type ExecutionEnvironmentPlatformOs,
   type MachineThresholds,
   MachineThresholdsPatch,
+  type ModelSelection,
+  type ServerSettings,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 import { SettingsIcon } from "lucide-react";
 
-import { useUpdateEnvironmentSettings } from "../../hooks/useSettings";
-import { serverEnvironment } from "~/state/server";
+import { resolveMachineBucketsModel } from "@t3tools/shared/machineBuckets";
+import { createModelSelection } from "@t3tools/shared/model";
+
+import { useEnvironmentSettings, useUpdateEnvironmentSettings } from "../../hooks/useSettings";
+import { getCustomModelOptionsByInstance } from "../../modelSelection";
+import { providerInstanceEntriesFor } from "../../providerInstances";
+import { useEnvironmentProviders } from "../../state/environments";
+import { EMPTY_SERVER_PROVIDERS, serverEnvironment } from "~/state/server";
 import { useEnvironmentScope } from "~/state/session";
 import { MachineBucketList } from "../nodeResources/buckets/MachineBucketList";
+import { ProviderModelPicker } from "../chat/ProviderModelPicker";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
-import { SettingResetButton, SettingsRow } from "./settingsLayout";
+import { Switch } from "../ui/switch";
+import {
+  SETTINGS_PICKER_TRIGGER_CLASSNAME,
+  SettingResetButton,
+  SettingsRow,
+} from "./settingsLayout";
 import { searchableSetting } from "./settingsSearch";
 
 type ThresholdKey = keyof MachineThresholds;
@@ -232,10 +246,96 @@ export function MachineResourcesSection({
           description="macOS counts cache as used, so memory pressure reaching critical replaces the RAM rule."
         />
       ) : null}
+      {config.environment.capabilities.machineAutoBuckets === true ? (
+        <AutoBucketsSettings
+          environmentId={environmentId}
+          settings={config.settings}
+          canWrite={canWrite}
+        />
+      ) : null}
       <div className="px-3 pt-2 sm:px-4">
         <MachineBucketList environmentId={environmentId} />
       </div>
     </div>
+  );
+}
+
+function AutoBucketsSettings({
+  environmentId,
+  settings,
+  canWrite,
+}: {
+  readonly environmentId: EnvironmentId;
+  readonly settings: ServerSettings;
+  readonly canWrite: boolean;
+}) {
+  const unifiedSettings = useEnvironmentSettings(environmentId);
+  const updateSettings = useUpdateEnvironmentSettings(environmentId);
+  const providers = (useEnvironmentProviders().get(environmentId) ?? EMPTY_SERVER_PROVIDERS).filter(
+    (provider) => provider.supportsTextGeneration !== false,
+  );
+  const autoBuckets = settings.machineResources.autoBuckets;
+  const active = resolveMachineBucketsModel(settings);
+  const instanceEntries = providerInstanceEntriesFor(providers, unifiedSettings, null);
+  const modelOptionsByInstance = getCustomModelOptionsByInstance(
+    unifiedSettings,
+    providers,
+    active?.instanceId ?? null,
+    active?.model ?? null,
+  );
+  const saveModel = (modelSelection: ModelSelection | null) =>
+    updateSettings({ machineResources: { autoBuckets: { modelSelection } } });
+
+  return (
+    <>
+      <SettingsRow
+        title="Auto-buckets"
+        description="When processes nothing owns pass a quarter of what's running, a background thread groups them into buckets."
+        control={
+          <Switch
+            checked={autoBuckets.enabled}
+            disabled={!canWrite}
+            onCheckedChange={(enabled) =>
+              updateSettings({ machineResources: { autoBuckets: { enabled } } })
+            }
+            aria-label="Auto-buckets"
+          />
+        }
+      />
+      {autoBuckets.enabled ? (
+        <SettingsRow
+          title="Auto-buckets model"
+          description="Auto uses a fast model from an enabled provider."
+          resetAction={
+            canWrite && autoBuckets.modelSelection !== null ? (
+              <SettingResetButton label="Auto-buckets model" onClick={() => saveModel(null)} />
+            ) : null
+          }
+          control={
+            active === null ? (
+              <span className="text-sm text-muted-foreground">No provider available.</span>
+            ) : (
+              <ProviderModelPicker
+                environmentId={environmentId}
+                disabled={!canWrite}
+                activeInstanceId={active.instanceId}
+                model={active.model}
+                lockedProvider={null}
+                instanceEntries={instanceEntries}
+                modelOptionsByInstance={modelOptionsByInstance}
+                isComposerOwned={false}
+                triggerClassName={SETTINGS_PICKER_TRIGGER_CLASSNAME}
+                triggerAriaLabel="Auto-buckets model"
+                {...(autoBuckets.modelSelection === null ? { triggerDetail: "Auto" } : {})}
+                onInstanceModelChange={(instanceId, model) =>
+                  saveModel(createModelSelection(instanceId, model))
+                }
+              />
+            )
+          }
+        />
+      ) : null}
+    </>
   );
 }
 

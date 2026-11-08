@@ -1355,6 +1355,70 @@ describe("HTML renders in the timeline", () => {
     expect(entries.some((entry) => entry.kind === "html-render")).toBe(false);
     expect(entries.find((entry) => entry.id === "render")?.kind).toBe("work");
   });
+
+  const machineCard = {
+    environmentId: "environment:mac",
+    snapshot: { verdict: "ok", reason: null, totals: null },
+  };
+  const machineReadCall = (
+    status: OrchestrationV2TurnItem["status"],
+    output: unknown,
+    toolName = "mcp__t3-code__t3_machine_read",
+  ): OrchestrationV2TurnItem => ({
+    ...base("render", 2),
+    status,
+    type: "dynamic_tool",
+    toolName,
+    input: { show: true },
+    output,
+  });
+
+  it("shows a machine card in place, above the reply, through the turn fold", () => {
+    const entries = turn(
+      machineReadCall("completed", { structuredContent: { machineCard }, content: [] }),
+    );
+    expect(entries.find((entry) => entry.kind === "machine-card")).toMatchObject({
+      id: "render",
+      runId,
+      machineCard,
+    });
+    expect(rowsFor(entries, false)).toEqual(["message", "turn-fold", "machine-card", "message"]);
+  });
+
+  it("keeps a machine card visible when its superseded attempt folds", () => {
+    const attempt: OrchestrationV2RunAttempt = {
+      id: RunAttemptId.make("attempt-superseded"),
+      runId,
+      attemptOrdinal: 1,
+      rootNodeId: NodeId.make("node-superseded"),
+      providerInstanceId: ProviderInstanceId.make("codex-default"),
+      providerThreadId: ProviderThreadId.make("provider-thread"),
+      providerTurnId: null,
+      reason: "initial",
+      status: "superseded",
+      startedAt: at(0),
+      completedAt: at(4),
+    };
+    const entries = turn(machineReadCall("completed", { machineCard })).map((entry) =>
+      entry.kind === "message" && entry.message.role === "user" ? entry : { ...entry, attempt },
+    );
+    expect(rowsFor(entries, true)).toEqual([
+      "message",
+      "turn-fold",
+      "attempt-fold",
+      "machine-card",
+    ]);
+  });
+
+  it.each([
+    ["another server's tool", "completed", { machineCard }, "other.t3_machine_read"],
+    ["a failed read", "completed", { machineCard, isError: true }, undefined],
+    ["a running read", "running", { machineCard }, undefined],
+  ] as const)("keeps %s in the work log", (_label, status, output, toolName) => {
+    const entries = turn(machineReadCall(status, output, toolName));
+    expect(entries.some((entry) => entry.kind === "machine-card")).toBe(false);
+    expect(entries.find((entry) => entry.id === "render")?.kind).toBe("work");
+  });
 });
 
 describe("work-log failure policy (#7999/#7893)", () => {

@@ -57,6 +57,52 @@ it("shows a captured MCP app for a failed deferred write", () => {
   expect(buildThreadFeed([projected(item, 0)])).toMatchObject([{ type: "mcp-app", app: mcpApp }]);
 });
 
+it("keeps an agent's machine card out of the settled run's fold", () => {
+  const machineCard = {
+    environmentId: "environment:mac",
+    snapshot: { verdict: "ok", reason: null, totals: null },
+  };
+  const read = (toolName: string): OrchestrationV2TurnItem => ({
+    ...base("machine-read", "2026-06-20T00:00:02.500Z", 2),
+    type: "dynamic_tool",
+    toolName,
+    input: { show: true },
+    output: { structuredContent: { machineCard }, content: [] },
+  });
+  const feedFor = (toolName: string, visibility: "local" | "inherited" = "local") =>
+    buildThreadFeed([
+      projected(userMessage(), 0),
+      projected(command(), 1),
+      projected(read(toolName), 2, visibility),
+      projected({ ...assistantMessage(), ordinal: 3 }, 3),
+    ]);
+  const latestRun = {
+    runId,
+    status: "completed" as const,
+    startedAt: "2026-06-20T00:00:01.000Z",
+    completedAt: "2026-06-20T00:00:03.000Z",
+  };
+
+  const feed = feedFor("mcp__t3-code__t3_machine_read");
+  expect(feed.find((entry) => entry.type === "machine-card")).toMatchObject({
+    id: "machine-card:local:thread-1:machine-read",
+    runId,
+    card: machineCard,
+  });
+  expect(
+    feedFor("t3_machine_read", "inherited").find((entry) => entry.type === "machine-card")?.id,
+  ).toBe("machine-card:inherited:thread-source:machine-read");
+  expect(
+    deriveThreadFeedPresentation(feed, latestRun, new Set()).map((entry) => entry.type),
+  ).toEqual(["message", "run-fold", "machine-card", "message"]);
+
+  const foreign = feedFor("other.t3_machine_read");
+  expect(foreign.some((entry) => entry.type === "machine-card")).toBe(false);
+  expect(
+    deriveThreadFeedPresentation(foreign, latestRun, new Set()).map((entry) => entry.type),
+  ).toEqual(["message", "run-fold", "message"]);
+});
+
 it("keeps historical plan detail accessible from its paged turn item", () => {
   const item = {
     ...base("historical-plan", "2026-08-29T00:00:00.000Z", 1),

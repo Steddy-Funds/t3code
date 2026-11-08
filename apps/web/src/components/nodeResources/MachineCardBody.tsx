@@ -62,8 +62,9 @@ export function MachineCardBody({
   ownerNames,
 }: {
   readonly view: MachineIndicatorView;
-  readonly snapshot: MachineStatusSnapshot | null;
-  readonly processes: MachineProcessList;
+  readonly snapshot: Pick<MachineStatusSnapshot, "totals" | "sample"> | null;
+  /** Absent hides the section, as on a frozen snapshot. */
+  readonly processes?: MachineProcessList;
   /** The machine's thresholds, when the caller knows them. */
   readonly limits?: MachineLimits;
   readonly runningThreadCount?: number;
@@ -102,7 +103,9 @@ export function MachineCardBody({
           ) : null}
         </div>
       ) : null}
-      {view.unreachable ? null : <ProcessesSection processes={processes} ownerNames={ownerNames} />}
+      {view.unreachable || processes === undefined ? null : (
+        <ProcessesSection processes={processes} ownerNames={ownerNames} />
+      )}
       {runningThreadCount === undefined ? null : (
         <div className="px-3 py-2.5 text-muted-foreground">
           {runningThreadCount} T3 {runningThreadCount === 1 ? "thread" : "threads"} running

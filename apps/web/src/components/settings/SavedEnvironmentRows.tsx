@@ -25,7 +25,7 @@ import * as Option from "effect/Option";
 
 import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
 import { cn } from "../../lib/utils";
-import { SettingsRow } from "./settingsLayout";
+import { SettingsRow, useOpenWhenTargeted, useSettingsSearchTargetId } from "./settingsLayout";
 import { searchableSetting } from "./settingsSearch";
 import { EnvironmentIconMenu } from "./EnvironmentIconPicker";
 import { EnvironmentRoutesList } from "./EnvironmentRoutesList";
@@ -77,6 +77,10 @@ type SavedBackendListRowProps = {
   onAddRoute: (environment: EnvironmentPresentation) => void;
 };
 
+/** The hash that scrolls Settings → Environments to this row and opens its machine settings. */
+export const environmentSettingsTargetId = (environmentId: EnvironmentId) =>
+  `environment-${environmentId}`;
+
 function savedBackendStatus(environment: EnvironmentPresentation): {
   readonly text: string;
   readonly tone: "muted" | "error";
@@ -118,8 +122,11 @@ export function SavedBackendListRow({
   const [routesOpen, setRoutesOpen] = useState(false);
   const [permissionsOpen, setPermissionsOpen] = useState(false);
   const [diagnosisOpen, setDiagnosisOpen] = useState(false);
-  const [machineSettingsOpen, setMachineSettingsOpen] = useState(false);
   const environmentId = environment.environmentId;
+  const targetId = environmentSettingsTargetId(environmentId);
+  const [machineSettingsOpen, setMachineSettingsOpen] = useOpenWhenTargeted(
+    useSettingsSearchTargetId() === targetId,
+  );
   const unsupported = environment.connection.phase === "unsupported";
   const blocked = unsupported && !hasSavedBearerRoute(environment.entry);
   const enabled = environment.entry.enabled && !unsupported;
@@ -244,6 +251,7 @@ export function SavedBackendListRow({
     <EnvironmentRow
       kind={machineKind}
       environmentId={environment.environmentId}
+      settingsTargetId={targetId}
       machineCard
       label={environment.label}
       dimmed={!enabled}

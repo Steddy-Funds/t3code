@@ -5,10 +5,15 @@ import {
   ProviderDriverKind,
   ProviderInstanceId,
   ProjectId,
+  ScheduledTaskId,
+  type ScheduledTask,
 } from "@t3tools/contracts";
 import {
   scheduledTaskDefaultModel,
   DEFAULT_SCHEDULE,
+  editDraft,
+  hasScheduledTaskDraftChanges,
+  type ScheduledTaskDraft,
   scheduleDraftForTask,
   scheduleFromDraft,
 } from "./scheduledTaskDraft";
@@ -79,6 +84,68 @@ describe("scheduleDraftForTask", () => {
     expect(
       scheduleFromDraft({ ...draft, filters: [{ id: "f1", path: "", op: "exists", value: "" }] }),
     ).toBeNull();
+  });
+});
+
+describe("load schedule drafts", () => {
+  const schedule = {
+    type: "load",
+    condition: { metric: "loadPerCore", op: "<=", threshold: 8.5, sustainSeconds: 120 },
+    clear: { metric: "loadPerCore", op: ">=", threshold: 10, sustainSeconds: 0 },
+  } as const;
+  const task: ScheduledTask = {
+    id: ScheduledTaskId.make("load-task"),
+    title: "Run when idle",
+    prompt: "Run the long suite",
+    enabled: true,
+    schedule,
+    projectId: ProjectId.make("project"),
+    threadId: null,
+    workspaceStrategy: { type: "root" },
+    modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
+    runtimeMode: "full-access",
+    interactionMode: "default",
+    createdBy: "user",
+    creationSource: "mobile",
+    createdAt: "2026-11-08T00:00:00.000Z",
+    updatedAt: "2026-11-08T00:00:00.000Z",
+    nextRunAt: null,
+    lastRunAt: null,
+    lastRunStatus: "never",
+    lastRunError: null,
+    runCount: 0,
+  };
+
+  it("opens a load task in load mode and saves it back unchanged", () => {
+    const draft = scheduleDraftForTask(task);
+    expect(draft.mode).toBe("load");
+    expect(draft.load).toMatchObject({ clearEnabled: true, condition: { threshold: "8.5" } });
+    expect(scheduleFromDraft(draft)).toStrictEqual(schedule);
+    expect(
+      scheduleFromDraft({
+        ...draft,
+        load: { ...draft.load, condition: { ...draft.load.condition, threshold: "x" } },
+      }),
+    ).toBeNull();
+  });
+
+  it("notices an edit to any load field", () => {
+    const initial = editDraft(task);
+    expect(hasScheduledTaskDraftChanges(initial, editDraft(task))).toBe(false);
+    const edit = (load: Partial<ScheduledTaskDraft["schedule"]["load"]>) => ({
+      ...initial,
+      schedule: { ...initial.schedule, load: { ...initial.schedule.load, ...load } },
+    });
+    const { condition } = initial.schedule.load;
+    for (const edited of [
+      edit({ condition: { ...condition, threshold: "9" } }),
+      edit({ condition: { ...condition, op: ">=" } }),
+      edit({ condition: { ...condition, sustainSeconds: "60" } }),
+      edit({ condition: { ...condition, metric: "cpuPercent" } }),
+      edit({ clearEnabled: false }),
+    ]) {
+      expect(hasScheduledTaskDraftChanges(initial, edited)).toBe(true);
+    }
   });
 });
 

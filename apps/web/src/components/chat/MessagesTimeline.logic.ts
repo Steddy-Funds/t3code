@@ -63,7 +63,11 @@ import {
 } from "@t3tools/contracts";
 import type { ThreadRunSummary } from "@t3tools/client-runtime/state/shell";
 import { resolveT3McpToolDefinition } from "@t3tools/shared/t3McpToolPresentation";
-import { compactDynamicToolOutput } from "@t3tools/shared/toolOutput";
+import {
+  compactDynamicToolOutput,
+  type MachineCard,
+  machineCardsEqual,
+} from "@t3tools/shared/toolOutput";
 import { htmlRenderReferencesEqual, type HtmlRenderReference } from "@t3tools/shared/htmlRender";
 import { mcpAppReferencesEqual, type McpAppReference } from "@t3tools/shared/mcpApp";
 import { dynamicToolTitle } from "@t3tools/shared/toolActivity";
@@ -82,7 +86,9 @@ function timelineEntryRunId(entry: TimelineEntry): RunId | null {
   if (entry.kind === "proposed-plan") {
     return entry.proposedPlan.runId;
   }
-  if (entry.kind === "html-render" || entry.kind === "mcp-app") return entry.runId;
+  if (entry.kind === "html-render" || entry.kind === "mcp-app" || entry.kind === "machine-card") {
+    return entry.runId;
+  }
   return entry.kind === "work" ? (entry.entry.runId ?? null) : null;
 }
 
@@ -632,6 +638,13 @@ type MessagesTimelineRowContent =
       htmlRender: HtmlRenderReference;
     }
   | {
+      kind: "machine-card";
+      id: string;
+      createdAt: string;
+      runId: RunId | null;
+      machineCard: MachineCard;
+    }
+  | {
       kind: "mcp-app";
       id: string;
       createdAt: string;
@@ -795,6 +808,7 @@ function deriveSupersededAttemptFolds(
       (entry.kind === "event" && entry.projectedItem.item.type === "handoff") ||
       entry.kind === "html-render" ||
       entry.kind === "mcp-app" ||
+      entry.kind === "machine-card" ||
       timelineEntryIsPersistentResourceCard(entry) ||
       liveSubagentEntryIds.has(entry.id) ||
       (entry.kind === "work" && entry.entry.itemType === "system_notice")
@@ -1959,6 +1973,17 @@ export function deriveMessagesTimelineRows(input: {
       continue;
     }
 
+    if (timelineEntry.kind === "machine-card") {
+      nextRows.push({
+        kind: "machine-card",
+        id: timelineEntry.id,
+        createdAt: timelineEntry.createdAt,
+        runId: timelineEntry.runId,
+        machineCard: timelineEntry.machineCard,
+      });
+      continue;
+    }
+
     if (timelineEntry.kind === "mcp-app") {
       nextRows.push({
         kind: "mcp-app",
@@ -2443,6 +2468,16 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
       // Tool updates rebuild entries; preserve frames for unchanged pages.
       const bh = b as typeof a;
       return a.createdAt === bh.createdAt && htmlRenderReferencesEqual(a.htmlRender, bh.htmlRender);
+    }
+
+    case "machine-card": {
+      // Entries rebuild on every tool update; the card is the same while its output is.
+      const bc = b as typeof a;
+      return (
+        a.createdAt === bc.createdAt &&
+        a.runId === bc.runId &&
+        machineCardsEqual(a.machineCard, bc.machineCard)
+      );
     }
 
     case "mcp-app": {

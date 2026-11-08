@@ -533,6 +533,35 @@ describe("attributeRows", () => {
       expect(owner(cargo)).toEqual({ type: "bucket", bucketId: "first" });
     });
 
+    it.each<[string, MachineActor, number, ProcessOwner]>([
+      [
+        "a user bucket takes a server child",
+        { type: "user" },
+        SERVER,
+        { type: "bucket", bucketId: bucketId("git") },
+      ],
+      [
+        "an auto bucket leaves a server child to T3",
+        { type: "auto", threadId: THREAD_A },
+        SERVER,
+        { type: "t3", label: "other" },
+      ],
+      [
+        "an auto bucket takes a process nothing owns",
+        { type: "auto", threadId: THREAD_A },
+        1,
+        { type: "bucket", bucketId: bucketId("git") },
+      ],
+    ])("%s", (_name, updatedBy, ppid, expected) => {
+      const git = row(300, ppid, 5_000, { name: "git", exe: "/usr/bin/git" });
+      const owner = attribute([serverRow, git], {
+        buckets: [
+          bucket("git", [{ field: "exe", op: "equals", value: "/usr/bin/git" }], updatedBy),
+        ],
+      });
+      expect(owner(git)).toEqual(expected);
+    });
+
     it("uses carried matches from the memo and fills it for every row", () => {
       const memo = new Map<string, MachineBucketId | null>([
         [processKey(900, 8_000), bucketId("carried")],

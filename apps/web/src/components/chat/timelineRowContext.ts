@@ -78,6 +78,8 @@ export interface TimelineRowSharedState {
    * loads it through its own route.
    */
   renderHtmlRender: ((row: Extract<TimelineRow, { kind: "html-render" }>) => ReactNode) | undefined;
+  /** False where no machine is reachable, as for a guest: machine cards stay snapshots. */
+  liveMachineCards: boolean;
   /** Unset, expanded rows read detail and command output from the environment. */
   turnItemSource: TurnItemSource | undefined;
   onOpenThread: (threadId: OrchestrationV2TurnItem["threadId"]) => void;

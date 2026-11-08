@@ -26,6 +26,56 @@ describe("scheduled task schedule calculation", () => {
     expect(parts?.minute).toBe(0);
   });
 
+  it("never schedules a clock run for a load task", () => {
+    expect(
+      nextScheduledRunAt(
+        {
+          type: "load",
+          condition: { metric: "cpuPercent", op: ">=", threshold: 90, sustainSeconds: 60 },
+        },
+        DateTime.makeUnsafe("2026-11-08T00:00:00.000Z"),
+      ),
+    ).toBeNull();
+  });
+
+  it("treats a load schedule as changed when any condition field differs", () => {
+    const condition = {
+      metric: "gpuUtilPercent",
+      op: ">=",
+      threshold: 90,
+      sustainSeconds: 60,
+      gpuId: "gpu-0",
+    } as const;
+    const clear = { ...condition, op: "<=", threshold: 20 } as const;
+    const base = { type: "load", condition, clear } as const;
+    expect(
+      isSameSchedule(base, { type: "load", condition: { ...condition }, clear: { ...clear } }),
+    ).toBe(true);
+    const { gpuId: _gpuId, ...anyGpu } = condition;
+    expect(
+      isSameSchedule(
+        { type: "load", condition: anyGpu },
+        { type: "load", condition: { ...anyGpu } },
+      ),
+    ).toBe(true);
+    for (const changed of [
+      { ...base, condition: { ...condition, metric: "vramUsedPercent" } },
+      { ...base, condition: { ...condition, op: "<=" } },
+      { ...base, condition: { ...condition, threshold: 91 } },
+      { ...base, condition: { ...condition, sustainSeconds: 0 } },
+      { ...base, condition: anyGpu },
+      { ...base, condition: { ...condition, gpuId: "gpu-1" } },
+      { ...base, clear: { ...clear, threshold: 30 } },
+      { type: "load", condition },
+    ] as const) {
+      expect(isSameSchedule(base, changed)).toBe(false);
+      expect(isSameSchedule(changed, base)).toBe(false);
+    }
+    expect(isSameSchedule(base, { type: "interval", everyMs: 60_000 })).toBe(false);
+    expect(isSameSchedule({ type: "interval", everyMs: 60_000 }, base)).toBe(false);
+    expect(isSameSchedule({ type: "webhook", signature: null }, base)).toBe(false);
+  });
+
   it("compares schedules structurally", () => {
     expect(
       isSameSchedule(

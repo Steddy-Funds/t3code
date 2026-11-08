@@ -2,6 +2,7 @@ import { SessionPermissions } from "./SessionPermissions";
 import { ChevronRightIcon, EllipsisIcon } from "lucide-react";
 import { useAtomValue } from "@effect/atom-react";
 import { type ReactNode, useState } from "react";
+import { useLocation } from "@tanstack/react-router";
 import {
   AuthAccessReadScope,
   AuthAccessWriteScope,
@@ -35,7 +36,12 @@ import {
   resolveTailscaleServeBaseUrl,
 } from "./ConnectionsSettings.logic";
 import { settingsScopeEnvironmentLabel } from "./settingsScopeAxis";
-import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
+import {
+  SettingsPageContainer,
+  SettingsRow,
+  SettingsSection,
+  useOpenWhenTargeted,
+} from "./settingsLayout";
 import { ManagedByOrganization } from "../ManagedPolicy";
 import { LocalEnvironmentSetting } from "./LocalEnvironmentSetting";
 import { MachineResourcesSection, MachineSettingsToggle } from "./MachineResourcesSection";
@@ -311,7 +317,11 @@ function ConnectionsSettingsContent({
           environment.serverConfig?.environment.capabilities.machineResources === true,
       )
     : [];
-  const [machineSettingsOpen, setMachineSettingsOpen] = useState(false);
+  // This page provides the search-target context, so it reads the hash itself.
+  const targetsMachineSection = useLocation({
+    select: (location) => location.hash.replace(/^#/, "") === "connections-environment",
+  });
+  const [machineSettingsOpen, setMachineSettingsOpen] = useOpenWhenTargeted(targetsMachineSection);
   const savedUpdateStates = useAtomValue(
     environmentUpdateStatesAtom(
       environmentIdsKey(savedEnvironments.map(({ environmentId }) => environmentId)),

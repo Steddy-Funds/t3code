@@ -19,7 +19,6 @@ import type {
   ProjectId,
   ScheduledTask,
   ScheduledTaskId,
-  ScheduledTaskSchedule,
   ScheduledTaskUpsertInput,
   ScheduledTaskWebhookDeliverySummary,
   ThreadId,
@@ -33,6 +32,17 @@ import {
   type WebhookFilterDraft,
 } from "@t3tools/client-runtime/scheduled-task-webhook";
 import {
+  DEFAULT_LOAD_SCHEDULE_DRAFT,
+  isGpuLoadMetric,
+  LOAD_METRICS,
+  loadVerdictState,
+  scheduledTaskScheduleSummary,
+  withLoadMetric,
+  withLoadVerdictState,
+  type LoadConditionDraft,
+} from "@t3tools/client-runtime/scheduled-task-schedule";
+import {
+  MAX_LOAD_SUSTAIN_SECONDS,
   MAX_WEBHOOK_DELIVERY_AGE_MINUTES,
   MAX_WEBHOOK_FILTERS,
   MIN_SCHEDULED_TASK_INTERVAL_MS,
@@ -45,7 +55,7 @@ import {
 } from "@t3tools/client-runtime/state/runtime";
 
 import { formatRelativeTime } from "../../timestampFormat";
-import { useEnvironmentSettings } from "../../hooks/useSettings";
+import { useEnvironmentSettings, useUpdateEnvironmentSettings } from "../../hooks/useSettings";
 import { getCustomModelOptionsByInstance } from "../../modelSelection";
 import { providerInstanceEntriesFor } from "../../providerInstances";
 import { usePrimaryCloudLinkState } from "../../cloud/cloudLinkState";
@@ -57,6 +67,7 @@ import { useNowMinute } from "../../hooks/useNowMinute";
 import {
   useEnvironment,
   useEnvironmentHttpBaseUrl,
+  usePrimaryEnvironmentId,
   type EnvironmentPresentation,
 } from "../../state/environments";
 import { useProjects, useThreadShell } from "../../state/entities";
@@ -71,15 +82,17 @@ import { EnvironmentMachineIcon } from "../EnvironmentMachineIcon";
 import { ConnectionStatusDot, connectionPhaseDotClassName } from "../ConnectionStatusDot";
 import {
   AuthOrchestrationOperateScope,
+  AuthSettingsWriteScope,
   clampManagedRuntimeMode,
   managedCapabilityDenial,
 } from "@t3tools/contracts";
 import { resolvePastedPath } from "@t3tools/shared/path";
 import { useManagedPolicy } from "~/state/managedPolicy";
 import { ManagedNotice } from "../ManagedPolicy";
-import { readEnvironmentScope } from "~/state/session";
+import { readEnvironmentScope, useEnvironmentScope } from "~/state/session";
 import { useSettingsScope } from "./SettingsScopeContext";
 import { EnvironmentRow, useEnvironmentTransportLabel } from "./EnvironmentRow";
+import { environmentSettingsTargetId } from "./SavedEnvironmentRows";
 import { SettingsGroup } from "./SettingsGroup";
 import { settingsScopeEnvironmentLabel, settingsScopeEnvironmentLabels } from "./settingsScopeAxis";
 import {
@@ -166,6 +179,7 @@ const EMPTY_DRAFT: DraftState = {
   coalesceWindowSeconds: "",
   filters: [],
   savedFilters: [],
+  load: DEFAULT_LOAD_SCHEDULE_DRAFT,
 };
 
 function WebhookFiltersField({
@@ -294,30 +308,6 @@ function splitModelKey(value: string): ModelSelection | null {
   };
 }
 
-const ONCE_FORMATTER = new Intl.DateTimeFormat(undefined, {
-  dateStyle: "medium",
-  timeStyle: "short",
-});
-
-export function scheduleLabel(schedule: ScheduledTaskSchedule): string {
-  if (schedule.type === "webhook") return "On webhook";
-  if (schedule.type === "once") return `Once, ${ONCE_FORMATTER.format(new Date(schedule.runAt))}`;
-  if (schedule.type === "interval") {
-    const minutes = schedule.everyMs / 60_000;
-    return Number.isInteger(minutes)
-      ? `Every ${minutes} min`
-      : `Every ${Math.round(schedule.everyMs / 1000)} sec`;
-  }
-  const weekdays = schedule.weekdays ?? [];
-  const days =
-    weekdays.length === 0
-      ? "Daily"
-      : weekdays.length === 5 && weekdays.every((day) => day >= 1 && day <= 5)
-        ? "Weekdays"
-        : weekdays.map((day) => WEEKDAY_LABELS[day]).join(", ");
-  return `${days} at ${schedule.timeOfDay}`;
-}
-
 /** formatRelativeTime handles only the past; upcoming runs need future labels. */
 function relativeLabel(value: string | null, nowMs: number): string {
   if (!value) return "Not scheduled";
@@ -403,7 +393,8 @@ export function ScheduledTasksSettings(target: {
   }
   if (linkedTask && linkedEnvironmentId !== undefined && openedLinkTaskId !== target.taskId) {
     setOpenedLinkTaskId(target.taskId);
-    if (editor === null) setEditor({ environmentId: linkedEnvironmentId, task: linkedTask });
+    if (editor === null && linkedTask.builtIn === undefined)
+      setEditor({ environmentId: linkedEnvironmentId, task: linkedTask });
   }
   const navigate = useNavigate({ from: "/settings/scheduled-tasks" });
   const closeEditor = () => {
@@ -733,6 +724,8 @@ function ScheduledTaskRow({
   const [busy, setBusy] = useState(false);
   const [deliveriesOpen, setDeliveriesOpen] = useState(false);
   const isWebhook = task.schedule.type === "webhook";
+  const builtIn = task.builtIn !== undefined;
+  const primaryEnvironmentId = usePrimaryEnvironmentId();
   const toggle = useAtomCommand(serverEnvironment.setScheduledTaskEnabled, {
     label: "scheduled task enabled",
   });
@@ -756,7 +749,8 @@ function ScheduledTaskRow({
       toastManager.add(
         stackedThreadToast({
           type: "error",
-          title: "Could not update scheduled task",
+          title:
+            action === "run" ? "Could not run scheduled task" : "Could not update scheduled task",
           description: String(squashAtomCommandFailure(result)),
         }),
       );
@@ -768,14 +762,17 @@ function ScheduledTaskRow({
       description={<span className="line-clamp-2">{task.prompt}</span>}
       status={
         <div className="flex flex-wrap items-center gap-2">
+          {builtIn ? <Badge variant="outline">Built-in</Badge> : null}
           <span>
-            {scheduleLabel(task.schedule)} ·{" "}
+            {scheduledTaskScheduleSummary(task.schedule)} ·{" "}
             {task.blockedByPolicy !== undefined ? (
               task.blockedByPolicy
             ) : !task.enabled ? (
               "Paused"
             ) : isWebhook ? (
               "Listening"
+            ) : task.schedule.type === "load" ? (
+              "Watching"
             ) : task.nextRunAt ? (
               <>
                 Next run <ScheduledRelativeLabel value={task.nextRunAt} />
@@ -788,16 +785,33 @@ function ScheduledTaskRow({
             <Badge variant={statusVariant(task.lastRunStatus)}>{task.lastRunStatus}</Badge>
           ) : null}
           {task.lastRunError ? <span className="text-destructive">{task.lastRunError}</span> : null}
+          {builtIn ? (
+            <Link
+              {...(environmentId === primaryEnvironmentId
+                ? { to: "/settings/access", hash: "connections-environment" }
+                : {
+                    to: "/settings/connections",
+                    hash: environmentSettingsTargetId(environmentId),
+                  })}
+              className="text-foreground underline-offset-4 hover:underline"
+            >
+              Machine settings
+            </Link>
+          ) : null}
         </div>
       }
       control={
         <div className="flex items-center gap-2">
-          <Switch
-            checked={task.enabled}
-            disabled={busy || !canOperate}
-            aria-label={`Enable ${task.title}`}
-            onCheckedChange={() => void act("toggle")}
-          />
+          {builtIn ? (
+            <BuiltInTaskSwitch environmentId={environmentId} task={task} />
+          ) : (
+            <Switch
+              checked={task.enabled}
+              disabled={busy || !canOperate}
+              aria-label={`Enable ${task.title}`}
+              onCheckedChange={() => void act("toggle")}
+            />
+          )}
           <Menu>
             <MenuTrigger
               render={
@@ -812,10 +826,12 @@ function ScheduledTaskRow({
               <MoreHorizontalIcon className="size-4" />
             </MenuTrigger>
             <MenuPopup align="end">
-              <MenuItem onClick={onEdit}>
-                <PencilIcon />
-                Edit
-              </MenuItem>
+              {builtIn ? null : (
+                <MenuItem onClick={onEdit}>
+                  <PencilIcon />
+                  Edit
+                </MenuItem>
+              )}
               {isWebhook ? (
                 <MenuItem onClick={() => setDeliveriesOpen(true)}>
                   <InboxIcon />
@@ -827,11 +843,15 @@ function ScheduledTaskRow({
                   Run now
                 </MenuItem>
               )}
-              <MenuSeparator />
-              <MenuItem onClick={() => void act("delete")}>
-                <Trash2Icon />
-                Delete
-              </MenuItem>
+              {builtIn ? null : (
+                <>
+                  <MenuSeparator />
+                  <MenuItem onClick={() => void act("delete")}>
+                    <Trash2Icon />
+                    Delete
+                  </MenuItem>
+                </>
+              )}
             </MenuPopup>
           </Menu>
           {deliveriesOpen ? (
@@ -842,6 +862,41 @@ function ScheduledTaskRow({
             />
           ) : null}
         </div>
+      }
+    />
+  );
+}
+
+/**
+ * T3 keeps a built-in task in step with its setting; the switch shows and writes that setting,
+ * so it reads on while a block (shown in the row) keeps the task off.
+ */
+function BuiltInTaskSwitch({
+  environmentId,
+  task,
+}: {
+  readonly environmentId: EnvironmentId;
+  readonly task: ScheduledTask;
+}) {
+  const config = useAtomValue(serverEnvironment.configValueAtom(environmentId));
+  const settingEnabled = useAtomValue(
+    serverEnvironment.settingsValueAtom(environmentId),
+    (settings) => settings?.machineResources.autoBuckets.enabled,
+  );
+  const canWrite = useEnvironmentScope(environmentId, AuthSettingsWriteScope);
+  const updateSettings = useUpdateEnvironmentSettings(environmentId);
+  // Without the setting, a blocked row's `enabled` says nothing about what a flip would write.
+  const writable =
+    canWrite &&
+    config?.environment.capabilities.machineAutoBuckets === true &&
+    (settingEnabled !== undefined || task.blockedByPolicy === undefined);
+  return (
+    <Switch
+      checked={settingEnabled ?? task.enabled}
+      disabled={!writable}
+      aria-label={`Enable ${task.title}`}
+      onCheckedChange={(enabled) =>
+        updateSettings({ machineResources: { autoBuckets: { enabled } } })
       }
     />
   );
@@ -1112,6 +1167,120 @@ function WebhookDeliveryMode({ environmentId }: { readonly environmentId: Enviro
   );
 }
 
+function LoadConditionFields({
+  idPrefix,
+  label,
+  condition,
+  onChange,
+}: {
+  readonly idPrefix: string;
+  readonly label: string;
+  readonly condition: LoadConditionDraft;
+  readonly onChange: (condition: LoadConditionDraft) => void;
+}) {
+  const metric = LOAD_METRICS.find((entry) => entry.metric === condition.metric);
+  const verdictState = loadVerdictState({
+    op: condition.op,
+    threshold: Number(condition.threshold),
+  });
+  return (
+    <div className="space-y-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <Label htmlFor={`${idPrefix}-metric`}>{label}</Label>
+        <Select
+          value={condition.metric}
+          onValueChange={(value) => {
+            const next = LOAD_METRICS.find((entry) => entry.metric === value);
+            if (next) onChange(withLoadMetric(condition, next.metric));
+          }}
+        >
+          <SelectTrigger id={`${idPrefix}-metric`} size="sm" className="w-44">
+            <SelectValue>{metric?.label}</SelectValue>
+          </SelectTrigger>
+          <SelectPopup>
+            {LOAD_METRICS.map((entry) => (
+              <SelectItem key={entry.metric} value={entry.metric}>
+                {entry.label}
+              </SelectItem>
+            ))}
+          </SelectPopup>
+        </Select>
+        {condition.metric === "verdict" ? (
+          <Select
+            value={verdictState ?? (condition.op === ">=" ? "stressed" : "ok")}
+            onValueChange={(value) =>
+              onChange(withLoadVerdictState(condition, value === "stressed" ? "stressed" : "ok"))
+            }
+          >
+            <SelectTrigger aria-label="Machine status" size="sm" className="w-32">
+              <SelectValue>{condition.op === ">=" ? "is stressed" : "is ok"}</SelectValue>
+            </SelectTrigger>
+            <SelectPopup>
+              <SelectItem value="stressed">is stressed</SelectItem>
+              <SelectItem value="ok">is ok</SelectItem>
+            </SelectPopup>
+          </Select>
+        ) : (
+          <>
+            <Select
+              value={condition.op}
+              onValueChange={(value) =>
+                onChange({ ...condition, op: value === "<=" ? "<=" : ">=" })
+              }
+            >
+              <SelectTrigger aria-label="Comparison" size="sm" className="w-16">
+                <SelectValue>{condition.op === ">=" ? "≥" : "≤"}</SelectValue>
+              </SelectTrigger>
+              <SelectPopup>
+                <SelectItem value=">=">≥</SelectItem>
+                <SelectItem value="<=">≤</SelectItem>
+              </SelectPopup>
+            </Select>
+            <Input
+              aria-label="Threshold"
+              type="number"
+              nativeInput
+              step="any"
+              className="w-20"
+              value={condition.threshold}
+              onChange={(event) => onChange({ ...condition, threshold: event.target.value })}
+            />
+            {metric?.unit ? (
+              <span className="text-xs text-muted-foreground">{metric.unit}</span>
+            ) : null}
+          </>
+        )}
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <Label htmlFor={`${idPrefix}-sustain`}>For</Label>
+        <Input
+          id={`${idPrefix}-sustain`}
+          type="number"
+          nativeInput
+          min={0}
+          max={MAX_LOAD_SUSTAIN_SECONDS}
+          className="w-20"
+          value={condition.sustainSeconds}
+          onChange={(event) => onChange({ ...condition, sustainSeconds: event.target.value })}
+        />
+        <span className="text-xs text-muted-foreground">seconds</span>
+        {isGpuLoadMetric(condition.metric) ? (
+          <>
+            <Label htmlFor={`${idPrefix}-gpu`}>GPU</Label>
+            <Input
+              id={`${idPrefix}-gpu`}
+              className="w-28"
+              placeholder="Any"
+              value={condition.gpuId}
+              onChange={(event) => onChange({ ...condition, gpuId: event.target.value })}
+            />
+          </>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 function ScheduledTaskEditorDialog({
   initialEnvironmentId,
   task,
@@ -1195,6 +1364,7 @@ function ScheduledTaskEditorForm({
   const offersOnce =
     environment?.serverConfig?.environment.capabilities.oneTimeSchedules === true ||
     task?.schedule.type === "once";
+  const offersLoad = environment?.serverConfig?.environment.capabilities.loadSchedules === true;
   const connected =
     environment?.connection.phase === "connected" && environment.serverConfig !== null;
   const tasksQuery = useEnvironmentQuery(
@@ -1387,8 +1557,8 @@ function ScheduledTaskEditorForm({
       <DialogHeader>
         <DialogTitle>{draft.editingId ? "Edit task" : "New task"}</DialogTitle>
         <DialogDescription>
-          Run a prompt automatically on an interval, at a fixed time, once at a set date, or when a
-          webhook is called.
+          Run a prompt automatically on an interval, at a fixed time, once at a set date, when a
+          webhook is called, or when this machine's load crosses a threshold.
         </DialogDescription>
       </DialogHeader>
 
@@ -1406,8 +1576,13 @@ function ScheduledTaskEditorForm({
                 const next = connectedEnvironments.find((entry) => entry.environmentId === id);
                 if (!next) return;
                 setEnvironmentId(next.environmentId);
+                const nextOffersLoad =
+                  next.serverConfig?.environment.capabilities.loadSchedules === true;
                 setDraft((current) => ({
                   ...current,
+                  ...(current.scheduleMode === "load" && !nextOffersLoad
+                    ? { scheduleMode: EMPTY_DRAFT.scheduleMode }
+                    : {}),
                   projectId: defaultScheduledTaskProjectId(projectsOn(next.environmentId), scope),
                   modelKey: "",
                   baseModelSelection: null,
@@ -1625,7 +1800,8 @@ function ScheduledTaskEditorForm({
                     mode === "fixed" ||
                     mode === "once" ||
                     mode === "interval" ||
-                    mode === "webhook"
+                    mode === "webhook" ||
+                    mode === "load"
                   )
                     setDraft((current) => {
                       const suggested =
@@ -1661,6 +1837,7 @@ function ScheduledTaskEditorForm({
                 >
                   On webhook
                 </Toggle>
+                {offersLoad ? <Toggle value="load">On load</Toggle> : null}
               </ToggleGroup>
             </div>
 
@@ -1844,6 +2021,46 @@ function ScheduledTaskEditorForm({
                       />
                     </Field>
                   </div>
+                ) : null}
+              </div>
+            ) : draft.scheduleMode === "load" ? (
+              <div className="space-y-3">
+                <LoadConditionFields
+                  idPrefix="scheduled-task-load"
+                  label="When"
+                  condition={draft.load.condition}
+                  onChange={(condition) =>
+                    setDraft((current) => ({ ...current, load: { ...current.load, condition } }))
+                  }
+                />
+                <div className="flex items-center justify-between gap-4">
+                  <div className="min-w-0 space-y-1">
+                    <Label htmlFor="scheduled-task-load-clear">Clear condition</Label>
+                    <p className="text-sm text-muted-foreground">
+                      Runs once, then waits for this before it can run again. Off: when the
+                      condition stops holding.
+                    </p>
+                  </div>
+                  <Switch
+                    id="scheduled-task-load-clear"
+                    checked={draft.load.clearEnabled}
+                    onCheckedChange={(clearEnabled) =>
+                      setDraft((current) => ({
+                        ...current,
+                        load: { ...current.load, clearEnabled },
+                      }))
+                    }
+                  />
+                </div>
+                {draft.load.clearEnabled ? (
+                  <LoadConditionFields
+                    idPrefix="scheduled-task-load-clear"
+                    label="Clear when"
+                    condition={draft.load.clear}
+                    onChange={(clear) =>
+                      setDraft((current) => ({ ...current, load: { ...current.load, clear } }))
+                    }
+                  />
                 ) : null}
               </div>
             ) : draft.scheduleMode === "once" ? (

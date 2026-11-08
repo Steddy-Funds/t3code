@@ -41,13 +41,36 @@ const task: ScheduledTask = {
   runCount: 0,
 };
 
+const builtInTask: ScheduledTask = {
+  ...task,
+  id: ScheduledTaskId.make("machine-buckets"),
+  title: "Machine buckets",
+  builtIn: "machine-buckets",
+  threadId: null,
+  schedule: {
+    type: "load",
+    condition: { metric: "unbucketedSharePercent", op: ">=", threshold: 25, sustainSeconds: 0 },
+    clear: { metric: "unbucketedSharePercent", op: "<=", threshold: 15, sustainSeconds: 0 },
+  },
+};
+
 // Stands in for the thread family read the editor makes when the shell lacks the bound thread.
 const threadFamilyRead = {
   snapshotSequence: 1,
   threads: [{ id: task.threadId, title: "Fix login bug" }],
 };
 
-const state = vi.hoisted(() => ({ connected: true, tasksLoaded: true, secondary: false }));
+const state = vi.hoisted(() => ({
+  connected: true,
+  tasksLoaded: true,
+  secondary: false,
+  loadSchedules: false,
+  secondaryLoadSchedules: false,
+  builtIn: false,
+  autoBuckets: false,
+  canWriteSettings: true,
+  settingsPatches: [] as unknown[],
+}));
 const secondaryId = EnvironmentId.make("secondary");
 const permissions = new Map<string, Atom.Writable<boolean>>();
 
@@ -55,6 +78,12 @@ function setup() {
   state.connected = true;
   state.tasksLoaded = true;
   state.secondary = false;
+  state.loadSchedules = false;
+  state.secondaryLoadSchedules = false;
+  state.builtIn = false;
+  state.autoBuckets = false;
+  state.canWriteSettings = true;
+  state.settingsPatches = [];
   permissions.clear();
   permissions.set(environmentId, Atom.make(true));
   permissions.set(secondaryId, Atom.make(true));
@@ -62,7 +91,18 @@ function setup() {
 }
 
 function secondaryEnvironment() {
-  return { ...environment(), environmentId: secondaryId, label: "Secondary" };
+  const entry = environment();
+  return {
+    ...entry,
+    environmentId: secondaryId,
+    label: "Secondary",
+    serverConfig: entry.serverConfig && {
+      environment: {
+        ...entry.serverConfig.environment,
+        capabilities: { oneTimeSchedules: true, loadSchedules: state.secondaryLoadSchedules },
+      },
+    },
+  };
 }
 
 function environment() {
@@ -71,7 +111,12 @@ function environment() {
     label: "Laptop",
     connection: { phase: state.connected ? "connected" : "disconnected" },
     serverConfig: state.connected
-      ? { environment: { platform: "linux", capabilities: { oneTimeSchedules: true } } }
+      ? {
+          environment: {
+            platform: "linux",
+            capabilities: { oneTimeSchedules: true, loadSchedules: state.loadSchedules },
+          },
+        }
       : null,
   };
 }
@@ -104,6 +149,10 @@ vi.mock(import("../../state/server"), async (original) => {
     ...actual,
     serverEnvironment: {
       ...actual.serverEnvironment,
+      configValueAtom: (() =>
+        Atom.make({
+          environment: { capabilities: { machineAutoBuckets: state.autoBuckets } },
+        })) as never,
       upsertScheduledTask: {
         ...actual.serverEnvironment.upsertScheduledTask,
         permissionAtom: (id: string | null) => permissions.get(id ?? "")!,
@@ -125,7 +174,7 @@ vi.mock(import("../../state/query"), async (original) => ({
     data:
       request === null || request === threadFamilyRead
         ? request
-        : { tasks: state.tasksLoaded ? [task] : [] },
+        : { tasks: state.tasksLoaded ? [state.builtIn ? builtInTask : task] : [] },
     error: null,
     isPending: false,
     refresh: vi.fn(),
@@ -143,6 +192,14 @@ vi.mock(import("../../state/entities"), async (original) => ({
 vi.mock(import("../../hooks/useSettings"), async (original) => ({
   ...(await original()),
   useEnvironmentSettings: (() => DEFAULT_UNIFIED_SETTINGS) as never,
+  useUpdateEnvironmentSettings: (() => (patch: unknown) => {
+    state.settingsPatches.push(patch);
+  }) as never,
+}));
+vi.mock(import("~/state/session"), async (original) => ({
+  ...(await original()),
+  useEnvironmentScope: ((_id: unknown, scope: string) =>
+    scope === "settings:write" ? state.canWriteSettings : true) as never,
 }));
 
 describe("ScheduledTasksSettings", () => {
@@ -214,5 +271,77 @@ describe("ScheduledTasksSettings", () => {
 
     await expect.element(dialog.getByRole("heading", { name: "New task" })).toBeInTheDocument();
     await expect.element(name).toHaveValue("My draft");
+  });
+
+  it("offers On load only where the target environment supports it", async () => {
+    setup();
+    state.secondary = true;
+    await using screen = await render(<ScheduledTasksSettings />);
+    await screen.getByRole("button", { name: "New task" }).click();
+    const dialog = page.getByRole("dialog");
+    await expect.element(dialog.getByText("Every interval")).toBeVisible();
+    expect(dialog.getByText("On load").query()).toBeNull();
+  });
+
+  it("drops an On load draft when Runs on moves to an environment without it", async () => {
+    setup();
+    state.secondary = true;
+    state.loadSchedules = true;
+    await using screen = await render(<ScheduledTasksSettings />);
+    await screen.getByRole("button", { name: "New task" }).click();
+    const dialog = page.getByRole("dialog");
+    await userEvent.click(dialog.getByText("On load"));
+    await expect.element(dialog.getByLabelText("Machine status")).toBeVisible();
+    await userEvent.click(page.getByLabelText("Runs on"));
+    await userEvent.click(page.getByRole("option", { name: /Secondary/ }));
+    await expect.element(page.getByLabelText("Runs on")).toHaveTextContent("Secondary");
+    expect(dialog.getByText("On load").query()).toBeNull();
+    expect(dialog.getByLabelText("Machine status").query()).toBeNull();
+  });
+
+  it("shows a built-in task without edit or delete, and keeps its deep link closed", async () => {
+    setup();
+    state.builtIn = true;
+    await using screen = await render(<ScheduledTasksSettings taskId={builtInTask.id} />);
+    await expect.element(screen.getByText("Built-in")).toBeVisible();
+    await expect.element(screen.getByRole("link", { name: "Machine settings" })).toBeVisible();
+    await expect
+      .element(screen.getByText(/On load · unbucketed share ≥ 25% · clears when/))
+      .toBeVisible();
+    expect(page.getByRole("dialog").query()).toBeNull();
+    await expect
+      .element(screen.getByRole("switch", { name: "Enable Machine buckets" }))
+      .toBeDisabled();
+    await userEvent.click(screen.getByRole("button", { name: "Actions for Machine buckets" }));
+    await expect.element(page.getByRole("menuitem", { name: "Run now" })).toBeVisible();
+    expect(page.getByRole("menuitem", { name: "Edit" }).query()).toBeNull();
+    expect(page.getByRole("menuitem", { name: "Delete" }).query()).toBeNull();
+  });
+
+  it.each([
+    ["without the capability", false, true],
+    ["without settings write", true, false],
+  ])("keeps the built-in switch read-only %s", async (_label, autoBuckets, canWrite) => {
+    setup();
+    state.builtIn = true;
+    state.autoBuckets = autoBuckets;
+    state.canWriteSettings = canWrite;
+    await using screen = await render(<ScheduledTasksSettings />);
+    await expect
+      .element(screen.getByRole("switch", { name: "Enable Machine buckets" }))
+      .toBeDisabled();
+  });
+
+  it("pauses the built-in task through its machine setting", async () => {
+    setup();
+    state.builtIn = true;
+    state.autoBuckets = true;
+    await using screen = await render(<ScheduledTasksSettings />);
+    const toggle = screen.getByRole("switch", { name: "Enable Machine buckets" });
+    await expect.element(toggle).toBeEnabled();
+    await userEvent.click(toggle);
+    expect(state.settingsPatches).toEqual([
+      { machineResources: { autoBuckets: { enabled: false } } },
+    ]);
   });
 });

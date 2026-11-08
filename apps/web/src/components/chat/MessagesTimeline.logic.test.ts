@@ -3168,6 +3168,34 @@ it.each([
   ).toBe(next);
 });
 
+it("keeps a machine card row while its tool output rebuilds the same card", () => {
+  const snapshot = { verdict: "ok" as const, reason: null, totals: null };
+  const row = (
+    machineCard: Extract<MessagesTimelineRow, { kind: "machine-card" }>["machineCard"],
+  ) =>
+    ({
+      kind: "machine-card",
+      id: "machine-read",
+      createdAt: "2026-01-01T00:00:00Z",
+      runId: RunId.make("run"),
+      machineCard,
+    }) satisfies MessagesTimelineRow;
+  const first = computeStableMessagesTimelineRows([row({ environmentId: "env", snapshot })], {
+    result: [],
+    byId: new Map(),
+  });
+  const rebuilt = row({ environmentId: "env", snapshot: { ...snapshot } });
+  expect(computeStableMessagesTimelineRows([rebuilt], first)).toBe(first);
+  for (const changed of [
+    row({ environmentId: "env" }),
+    row({ environmentId: "env", snapshot: { ...snapshot, verdict: "unknown" } }),
+    row({ environmentId: "other", snapshot }),
+    { ...rebuilt, runId: RunId.make("next-run") },
+  ]) {
+    expect(computeStableMessagesTimelineRows([changed], first).result[0]).toBe(changed);
+  }
+});
+
 describe("streaming v2 row projection", () => {
   function fixture(text = "") {
     const source = makeStreamingTimelineFixture(text);

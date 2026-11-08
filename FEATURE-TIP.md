@@ -29,6 +29,7 @@ upstream; a feature can, from its own branch, when Akiva decides.
 | Sidebar machine toggle; machine in thread header; copy branch       | #58 | 796dfab |
 | Sidebar cards drop the empty icon group's gap                       | #59 | 3f45500 |
 | Thread cost and activity on one line, labels on hover | #60 | 4f50cad |
+| Thread cost as one lineage total, last pull cached | #66 | 6a6c02a |
 | Machines show stress: sweating icon, hover card, mobile sheet (node resources 1/5) | #61 | 6612446 |
 | Task manager, cross-machine view, NVIDIA and Intel GPUs (node resources 2/5) | #62 | 4c28c14 |
 | Who is using a machine: ownership, claims, buckets, per-thread resources (node resources 3/5) | #63 | 3180ffa |

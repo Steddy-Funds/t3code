@@ -1,4 +1,5 @@
 import type {
+  ResourceMonitorProcessTableEntry,
   ResourceTelemetryProcessCategory,
   ServerProcessDiagnosticsEntry,
   ServerProcessDiagnosticsResult,
@@ -11,7 +12,11 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
+import * as NativeTelemetryClient from "../resourceTelemetry/NativeTelemetryClient.ts";
 import * as ResourceTelemetry from "../resourceTelemetry/ResourceTelemetry.ts";
+
+// Snapshot and process-table start times come from different boot-epoch reads at 1 s precision.
+const START_TIME_TOLERANCE_MS = 1_000;
 
 export class ProcessSignalFailed extends Schema.TaggedError<ProcessSignalFailed>()(
   "ProcessSignalFailed",
@@ -54,9 +59,55 @@ function canSignalCategory(category: ResourceTelemetryProcessCategory): boolean 
   );
 }
 
+const matchesStartTime = (actual: number, expected: number) =>
+  Math.abs(actual - expected) <= START_TIME_TOLERANCE_MS;
+
+/** The server and every process above it, followed through the table's ppids. */
+export function serverLineage(
+  table: ReadonlyArray<ResourceMonitorProcessTableEntry>,
+  serverPid: number,
+): ReadonlySet<number> {
+  const parents = new Map(table.map((entry) => [entry.pid, entry.ppid]));
+  const lineage = new Set<number>();
+  let pid: number | undefined = serverPid;
+  while (pid !== undefined && pid > 0 && !lineage.has(pid)) {
+    lineage.add(pid);
+    pid = parents.get(pid);
+  }
+  return lineage;
+}
+
+/** Why a host-wide signal is refused, or null when the identity checks out. */
+export function refuseHostSignal(
+  table: ReadonlyArray<ResourceMonitorProcessTableEntry>,
+  input: { readonly pid: number; readonly startTimeMs: number },
+  guards: { readonly serverPid: number; readonly monitorPid: number },
+): string | null {
+  if (input.pid === guards.monitorPid) return "Refusing to signal the resource monitor.";
+  if (serverLineage(table, guards.serverPid).has(input.pid)) {
+    return "Refusing to signal the T3 server or a process it runs under.";
+  }
+  const entry = table.find((row) => row.pid === input.pid);
+  if (
+    entry === undefined ||
+    entry.startTimeMs === undefined ||
+    !matchesStartTime(entry.startTimeMs, input.startTimeMs)
+  ) {
+    return `Process ${input.pid} no longer matches the selected process identity.`;
+  }
+  return null;
+}
+
+const isPermissionError = (cause: unknown) =>
+  typeof cause === "object" &&
+  cause !== null &&
+  "code" in cause &&
+  (cause.code === "EPERM" || cause.code === "EACCES");
+
 /** @public */
 export const make = Effect.fn("makeProcessDiagnostics")(function* () {
   const telemetry = yield* ResourceTelemetry.ResourceTelemetry;
+  const native = yield* NativeTelemetryClient.NativeTelemetryClient;
   const refreshedTelemetry = telemetry.refresh.pipe(Effect.catch(() => telemetry.latest));
   const read: ProcessDiagnostics["Service"]["read"] = refreshedTelemetry.pipe(
     Effect.map((snapshot) => {
@@ -87,47 +138,55 @@ export const make = Effect.fn("makeProcessDiagnostics")(function* () {
     }),
   );
 
-  const signal: ProcessDiagnostics["Service"]["signal"] = Effect.fn("ProcessDiagnostics.signal")(
-    function* (input) {
-      if (input.pid === process.pid) {
-        return {
-          pid: input.pid,
-          signal: input.signal,
-          signaled: false,
-          message: Option.some("Refusing to signal the T3 server process."),
-        };
-      }
+  /** Today's rule: a T3 backend descendant, rechecked against a fresh snapshot. */
+  const refuseSubtreeSignal = Effect.fn("ProcessDiagnostics.refuseSubtreeSignal")(
+    function* (input: { readonly pid: number; readonly startTimeMs: number }) {
       const current = yield* telemetry.refresh.pipe(Effect.option);
       if (Option.isNone(current)) {
-        return {
-          pid: input.pid,
-          signal: input.signal,
-          signaled: false,
-          message: Option.some(
-            `Could not refresh process ${input.pid}; refusing to signal a stale identity.`,
-          ),
-        };
+        return `Could not refresh process ${input.pid}; refusing to signal a stale identity.`;
       }
       const selected = current.value.processes.find(
         (entry) =>
           entry.identity.pid === input.pid && entry.identity.startTimeMs === input.startTimeMs,
       );
-      if (!selected) {
-        return {
-          pid: input.pid,
-          signal: input.signal,
-          signaled: false,
-          message: Option.some(
-            `Process ${input.pid} no longer matches the selected process identity.`,
-          ),
-        };
-      }
+      if (!selected) return `Process ${input.pid} no longer matches the selected process identity.`;
       if (!canSignalCategory(selected.category)) {
+        return `Process ${input.pid} is not a signalable T3 backend descendant.`;
+      }
+      return null;
+    },
+  );
+
+  const refuse = Effect.fn("ProcessDiagnostics.refuse")(function* (input: {
+    readonly pid: number;
+    readonly startTimeMs: number;
+  }) {
+    if (input.pid <= 1) return `Refusing to signal process ${input.pid}.`;
+    if (input.pid === process.pid) return "Refusing to signal the T3 server process.";
+    const hello = (yield* native.health).hello;
+    if (Option.isNone(hello) || hello.value.capabilities.hostProcesses !== true) {
+      return yield* refuseSubtreeSignal(input);
+    }
+    // Rechecked right before the signal, so a pid reused since the user picked it is refused.
+    const table = yield* native.processTable.pipe(Effect.option);
+    if (Option.isNone(table)) {
+      return `Could not refresh process ${input.pid}; refusing to signal a stale identity.`;
+    }
+    return refuseHostSignal(table.value, input, {
+      serverPid: process.pid,
+      monitorPid: hello.value.sidecarPid,
+    });
+  });
+
+  const signal: ProcessDiagnostics["Service"]["signal"] = Effect.fn("ProcessDiagnostics.signal")(
+    function* (input) {
+      const refused = yield* refuse(input);
+      if (refused !== null) {
         return {
           pid: input.pid,
           signal: input.signal,
           signaled: false,
-          message: Option.some(`Process ${input.pid} is not a signalable T3 backend descendant.`),
+          message: Option.some(refused),
         };
       }
       return yield* Effect.try({
@@ -153,7 +212,9 @@ export const make = Effect.fn("makeProcessDiagnostics")(function* () {
             signal: input.signal,
             signaled: false,
             message: Option.some(
-              error instanceof Error ? error.message : "Failed to signal process.",
+              isPermissionError(error.cause)
+                ? `Not permitted to signal process ${input.pid}.`
+                : error.message,
             ),
           }),
         ),

@@ -1,7 +1,7 @@
 import { DEFAULT_MACHINE_THRESHOLDS, type MachineThresholds } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import type { HostTotals } from "./hostTotals.ts";
+import type { HostGpuTotals, HostTotals } from "./hostTotals.ts";
 import {
   initialVerdictState,
   stepVerdict,
@@ -289,6 +289,246 @@ describe("stepVerdict unknown", () => {
       ["ok", 0],
       ["ok", 0],
     ]);
+  });
+});
+
+const gpu = (id: string, overrides: Partial<HostGpuTotals> = {}): HostGpuTotals => ({
+  id,
+  name: `GPU ${id}`,
+  vendor: "nvidia",
+  status: "active",
+  utilPercent: 10,
+  vramUsedPercent: 10,
+  ...overrides,
+});
+
+// Calm load and memory, so only the GPU rules can stress.
+const withGpus = (...gpus: Array<HostGpuTotals>) => totals({ gpus });
+
+describe("stepVerdict GPU rules", () => {
+  it.each<{
+    label: string;
+    device: Partial<HostGpuTotals>;
+    at: number;
+    verdict: "ok" | "stressed";
+    rule?: "gpuVram" | "gpuUtil";
+  }>([
+    {
+      label: "NVIDIA VRAM at 92.5 % held enterHoldMs",
+      device: { vramUsedPercent: 92.5 },
+      at: 10_000,
+      verdict: "stressed",
+      rule: "gpuVram",
+    },
+    {
+      label: "NVIDIA VRAM over, before enterHoldMs",
+      device: { vramUsedPercent: 99 },
+      at: 9_999,
+      verdict: "ok",
+    },
+    {
+      label: "NVIDIA VRAM just under",
+      device: { vramUsedPercent: 92.4 },
+      at: 600_000,
+      verdict: "ok",
+    },
+    {
+      label: "Intel VRAM (shared memory) never counts",
+      device: { vendor: "intel", vramUsedPercent: 100 },
+      at: 600_000,
+      verdict: "ok",
+    },
+    { label: "NVIDIA VRAM unknown", device: { vramUsedPercent: null }, at: 600_000, verdict: "ok" },
+    {
+      label: "util at 95 % held gpuUtilHoldMs",
+      device: { utilPercent: 95 },
+      at: 300_000,
+      verdict: "stressed",
+      rule: "gpuUtil",
+    },
+    {
+      label: "util over, held only enterHoldMs",
+      device: { utilPercent: 100 },
+      at: 299_999,
+      verdict: "ok",
+    },
+    {
+      label: "Intel util held gpuUtilHoldMs",
+      device: { vendor: "intel", utilPercent: 99 },
+      at: 300_000,
+      verdict: "stressed",
+      rule: "gpuUtil",
+    },
+    { label: "util unknown", device: { utilPercent: null }, at: 600_000, verdict: "ok" },
+    {
+      label: "a suspended device",
+      device: { status: "suspended", utilPercent: 100, vramUsedPercent: 100 },
+      at: 600_000,
+      verdict: "ok",
+    },
+    {
+      label: "an unavailable device",
+      device: { status: "unavailable", utilPercent: 100, vramUsedPercent: 100 },
+      at: 600_000,
+      verdict: "ok",
+    },
+  ])("$label → $verdict", ({ device, at, verdict, rule }) => {
+    const sample = withGpus(gpu("0000:01:00.0", device));
+    const states = run([
+      [0, sample],
+      [at, sample],
+    ]);
+    expect(states[1]!.verdict).toBe(verdict);
+    if (rule !== undefined) {
+      expect(states[1]!.reason).toMatchObject({
+        rule,
+        heldForMs: at,
+        deviceId: "0000:01:00.0",
+        deviceName: "GPU 0000:01:00.0",
+      });
+    }
+  });
+
+  it("carries the threshold from settings in the reason", () => {
+    const [state] = run([[0, withGpus(gpu("a", { vramUsedPercent: 81 }))]], {
+      enterHoldMs: 0,
+      gpuVramUsedPercent: 80,
+    });
+    expect(state!.reason).toMatchObject({ rule: "gpuVram", value: 81, threshold: 80 });
+  });
+
+  it.each([
+    ["no gpus field (no monitor)", totals()],
+    ["an empty device list", withGpus()],
+  ])("judges CPU and memory alone with %s", (_name, sample) => {
+    const states = run([[0, sample]], { enterHoldMs: 0 });
+    expect(states[0]!.verdict).toBe("ok");
+    expect(Object.keys(states[0]!.overSince)).toEqual([]);
+  });
+
+  it("is ok, not unknown, when only an active GPU can be measured", () => {
+    const sample = totals({ load: null, memoryTotalBytes: 0, gpus: [gpu("a")] });
+    expect(run([[0, sample]])[0]!.verdict).toBe("ok");
+  });
+
+  it("is unknown when the only GPU is suspended and nothing else is measured", () => {
+    const sample = totals({
+      load: null,
+      memoryTotalBytes: 0,
+      gpus: [gpu("a", { status: "suspended" })],
+    });
+    expect(run([[0, sample]])[0]!.verdict).toBe("unknown");
+  });
+
+  it("holds util per device, so two devices taking turns never add up", () => {
+    const busyA = withGpus(gpu("a", { utilPercent: 99 }), gpu("b"));
+    const busyB = withGpus(gpu("a"), gpu("b", { utilPercent: 99 }));
+    const states = run([
+      [0, busyA],
+      [150_000, busyA],
+      [150_001, busyB],
+      [300_000, busyB],
+      [450_000, busyB],
+      [450_001, busyB],
+    ]);
+    expect(verdicts(states)).toEqual(["ok", "ok", "ok", "ok", "ok", "stressed"]);
+    expect(states[5]!.reason).toMatchObject({ rule: "gpuUtil", deviceId: "b", heldForMs: 300_000 });
+  });
+
+  it("keeps separate VRAM and util holds on one device", () => {
+    const both = withGpus(gpu("a", { utilPercent: 99, vramUsedPercent: 99 }));
+    const states = run([
+      [0, both],
+      [10_000, both],
+    ]);
+    expect(states[1]!.reason).toMatchObject({ rule: "gpuVram", deviceId: "a" });
+    expect(Object.keys(states[1]!.overSince).sort()).toEqual(["gpuUtil:a", "gpuVram:a"]);
+  });
+
+  it("drops a device's hold when it suspends, so waking restarts it", () => {
+    const busy = withGpus(gpu("a", { utilPercent: 99 }));
+    const asleep = withGpus(gpu("a", { status: "suspended", utilPercent: 0 }));
+    const states = run([
+      [0, busy],
+      [200_000, busy],
+      [205_000, asleep],
+      [210_000, busy],
+      [500_000, busy],
+      [510_000, busy],
+    ]);
+    expect(verdicts(states)).toEqual(["ok", "ok", "ok", "ok", "ok", "stressed"]);
+    expect(states[5]!.reason!.heldForMs).toBe(300_000);
+  });
+
+  it("names the worse of a GPU rule and a host rule, relative to threshold", () => {
+    const sample = totals({
+      load: { one: 13, five: 13, fifteen: 13 },
+      gpus: [gpu("a", { vramUsedPercent: 99 })],
+    });
+    expect(run([[0, sample]], { enterHoldMs: 0 })[0]!.reason).toMatchObject({
+      rule: "gpuVram",
+      deviceId: "a",
+    });
+  });
+
+  it("while stressed, sticks to the same rule and device while it stays over the exit level", () => {
+    const states = run(
+      [
+        [0, withGpus(gpu("a", { utilPercent: 96 }), gpu("b"))],
+        // b is worse, a is still over 0.85 × 95 = 80.75
+        [5_000, withGpus(gpu("a", { utilPercent: 81 }), gpu("b", { utilPercent: 100 }))],
+        // a falls under its exit level: the reason moves to b
+        [10_000, withGpus(gpu("a", { utilPercent: 80 }), gpu("b", { utilPercent: 100 }))],
+      ],
+      { gpuUtilHoldMs: 0 },
+    );
+    expect(verdicts(states)).toEqual(["stressed", "stressed", "stressed"]);
+    expect(states.map((state) => state.reason?.deviceId)).toEqual(["a", "a", "b"]);
+    expect(states[2]!.reason).toMatchObject({
+      rule: "gpuUtil",
+      deviceName: "GPU b",
+      heldForMs: 5_000,
+    });
+  });
+
+  it("does not stick to the same rule on another device", () => {
+    const states = run(
+      [
+        [0, withGpus(gpu("a", { vramUsedPercent: 99 }), gpu("b"))],
+        [5_000, withGpus(gpu("a"), gpu("b", { vramUsedPercent: 99 }))],
+      ],
+      { enterHoldMs: 0 },
+    );
+    expect(states.map((state) => state.reason?.deviceId)).toEqual(["a", "b"]);
+  });
+
+  it("leaves a GPU stress only after util stays under the exit level for exitHoldMs", () => {
+    const at = (utilPercent: number) => withGpus(gpu("a", { utilPercent }));
+    const states = run(
+      [
+        [0, at(99)],
+        [5_000, at(81)],
+        [10_000, at(80)],
+        [69_999, at(80)],
+        [70_000, at(80)],
+      ],
+      { gpuUtilHoldMs: 0 },
+    );
+    expect(verdicts(states)).toEqual(["stressed", "stressed", "stressed", "stressed", "ok"]);
+    expect(states.map((state) => state.clearSince)).toEqual([null, null, 10_000, 10_000, null]);
+  });
+
+  it("clears a GPU stress when the device suspends", () => {
+    const states = run(
+      [
+        [0, withGpus(gpu("a", { vramUsedPercent: 99 }))],
+        [5_000, withGpus(gpu("a", { status: "suspended" }))],
+        [65_000, withGpus(gpu("a", { status: "suspended" }))],
+      ],
+      { enterHoldMs: 0 },
+    );
+    expect(verdicts(states)).toEqual(["stressed", "stressed", "ok"]);
+    expect(states[1]!.clearSince).toBe(5_000);
   });
 });
 

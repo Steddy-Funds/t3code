@@ -308,7 +308,7 @@ const layerThreadUsage = ThreadUsageService.layer.pipe(
 );
 
 const layerResourceDiagnostics = Layer.mergeAll(
-  HostResources.layer.pipe(Layer.provide(layerServerSettings)),
+  HostResources.layer.pipe(Layer.provide(layerServerSettings), Layer.provide(layerNativeTelemetry)),
   HostProcesses.layer.pipe(Layer.provide(layerResourceTelemetry)),
   layerResourceTelemetry,
   ProcessDiagnostics.layer.pipe(Layer.provide(layerResourceTelemetry)),

@@ -1,6 +1,7 @@
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
+  MachineBucketId,
   DEFAULT_MACHINE_THRESHOLDS,
   DEFAULT_SERVER_SETTINGS,
   globalIdleCompaction,
@@ -18,6 +19,7 @@ import {
 } from "@t3tools/contracts";
 import { createModelSelection } from "@t3tools/shared/model";
 import { assert, expect, it } from "@effect/vitest";
+import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -136,6 +138,18 @@ function strictSecretReferencePaths(
   return [];
 }
 
+/** A bucket as `settings.json` holds it: JSON, so the timestamp is a string. */
+const storedBucket = (id: string) => ({
+  id,
+  name: "Builds",
+  rules: [{ field: "exe", op: "equals", value: "cargo" }],
+  provenance: {
+    createdBy: { type: "user" },
+    updatedBy: { type: "auto", threadId: "thread-a" },
+    updatedAt: "2026-11-07T00:00:00.000Z",
+  },
+});
+
 it.each([
   ["no machineResources", { a: 1 }, { a: 1 }, []],
   ["no thresholds", { machineResources: {} }, { machineResources: {} }, []],
@@ -181,6 +195,37 @@ it.each([
     { a: 1, machineResources: "high" },
     { a: 1 },
     ["machineResources"],
+  ],
+  [
+    "a valid bucket as settings.json stores it",
+    { machineResources: { buckets: { builds: storedBucket("builds") } } },
+    { machineResources: { buckets: { builds: storedBucket("builds") } } },
+    [],
+  ],
+  [
+    "a bucket filed under another id, one without provenance and one with an unknown rule",
+    {
+      machineResources: {
+        buckets: {
+          builds: storedBucket("builds"),
+          moved: storedBucket("elsewhere"),
+          unstamped: { id: "unstamped", name: "x", rules: [] },
+          odd: { ...storedBucket("odd"), rules: [{ field: "colour", op: "equals", value: "x" }] },
+        },
+      },
+    },
+    { machineResources: { buckets: { builds: storedBucket("builds") } } },
+    [
+      "machineResources.buckets.moved",
+      "machineResources.buckets.unstamped",
+      "machineResources.buckets.odd",
+    ],
+  ],
+  [
+    "buckets that are not an object, beside a bad threshold",
+    { machineResources: { thresholds: { loadPerCore: 0 }, buckets: [1] } },
+    { machineResources: { thresholds: {} } },
+    ["machineResources.thresholds.loadPerCore", "machineResources.buckets"],
   ],
   ["a file that is not an object", null, null, []],
 ] as const)("dropInvalidMachineThresholds with %s", (_name, file, expected, dropped) => {
@@ -2205,6 +2250,51 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("server settings"
         ),
       );
     },
+  );
+
+  it.effect("keeps stamped buckets across a restart and stores no unstamped entry", () =>
+    Effect.gen(function* () {
+      const bucketId = MachineBucketId.make("builds");
+      const bucket = {
+        id: bucketId,
+        name: "Builds",
+        rules: [{ field: "exe" as const, op: "equals" as const, value: "cargo" }],
+      };
+      const provenance = {
+        createdBy: { type: "user" as const },
+        updatedBy: { type: "user" as const },
+        updatedAt: DateTime.makeUnsafe("2026-11-07T00:00:00.000Z"),
+      };
+      const written = yield* Effect.gen(function* () {
+        const config = yield* ServerConfig.ServerConfig;
+        const fs = yield* FileSystem.FileSystem;
+        const service = yield* ServerSettingsModule.ServerSettingsService;
+        const updated = yield* service.updateSettings({
+          machineResources: {
+            buckets: {
+              [bucketId]: { ...bucket, provenance },
+              [MachineBucketId.make("unstamped")]: {
+                ...bucket,
+                id: MachineBucketId.make("unstamped"),
+              },
+            },
+          },
+        });
+        assert.deepEqual(Object.keys(updated.machineResources.buckets), ["builds"]);
+        return yield* fs.readFileString(config.settingsPath);
+      }).pipe(Effect.provide(layerServerSettings()));
+
+      const reloaded = yield* Effect.gen(function* () {
+        const config = yield* ServerConfig.ServerConfig;
+        const fs = yield* FileSystem.FileSystem;
+        yield* fs.writeFileString(config.settingsPath, written);
+        const service = yield* ServerSettingsModule.ServerSettingsService;
+        return yield* service.getSettings;
+      }).pipe(Effect.provide(layerServerSettings()));
+      assert.deepEqual(reloaded.machineResources.buckets, {
+        [MachineBucketId.make("builds")]: { ...bucket, provenance },
+      });
+    }),
   );
 
   it.effect("rejects a zero load-per-core threshold in a settings patch", () =>

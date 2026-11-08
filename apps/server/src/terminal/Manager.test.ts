@@ -11,7 +11,12 @@ import {
   ProjectId,
   TerminalProviderInstanceNotFoundError,
 } from "@t3tools/contracts";
+import { AgentScope } from "@t3tools/shared/AgentScope";
 import * as HostProcess from "@t3tools/shared/HostProcess";
+import {
+  ProcessOwnershipRegistry,
+  type ProcessRoot,
+} from "@t3tools/shared/ProcessOwnershipRegistry";
 import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
@@ -429,6 +434,65 @@ it.layer(
       assert.equal(third.threadId, "thread-1");
       expect(ptyAdapter.spawnInputs).toHaveLength(1);
     }),
+  );
+
+  it.effect.each(["exits", "restarts", "closes"] as const)(
+    "attributes a terminal to its thread until its shell %s",
+    (ends) =>
+      Effect.gen(function* () {
+        const roots: Array<{ readonly root: ProcessRoot; releases: number }> = [];
+        const { manager, ptyAdapter, baseDir } = yield* createManager().pipe(
+          Effect.provideService(AgentScope, {
+            ...AgentScope.defaultValue(),
+            wrap: ({ command, args }) =>
+              Effect.succeed({ command, args, unit: "t3-terminal.scope" }),
+            controlGroup: (unit) =>
+              Effect.succeed(
+                unit === "t3-terminal.scope" ? "/agents/t3-terminal.scope" : undefined,
+              ),
+          }),
+          Effect.provideService(ProcessOwnershipRegistry, {
+            registerRoot: (root) => {
+              const entry = { root, releases: 0 };
+              roots.push(entry);
+              return () => {
+                entry.releases += 1;
+              };
+            },
+            roots: () => [],
+          }),
+        );
+        const exited = yield* Deferred.make<void>();
+        const unsubscribe = yield* manager.subscribe((event) =>
+          event.type === "exited"
+            ? Deferred.succeed(exited, undefined).pipe(Effect.asVoid)
+            : Effect.void,
+        );
+        yield* Effect.addFinalizer(() => Effect.sync(unsubscribe));
+        const rootOf = (pid: number) => ({
+          pid,
+          cgroup: "/agents/t3-terminal.scope",
+          owner: { type: "thread", threadId: "thread-1", terminalId: DEFAULT_TERMINAL_ID },
+        });
+
+        yield* manager.open(openInput());
+        expect(roots).toEqual([{ root: rootOf(9000), releases: 0 }]);
+
+        if (ends === "exits") {
+          ptyAdapter.processes[0]?.emitExit({ exitCode: 0, signal: 0 });
+          yield* Deferred.await(exited);
+          expect(roots).toEqual([{ root: rootOf(9000), releases: 1 }]);
+        } else if (ends === "restarts") {
+          yield* manager.open(openInput({ cwd: baseDir }));
+          expect(roots).toEqual([
+            { root: rootOf(9000), releases: 1 },
+            { root: rootOf(9001), releases: 0 },
+          ]);
+        } else {
+          yield* manager.close({ threadId: "thread-1", terminalId: DEFAULT_TERMINAL_ID });
+          expect(roots).toEqual([{ root: rootOf(9000), releases: 1 }]);
+        }
+      }),
   );
 
   it.effect("keeps attach streams live when a terminal id is closed and reopened", () =>

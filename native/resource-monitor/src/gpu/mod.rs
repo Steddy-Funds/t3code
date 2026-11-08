@@ -50,6 +50,8 @@ pub(crate) struct GpuProcessSample {
 pub(crate) struct GpuSample {
     pub(crate) devices: Vec<GpuDeviceSample>,
     pub(crate) processes: Vec<GpuProcessSample>,
+    /// Devices whose process walk succeeded; a process missing from another device is unmeasured there.
+    pub(crate) process_devices: Vec<String>,
 }
 
 /// What `hello` advertises: "can try", decided without initialising NVML.
@@ -149,12 +151,14 @@ impl Gpus {
             Ok(devices) => {
                 slot.device_errors = 0;
                 sample.devices.extend(devices.iter().cloned());
-                slot.last_devices = Some(devices);
                 if processes && !slot.processes_off {
                     match slot.backend.processes() {
                         Ok(rows) => {
                             slot.process_errors = 0;
                             sample.processes.extend(rows);
+                            sample
+                                .process_devices
+                                .extend(devices.iter().map(|device| device.id.clone()));
                         }
                         Err(_) => {
                             slot.process_errors += 1;
@@ -162,6 +166,7 @@ impl Gpus {
                         }
                     }
                 }
+                slot.last_devices = Some(devices);
                 true
             }
             Err(message) => {
@@ -454,6 +459,10 @@ mod tests {
         sample.processes.iter().map(|row| row.pid).collect()
     }
 
+    fn walked(sample: &super::GpuSample) -> Vec<&str> {
+        sample.process_devices.iter().map(String::as_str).collect()
+    }
+
     #[test]
     fn a_failed_read_reuses_the_last_devices_and_a_success_resets_the_streak() {
         let fake = script(vec![
@@ -491,20 +500,29 @@ mod tests {
         let mut gpus = gpus_with(&[healthy.clone(), broken.clone()]);
         let run = |gpus: &mut Gpus| gpus.sample(true, &|pid| Some(u64::from(pid))).expect("ok");
 
+        // Only a backend whose walk succeeded lists its devices as walked.
         let first = run(&mut gpus);
         assert_eq!(ids(&first.devices), ["a", "b"]);
         assert_eq!(pids(&first), [1]);
+        assert_eq!(walked(&first), ["a"]);
         // The good walk resets the streak: walks 2 to 4 are the three in a row.
-        assert_eq!(pids(&run(&mut gpus)), [1, 2]);
-        assert_eq!(pids(&run(&mut gpus)), [1]);
-        assert_eq!(pids(&run(&mut gpus)), [1]);
+        let recovered = run(&mut gpus);
+        assert_eq!(pids(&recovered), [1, 2]);
+        assert_eq!(walked(&recovered), ["a", "b"]);
+        for _ in ["walk 3", "walk 4"] {
+            let failed = run(&mut gpus);
+            assert_eq!(pids(&failed), [1]);
+            assert_eq!(walked(&failed), ["a"]);
+        }
         assert_eq!(broken.process_calls.get(), 4);
         let off = run(&mut gpus);
         assert_eq!(pids(&off), [1]);
         assert_eq!(ids(&off.devices), ["a", "b"]);
+        assert_eq!(walked(&off), ["a"]);
 
         let after = run(&mut gpus);
         assert_eq!(ids(&after.devices), ["a", "b"]);
+        assert_eq!(walked(&after), ["a"]);
         assert_eq!(broken.process_calls.get(), 5);
         assert_eq!(healthy.process_calls.get(), 6);
     }
@@ -548,6 +566,24 @@ mod tests {
     }
 
     #[test]
+    fn walked_devices_cover_every_device_of_a_backend_but_not_held_ones() {
+        let multi = script(vec![Ok(vec![device("b"), device("c")])]);
+        *multi.processes.borrow_mut() = vec![Ok(Vec::new())].into();
+        let flaky = script(vec![Ok(vec![device("a")]), err("read")]);
+        *flaky.processes.borrow_mut() = vec![Ok(vec![process(1)]), Ok(vec![process(1)])].into();
+        let mut gpus = gpus_with(&[flaky.clone(), multi]);
+        let run = |gpus: &mut Gpus| gpus.sample(true, &|pid| Some(u64::from(pid))).expect("ok");
+
+        // A walk that found no processes still measured its devices.
+        assert_eq!(walked(&run(&mut gpus)), ["a", "b", "c"]);
+        // A failed device read holds "a" from the last read, but nothing walked it.
+        let held = run(&mut gpus);
+        assert_eq!(ids(&held.devices), ["a"]);
+        assert!(held.process_devices.is_empty());
+        assert_eq!(flaky.process_calls.get(), 1);
+    }
+
+    #[test]
     fn devices_from_every_backend_in_order() {
         let first = script(vec![Ok(vec![device("a")])]);
         let second = script(vec![Ok(vec![device("b"), device("c")])]);
@@ -583,7 +619,8 @@ mod tests {
         let fake = script(Vec::new());
         let mut gpus = gpus_with(std::slice::from_ref(&fake));
         gpus.totals().expect("ok");
-        gpus.sample(false, &|_| Some(0)).expect("ok");
+        let devices_only = gpus.sample(false, &|_| Some(0)).expect("ok");
+        assert!(devices_only.process_devices.is_empty());
         assert_eq!(fake.device_calls.get(), 2);
         assert_eq!(fake.process_calls.get(), 0);
         gpus.sample(true, &|_| Some(0)).expect("ok");

@@ -6,6 +6,11 @@ const PROVIDER_GROUPS: ReadonlyArray<readonly [RegExp, string]> = [
   [/opencode/, "opencode"],
   [/grok/, "grok"],
   [/antigravity|gemini/, "antigravity"],
+  [/kiro/, "kiro"],
+  [/muse/, "muse"],
+  // Two-letter names match only as a whole executable or script name.
+  [/(?:^|[/\\])pi(?:\.exe|\.[cm]?js)?(?:\s|$)/, "pi"],
+  [/(?:^|[/\\])fx(?:\.exe|\.[cm]?js)?(?:\s|$)/, "fx"],
 ];
 // A CLI shipped as a script runs under a JavaScript runtime, so its process name is the
 // runtime's (older Claude packages run `node .../@anthropic-ai/claude-code/cli.js`). Only those

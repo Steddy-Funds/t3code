@@ -20,7 +20,12 @@ import { ChildProcessSpawner } from "effect/process";
 import { describe, expect } from "vite-plus/test";
 
 import * as AcpSessionRuntime from "@t3tools/provider-acp/server/AcpSessionRuntime";
-import { AgentScope } from "@t3tools/shared/AgentScope";
+import { AgentScope, AgentScopeThreadId } from "@t3tools/shared/AgentScope";
+import {
+  ProcessOwnershipRegistry,
+  type ProcessRoot,
+} from "@t3tools/shared/ProcessOwnershipRegistry";
+import * as Sink from "effect/Sink";
 import * as EffectAcpErrors from "effect-acp/errors";
 
 const __dirname = NodePath.dirname(NodeURL.fileURLToPath(import.meta.url));
@@ -261,6 +266,130 @@ describe("AcpSessionRuntime", () => {
       ).toBe(event.error);
       expect(yield* runtime.notify("_test/exit", {}).pipe(Effect.flip)).toBe(event.error);
     }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
+  );
+
+  const ROOT_PID = 2_000_000_001;
+  const ownershipRows = [
+    {
+      name: "a systemd scope",
+      threadId: "thread-acp" as string | undefined,
+      lease: false,
+      expected: [
+        {
+          pid: ROOT_PID,
+          cgroup: "/agents/t3-acp.scope",
+          owner: { type: "thread", threadId: "thread-acp" },
+        },
+      ] as ReadonlyArray<ProcessRoot>,
+    },
+    {
+      name: "a cgroup lease",
+      threadId: "thread-acp" as string | undefined,
+      lease: true,
+      expected: [
+        {
+          pid: ROOT_PID,
+          cgroup: "/user.slice/t3-acp-lease",
+          owner: { type: "thread", threadId: "thread-acp" },
+        },
+      ] as ReadonlyArray<ProcessRoot>,
+    },
+    {
+      name: "no thread",
+      threadId: undefined,
+      lease: false,
+      expected: [] as ReadonlyArray<ProcessRoot>,
+    },
+  ];
+  it.effect.each(ownershipRows)(
+    "attributes the agent to its thread until the runtime closes ($name)",
+    ({ threadId, lease, expected }) =>
+      Effect.gen(function* () {
+        const roots: Array<{ readonly root: ProcessRoot; releases: number }> = [];
+        const exited = yield* Deferred.make<ChildProcessSpawner.ExitCode>();
+        const child = ChildProcessSpawner.makeHandle({
+          pid: ChildProcessSpawner.ProcessId(ROOT_PID),
+          exitCode: Deferred.await(exited),
+          isRunning: Deferred.isDone(exited).pipe(Effect.map((done) => !done)),
+          kill: () =>
+            Deferred.succeed(exited, ChildProcessSpawner.ExitCode(143)).pipe(Effect.asVoid),
+          stdin: Sink.drain,
+          stdout: Stream.fromEffect(Deferred.await(exited)).pipe(Stream.drain),
+          stderr: Stream.empty,
+          all: Stream.empty,
+          getInputFd: () => Sink.drain,
+          getOutputFd: () => Stream.empty,
+          unref: Effect.succeed(Effect.void),
+        });
+        const runtimeScope = yield* Scope.fork(yield* Scope.Scope);
+        yield* AcpSessionRuntime.make({
+          ...mockRuntimeOptions,
+          spawn: { command: process.execPath, args: mockAgentArgs },
+          ...(lease
+            ? {
+                ownDescendantProcessGroups: true,
+                processGroupPlatform: "linux" as const,
+                linuxCgroupController: {
+                  create: () => ({
+                    contains: () => false,
+                    exists: () => false,
+                    path: "/sys/fs/cgroup/user.slice/t3-acp-lease",
+                    relativePath: "/user.slice/t3-acp-lease",
+                    kill: () => undefined,
+                    populated: () => false,
+                    remove: () => undefined,
+                  }),
+                },
+                posixProcessTreeController: {
+                  childPidsOf: () => [],
+                  childrenOf: () => [],
+                  identity: (pid) =>
+                    pid === ROOT_PID || pid === process.pid
+                      ? {
+                          executable: `/proc/${pid}/exe`,
+                          pgid: pid,
+                          pid,
+                          ppid: pid === ROOT_PID ? process.pid : 1,
+                          sid: pid,
+                          startTime: String(pid),
+                          state: "S",
+                        }
+                      : undefined,
+                  snapshot: () => [],
+                  signalProcess: () => undefined,
+                },
+              }
+            : {}),
+        }).pipe(
+          Effect.provideService(Scope.Scope, runtimeScope),
+          Effect.provideService(
+            ChildProcessSpawner.ChildProcessSpawner,
+            ChildProcessSpawner.make(() => Effect.succeed(child)),
+          ),
+          Effect.provideService(AgentScope, {
+            ...AgentScope.defaultValue(),
+            wrap: ({ command, args }) => Effect.succeed({ command, args, unit: "t3-acp.scope" }),
+            controlGroup: (unit) =>
+              Effect.succeed(unit === "t3-acp.scope" ? "/agents/t3-acp.scope" : undefined),
+          }),
+          Effect.provideService(AgentScopeThreadId, threadId),
+          Effect.provideService(ProcessOwnershipRegistry, {
+            registerRoot: (root) => {
+              const entry = { root, releases: 0 };
+              roots.push(entry);
+              return () => {
+                entry.releases += 1;
+              };
+            },
+            roots: () => [],
+          }),
+        );
+        expect(roots.map((entry) => entry.root)).toEqual(expected);
+        expect(roots.map((entry) => entry.releases)).toEqual(expected.map(() => 0));
+        yield* Deferred.succeed(exited, ChildProcessSpawner.ExitCode(0));
+        yield* Scope.close(runtimeScope, Exit.void);
+        expect(roots.map((entry) => entry.releases)).toEqual(expected.map(() => 1));
+      }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
   );
 
   it.effect("retires a native runtime when its prompt caller is interrupted", () =>

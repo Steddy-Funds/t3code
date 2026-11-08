@@ -3,6 +3,7 @@ import {
   type DesktopHostTelemetrySnapshot,
   type ResourceMonitorProcessSample,
   type ResourceMonitorSnapshotEvent,
+  type ResourceTelemetryProcessCategory,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
@@ -97,10 +98,12 @@ function merge(input: {
   readonly desktop?: DesktopHostTelemetrySnapshot;
   readonly previous?: MergeProcessesResult;
   readonly sidecarPid?: number;
+  readonly rootCategories?: ReadonlyMap<string, ResourceTelemetryProcessCategory>;
 }): MergeProcessesResult {
   return mergeProcesses({
     serverPid: SERVER_PID,
     sidecarPid: Option.fromUndefinedOr(input.sidecarPid),
+    ...(input.rootCategories ? { rootCategories: input.rootCategories } : {}),
     fallbackSampledAtMs: input.native.sampledAtUnixMs,
     nativeSnapshot: Option.some(input.native),
     desktopSnapshot: Option.fromUndefinedOr(input.desktop),
@@ -111,6 +114,51 @@ function merge(input: {
 }
 
 describe("resource telemetry process model", () => {
+  it("leaves claimed processes to their claimant", () => {
+    const result = merge({
+      native: {
+        ...nativeSnapshot(BASE_TIME_MS, [
+          processSample({ pid: SERVER_PID, ppid: 1, startTimeMs: 1_000 }),
+          processSample({ pid: 200, ppid: SERVER_PID, startTimeMs: 2_000 }),
+          processSample({ pid: 201, ppid: 200, startTimeMs: 3_000 }),
+          processSample({ pid: 300, ppid: SERVER_PID, startTimeMs: 4_000 }),
+        ]),
+        claimedPids: [200, 201],
+      },
+    });
+
+    expect(result.processes.map((process) => process.identity.pid)).toEqual([SERVER_PID, 300]);
+    expect(result.groups.allT3.processCount).toBe(2);
+  });
+
+  it("labels registered spawn roots, but never over the server, monitor or Electron", () => {
+    const result = merge({
+      sidecarPid: 900,
+      native: nativeSnapshot(BASE_TIME_MS, [
+        processSample({ pid: SERVER_PID, ppid: 1, startTimeMs: 1_000 }),
+        processSample({ pid: 200, ppid: SERVER_PID, startTimeMs: 2_000 }),
+        processSample({ pid: 201, ppid: SERVER_PID, startTimeMs: 3_000 }),
+        processSample({ pid: 202, ppid: SERVER_PID, startTimeMs: 4_000 }),
+        processSample({ pid: 900, ppid: SERVER_PID, startTimeMs: 5_000 }),
+      ]),
+      rootCategories: new Map<string, ResourceTelemetryProcessCategory>([
+        [`${SERVER_PID}:1000`, "provider-root"],
+        ["200:2000", "provider-root"],
+        ["201:3000", "terminal-root"],
+        ["202:9999", "provider-root"],
+        ["900:5000", "terminal-root"],
+      ]),
+    });
+
+    expect(result.processes.map((process) => [process.identity.pid, process.category])).toEqual([
+      [SERVER_PID, "server"],
+      [200, "provider-root"],
+      [201, "terminal-root"],
+      [202, "server-child"],
+      [900, "resource-monitor"],
+    ]);
+  });
+
   it("builds complete descendant depths and isolates monitor overhead", () => {
     const result = merge({
       sidecarPid: 900,

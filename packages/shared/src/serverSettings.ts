@@ -6,6 +6,7 @@ import {
   defaultInstanceIdForDriver,
   globalIdleCompaction,
   type IdleCompactionMode,
+  type MachineBucket,
   isProviderAvailable,
   isUnconfiguredDefaultInstanceEnabled,
   resolveProjectProviderInstanceEnabled,
@@ -232,6 +233,25 @@ function mergeSettingsEntries<Value>(
   return Object.fromEntries(next);
 }
 
+/** Only server-stamped entries are stored; the server stamps every bucket write before this. */
+function stampedBucketEntries(
+  patch: NonNullable<NonNullable<ServerSettingsPatch["machineResources"]>["buckets"]>,
+): Record<string, MachineBucket | null> {
+  const entries: Record<string, MachineBucket | null> = {};
+  for (const [id, entry] of Object.entries(patch)) {
+    if (entry === null) entries[id] = null;
+    else if (entry.provenance !== undefined) {
+      entries[id] = {
+        id: entry.id,
+        name: entry.name,
+        rules: entry.rules,
+        provenance: entry.provenance,
+      };
+    }
+  }
+  return entries;
+}
+
 // Secret persistence keys tokens by trimmed, lowercased host, so merge on the same key.
 const byHost = (tokens: unknown) =>
   Object.fromEntries(
@@ -393,8 +413,14 @@ export function applyServerSettingsPatch(
     projectAgentBrowserAccessOverrides: _legacyBrowserAccess,
     projectAutoPullOverrides: _legacyAutoPull,
     projectScriptOverrides: _legacyScripts,
-    ...patchForMerge
+    machineResources: machineResourcesPatch,
+    ...patchRest
   } = patch;
+  const { buckets: bucketsPatch, ...machineResourcesForMerge } = machineResourcesPatch ?? {};
+  const patchForMerge =
+    machineResourcesPatch === undefined
+      ? patchRest
+      : { ...patchRest, machineResources: machineResourcesForMerge };
   const currentBackgroundActivity = normalizeServerBackgroundActivitySettings(current);
   const backgroundActivityPatch =
     backgroundActivityProfile !== undefined
@@ -482,7 +508,20 @@ export function applyServerSettingsPatch(
       },
     };
   }
-  const next = deepMerge(current, patchForMerge);
+  const merged = deepMerge(current, patchForMerge);
+  const next =
+    bucketsPatch === undefined
+      ? merged
+      : {
+          ...merged,
+          machineResources: {
+            ...merged.machineResources,
+            buckets: mergeSettingsEntries(
+              merged.machineResources.buckets,
+              stampedBucketEntries(bucketsPatch),
+            ),
+          },
+        };
   const nextWithReplacementsBase = {
     ...next,
     favorites,

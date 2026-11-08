@@ -9,6 +9,7 @@ import { resolveAttachmentRelativePath } from "../attachmentPaths.ts";
 import { parseAttachmentFileExtension, resolveAttachmentPathById } from "../attachmentStore.ts";
 import * as ServerConfig from "../config.ts";
 import * as PreviewManager from "../preview/Manager.ts";
+import { ProcessOwnership } from "../resourceTelemetry/ProcessOwnership.ts";
 import * as ScheduledTaskService from "../scheduledTasks/ScheduledTaskService.ts";
 import * as TerminalManager from "../terminal/Manager.ts";
 
@@ -26,6 +27,8 @@ export class ResourceCleanupService extends Context.Reference<{
   readonly cleanupScheduledTasks: (threadId: ThreadId) => Effect.Effect<void, ResourceCleanupError>;
   readonly cleanupTerminals: (threadId: string) => Effect.Effect<void, ResourceCleanupError>;
   readonly cleanupPreviews: (threadId: string) => Effect.Effect<void, ResourceCleanupError>;
+  /** Releases a deleted thread's machine claims; archiving keeps them. */
+  readonly cleanupMachineClaims: (threadId: ThreadId) => Effect.Effect<void>;
   readonly cleanupAttachments: (
     attachmentIds: ReadonlyArray<string>,
   ) => Effect.Effect<void, ResourceCleanupError>;
@@ -34,6 +37,7 @@ export class ResourceCleanupService extends Context.Reference<{
     cleanupScheduledTasks: () => Effect.void,
     cleanupTerminals: () => Effect.void,
     cleanupPreviews: () => Effect.void,
+    cleanupMachineClaims: () => Effect.void,
     cleanupAttachments: () => Effect.void,
   }),
 }) {}
@@ -46,7 +50,9 @@ export const layer = Layer.effect(
     const fileSystem = yield* FileSystem.FileSystem;
     const config = yield* ServerConfig.ServerConfig;
     const scheduledTasks = yield* ScheduledTaskService.ScheduledTaskService;
+    const ownership = yield* ProcessOwnership;
     return {
+      cleanupMachineClaims: ownership.releaseThread,
       cleanupScheduledTasks: Effect.fn("ResourceCleanupService.cleanupScheduledTasks")(function (
         threadId: ThreadId,
       ) {

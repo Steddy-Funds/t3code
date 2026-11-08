@@ -1,4 +1,4 @@
-import type { EnvironmentId } from "@t3tools/contracts";
+import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import type { Atom } from "effect/reactivity";
 
 import { ToggleGroup, ToggleGroupItem } from "~/components/ui/toggle-group";
@@ -26,6 +26,7 @@ function isTaskManagerTab(value: unknown): value is TaskManagerTab {
 /** Tabs for the lists only, so the graphs and grids above stay in view while sorting. */
 export function TaskManagerLists({
   environmentId,
+  focus,
   processes,
   processListState,
   hasGpu,
@@ -34,6 +35,8 @@ export function TaskManagerLists({
   onViewModeChange,
 }: {
   readonly environmentId: EnvironmentId;
+  /** The focused thread's lineage, picked out and listed first. */
+  readonly focus: ReadonlySet<ThreadId> | null;
   /** The page's one process stream, shared with the memory pool; the page closes it on Threads. */
   readonly processes: Atom.Atom<ProcessesResult>;
   /** Held by the page, with the open tab, so sort, columns and filter survive the other tabs. */
@@ -66,6 +69,7 @@ export function TaskManagerLists({
       {list === "processes" ? (
         <MachineProcessList
           environmentId={environmentId}
+          focus={focus}
           processes={processes}
           hasGpu={hasGpu}
           unavailable={processesUnavailable}
@@ -74,7 +78,7 @@ export function TaskManagerLists({
           onViewModeChange={onViewModeChange}
         />
       ) : list === "threads" ? (
-        <TaskManagerThreads environmentId={environmentId} />
+        <TaskManagerThreads environmentId={environmentId} focus={focus} />
       ) : (
         <TaskManagerBuckets environmentId={environmentId} processes={processes} />
       )}

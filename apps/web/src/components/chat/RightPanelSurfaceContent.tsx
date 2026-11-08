@@ -204,7 +204,13 @@ export function RightPanelSurfaceContent(props: {
       return (
         <Suspense fallback={null}>
           <div className="h-full min-h-0 overflow-y-auto p-3">
-            <TaskManagerView environmentId={surface.environmentId} />
+            <TaskManagerView
+              environmentId={surface.environmentId}
+              focusThreadId={surface.focusThreadId}
+              onClearFocus={() =>
+                useRightPanelStore.getState().openMachine(threadRef, surface.environmentId)
+              }
+            />
           </div>
         </Suspense>
       );

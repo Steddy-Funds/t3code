@@ -11,7 +11,7 @@ import {
   MachineBucketId,
 } from "@t3tools/contracts";
 import { PlusIcon } from "lucide-react";
-import { useState } from "react";
+import { type ReactNode, useState } from "react";
 
 import {
   AlertDialog,
@@ -49,6 +49,7 @@ import { BucketRuleList } from "../primitives/BucketRuleFields";
 import { MachineSection, MachineSectionMessage } from "../primitives/MachineSection";
 import { OwnerChip } from "../primitives/OwnerChip";
 import { ownerLabel } from "../primitives/OwnerLabel";
+import { Unmeasured } from "../primitives/Unmeasured";
 import { ownershipWrites } from "./ownershipWrites";
 
 /** Live totals per bucket, from the task manager's process stream. */
@@ -292,7 +293,7 @@ function BucketTotalsCells({
   readonly bucketId: MachineBucketId;
 }) {
   const totals = live.totals.get(bucketId);
-  const cell = (value: string) => (
+  const cell = (value: ReactNode) => (
     <TableCell className="text-end">
       <span className="tabular-nums">{value}</span>
     </TableCell>
@@ -300,10 +301,10 @@ function BucketTotalsCells({
   if (live.unmeasured) {
     return (
       <>
-        {cell("unmeasured")}
-        {cell("unmeasured")}
-        {cell("unmeasured")}
-        {live.showGpu ? cell("unmeasured") : null}
+        {cell(<Unmeasured />)}
+        {cell(<Unmeasured />)}
+        {cell(<Unmeasured />)}
+        {live.showGpu ? cell(<Unmeasured />) : null}
       </>
     );
   }
@@ -313,7 +314,7 @@ function BucketTotalsCells({
       {cell(formatPercent(totals?.cpu ?? 0))}
       {cell(formatProcessMemory(totals?.rss ?? 0))}
       {live.showGpu
-        ? cell(totals?.gpuUtil === null ? "unmeasured" : formatPercent(totals?.gpuUtil ?? 0))
+        ? cell(totals?.gpuUtil === null ? <Unmeasured /> : formatPercent(totals?.gpuUtil ?? 0))
         : null}
     </>
   );

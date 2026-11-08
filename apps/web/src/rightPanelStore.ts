@@ -78,7 +78,13 @@ export type RightPanelSurface =
     }
   | { id: "pull-requests"; kind: "pull-requests" }
   | { id: `side-chat:${string}`; kind: "side-chat"; threadId: ThreadId }
-  | { id: `machine:${string}`; kind: "machine"; environmentId: EnvironmentId };
+  | {
+      id: `machine:${string}`;
+      kind: "machine";
+      environmentId: EnvironmentId;
+      /** Thread details opens the tab on one thread's lineage; every other opener clears it. */
+      focusThreadId?: ThreadId;
+    };
 
 const RIGHT_PANEL_STORAGE_KEY = "t3code:right-panel-state:v2";
 const RIGHT_PANEL_STORAGE_VERSION = 14;
@@ -128,7 +134,11 @@ interface RightPanelStoreState {
     kind: Exclude<RightPanelKind, "file" | "terminal" | "pull-request" | "side-chat" | "machine">,
   ) => void;
   openSideChat: (ref: ScopedThreadRef, threadId: ThreadId) => void;
-  openMachine: (ref: ScopedThreadRef, environmentId: EnvironmentId) => void;
+  openMachine: (
+    ref: ScopedThreadRef,
+    environmentId: EnvironmentId,
+    focusThreadId?: ThreadId,
+  ) => void;
   openDevice: (ref: ScopedThreadRef, target: DeviceTabTarget, automatic?: boolean) => void;
   renameDevice: (ref: ScopedThreadRef, surfaceId: string, title: string) => void;
   openBrowser: (ref: ScopedThreadRef, tabId: string | null) => void;
@@ -264,8 +274,16 @@ const terminalSurface = (terminalId: string): RightPanelSurface => ({
 
 export type MachineSurface = Extract<RightPanelSurface, { kind: "machine" }>;
 
-export function machineSurface(environmentId: EnvironmentId): MachineSurface {
-  return { id: `machine:${environmentId}`, kind: "machine", environmentId };
+export function machineSurface(
+  environmentId: EnvironmentId,
+  focusThreadId?: ThreadId,
+): MachineSurface {
+  return {
+    id: `machine:${environmentId}`,
+    kind: "machine",
+    environmentId,
+    ...(focusThreadId === undefined ? {} : { focusThreadId }),
+  };
 }
 
 const isRightPanelKind = (kind: unknown): kind is RightPanelKind =>
@@ -507,9 +525,17 @@ export function migratePersistedRightPanelState(persistedState: unknown): {
                     if (!isRightPanelKind((surface as { kind?: unknown } | null)?.kind)) return [];
                     if (surface.kind === "machine") {
                       const environmentId: unknown = surface.environmentId;
+                      const focusThreadId: unknown = surface.focusThreadId;
                       return typeof environmentId === "string" &&
                         surface.id === `machine:${environmentId}`
-                        ? [machineSurface(EnvironmentId.make(environmentId))]
+                        ? [
+                            machineSurface(
+                              EnvironmentId.make(environmentId),
+                              typeof focusThreadId === "string"
+                                ? ThreadId.make(focusThreadId)
+                                : undefined,
+                            ),
+                          ]
                         : [];
                     }
                     if (
@@ -742,11 +768,21 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
             );
           }),
         ),
-      openMachine: (ref, environmentId) =>
+      openMachine: (ref, environmentId, focusThreadId) =>
         set((state) =>
-          userAction(state, scopedThreadKey(ref), (current) =>
-            upsertSurface(current, machineSurface(environmentId)),
-          ),
+          userAction(state, scopedThreadKey(ref), (current) => {
+            // Replaced in place, so a new opener's focus (or none) wins over the open tab's.
+            const surface = machineSurface(environmentId, focusThreadId);
+            return upsertSurface(
+              {
+                ...current,
+                surfaces: current.surfaces.map((entry) =>
+                  entry.id === surface.id ? surface : entry,
+                ),
+              },
+              surface,
+            );
+          }),
         ),
       openSideChat: (ref, threadId) =>
         set((state) =>

@@ -4,6 +4,7 @@ import {
   AuthTerminalOperateScope,
   type EnvironmentId,
   type MachineStatusSnapshot,
+  type ThreadId,
 } from "@t3tools/contracts";
 import { Link } from "@tanstack/react-router";
 import * as Cause from "effect/Cause";
@@ -12,13 +13,16 @@ import { AsyncResult, Atom } from "effect/reactivity";
 import { useState } from "react";
 
 import { Button } from "~/components/ui/button";
+import { useQuietThreadShell } from "~/state/entities";
 import { useEnvironmentIdentities } from "~/state/environments";
 import { machineIndicator, machineResources } from "~/state/machineResources";
+import { useEnvironmentQuery } from "~/state/query";
 import { serverEnvironment } from "~/state/server";
 import { useEnvironmentScope } from "~/state/session";
 import { useKnownTerminalSessions } from "~/state/terminalSessions";
 
 import { documentVisibleAtom } from "./documentVisible";
+import { focusLineage } from "./machineFocus";
 import { MachineSectionMessage } from "./primitives/MachineSection";
 import type { ProcessViewMode } from "./primitives/ProcessViewToggle";
 import {
@@ -47,13 +51,31 @@ const allMachinesButton = (
   </Button>
 );
 
-/** One machine's task manager, shared by the /machines/$environmentId page and the right panel. */
-export function TaskManagerView({ environmentId }: { readonly environmentId: EnvironmentId }) {
+/**
+ * One machine's task manager, shared by the /machines/$environmentId page and the right panel.
+ * Focused on a thread (from its details), that thread's lineage is picked out and listed first.
+ */
+export function TaskManagerView({
+  environmentId,
+  focusThreadId,
+  onClearFocus,
+}: {
+  readonly environmentId: EnvironmentId;
+  readonly focusThreadId?: ThreadId | undefined;
+  readonly onClearFocus?: (() => void) | undefined;
+}) {
   const label = useEnvironmentIdentities().find(
     (identity) => identity.environmentId === environmentId,
   )?.label;
   const capable = useAtomValue(machineIndicator.machineCapableAtom(environmentId));
   const preferences = useTaskManagerPreferences();
+  // The same query thread details reads, so the lineage usually arrives from cache.
+  const lineageQuery = useEnvironmentQuery(
+    focusThreadId === undefined
+      ? null
+      : machineResources.threadResources(environmentId, focusThreadId),
+  );
+  const focus = focusThreadId === undefined ? null : focusLineage(focusThreadId, lineageQuery.data);
 
   if (label === undefined) {
     return (
@@ -71,8 +93,17 @@ export function TaskManagerView({ environmentId }: { readonly environmentId: Env
   }
   return (
     <div className="@container/task-manager flex min-w-0 flex-col gap-4">
+      {focusThreadId === undefined || focus === null ? null : (
+        <TaskManagerFocusBar
+          environmentId={environmentId}
+          threadId={focusThreadId}
+          lineageSize={focus.size}
+          onClear={onClearFocus}
+        />
+      )}
       <TaskManagerOverview
         environmentId={environmentId}
+        focus={focus}
         label={label}
         tick={preferences.tick}
         onTickChange={preferences.setTick}
@@ -86,8 +117,41 @@ export function TaskManagerView({ environmentId }: { readonly environmentId: Env
   );
 }
 
+function TaskManagerFocusBar({
+  environmentId,
+  threadId,
+  lineageSize,
+  onClear,
+}: {
+  readonly environmentId: EnvironmentId;
+  readonly threadId: ThreadId;
+  readonly lineageSize: number;
+  readonly onClear: (() => void) | undefined;
+}) {
+  const title = useQuietThreadShell({ environmentId, threadId })?.title ?? "This thread";
+  const others = lineageSize - 1;
+  return (
+    <div className="flex min-w-0 items-center gap-2 rounded-md bg-primary/8 px-2.5 py-1.5 text-xs">
+      <span className="min-w-0 flex-1 truncate">
+        Focused on <span className="font-medium">{title}</span>
+        {others > 0 ? (
+          <span className="text-muted-foreground">
+            {` and ${others} ${others === 1 ? "subagent" : "subagents"}`}
+          </span>
+        ) : null}
+      </span>
+      {onClear ? (
+        <Button variant="ghost" size="xs" onClick={onClear}>
+          Clear focus
+        </Button>
+      ) : null}
+    </div>
+  );
+}
+
 function TaskManagerOverview({
   environmentId,
+  focus,
   label,
   tick,
   onTickChange,
@@ -97,6 +161,7 @@ function TaskManagerOverview({
   onViewModeChange,
 }: {
   readonly environmentId: EnvironmentId;
+  readonly focus: ReadonlySet<ThreadId> | null;
   readonly label: string;
   readonly tick: TaskManagerTick;
   readonly onTickChange: (tick: TaskManagerTick) => void;
@@ -201,6 +266,7 @@ function TaskManagerOverview({
       )}
       <TaskManagerLists
         environmentId={environmentId}
+        focus={focus}
         processes={processes}
         processListState={processListState}
         hasGpu={visible ? hasGpu : null}

@@ -92,6 +92,7 @@ function Lists() {
   return (
     <TaskManagerLists
       environmentId={environmentId}
+      focus={null}
       processes={processes}
       processListState={processListState}
       hasGpu={false}

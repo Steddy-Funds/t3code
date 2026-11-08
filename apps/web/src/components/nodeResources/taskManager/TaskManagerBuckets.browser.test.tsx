@@ -173,6 +173,9 @@ async function renderBuckets({ registry, processes }: ReturnType<typeof setup>) 
   };
 }
 
+/** A dash on screen, with the word for screen readers. */
+const UNMEASURED = "-unmeasured";
+
 describe("TaskManagerBuckets", () => {
   it("totals each bucket and claim from host rows", async () => {
     await using view = await renderBuckets(setup());
@@ -186,7 +189,7 @@ describe("TaskManagerBuckets", () => {
     [
       "for buckets and claims when only T3's own processes are reported",
       { source: "t3" },
-      ["unmeasured", "unmeasured", "unmeasured"],
+      [UNMEASURED, UNMEASURED, UNMEASURED],
     ],
     [
       "for a claim that can't be measured",
@@ -196,7 +199,7 @@ describe("TaskManagerBuckets", () => {
   ])("shows unmeasured, never 0, %s", async (_name, options, bucketCells) => {
     await using view = await renderBuckets(setup(options));
     await expect.element(view.screen.getByRole("heading", { name: "Claims" })).toBeVisible();
-    expect(view.cells("PID 42").slice(5, 7)).toEqual(["unmeasured", "unmeasured"]);
+    expect(view.cells("PID 42").slice(5, 7)).toEqual([UNMEASURED, UNMEASURED]);
     expect(view.cells("Builds").slice(4, 7)).toEqual(bucketCells);
   });
 
@@ -211,7 +214,7 @@ describe("TaskManagerBuckets", () => {
       }),
     );
     await expect.element(view.screen.getByRole("heading", { name: "Claims" })).toBeVisible();
-    expect(view.cells("Builds")[7]).toBe("unmeasured");
+    expect(view.cells("Builds")[7]).toBe(UNMEASURED);
     expect(view.cells("PID 42")[7]).toBe("15%");
   });
 

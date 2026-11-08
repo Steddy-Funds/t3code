@@ -31,6 +31,8 @@ import {
   cpuPercentBetween,
   historyPoints,
   layerWith,
+  lineageOf,
+  lineageRoots,
   measureUnits,
   parseCpuStatUsageUsec,
   parseProcStat,
@@ -249,6 +251,8 @@ interface World {
   running: ReadonlyArray<ThreadId> | "fail";
   sample: ReadonlyArray<ResourceMonitorProcessSample>;
   owners: ReadonlyMap<string, ProcessOwner>;
+  /** What `listSubagentLinks` returns; unset, none. */
+  tree?: ReadonlyArray<ProjectionStoreV2.SubagentLink> | "fail";
   readonly scheduled: Array<string>;
 }
 
@@ -351,6 +355,10 @@ const makeService = (state: World, platform: "linux" | "darwin" = "linux") =>
               state.running === "fail"
                 ? Effect.fail(new ProjectionStoreV2.ProjectionStoreReadError({ threadId: threadA }))
                 : Effect.succeed(state.running),
+            listSubagentLinks: () =>
+              state.tree === "fail"
+                ? Effect.fail(new ProjectionStoreV2.ProjectionStoreReadError({ threadId: threadA }))
+                : Effect.succeed(state.tree ?? []),
           } as unknown as ProjectionStoreV2.ProjectionStoreV2["Service"]),
         ),
       ),
@@ -670,7 +678,11 @@ describe("ThreadResources.read", () => {
   it.effect("returns null with no history for a thread nothing belongs to", () =>
     Effect.gen(function* () {
       const service = yield* makeService(world());
-      expect(yield* service.read(threadA)).toEqual({ current: null, history: [] });
+      expect(yield* service.read(threadA)).toEqual({
+        current: null,
+        history: [],
+        threadIds: [threadA],
+      });
     }),
   );
 
@@ -690,6 +702,214 @@ describe("ThreadResources.read", () => {
 
       const { history } = yield* service.read(threadA);
       expect(gaps(history)).toEqual([30_000, 100_000, 30_000]);
+    }),
+  );
+});
+
+describe("ThreadResources lineage", () => {
+  const parent = ThreadId.make("parent");
+  const child = ThreadId.make("child");
+  const grandchild = ThreadId.make("grandchild");
+  const sibling = ThreadId.make("sibling");
+  const fork = ThreadId.make("fork");
+  const unrelated = ThreadId.make("unrelated");
+  const entry = (threadId: ThreadId, parentThreadId: ThreadId) => ({ threadId, parentThreadId });
+  /** As the store reads it: a fork is no link, so it tops its own tree. */
+  const family = [entry(child, parent), entry(sibling, parent), entry(grandchild, child)];
+
+  it("lists a thread then its subagent descendants breadth first", () => {
+    expect(lineageOf(family, parent)).toEqual([parent, child, sibling, grandchild]);
+    expect(lineageOf(family, child)).toEqual([child, grandchild]);
+    expect(lineageOf(family, fork)).toEqual([fork]);
+    expect(lineageOf([], parent)).toEqual([parent]);
+  });
+
+  it("roots a lineage at each running thread and every live ancestor of it", () => {
+    expect([...lineageRoots(family, new Set([grandchild]))].toSorted()).toEqual(
+      [child, grandchild, parent].toSorted(),
+    );
+    expect([...lineageRoots(family, new Set([fork, sibling]))].toSorted()).toEqual(
+      [fork, parent, sibling].toSorted(),
+    );
+    // A deleted parent has no links, so the walk stops below it.
+    expect([...lineageRoots([], new Set([child]))]).toEqual([child]);
+  });
+
+  it("ends both walks on a subagent cycle, listing each thread once", () => {
+    const loopA = ThreadId.make("loop-a");
+    const loopB = ThreadId.make("loop-b");
+    const loop = [entry(loopA, loopB), entry(loopB, loopA)];
+    expect(lineageOf(loop, loopA)).toEqual([loopA, loopB]);
+    expect([...lineageRoots(loop, new Set([loopA]))].toSorted()).toEqual([loopA, loopB].toSorted());
+  });
+
+  it.effect("rolls up each running thread alone when the links read fails", () =>
+    Effect.gen(function* () {
+      const state = world({
+        tree: "fail",
+        running: [threadA],
+        roots: [threadRoot(1, threadA, "/a.scope")],
+      });
+      cgroupFiles(state.files, "/a.scope", { usageUsec: 0, memory: 1_000, procs: [1] });
+      const service = yield* makeService(state);
+      yield* tick(service, 30);
+
+      expect((yield* service.byThread).get(threadA)).toMatchObject({
+        memoryBytes: 1_000,
+        processCount: 1,
+      });
+      const read = yield* service.read(threadA);
+      expect(read.threadIds).toEqual([threadA]);
+      expect(read.history.map((point) => point.memoryBytes)).toEqual([1_000, 1_000]);
+    }),
+  );
+
+  it.effect("falls back to the thread alone when the store read fails", () =>
+    Effect.gen(function* () {
+      const state = world({ tree: "fail", roots: [threadRoot(1, threadA, "/a.scope")] });
+      cgroupFiles(state.files, "/a.scope", { usageUsec: 0, memory: 1_000, procs: [1] });
+      const service = yield* makeService(state);
+
+      expect(yield* service.lineage(threadA)).toEqual([threadA]);
+      const read = yield* service.read(threadA);
+      expect(read.threadIds).toEqual([threadA]);
+      expect(read.current).toMatchObject({ memoryBytes: 1_000, processCount: 1 });
+    }),
+  );
+
+  it.effect(
+    "sums the lineage on demand once, with the child's nested unit out of the parent's",
+    () =>
+      Effect.gen(function* () {
+        const state = world({
+          tree: family,
+          // The child's unit comes first, so the parent's outer unit subtracts it.
+          roots: [
+            threadRoot(1, child, "/p.slice/c.scope"),
+            threadRoot(2, parent, "/p.slice"),
+            threadRoot(3, grandchild, "/g.scope"),
+            threadRoot(4, fork, "/f.scope"),
+            threadRoot(5, unrelated, "/u.scope"),
+            threadRoot(6, sibling, "/s.scope"),
+          ],
+        });
+        const files = (usage: { parent: number; child: number; grandchild: number }) => {
+          cgroupFiles(state.files, "/p.slice", {
+            usageUsec: usage.parent,
+            memory: 5_000,
+            procs: [1],
+          });
+          cgroupFiles(state.files, "/p.slice/c.scope", {
+            usageUsec: usage.child,
+            memory: 1_000,
+            procs: [2, 3],
+          });
+          cgroupFiles(state.files, "/g.scope", {
+            usageUsec: usage.grandchild,
+            memory: 300,
+            procs: [4],
+          });
+          cgroupFiles(state.files, "/f.scope", { usageUsec: 0, memory: 70_000, procs: [5] });
+          cgroupFiles(state.files, "/u.scope", { usageUsec: 0, memory: 80_000, procs: [6] });
+        };
+        files({ parent: 0, child: 0, grandchild: 0 });
+        cgroupFiles(state.files, "/s.scope", { usageUsec: 0, memory: 40, procs: [7] });
+        const service = yield* makeService(state);
+
+        const first = yield* service.read(parent);
+        expect(first.threadIds).toEqual([parent, child, sibling, grandchild]);
+        expect(first.current).toMatchObject({
+          cpuPercent: null,
+          // Parent 5000 less its nested child 1000, plus child 1000, grandchild 300, sibling 40.
+          memoryBytes: 5_340,
+          processCount: 5,
+          source: "cgroup",
+        });
+
+        // Over 5 s: the parent's 1 s holds the child's 0.25 s, so 15% + 5% + 5%.
+        yield* TestClock.adjust("5 seconds");
+        files({ parent: 1_000_000, child: 250_000, grandchild: 250_000 });
+        expect((yield* service.read(parent)).current?.cpuPercent).toBe(25);
+
+        const fromChild = yield* service.read(child);
+        expect(fromChild.threadIds).toEqual([child, grandchild]);
+        expect(fromChild.current).toMatchObject({ memoryBytes: 1_300, processCount: 3 });
+
+        // A new subagent with no earlier CPU reading makes the lineage's CPU not current.
+        const newcomer = ThreadId.make("newcomer");
+        state.tree = [...family, entry(newcomer, grandchild)];
+        state.roots = [...state.roots, threadRoot(7, newcomer, "/n.scope")];
+        cgroupFiles(state.files, "/n.scope", { usageUsec: 0, memory: 10, procs: [8] });
+        yield* TestClock.adjust("5 seconds");
+        const withNewcomer = yield* service.read(parent);
+        expect(withNewcomer.threadIds).toEqual([parent, child, sibling, grandchild, newcomer]);
+        expect(withNewcomer.current).toMatchObject({ cpuPercent: null, memoryBytes: 5_350 });
+      }),
+  );
+
+  it.effect("rolls up a running child into its ancestors, keeping byThread to own totals", () =>
+    Effect.gen(function* () {
+      const state = world({
+        tree: family,
+        running: [grandchild],
+        roots: [
+          threadRoot(1, parent, "/p.scope"),
+          threadRoot(2, child, "/c.scope"),
+          threadRoot(3, grandchild, "/g.scope"),
+          threadRoot(4, sibling, "/s.scope"),
+        ],
+      });
+      cgroupFiles(state.files, "/p.scope", { usageUsec: 0, memory: 1_000, procs: [1] });
+      cgroupFiles(state.files, "/c.scope", { usageUsec: 0, memory: 200, procs: [2] });
+      cgroupFiles(state.files, "/g.scope", { usageUsec: 0, memory: 30, procs: [3] });
+      cgroupFiles(state.files, "/s.scope", { usageUsec: 0, memory: 4, procs: [4] });
+      const service = yield* makeService(state);
+      yield* service.rollup;
+      cgroupFiles(state.files, "/g.scope", { usageUsec: 0, memory: 99_999, procs: [3] });
+
+      const byThread = yield* service.byThread;
+      expect([...byThread.keys()]).toEqual([grandchild]);
+      expect(byThread.get(grandchild)).toMatchObject({ memoryBytes: 30, processCount: 1 });
+
+      yield* TestClock.adjust("20 seconds");
+      const read = yield* service.read(parent);
+      // Fresh from the rollup: the sibling is in the lineage and was measured with it.
+      expect(read.threadIds).toEqual([parent, child, sibling, grandchild]);
+      expect(read.current).toMatchObject({
+        memoryBytes: 1_234,
+        processCount: 4,
+        sampleAgeMs: 20_000,
+      });
+      expect(read.history.map((point) => point.memoryBytes)).toEqual([1_234]);
+      expect((yield* service.read(child)).history.map((point) => point.memoryBytes)).toEqual([230]);
+      expect((yield* service.read(sibling)).history).toEqual([]);
+      expect((yield* service.read(unrelated)).history).toEqual([]);
+    }),
+  );
+
+  it.effect("keeps a deleted child's share in the parent's earlier points", () =>
+    Effect.gen(function* () {
+      const state = world({
+        tree: [entry(child, parent)],
+        running: [child],
+        roots: [threadRoot(1, parent, "/p.scope"), threadRoot(2, child, "/c.scope")],
+      });
+      cgroupFiles(state.files, "/p.scope", { usageUsec: 0, memory: 1_000, procs: [1] });
+      cgroupFiles(state.files, "/c.scope", { usageUsec: 0, memory: 300, procs: [2] });
+      const service = yield* makeService(state);
+      yield* tick(service, 30);
+
+      // The child is deleted: gone from the tree, and its unit with it.
+      state.tree = [];
+      state.running = [parent];
+      state.roots = [threadRoot(1, parent, "/p.scope")];
+      yield* tick(service, 30);
+
+      const { history } = yield* service.read(parent);
+      expect(history.map((point) => point.memoryBytes)).toEqual([1_300, 1_300, 1_000]);
+      expect((yield* service.read(child)).history.map((point) => point.memoryBytes)).toEqual([
+        300, 300,
+      ]);
     }),
   );
 });

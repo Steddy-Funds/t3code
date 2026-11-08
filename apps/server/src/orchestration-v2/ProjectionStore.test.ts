@@ -2276,7 +2276,7 @@ it.effect("lists only active subagent IDs without loading shell data", () =>
   }).pipe(Effect.provide(layerTest)),
 );
 
-it.effect("lists the live subagent tree around a thread, without forks or deleted branches", () =>
+it.effect("lists live subagent links, without forks or deleted threads", () =>
   Effect.gen(function* () {
     const store = yield* ProjectionStore.ProjectionStoreV2;
     const sql = yield* SqlClient.SqlClient;
@@ -2292,6 +2292,8 @@ it.effect("lists the live subagent tree around a thread, without forks or delete
       ["fork", "fork", "parent", null, null],
       ["under-fork", "subagent", "fork", null, null],
       ["unrelated", null, null, null, null],
+      ["loop-a", "subagent", "loop-b", null, null],
+      ["loop-b", "subagent", "loop-a", null, null],
     ] as const) {
       yield* sql`
         INSERT INTO orchestration_v2_projection_threads (
@@ -2307,32 +2309,24 @@ it.effect("lists the live subagent tree around a thread, without forks or delete
         )
       `;
     }
-    const entry = (threadId: string, parentThreadId: string | null) => ({
+    const link = (threadId: string, parentThreadId: string) => ({
       threadId: ThreadId.make(threadId),
-      parentThreadId: parentThreadId === null ? null : ThreadId.make(parentThreadId),
+      parentThreadId: ThreadId.make(parentThreadId),
     });
-    const tree = [
-      entry("parent", null),
-      entry("child", "parent"),
-      entry("grandchild", "child"),
-      entry("sibling", "parent"),
-      entry("archived", "parent"),
-    ];
-
-    for (const from of ["parent", "grandchild"]) {
-      assert.sameDeepMembers(
-        [...(yield* store.listSubagentTrees([ThreadId.make(from)]))],
-        tree,
-        `from ${from}`,
-      );
-    }
-    // A fork tops its own tree: its parent link reads as null.
+    // A fork is no link but tops its own tree; a deleted thread loses its links both ways.
     assert.sameDeepMembers(
-      [...(yield* store.listSubagentTrees([ThreadId.make("under-fork")]))],
-      [entry("fork", null), entry("under-fork", "fork")],
+      [...(yield* store.listSubagentLinks())],
+      [
+        link("child", "parent"),
+        link("grandchild", "child"),
+        link("sibling", "parent"),
+        link("archived", "parent"),
+        link("under-fork", "fork"),
+        // A corrupt cycle reads back as is; the lineage walks end on it.
+        link("loop-a", "loop-b"),
+        link("loop-b", "loop-a"),
+      ],
     );
-    assert.deepStrictEqual([...(yield* store.listSubagentTrees([ThreadId.make("deleted")]))], []);
-    assert.deepStrictEqual([...(yield* store.listSubagentTrees([]))], []);
   }).pipe(Effect.provide(layerTest)),
 );
 

@@ -251,8 +251,8 @@ interface World {
   running: ReadonlyArray<ThreadId> | "fail";
   sample: ReadonlyArray<ResourceMonitorProcessSample>;
   owners: ReadonlyMap<string, ProcessOwner>;
-  /** What `listSubagentTrees` returns; unset, each asked thread tops its own tree. */
-  tree?: ReadonlyArray<ProjectionStoreV2.SubagentTreeEntry> | "fail";
+  /** What `listSubagentLinks` returns; unset, none. */
+  tree?: ReadonlyArray<ProjectionStoreV2.SubagentLink> | "fail";
   readonly scheduled: Array<string>;
 }
 
@@ -355,12 +355,10 @@ const makeService = (state: World, platform: "linux" | "darwin" = "linux") =>
               state.running === "fail"
                 ? Effect.fail(new ProjectionStoreV2.ProjectionStoreReadError({ threadId: threadA }))
                 : Effect.succeed(state.running),
-            listSubagentTrees: (threadIds: ReadonlyArray<ThreadId>) =>
+            listSubagentLinks: () =>
               state.tree === "fail"
                 ? Effect.fail(new ProjectionStoreV2.ProjectionStoreReadError({ threadId: threadA }))
-                : Effect.succeed(
-                    state.tree ?? threadIds.map((threadId) => ({ threadId, parentThreadId: null })),
-                  ),
+                : Effect.succeed(state.tree ?? []),
           } as unknown as ProjectionStoreV2.ProjectionStoreV2["Service"]),
         ),
       ),
@@ -715,19 +713,9 @@ describe("ThreadResources lineage", () => {
   const sibling = ThreadId.make("sibling");
   const fork = ThreadId.make("fork");
   const unrelated = ThreadId.make("unrelated");
-  const entry = (threadId: ThreadId, parentThreadId: ThreadId | null = null) => ({
-    threadId,
-    parentThreadId,
-  });
-  /** As the store reads it: a fork's parent link is null, so it tops its own tree. */
-  const family = [
-    entry(parent),
-    entry(child, parent),
-    entry(sibling, parent),
-    entry(grandchild, child),
-    entry(fork),
-    entry(unrelated),
-  ];
+  const entry = (threadId: ThreadId, parentThreadId: ThreadId) => ({ threadId, parentThreadId });
+  /** As the store reads it: a fork is no link, so it tops its own tree. */
+  const family = [entry(child, parent), entry(sibling, parent), entry(grandchild, child)];
 
   it("lists a thread then its subagent descendants breadth first", () => {
     expect(lineageOf(family, parent)).toEqual([parent, child, sibling, grandchild]);
@@ -743,9 +731,38 @@ describe("ThreadResources lineage", () => {
     expect([...lineageRoots(family, new Set([fork, sibling]))].toSorted()).toEqual(
       [fork, parent, sibling].toSorted(),
     );
-    // A deleted parent is missing from the tree, so the walk stops below it.
-    expect([...lineageRoots([entry(child, parent)], new Set([child]))]).toEqual([child]);
+    // A deleted parent has no links, so the walk stops below it.
+    expect([...lineageRoots([], new Set([child]))]).toEqual([child]);
   });
+
+  it("ends both walks on a subagent cycle, listing each thread once", () => {
+    const loopA = ThreadId.make("loop-a");
+    const loopB = ThreadId.make("loop-b");
+    const loop = [entry(loopA, loopB), entry(loopB, loopA)];
+    expect(lineageOf(loop, loopA)).toEqual([loopA, loopB]);
+    expect([...lineageRoots(loop, new Set([loopA]))].toSorted()).toEqual([loopA, loopB].toSorted());
+  });
+
+  it.effect("rolls up each running thread alone when the links read fails", () =>
+    Effect.gen(function* () {
+      const state = world({
+        tree: "fail",
+        running: [threadA],
+        roots: [threadRoot(1, threadA, "/a.scope")],
+      });
+      cgroupFiles(state.files, "/a.scope", { usageUsec: 0, memory: 1_000, procs: [1] });
+      const service = yield* makeService(state);
+      yield* tick(service, 30);
+
+      expect((yield* service.byThread).get(threadA)).toMatchObject({
+        memoryBytes: 1_000,
+        processCount: 1,
+      });
+      const read = yield* service.read(threadA);
+      expect(read.threadIds).toEqual([threadA]);
+      expect(read.history.map((point) => point.memoryBytes)).toEqual([1_000, 1_000]);
+    }),
+  );
 
   it.effect("falls back to the thread alone when the store read fails", () =>
     Effect.gen(function* () {
@@ -873,7 +890,7 @@ describe("ThreadResources lineage", () => {
   it.effect("keeps a deleted child's share in the parent's earlier points", () =>
     Effect.gen(function* () {
       const state = world({
-        tree: [entry(parent), entry(child, parent)],
+        tree: [entry(child, parent)],
         running: [child],
         roots: [threadRoot(1, parent, "/p.scope"), threadRoot(2, child, "/c.scope")],
       });
@@ -883,7 +900,7 @@ describe("ThreadResources lineage", () => {
       yield* tick(service, 30);
 
       // The child is deleted: gone from the tree, and its unit with it.
-      state.tree = [entry(parent)];
+      state.tree = [];
       state.running = [parent];
       state.roots = [threadRoot(1, parent, "/p.scope")];
       yield* tick(service, 30);

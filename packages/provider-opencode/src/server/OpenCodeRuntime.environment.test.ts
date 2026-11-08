@@ -146,16 +146,16 @@ describe("OpenCode serve ownership", () => {
       yield* Fiber.join(closing);
     });
 
-  effectIt.effect("shares a serve among the threads in its directory until each leaves", () =>
+  effectIt.effect("gives a session's serve to its thread and leaves an unowned serve shared", () =>
     withRuntime((runtime, registered) =>
       Effect.gen(function* () {
-        const start = (directory: string, threadId?: string) =>
+        const start = (threadId?: string) =>
           Effect.gen(function* () {
             const scope = yield* Scope.make();
             yield* runtime
               .startOpenCodeServerProcess({
                 binaryPath: "opencode",
-                directory,
+                directory: "/work/app",
                 port: 4096,
                 timeoutMs: 600_000,
                 ...(threadId === undefined ? {} : { threadId }),
@@ -163,34 +163,30 @@ describe("OpenCode serve ownership", () => {
               .pipe(Effect.provideService(Scope.Scope, scope), Effect.forkChild);
             return { scope, entry: yield* Queue.take(registered) };
           });
-        const first = yield* start("/work/app", "thread-a");
-        const second = yield* start("/work/app", "thread-b");
-        const elsewhere = yield* start("/work/other", "thread-c");
-        const unowned = yield* start("/work/probe");
+        const owned = yield* start("thread-a");
+        const sameDirectory = yield* start("thread-b");
+        const unowned = yield* start();
 
-        const { threads, ...root } = first.entry.root;
-        expect(root).toEqual({
+        expect(owned.entry.root).toEqual({
           pid: FIRST_PID,
           cgroup: "/agents/t3-opencode.scope",
-          owner: { type: "shared", provider: "opencode", label: "serve" },
+          owner: { type: "thread", threadId: "thread-a" },
         });
-        expect(first.entry.root.splitByEnv).toBeUndefined();
-        expect(threads?.()).toEqual(["thread-a", "thread-b"]);
-        expect(second.entry.root.threads?.()).toEqual(["thread-a", "thread-b"]);
-        expect(elsewhere.entry.root.threads?.()).toEqual(["thread-c"]);
-        expect(unowned.entry.root.threads?.()).toEqual([]);
+        expect(sameDirectory.entry.root.owner).toEqual({ type: "thread", threadId: "thread-b" });
+        expect(unowned.entry.root.owner).toEqual({
+          type: "shared",
+          provider: "opencode",
+          label: "serve",
+        });
+        expect(unowned.entry.root.threads).toBeUndefined();
+        expect(unowned.entry.root.splitByEnv).toBeUndefined();
 
-        yield* closeServe(first);
-        expect(first.entry.releases).toBe(1);
-        expect(second.entry.releases).toBe(0);
-        expect(second.entry.root.threads?.()).toEqual(["thread-b"]);
-        expect(elsewhere.entry.root.threads?.()).toEqual(["thread-c"]);
-
-        yield* closeServe(second);
-        expect(second.entry.releases).toBe(1);
-        expect(second.entry.root.threads?.()).toEqual([]);
-        yield* closeServe(elsewhere);
+        yield* closeServe(owned);
+        expect(owned.entry.releases).toBe(1);
+        expect(sameDirectory.entry.releases).toBe(0);
+        yield* closeServe(sameDirectory);
         yield* closeServe(unowned);
+        expect(unowned.entry.releases).toBe(1);
       }),
     ),
   );

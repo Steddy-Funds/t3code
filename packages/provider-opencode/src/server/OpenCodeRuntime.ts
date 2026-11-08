@@ -250,7 +250,7 @@ export class OpenCodeRuntime extends Context.Service<
       readonly hostname?: string;
       readonly timeoutMs?: number;
       readonly verify?: (url: string) => Effect.Effect<string, OpenCodeRuntimeError>;
-      /** The thread the server is started for, while the caller's scope is open. */
+      /** The thread whose session owns this server. */
       readonly threadId?: string;
     }) => Effect.Effect<OpenCodeServerProcess, OpenCodeRuntimeError, Scope.Scope>;
     readonly connectToOpenCodeServer: (input: {
@@ -426,26 +426,6 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
   const serverLedger = yield* OpenCodeServerLedger.OpenCodeServerLedger;
   const agentScope = yield* AgentScope;
   const ownership = yield* ProcessOwnershipRegistry;
-  // A serve is shared by directory, so its root counts every thread working there.
-  const threadsByDirectory = new Map<string, Set<string>>();
-  const serveThreadIn = Effect.fn("OpenCodeRuntime.serveThreadIn")(function* (
-    directory: string,
-    threadId: string,
-  ) {
-    yield* Effect.acquireRelease(
-      Effect.sync(() => {
-        const threads = threadsByDirectory.get(directory) ?? new Set<string>();
-        threads.add(threadId);
-        threadsByDirectory.set(directory, threads);
-      }),
-      () =>
-        Effect.sync(() => {
-          const threads = threadsByDirectory.get(directory);
-          threads?.delete(threadId);
-          if (threads?.size === 0) threadsByDirectory.delete(directory);
-        }),
-    );
-  });
   // npm's Windows shim lets the child escape libuv kill-on-close; run its executable directly.
   const resolveCommand = (command: string, args: ReadonlyArray<string>, env?: NodeJS.ProcessEnv) =>
     resolveSpawnCommand(command, args, { ...(env ? { env } : {}), bypassNpmShim: true });
@@ -601,8 +581,11 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
     const releaseRoot = ownership.registerRoot({
       pid: Number(child.pid),
       ...(cgroup === undefined ? {} : { cgroup }),
-      owner: { type: "shared", provider: "opencode", label: "serve" },
-      threads: () => [...(threadsByDirectory.get(input.directory) ?? [])],
+      // Each session starts its own serve; only the owner's probes and text generation share one.
+      owner:
+        input.threadId === undefined
+          ? { type: "shared", provider: "opencode", label: "serve" }
+          : { type: "thread", threadId: input.threadId },
     });
     yield* Scope.addFinalizer(runtimeScope, Effect.sync(releaseRoot));
     const forgetServer = yield* serverLedger.track({ pid: Number(child.pid), port, args });
@@ -740,7 +723,6 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
   const startOpenCodeServerProcess: OpenCodeRuntime["Service"]["startOpenCodeServerProcess"] =
     Effect.fn("OpenCodeRuntime.startOpenCodeServerProcess")(function* (input) {
       const ownerScope = yield* Scope.Scope;
-      if (input.threadId !== undefined) yield* serveThreadIn(input.directory, input.threadId);
       const attempt = Effect.gen(function* () {
         const attemptScope = yield* Scope.fork(ownerScope);
         return yield* startServerAttempt(input).pipe(

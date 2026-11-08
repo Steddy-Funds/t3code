@@ -1259,19 +1259,21 @@ export const layerQueryRunner: Layer.Layer<
           const spawnClaudeCodeProcess = (spawnOptions: ClaudeSpawnOptions) => {
             const child = spawnProcess(spawnOptions);
             spawnedProcess = child;
-            // A spawn that fails emits only "error".
-            const releaseAgent = portDiscovery.trackAgent();
-            child.once("exit", releaseAgent);
-            child.on("error", releaseAgent);
             // The SDK's process type hides the pid that Node's child carries.
             const pid = "pid" in child && typeof child.pid === "number" ? child.pid : undefined;
+            const releaseAgent = portDiscovery.trackAgent();
             const releaseRoot = ownership.registerRoot({
               ...(pid === undefined ? {} : { pid }),
               ...(cgroup === undefined ? {} : { cgroup }),
               owner: { type: "thread", threadId: input.threadId },
             });
-            child.once("exit", releaseRoot);
-            child.on("error", releaseRoot);
+            const release = () => {
+              releaseAgent();
+              releaseRoot();
+            };
+            // A spawn that fails emits only "error".
+            child.once("exit", release);
+            child.on("error", release);
             processExited = child.exitCode !== null || child.signalCode != null;
             processExit = new Promise<void>((resolve) => {
               if (processExited) resolve();

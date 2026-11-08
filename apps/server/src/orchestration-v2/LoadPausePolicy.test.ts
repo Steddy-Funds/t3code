@@ -67,7 +67,7 @@ const usage = (
 const loadPause: OrchestrationV2LoadPause = {
   runId: RunId.make("run:old"),
   episodeId: "1",
-  pausedAt: new Date(NOW).toISOString(),
+  pausedAt: DateTime.formatIso(at(NOW)),
   reason: { rule: "load", value: 4, threshold: 3, shareOfLoad: 0.5 },
   containersPaused: [],
 };
@@ -354,9 +354,7 @@ describe("loadPauseContainers", () => {
       cgroup: "/system.slice/foo.service",
       containerId: FULL_B,
     };
-    expect(
-      containersOf(["v"], [claim("v", { containerId: undefined }), processClaim, cgroupClaim]),
-    ).toEqual({});
+    expect(containersOf(["v"], [claim("v"), processClaim, cgroupClaim])).toEqual({});
   });
 
   it.each([
@@ -401,7 +399,7 @@ const paused = (id: string, pausedAtMs: number | string) => ({
   loadPause: {
     ...loadPause,
     episodeId: `e-${id}`,
-    pausedAt: typeof pausedAtMs === "string" ? pausedAtMs : new Date(pausedAtMs).toISOString(),
+    pausedAt: typeof pausedAtMs === "string" ? pausedAtMs : DateTime.formatIso(at(pausedAtMs)),
   },
 });
 

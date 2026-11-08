@@ -15,6 +15,8 @@ import * as ResourceCleanupService from "./ResourceCleanupService.ts";
 
 const FULL_ID = "c".repeat(64);
 const HOST = "ssh://builder@box";
+/** Read once outside Effect code: docker without a recorded host inherits the server's. */
+const SERVER_DOCKER_HOST = process.env.DOCKER_HOST;
 
 interface Reply {
   readonly stdout?: string;
@@ -117,7 +119,7 @@ describe("LoadPauseDocker", () => {
       });
       assert.deepEqual(
         calls.map((call) => call.dockerHost),
-        [process.env.DOCKER_HOST, process.env.DOCKER_HOST],
+        [SERVER_DOCKER_HOST, SERVER_DOCKER_HOST],
       );
     }),
   );

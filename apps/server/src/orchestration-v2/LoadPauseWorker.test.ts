@@ -57,7 +57,7 @@ import * as ProviderReplayHarness from "./testkit/ProviderReplayHarness.ts";
 class Unpaused extends Context.Service<
   Unpaused,
   Ref.Ref<ReadonlyArray<ReadonlyArray<OrchestrationV2LoadPausedContainer>>>
->()("test/LoadPauseWorkerUnpaused") {}
+>()("t3/orchestration-v2/LoadPauseWorker.test/Unpaused") {}
 
 const instanceId = ProviderInstanceId.make("codex");
 const adapter = {
@@ -98,7 +98,12 @@ const layerTest = ThreadManagementService.layer.pipe(
     ServerSettings.layerTest({ machineResources: { loadManagement: { enabled: true } } }),
   ),
   Layer.provideMerge(CommandReceiptStore.layer.pipe(Layer.provide(layerDatabase))),
-  Layer.provideMerge(Layer.effect(Unpaused, Ref.make([]))),
+  Layer.provideMerge(
+    Layer.effect(
+      Unpaused,
+      Ref.make<ReadonlyArray<ReadonlyArray<OrchestrationV2LoadPausedContainer>>>([]),
+    ),
+  ),
 );
 
 // 10 cores at 50%: 500 core-percent in use.
@@ -218,7 +223,14 @@ const startWorker = (world: World) =>
             ? Effect.die("injected set failure")
             : orchestrator.dispatch(command).pipe(
                 Effect.tap(() =>
-                  Effect.sync(() => world.log.push(`${command.type} ${command.threadId}`)),
+                  Effect.sync(() =>
+                    world.log.push(
+                      command.type === "thread.load-pause.set" ||
+                        command.type === "thread.load-pause.clear"
+                        ? `${command.type} ${command.threadId}`
+                        : command.type,
+                    ),
+                  ),
                 ),
                 Effect.tap(() =>
                   command.type === "thread.load-pause.set"
@@ -370,7 +382,7 @@ const drainCleanups = Effect.gen(function* () {
 });
 
 /** Sweeps once stressed, then again once `pauseHoldSeconds` (60 s by default) has passed. */
-const sweepThroughHold = (sweep: Effect.Effect<void>) =>
+const sweepThroughHold = <E, R>(sweep: Effect.Effect<void, E, R>) =>
   Effect.gen(function* () {
     yield* sweep;
     yield* TestClock.adjust("60 seconds");

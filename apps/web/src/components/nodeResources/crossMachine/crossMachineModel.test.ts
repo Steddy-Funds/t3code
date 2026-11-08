@@ -1,4 +1,5 @@
 import type { MachineIndicatorView } from "@t3tools/client-runtime/state/machineFormat";
+import type { MachineProcessRow } from "@t3tools/client-runtime/state/machineProcessFrames";
 import type { GpuDeviceSample } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
@@ -12,8 +13,10 @@ import {
   loadPerCore,
   orderCrossMachines,
   resampleSeries,
+  topOwnerShare,
   vramTotal,
 } from "./crossMachineModel";
+import { ownerThreadId } from "../ownership/processOwners";
 
 const GIB = 1024 ** 3;
 
@@ -282,5 +285,25 @@ describe("resampleSeries", () => {
     expect(values(resampleSeries(series([10, Number.NaN, 30]), 5_000, 2_000))).toEqual([
       [10, 10, 10, Number.NaN, Number.NaN, 30],
     ]);
+  });
+});
+
+describe("topOwnerShare", () => {
+  const row = (threadId: string | null, cpu: number) =>
+    ({
+      cpu,
+      rss: 0,
+      ...(threadId === null ? {} : { owner: { type: "thread", threadId } }),
+    }) as unknown as MachineProcessRow;
+  const byThread = (r: MachineProcessRow) => ownerThreadId(r.owner);
+
+  it("sums each owner's rows and labels the busiest as a floor", () => {
+    const rows = [row("a", 30), row("b", 50), row("a", 40.4), row(null, 99)];
+    expect(topOwnerShare(rows, byThread)).toEqual({ key: "a", text: "≥70%" });
+  });
+
+  it("is null when no row has an owner", () => {
+    expect(topOwnerShare([row(null, 10)], byThread)).toBeNull();
+    expect(topOwnerShare([], byThread)).toBeNull();
   });
 });

@@ -112,7 +112,7 @@ This API replay measures routing and recovery decisions. Screenshots return prod
 
 ## Machine resources cases
 
-`cases/machine-resources.ndjson` checks `t3_resource_claim`: an agent asked to count a container it started toward its thread claims it, and a control where restarting that container claims nothing.
+`cases/machine-resources.ndjson` checks `t3_resource_claim` and `t3_machine_read`. An agent asked to count a container it started toward its thread claims it, and restarting that container claims nothing. An agent asked whether the machine is overloaded reads `t3_machine_read` and names the verdict and the busy thread, and editing a test runner's worker count reads nothing.
 
 ## Threads vs tasks cases
 

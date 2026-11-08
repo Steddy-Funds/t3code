@@ -516,3 +516,47 @@ export const SubscribeMachineProcessesInput = Schema.Struct({
   threadId: Schema.optionalKey(ThreadId),
 });
 export type SubscribeMachineProcessesInput = typeof SubscribeMachineProcessesInput.Type;
+
+export const MACHINE_PROCESS_SNAPSHOT_MAX_LIMIT = 200;
+
+export const MachineProcessSnapshotGroupBy = Schema.Literals(["none", "owner", "bucket"]);
+export type MachineProcessSnapshotGroupBy = typeof MachineProcessSnapshotGroupBy.Type;
+
+/** One process walk for an agent (`t3_machine_read`); not streamed to clients. */
+export const MachineProcessSnapshot = Schema.Struct({
+  sampleAgeMs: NonNegativeInt,
+  source: MachineProcessSource,
+  /** Top by CPU together with top by memory, busiest first. */
+  processes: Schema.Array(
+    Schema.Struct({
+      pid: PositiveInt,
+      ppid: NonNegativeInt,
+      name: Schema.String,
+      user: Schema.String,
+      /** Only for callers not reaching this machine through a peer link. */
+      command: Schema.optionalKey(Schema.String),
+      /** Percent of one core. */
+      cpuPercent: Schema.Number,
+      rssBytes: NonNegativeInt,
+      gpuUtilPercent: Schema.optionalKey(Schema.Number),
+      vramBytes: Schema.optionalKey(NonNegativeInt),
+      owner: Schema.optionalKey(ReceivedProcessOwner),
+    }),
+  ),
+  /** Every process counted once, busiest group first. */
+  groups: Schema.optionalKey(
+    Schema.Array(
+      Schema.Struct({
+        label: Schema.String,
+        owner: Schema.optionalKey(ReceivedProcessOwner),
+        bucketId: Schema.optionalKey(MachineBucketId),
+        cpuPercent: Schema.Number,
+        rssBytes: NonNegativeInt,
+        count: PositiveInt,
+      }),
+    ),
+  ),
+  /** Processes left out past the limit. */
+  truncated: Schema.optionalKey(PositiveInt),
+});
+export type MachineProcessSnapshot = typeof MachineProcessSnapshot.Type;

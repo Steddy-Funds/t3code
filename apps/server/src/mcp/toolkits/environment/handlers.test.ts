@@ -25,6 +25,8 @@ import * as Stream from "effect/Stream";
 import * as Environment from "../../../environment/ServerEnvironment.ts";
 import * as ThreadCommandExecutor from "../../../orchestration-v2/ThreadCommandExecutor.ts";
 import * as ThreadManagement from "../../../orchestration-v2/ThreadManagementService.ts";
+import * as HostProcesses from "../../../resourceTelemetry/HostProcesses.ts";
+import * as HostResources from "../../../resourceTelemetry/HostResources.ts";
 import * as ProcessOwnership from "../../../resourceTelemetry/ProcessOwnership.ts";
 import * as Settings from "../../../serverSettings.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
@@ -35,6 +37,10 @@ import { EnvironmentToolkit } from "./tools.ts";
 
 const environmentId = EnvironmentId.make("environment:preferences");
 const threadId = ThreadId.make("thread:preferences");
+const layerMachineReadUnused = Layer.mergeAll(
+  Layer.mock(HostProcesses.HostProcesses)({}),
+  Layer.mock(HostResources.HostResources)({}),
+);
 
 it.effect("refuses a preferences update when the caller's turn ends while it waits", () =>
   Effect.gen(function* () {
@@ -42,6 +48,7 @@ it.effect("refuses a preferences update when the caller's turn ends while it wai
     const updates = yield* Ref.make(0);
     const checked = yield* Deferred.make<void>();
     const layerDependencies = Layer.mergeAll(
+      layerMachineReadUnused,
       ThreadCommandExecutor.layer,
       Layer.succeed(McpInvocationContext.McpInvocationContext, {
         environmentId,
@@ -143,6 +150,7 @@ const machineHarness = (
       ...ownership,
     };
     const dependencies = Layer.mergeAll(
+      layerMachineReadUnused,
       ThreadCommandExecutor.layer,
       Layer.succeed(ProcessOwnership.ProcessOwnership, fake),
       Layer.succeed(

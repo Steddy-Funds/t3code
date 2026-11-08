@@ -3,8 +3,12 @@ import {
   MACHINE_PROCESSES_MIN_INTERVAL_MS,
   type Claim,
   type GpuProcessSample,
+  type MachineBucketId,
   type MachineProcessAdded,
   type MachineProcessFrame,
+  type MachineProcessSnapshot,
+  type MachineProcessSnapshotGroupBy,
+  type MachineProcessSource,
   type ProcessOwner,
   type ResourceTelemetryProcess,
   type ResourceTelemetrySnapshot,
@@ -18,6 +22,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
+import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
 import * as NativeTelemetryClient from "./NativeTelemetryClient.ts";
@@ -32,8 +37,44 @@ export class HostProcesses extends Context.Service<
      * subtree. Full on subscribe, on each new generation and after the monitor's `staticReset`.
      */
     readonly frames: (input: SubscribeMachineProcessesInput) => Stream.Stream<MachineProcessFrame>;
+    /** One process walk, host-wide when the monitor can, otherwise the T3 subtree. */
+    readonly snapshot: (
+      input: ProcessSnapshotInput,
+    ) => Effect.Effect<ProcessSnapshotResult, HostProcessesUnavailable>;
   }
 >()("t3/resourceTelemetry/HostProcesses") {}
+
+export class HostProcessesUnavailable extends Schema.TaggedError<HostProcessesUnavailable>()(
+  "HostProcessesUnavailable",
+  {},
+) {
+  override get message(): string {
+    return "This machine's resource monitor is not running, so its processes cannot be listed.";
+  }
+}
+
+export interface ProcessSnapshotInput {
+  /** Process rows to list; 0 lists none and skips the per-process GPU walk. */
+  readonly limit: number;
+  readonly groupBy: MachineProcessSnapshotGroupBy;
+  /** False for callers reaching this machine through a peer link. */
+  readonly commands: boolean;
+  readonly bucketNames: ReadonlyMap<MachineBucketId, string>;
+}
+
+export interface BucketTotal {
+  readonly bucketId: MachineBucketId;
+  readonly name: string;
+  readonly cpuPercent: number;
+  readonly rssBytes: number;
+  readonly count: number;
+}
+
+export interface ProcessSnapshotResult {
+  readonly snapshot: MachineProcessSnapshot;
+  /** Buckets with at least one process, busiest first. */
+  readonly buckets: ReadonlyArray<BucketTotal>;
+}
 
 export interface FrameBuilderState {
   readonly generation: number;
@@ -552,6 +593,221 @@ export function nextHostFrames(
   ];
 }
 
+// Enough for a bucket rule's command prefix; whole command lines would swamp an agent's context.
+const SNAPSHOT_COMMAND_MAX_CHARS = 512;
+
+/** One process as a snapshot reads it, from either source. */
+export interface SnapshotRow {
+  readonly identity: string;
+  readonly pid: number;
+  readonly ppid: number;
+  readonly name: string;
+  readonly user: string;
+  readonly command: string;
+  readonly cpuPercent: number;
+  readonly rssBytes: number;
+  readonly gpuUtilPercent: number | null;
+  readonly vramBytes: number | null;
+}
+
+export interface SnapshotBuildInput extends ProcessSnapshotInput {
+  readonly rows: ReadonlyArray<SnapshotRow>;
+  readonly owners: ReadonlyMap<string, ProcessOwner>;
+  readonly source: MachineProcessSource;
+  readonly sampleAgeMs: number;
+}
+
+interface GroupKey {
+  readonly key: string;
+  readonly label: string;
+  readonly owner?: ProcessOwner;
+  readonly bucketId?: MachineBucketId;
+}
+
+const OTHER_GROUP: GroupKey = { key: "other", label: "other" };
+
+/** A thread's own processes and its claims form one group. */
+function ownerGroup(
+  owner: ProcessOwner | undefined,
+  bucketNames: ReadonlyMap<MachineBucketId, string>,
+): GroupKey {
+  if (owner === undefined) return OTHER_GROUP;
+  switch (owner.type) {
+    case "thread":
+    case "claimed":
+      return {
+        key: `thread:${owner.threadId}`,
+        label: `thread ${owner.threadId}`,
+        owner: { type: "thread", threadId: owner.threadId },
+      };
+    case "shared":
+      return { key: `shared:${owner.provider}:${owner.label}`, label: owner.label, owner };
+    case "t3":
+      return { key: `t3:${owner.label}`, label: owner.label, owner };
+    case "bucket":
+      return bucketGroup(owner.bucketId, bucketNames);
+    case "provider":
+      return { key: `provider:${owner.provider}`, label: owner.provider, owner };
+    case "container":
+      return { key: `container:${owner.id}`, label: `container ${owner.id.slice(0, 12)}`, owner };
+    case "other":
+      return OTHER_GROUP;
+  }
+}
+
+function bucketGroup(
+  bucketId: MachineBucketId,
+  bucketNames: ReadonlyMap<MachineBucketId, string>,
+): GroupKey & { readonly bucketId: MachineBucketId } {
+  return {
+    key: `bucket:${bucketId}`,
+    label: bucketNames.get(bucketId) ?? bucketId,
+    owner: { type: "bucket", bucketId },
+    bucketId,
+  };
+}
+
+const NO_BUCKET_GROUP: GroupKey = { key: "none", label: "not in a bucket" };
+
+interface GroupTotal<G extends GroupKey> {
+  readonly group: G;
+  cpuPercent: number;
+  rssBytes: number;
+  count: number;
+}
+
+function sumGroups<G extends GroupKey>(
+  rows: ReadonlyArray<SnapshotRow>,
+  groupOf: (row: SnapshotRow) => G | undefined,
+): Array<GroupTotal<G>> {
+  const totals = new Map<string, GroupTotal<G>>();
+  for (const row of rows) {
+    const group = groupOf(row);
+    if (group === undefined) continue;
+    const total = totals.get(group.key) ?? { group, cpuPercent: 0, rssBytes: 0, count: 0 };
+    total.cpuPercent += row.cpuPercent;
+    total.rssBytes += row.rssBytes;
+    total.count += 1;
+    totals.set(group.key, total);
+  }
+  return [...totals.values()].toSorted(
+    (a, b) => b.cpuPercent - a.cpuPercent || b.rssBytes - a.rssBytes,
+  );
+}
+
+const snapshotByCpu = (a: SnapshotRow, b: SnapshotRow) => b.cpuPercent - a.cpuPercent;
+const snapshotByRss = (a: SnapshotRow, b: SnapshotRow) => b.rssBytes - a.rssBytes;
+
+/** The agent's view of one process walk: top rows, optional groups and bucket totals. */
+export function buildProcessSnapshot(input: SnapshotBuildInput): ProcessSnapshotResult {
+  const ownerOf = (row: SnapshotRow) => input.owners.get(row.identity);
+  const { selected } = selectTop(
+    input.rows,
+    Math.ceil(input.limit / 2),
+    snapshotByCpu,
+    snapshotByRss,
+  );
+  const listed = selected.toSorted(snapshotByCpu).slice(0, input.limit);
+  const processes = listed.map((row) => {
+    const owner = ownerOf(row);
+    return {
+      pid: row.pid,
+      ppid: row.ppid,
+      name: row.name,
+      user: row.user,
+      ...(input.commands ? { command: row.command.slice(0, SNAPSHOT_COMMAND_MAX_CHARS) } : {}),
+      cpuPercent: roundCpu(row.cpuPercent),
+      rssBytes: row.rssBytes,
+      ...(row.gpuUtilPercent ? { gpuUtilPercent: row.gpuUtilPercent } : {}),
+      ...(row.vramBytes ? { vramBytes: row.vramBytes } : {}),
+      ...(owner === undefined ? {} : { owner }),
+    };
+  });
+
+  const groups =
+    input.groupBy === "none"
+      ? undefined
+      : sumGroups(input.rows, (row): GroupKey => {
+          const owner = ownerOf(row);
+          if (input.groupBy === "owner") return ownerGroup(owner, input.bucketNames);
+          return owner?.type === "bucket"
+            ? bucketGroup(owner.bucketId, input.bucketNames)
+            : NO_BUCKET_GROUP;
+        }).map(({ group, cpuPercent, rssBytes, count }) => ({
+          label: group.label,
+          ...(group.owner === undefined ? {} : { owner: group.owner }),
+          ...(group.bucketId === undefined ? {} : { bucketId: group.bucketId }),
+          cpuPercent: roundCpu(cpuPercent),
+          rssBytes,
+          count,
+        }));
+
+  const buckets = sumGroups(input.rows, (row) => {
+    const owner = ownerOf(row);
+    return owner?.type === "bucket" ? bucketGroup(owner.bucketId, input.bucketNames) : undefined;
+  }).map(({ group, cpuPercent, rssBytes, count }) => ({
+    bucketId: group.bucketId,
+    name: group.label,
+    cpuPercent: roundCpu(cpuPercent),
+    rssBytes,
+    count,
+  }));
+
+  const truncated = input.rows.length - listed.length;
+  return {
+    snapshot: {
+      sampleAgeMs: Math.max(0, Math.round(input.sampleAgeMs)),
+      source: input.source,
+      processes,
+      ...(groups === undefined ? {} : { groups }),
+      ...(truncated > 0 && input.limit > 0 ? { truncated } : {}),
+    },
+    buckets,
+  };
+}
+
+/** A host sample's processes for a snapshot; GPU use only where every device was walked. */
+export function hostSnapshotRows(
+  sample: NativeTelemetryClient.NativeHostSample,
+): Array<SnapshotRow> {
+  const gpuUse = isEveryGpuWalked(sample.sample)
+    ? gpuUseByIdentity(sample.sample.gpuProcesses ?? [])
+    : new Map<string, { util: number | null; vram: number | null }>();
+  return hostRows(sample.sample).map((row) => {
+    const entry = knownStatics(row, sample.statics);
+    const use = gpuUse.get(row.identity);
+    return {
+      identity: row.identity,
+      pid: row.pid,
+      ppid: row.ppid,
+      name: entry?.name ?? "",
+      user: entry?.user ?? "",
+      command: entry?.command ?? "",
+      cpuPercent: row.cpu,
+      rssBytes: row.rss,
+      gpuUtilPercent: use?.util ?? null,
+      vramBytes: use?.vram ?? null,
+    };
+  });
+}
+
+export function subtreeSnapshotRows(
+  processes: ReadonlyArray<ResourceTelemetryProcess>,
+): Array<SnapshotRow> {
+  return processes.map((process) => ({
+    identity: identityOf(process),
+    pid: process.identity.pid,
+    ppid: process.ppid,
+    name: process.name,
+    user: "",
+    command: process.command,
+    cpuPercent: process.cpuPercent,
+    rssBytes: process.residentBytes,
+    gpuUtilPercent: null,
+    vramBytes: null,
+  }));
+}
+
 function isMonitorAvailable(snapshot: ResourceTelemetrySnapshot): boolean {
   const status = snapshot.health.native.status;
   return status !== "unavailable" && status !== "stopped";
@@ -661,7 +917,48 @@ const make = Effect.fn("makeHostProcesses")(function* () {
       ),
     );
 
-  return HostProcesses.of({ frames });
+  const hostSnapshot = Effect.fn("HostProcesses.hostSnapshot")(function* (
+    input: ProcessSnapshotInput,
+  ) {
+    const gpuProcesses = input.limit > 0;
+    const sample = yield* native.hostSampleNow({
+      processes: true,
+      gpus: gpuProcesses,
+      gpuProcesses,
+    });
+    const owners = yield* ownership.attribute(hostOwnershipRows(sample.sample, sample.statics));
+    const nowMs = yield* Clock.currentTimeMillis;
+    return buildProcessSnapshot({
+      ...input,
+      rows: hostSnapshotRows(sample),
+      owners,
+      source: "host",
+      sampleAgeMs: nowMs - sample.sample.sampledAtUnixMs,
+    });
+  });
+
+  const subtreeSnapshot = Effect.fn("HostProcesses.subtreeSnapshot")(function* (
+    input: ProcessSnapshotInput,
+  ) {
+    const snapshot = yield* telemetry.refresh.pipe(Effect.catch(() => telemetry.latest));
+    if (!isMonitorAvailable(snapshot)) return yield* new HostProcessesUnavailable();
+    const owners = yield* ownership.attribute(subtreeOwnershipRows(snapshot.processes));
+    const nowMs = yield* Clock.currentTimeMillis;
+    return buildProcessSnapshot({
+      ...input,
+      rows: subtreeSnapshotRows(snapshot.processes),
+      owners,
+      source: "t3",
+      sampleAgeMs: nowMs - DateTime.toEpochMillis(snapshot.readAt),
+    });
+  });
+
+  const snapshot = Effect.fn("HostProcesses.snapshot")(function* (input: ProcessSnapshotInput) {
+    if (!(yield* supportsHostProcesses(native))) return yield* subtreeSnapshot(input);
+    return yield* hostSnapshot(input).pipe(Effect.catch(() => subtreeSnapshot(input)));
+  });
+
+  return HostProcesses.of({ frames, snapshot });
 });
 
 export const layer = Layer.effect(HostProcesses, make());

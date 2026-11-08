@@ -1,6 +1,7 @@
 import {
   type BucketEditedError,
   MACHINE_BUCKETS_THREAD_TAG,
+  MACHINE_SAMPLE_MIN_INTERVAL_MS,
   type MachineActor,
   MachineBucketId,
   type MachineBucketLimitError,
@@ -12,11 +13,17 @@ import {
 } from "@t3tools/contracts";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
+import * as Result from "effect/Result";
+import * as Stream from "effect/Stream";
 import * as Environment from "../../../environment/ServerEnvironment.ts";
 import * as ThreadCommandExecutor from "../../../orchestration-v2/ThreadCommandExecutor.ts";
+import * as HostProcesses from "../../../resourceTelemetry/HostProcesses.ts";
+import * as HostResources from "../../../resourceTelemetry/HostResources.ts";
 import * as ProcessOwnership from "../../../resourceTelemetry/ProcessOwnership.ts";
+import * as ThreadResources from "../../../resourceTelemetry/ThreadResources.ts";
 import * as Settings from "../../../serverSettings.ts";
-import { assertNotLinked, assertSameLink } from "../../linkOrigin.ts";
+import { assertNotLinked, assertSameLink, callerLinkOrigin } from "../../linkOrigin.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
 import {
@@ -103,6 +110,10 @@ const assertMayChangeThread = Effect.fn("EnvironmentHandlers.assertMayChangeThre
   yield* assertSameLink(caller, target);
 });
 
+const DEFAULT_PROCESS_LIMIT = 20;
+// Ten minutes of 30 s rollups: enough to see a trend without the whole hour.
+const RECENT_THREAD_POINTS = 20;
+
 const newBucketId = Effect.fn("EnvironmentHandlers.newBucketId")(function* () {
   const random = yield* SecureRandom.SecureRandom;
   return MachineBucketId.make(`bucket_${yield* random.uuidV4()}`);
@@ -112,6 +123,50 @@ export const layer = McpToolAccess.toLayer(
   EnvironmentToolkit,
   Effect.gen(function* () {
     const ownership = yield* ProcessOwnership.ProcessOwnership;
+    const hostResources = yield* HostResources.HostResources;
+    const hostProcesses = yield* HostProcesses.HostProcesses;
+    const threadResources = yield* ThreadResources.ThreadResources;
+
+    const perCoreSample = Effect.scoped(
+      hostResources
+        .samples(MACHINE_SAMPLE_MIN_INTERVAL_MS)
+        .pipe(Effect.flatMap(Stream.runHead), Effect.map(Option.getOrUndefined)),
+    );
+
+    const runningThreads = Effect.fn("EnvironmentHandlers.runningThreads")(function* (
+      caller: Caller,
+    ) {
+      const usage = yield* threadResources.byThread;
+      const rows = yield* Effect.forEach(
+        usage,
+        ([threadId, totals]) =>
+          caller.threads.getThreadShell(threadId).pipe(
+            Effect.map((shell) =>
+              shell === null || shell.deletedAt !== null
+                ? []
+                : [{ threadId, title: shell.title, usage: totals }],
+            ),
+            Effect.orElseSucceed(() => []),
+          ),
+        { concurrency: 8 },
+      );
+      return rows.flat();
+    });
+
+    const threadUsage = Effect.fn("EnvironmentHandlers.threadUsage")(function* (
+      caller: Caller,
+      threadId: ThreadId,
+    ) {
+      const shell = yield* caller.threads
+        .getThreadShell(threadId)
+        .pipe(Effect.mapError(unavailable));
+      if (shell === null || shell.deletedAt !== null) {
+        return yield* threadNotFound(caller.threads, threadId, "The thread was not found.");
+      }
+      const { current, history } = yield* threadResources.read(threadId);
+      return { threadId, current, recent: history.slice(-RECENT_THREAD_POINTS) };
+    });
+
     return {
       t3_environment_read: McpToolAccess.reads(() =>
         Effect.gen(function* () {
@@ -141,6 +196,67 @@ export const layer = McpToolAccess.toLayer(
           return yield* scope.thread === undefined
             ? update
             : executor.withLock(scope.thread.threadId, update);
+        }),
+      ),
+      t3_machine_read: McpToolAccess.reads((input) =>
+        Effect.gen(function* () {
+          const context = yield* access;
+          const current = yield* context.settings.getSettings.pipe(Effect.mapError(unavailable));
+          const bucketNames = new Map(
+            Object.values(current.machineResources.buckets).map((bucket) => [
+              bucket.id,
+              bucket.name,
+            ]),
+          );
+          const [status, sample, walk, running, thread] = yield* Effect.all(
+            [
+              hostResources.status.pipe(Stream.runHead),
+              perCoreSample,
+              hostProcesses
+                .snapshot({
+                  limit:
+                    input.processes === undefined
+                      ? 0
+                      : (input.processes.limit ?? DEFAULT_PROCESS_LIMIT),
+                  groupBy: input.processes?.groupBy ?? "none",
+                  // A peer link gets names, pids and usage, never command lines.
+                  commands: callerLinkOrigin(context) === undefined,
+                  bucketNames,
+                })
+                .pipe(Effect.result),
+              runningThreads(context),
+              input.threadId === undefined
+                ? Effect.undefined
+                : threadUsage(context, input.threadId),
+            ],
+            { concurrency: "unbounded" },
+          );
+          if (Option.isNone(status)) return yield* unavailable();
+          const { verdict, reason, sampleAgeMs, totals } = status.value;
+          return {
+            verdict,
+            reason,
+            sampleAgeMs,
+            totals,
+            perCore: (sample?.perCore ?? []).map(Math.round),
+            ...(sample?.gpus === undefined ? {} : { gpus: sample.gpus }),
+            ...(Result.isSuccess(walk) ? { buckets: walk.success.buckets } : {}),
+            runningThreads: running,
+            ...(input.processes === undefined
+              ? {}
+              : Result.isSuccess(walk)
+                ? { processes: walk.success.snapshot }
+                : { processesUnavailable: walk.failure.message }),
+            ...(thread === undefined ? {} : { thread }),
+            ...(input.show === true
+              ? {
+                  machineCard: {
+                    environmentId: context.descriptor.environmentId,
+                    snapshot: { verdict, reason, totals },
+                  },
+                }
+              : {}),
+          };
         }),
       ),
       t3_machine_buckets: McpToolAccess.either(

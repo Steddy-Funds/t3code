@@ -1,8 +1,13 @@
 import {
   isProviderSendTurnSupportedImageMimeType,
+  MachineTotalsSummary,
+  MachineVerdict,
+  MachineVerdictReason,
   PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
 } from "@t3tools/contracts";
+import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
+import * as Schema from "effect/Schema";
 
 import {
   HTML_RENDER_TOOL_NAME,
@@ -18,6 +23,9 @@ import {
 import { resolveT3McpToolId } from "./t3McpToolPresentation.ts";
 
 const MAX_PARSED_BYTES = 16_384;
+// 200 process rows with 512-char command lines, so the card survives the table beside it.
+const MACHINE_READ_MAX_PARSED_BYTES = 256 * 1024;
+const MACHINE_READ_TOOL_ID = "t3_machine_read";
 const MAX_METADATA_BYTES = 8_192;
 const MAX_ID_LENGTH = 256;
 const MAX_THREADS = 100;
@@ -37,6 +45,22 @@ interface ResultEnvelope {
   failed: boolean;
 }
 
+/** The static copy an inline machine card shows when it is off screen or frozen. */
+export const MachineCardSnapshot = Schema.Struct({
+  verdict: MachineVerdict,
+  reason: Schema.NullOr(MachineVerdictReason),
+  totals: Schema.NullOr(MachineTotalsSummary),
+});
+export type MachineCardSnapshot = typeof MachineCardSnapshot.Type;
+
+export interface MachineCard {
+  readonly environmentId: string;
+  /** Pruned first when the compact output runs over its size budget. */
+  readonly snapshot?: MachineCardSnapshot;
+}
+
+const decodeMachineCardSnapshot = Schema.decodeUnknownOption(MachineCardSnapshot);
+
 interface CompactToolOutput {
   isError?: true;
   threadId?: string;
@@ -50,6 +74,7 @@ interface CompactToolOutput {
   threads?: Array<{ threadId?: string; status?: "rolled_back" }>;
   linkedCount?: number;
   unlinkedCount?: number;
+  machineCard?: MachineCard;
 }
 
 function readResult(value: unknown, budget: ResultReadBudget, depth = 0): ResultEnvelope {
@@ -115,9 +140,24 @@ function boundedId(value: unknown): string | undefined {
   return Array.from(value).join("");
 }
 
-export function compactDynamicToolOutput(value: unknown): CompactToolOutput | undefined {
+function readMachineCard(value: unknown): MachineCard | undefined {
+  if (!Predicate.isObject(value)) return undefined;
+  const environmentId = boundedId(value.environmentId);
+  if (environmentId === undefined) return undefined;
+  // A snapshot this client can't read (pruned, or from a newer server) still leaves a live card.
+  const snapshot = decodeMachineCardSnapshot(value.snapshot);
+  return Option.isSome(snapshot) ? { environmentId, snapshot: snapshot.value } : { environmentId };
+}
+
+export function compactDynamicToolOutput(
+  value: unknown,
+  toolName?: string | null,
+): CompactToolOutput | undefined {
   const budget: ResultReadBudget = {
-    remainingBytes: MAX_PARSED_BYTES,
+    remainingBytes:
+      resolveT3McpToolId(toolName) === MACHINE_READ_TOOL_ID
+        ? MACHINE_READ_MAX_PARSED_BYTES
+        : MAX_PARSED_BYTES,
     remainingNodes: MAX_ENVELOPE_NODES,
     exceeded: false,
   };
@@ -138,6 +178,8 @@ export function compactDynamicToolOutput(value: unknown): CompactToolOutput | un
     if (htmlRender !== undefined) output.htmlRender = htmlRender;
     const mcpApp = readMcpAppReference(data[MCP_APP_OUTPUT_KEY]);
     if (mcpApp !== undefined) output[MCP_APP_OUTPUT_KEY] = mcpApp;
+    const machineCard = readMachineCard(data.machineCard);
+    if (machineCard !== undefined) output.machineCard = machineCard;
     const nestedThreadId = Predicate.isObject(data.thread)
       ? boundedId(data.thread.threadId)
       : undefined;
@@ -184,6 +226,10 @@ export function compactDynamicToolOutput(value: unknown): CompactToolOutput | un
     output[MCP_APP_OUTPUT_KEY] = rest;
   }
   if (oversized()) delete output[MCP_APP_OUTPUT_KEY];
+  if (output.machineCard?.snapshot !== undefined && oversized()) {
+    output.machineCard = { environmentId: output.machineCard.environmentId };
+  }
+  if (oversized()) delete output.machineCard;
   return Object.keys(output).length === 0 ? undefined : output;
 }
 
@@ -194,6 +240,21 @@ export function htmlRenderFromToolItem(item: {
   if (resolveT3McpToolId(item.toolName) !== HTML_RENDER_TOOL_NAME) return undefined;
   const output = compactDynamicToolOutput(item.output);
   return output?.isError ? undefined : output?.htmlRender;
+}
+
+/** The card `t3_machine_read { show: true }` asked for; only T3's own tool can draw one. */
+export function machineCardFromToolItem(item: {
+  readonly toolName: string | null | undefined;
+  readonly output?: unknown;
+}): MachineCard | undefined {
+  if (resolveT3McpToolId(item.toolName) !== MACHINE_READ_TOOL_ID) return undefined;
+  const output = compactDynamicToolOutput(item.output, item.toolName);
+  return output?.isError ? undefined : output?.machineCard;
+}
+
+/** Cards decode into a fixed key order, so equal cards serialize alike. */
+export function machineCardsEqual(a: MachineCard, b: MachineCard): boolean {
+  return a === b || JSON.stringify(a) === JSON.stringify(b);
 }
 
 /** The thread-owned file `preview_recording_stop` stored for the agent. */

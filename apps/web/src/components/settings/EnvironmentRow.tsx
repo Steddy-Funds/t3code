@@ -18,6 +18,7 @@ import { usePreparedConnection } from "~/state/session";
 import { isDesktopLocalConnectionTarget } from "~/connection/desktopLocal";
 import { EnvironmentMachineIcon } from "../EnvironmentMachineIcon";
 import { MachineHoverTarget } from "../nodeResources/MachineHoverTarget";
+import { useSettingsSearchTarget } from "./settingsLayout";
 
 export function formatDesktopSshTarget(target: DesktopSshEnvironmentTarget): string {
   const authority = target.username ? `${target.username}@${target.hostname}` : target.hostname;
@@ -80,6 +81,7 @@ export function EnvironmentRow({
   detail,
   dimmed = false,
   className,
+  settingsTargetId,
   children,
 }: {
   readonly kind: EnvironmentMachineKind;
@@ -93,8 +95,11 @@ export function EnvironmentRow({
   readonly detail?: ReactNode;
   readonly dimmed?: boolean;
   readonly className?: string;
+  /** Lets a settings link (`#id`) scroll to and highlight this row. */
+  readonly settingsTargetId?: string;
   readonly children?: ReactNode;
 }) {
+  const targetRef = useSettingsSearchTarget<HTMLDivElement>(settingsTargetId);
   const icon = (
     <EnvironmentMachineIcon
       aria-hidden
@@ -105,6 +110,9 @@ export function EnvironmentRow({
   );
   return (
     <div
+      id={settingsTargetId}
+      ref={targetRef}
+      tabIndex={settingsTargetId === undefined ? undefined : -1}
       className={cn(
         "grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-3 px-3 py-2.5 sm:px-4",
         className,

@@ -355,6 +355,9 @@ export function summarizeT3ToolCalls(
     case "environment-update":
       label = phrase("Updated", "update", `environment preferences ${times}`);
       break;
+    case "machine-read":
+      label = phrase("Checked", "check", `machine load ${times}`);
+      break;
     case "machine-buckets":
       label = phrase("Used", "use", `machine buckets ${times}`);
       break;

@@ -26,7 +26,12 @@ import {
 import type { HtmlRenderReference } from "@t3tools/shared/htmlRender";
 import { turnItemDetailRevision } from "@t3tools/client-runtime/work-log/item-detail";
 import type { McpAppReference } from "@t3tools/shared/mcpApp";
-import { htmlRenderFromToolItem, mcpAppFromToolItem } from "@t3tools/shared/toolOutput";
+import {
+  htmlRenderFromToolItem,
+  type MachineCard,
+  machineCardFromToolItem,
+  mcpAppFromToolItem,
+} from "@t3tools/shared/toolOutput";
 import {
   contextCompactionLabel,
   workEntryIndicatesToolFailure,
@@ -132,6 +137,13 @@ export type TimelineEntry = (
       readonly createdAt: string;
       readonly runId: RunId | null;
       readonly htmlRender: HtmlRenderReference;
+    }
+  | {
+      readonly id: string;
+      readonly kind: "machine-card";
+      readonly createdAt: string;
+      readonly runId: RunId | null;
+      readonly machineCard: MachineCard;
     }
   | {
       readonly id: string;
@@ -695,10 +707,21 @@ export function deriveTimelineEntriesFromVisibleTurnItems(
       continue;
     }
 
-    const htmlRender =
-      item.type === "dynamic_tool" && item.status === "completed"
-        ? htmlRenderFromToolItem(item)
-        : undefined;
+    const completedTool = item.type === "dynamic_tool" && item.status === "completed";
+    const machineCard = completedTool ? machineCardFromToolItem(item) : undefined;
+    if (machineCard !== undefined) {
+      entries.push({
+        id: item.id,
+        kind: "machine-card",
+        createdAt,
+        runId: item.runId,
+        machineCard,
+        ...attemptMetadata,
+      });
+      continue;
+    }
+
+    const htmlRender = completedTool ? htmlRenderFromToolItem(item) : undefined;
     if (htmlRender !== undefined) {
       entries.push({
         id: item.id,

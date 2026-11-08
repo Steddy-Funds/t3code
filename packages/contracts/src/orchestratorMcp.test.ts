@@ -4,10 +4,13 @@ import * as Schema from "effect/Schema";
 import {
   OrchestratorMcpDelegateTaskInput,
   OrchestratorMcpDelegateTaskResult,
+  OrchestratorMcpListScheduledTasksResult,
+  OrchestratorMcpSaveScheduledTaskInput,
 } from "./orchestratorMcp.ts";
 
 const decodeDelegateTaskInput = Schema.decodeUnknownSync(OrchestratorMcpDelegateTaskInput);
 const decodeDelegateTaskResult = Schema.decodeUnknownSync(OrchestratorMcpDelegateTaskResult);
+const decodeListScheduledTasks = Schema.decodeUnknownSync(OrchestratorMcpListScheduledTasksResult);
 
 describe("orchestrator MCP contracts", () => {
   it("decodes cross-provider delegated task requests and durable results", () => {
@@ -65,5 +68,48 @@ describe("orchestrator MCP contracts", () => {
         pendingApproval: { ...pendingApproval, kind: "user_input" },
       }),
     ).toThrow();
+  });
+});
+
+describe("load schedules over MCP", () => {
+  const load = {
+    type: "load",
+    condition: { metric: "memoryUsedPercent", op: "<=", threshold: 40, sustainSeconds: 120 },
+  };
+  const decodeSchedule = Schema.decodeUnknownSync(
+    Schema.Struct({ schedule: OrchestratorMcpSaveScheduledTaskInput.fields.schedule }),
+  );
+
+  it("reads a load schedule as an object or as JSON text", () => {
+    expect(decodeSchedule({ schedule: load })).toEqual({ schedule: load });
+    expect(decodeSchedule({ schedule: JSON.stringify(load) })).toEqual({ schedule: load });
+    expect(() =>
+      decodeSchedule({
+        schedule: JSON.stringify({
+          ...load,
+          condition: { ...load.condition, sustainSeconds: 3601 },
+        }),
+      }),
+    ).toThrow();
+  });
+
+  it("drops a forwarded task with an unknown schedule type and keeps the rest", () => {
+    const listed = {
+      scheduledTaskId: "scheduled-task:idle",
+      title: "When idle",
+      prompt: "Run the benchmarks",
+      enabled: true,
+      projectId: "project:1",
+      boundThreadId: null,
+      schedule: load,
+      nextRunAt: null,
+      lastRunStatus: "never",
+    };
+    const newer = {
+      ...listed,
+      scheduledTaskId: "scheduled-task:newer",
+      schedule: { type: "on_commit" },
+    };
+    expect(decodeListScheduledTasks({ tasks: [newer, listed] })).toEqual({ tasks: [listed] });
   });
 });

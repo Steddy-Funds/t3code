@@ -1205,6 +1205,22 @@ export const SETTINGS_SEARCH_ITEMS = [
     ],
   },
   {
+    id: "machine-auto-buckets",
+    title: "Auto-buckets",
+    to: "/settings/access",
+    targetId: "connections-environment",
+    searchTerms: [
+      "auto buckets group unowned unbucketed processes task manager background machine resources",
+    ],
+  },
+  {
+    id: "machine-auto-buckets-model",
+    title: "Auto-buckets model",
+    to: "/settings/access",
+    targetId: "connections-environment",
+    searchTerms: ["auto buckets model provider haiku"],
+  },
+  {
     id: "machine-process-buckets",
     title: "Process buckets",
     to: "/settings/access",
@@ -1233,6 +1249,14 @@ export const SETTINGS_SEARCH_ITEMS = [
     targetId: "secret-providers",
     searchTerms: ["new 1password vault op cli account"],
     secretsFeatureOnly: true,
+  },
+  {
+    id: "scheduled-task-load-monitor",
+    title: "Load monitor",
+    to: "/settings/scheduled-tasks",
+    searchTerms: [
+      "when machine is busy stressed load cpu memory gpu scheduled task trigger on load wake",
+    ],
   },
   {
     id: "archive",

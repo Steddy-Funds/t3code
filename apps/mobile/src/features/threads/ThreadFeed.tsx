@@ -3,6 +3,7 @@ import * as Dialog from "../../components/ui/Dialog";
 import { useOpenPullRequest } from "../../native/useOpenPullRequest";
 import { useWorkspaceSettledContentWidth } from "../layout/workspace-content-width";
 import { ThreadMarkdownVideo, ThreadMediaVisibleContext } from "./ThreadMarkdownVideo";
+import { InlineMachineCard } from "./InlineMachineCard";
 import { useMarkdownImageSource } from "../../native/useMarkdownImageSource";
 import {
   enrichedContextLinkCustomization,
@@ -1674,6 +1675,7 @@ function renderFeedEntry(
     readonly workGroupScrollPositions: Map<string, ThreadWorkGroupScrollPosition>;
     readonly terminalAssistantMessageIds: ReadonlySet<string>;
     readonly unsettledTurnId: RunId | null;
+    readonly latestRunId: RunId | null;
     readonly compactionLabelsByEntryId: ReadonlyMap<string, { title: string; compacting: string }>;
     readonly failedRunIds: ReadonlySet<RunId>;
     readonly onCopyWorkRow: (rowId: string, value: string) => void;
@@ -1760,6 +1762,16 @@ function renderFeedEntry(
         render={entry.render}
         frameWidth={props.contentWidth}
         iconColor={iconSubtleColor}
+      />
+    );
+  }
+
+  if (entry.type === "machine-card") {
+    return (
+      <InlineMachineCard
+        card={entry.card}
+        capturedAt={entry.createdAt}
+        current={entry.runId !== null && entry.runId === props.latestRunId}
       />
     );
   }
@@ -3207,6 +3219,7 @@ export const ThreadFeed = memo(function ThreadFeed({
   );
   const reviewCommentColors = useReviewCommentColors();
   const unsettledTurnId = threadFeedRunIsUnsettled(props.latestRun) ? props.latestRun.runId : null;
+  const latestRunId = props.latestRun?.runId ?? null;
   const compactionLabelsByEntryId = useMemo(
     () => threadFeedCompactionLabels(props.feed),
     [props.feed],
@@ -3221,6 +3234,7 @@ export const ThreadFeed = memo(function ThreadFeed({
     setupWorkingStartedAt: props.setupWorkingStartedAt,
     dispatchingMessageId: props.dispatchingMessageId,
     unsettledTurnId,
+    latestRunId,
     copiedRowId,
     expandedWorkGroups,
     expandedWorkRows,
@@ -3753,6 +3767,7 @@ export const ThreadFeed = memo(function ThreadFeed({
             workGroupScrollPositions,
             terminalAssistantMessageIds,
             unsettledTurnId,
+            latestRunId,
             compactionLabelsByEntryId,
             failedRunIds,
             onCopyWorkRow,

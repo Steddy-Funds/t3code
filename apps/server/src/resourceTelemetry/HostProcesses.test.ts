@@ -5,8 +5,10 @@ import {
   type GpuDeviceSample,
   type GpuProcessSample,
   MACHINE_PROCESSES_MAX_ROWS,
+  MachineBucketId,
   type MachineProcessFrame,
   type ProcessOwner,
+  ProviderDriverKind,
   type ResourceMonitorHostProcessStatic,
   type ResourceTelemetryAggregate,
   type ResourceTelemetryProcess,
@@ -28,20 +30,28 @@ import { describe, expect } from "vite-plus/test";
 
 import { createMachineProcessFrameApplier } from "../../../../packages/client-runtime/src/state/machineProcessFrames.ts";
 import {
+  buildProcessSnapshot,
+  buildUnbucketed,
   type FrameInput,
   type HostFrameInput,
   HostProcesses,
+  HostProcessesUnavailable,
   hostOwnershipRows,
+  hostSnapshotRows,
   initialFrameBuilderState,
   initialHostFrameBuilderState,
   layer as hostProcessesLayer,
   nextFrame,
   nextHostFrames,
   selectProcesses,
+  type SnapshotBuildInput,
+  type SnapshotRow,
   subtreeOwnershipRows,
+  subtreeSnapshotRows,
+  unbucketedSharePercent,
 } from "./HostProcesses.ts";
 import * as NativeTelemetryClient from "./NativeTelemetryClient.ts";
-import { ResourceTelemetry } from "./ResourceTelemetry.ts";
+import { ResourceTelemetry, ResourceTelemetryRefreshFailed } from "./ResourceTelemetry.ts";
 
 const EPOCH = DateTime.makeUnsafe(0);
 
@@ -979,6 +989,332 @@ describe("frame owners and claims", () => {
   });
 });
 
+describe("buildProcessSnapshot", () => {
+  const threadA = ThreadId.make("thread-a");
+  const bucketDev = MachineBucketId.make("bucket:dev");
+  const bucketCi = MachineBucketId.make("bucket:ci");
+  const row = (
+    pid: number,
+    cpuPercent: number,
+    rssBytes: number,
+    overrides: Partial<SnapshotRow> = {},
+  ): SnapshotRow => ({
+    identity: `${pid}:${pid * 10}`,
+    pid,
+    ppid: 1,
+    name: `p${pid}`,
+    user: "dev",
+    command: `p${pid} --run`,
+    cpuPercent,
+    rssBytes,
+    gpuUtilPercent: null,
+    vramBytes: null,
+    ...overrides,
+  });
+  const build = (overrides: Partial<SnapshotBuildInput> = {}) =>
+    buildProcessSnapshot({
+      rows: [row(1, 5, 100), row(2, 50, 200), row(3, 1, 9_000), row(4, 20, 300)],
+      owners: new Map(),
+      source: "host",
+      sampleAgeMs: 250,
+      limit: 20,
+      groupBy: "none",
+      commands: true,
+      bucketNames: new Map(),
+      ...overrides,
+    });
+  const listedPids = (result: ReturnType<typeof buildProcessSnapshot>) =>
+    result.snapshot.processes.map((process) => process.pid);
+
+  it("lists the busiest by CPU together with the largest by memory, busiest first", () => {
+    const all = build();
+    expect(listedPids(all)).toEqual([2, 4, 1, 3]);
+    expect(all.snapshot).not.toHaveProperty("truncated");
+    expect(all.snapshot).not.toHaveProperty("groups");
+    expect(all.snapshot).toMatchObject({ source: "host", sampleAgeMs: 250 });
+
+    // Two by CPU and two by memory: the low-CPU memory hog makes the cut, and a process
+    // topping both takes one row, so fewer than `limit` can be listed.
+    const four = build({
+      rows: [row(1, 5, 100), row(2, 50, 200), row(3, 1, 9_000), row(4, 20, 300), row(5, 2, 50)],
+      limit: 4,
+    });
+    expect(listedPids(four)).toEqual([2, 4, 3]);
+    expect(four.snapshot.truncated).toBe(2);
+
+    const two = build({ limit: 2 });
+    expect(listedPids(two)).toEqual([2, 3]);
+    expect(two.snapshot.truncated).toBe(2);
+  });
+
+  it("lists nothing and reports nothing truncated at limit 0, but still totals buckets", () => {
+    const result = build({
+      limit: 0,
+      owners: new Map([["2:20", { type: "bucket", bucketId: bucketDev }]]),
+      bucketNames: new Map([[bucketDev, "Dev"]]),
+    });
+    expect(result.snapshot.processes).toEqual([]);
+    expect(result.snapshot).not.toHaveProperty("truncated");
+    expect(result.buckets).toEqual([
+      { bucketId: bucketDev, name: "Dev", cpuPercent: 50, rssBytes: 200, count: 1 },
+    ]);
+  });
+
+  it("puts command lines in only when asked, cut to 512 characters", () => {
+    const long = "x".repeat(2_000);
+    const rows = [row(1, 5, 100, { command: long })];
+    const withCommands = build({ rows });
+    expect(withCommands.snapshot.processes[0]?.command).toBe(long.slice(0, 512));
+
+    const without = build({ rows, commands: false });
+    expect(without.snapshot.processes[0]).toEqual({
+      pid: 1,
+      ppid: 1,
+      name: "p1",
+      user: "dev",
+      cpuPercent: 5,
+      rssBytes: 100,
+    });
+    expect(JSON.stringify(without)).not.toContain("xxx");
+  });
+
+  it("rounds CPU to one decimal, clamps a negative sample age and adds measured GPU use only", () => {
+    const result = build({
+      rows: [
+        row(1, 12.345, 100, { gpuUtilPercent: 30, vramBytes: 4_096 }),
+        row(2, 0.04, 100, { gpuUtilPercent: 0, vramBytes: 0 }),
+        row(3, 1, 100),
+      ],
+      sampleAgeMs: -40.6,
+      owners: new Map([["1:10", { type: "thread", threadId: threadA }]]),
+    });
+    expect(result.snapshot.sampleAgeMs).toBe(0);
+    expect(result.snapshot.processes).toEqual([
+      expect.objectContaining({
+        pid: 1,
+        cpuPercent: 12.3,
+        gpuUtilPercent: 30,
+        vramBytes: 4_096,
+        owner: { type: "thread", threadId: threadA },
+      }),
+      expect.not.objectContaining({ gpuUtilPercent: expect.anything() }),
+      expect.not.objectContaining({ vramBytes: expect.anything() }),
+    ]);
+    expect(result.snapshot.processes[2]).not.toHaveProperty("owner");
+  });
+
+  it("groups by owner: a thread with its claims, and unowned with other, every process once", () => {
+    const owners = new Map<string, ProcessOwner>([
+      ["1:10", { type: "thread", threadId: threadA }],
+      ["2:20", { type: "claimed", claimId: ClaimId.make("claim-1"), threadId: threadA }],
+      ["4:40", { type: "other" }],
+      ["5:50", { type: "container", id: "0123456789abcdef0123" }],
+      ["6:60", { type: "bucket", bucketId: bucketDev }],
+      ["7:70", { type: "provider", provider: ProviderDriverKind.make("codex") }],
+      ["8:80", { type: "t3", label: "server" }],
+      [
+        "9:90",
+        {
+          type: "shared",
+          provider: ProviderDriverKind.make("claude"),
+          label: "Claude MCP",
+          threadCount: 2,
+        },
+      ],
+    ]);
+    const rows = [
+      row(1, 10, 100),
+      row(2, 5, 50),
+      row(3, 1, 10),
+      row(4, 1, 20),
+      row(5, 4, 1),
+      row(6, 3, 1),
+      row(7, 2.5, 1),
+      row(8, 2, 1),
+      row(9, 0.5, 1),
+    ];
+    const { snapshot } = build({ rows, owners, groupBy: "owner", limit: 1 });
+    expect(snapshot.groups).toEqual([
+      {
+        label: "thread thread-a",
+        owner: { type: "thread", threadId: threadA },
+        cpuPercent: 15,
+        rssBytes: 150,
+        count: 2,
+      },
+      {
+        label: "container 0123456789ab",
+        owner: { type: "container", id: "0123456789abcdef0123" },
+        cpuPercent: 4,
+        rssBytes: 1,
+        count: 1,
+      },
+      {
+        label: "bucket:dev",
+        owner: { type: "bucket", bucketId: bucketDev },
+        bucketId: bucketDev,
+        cpuPercent: 3,
+        rssBytes: 1,
+        count: 1,
+      },
+      {
+        label: "codex",
+        owner: { type: "provider", provider: "codex" },
+        cpuPercent: 2.5,
+        rssBytes: 1,
+        count: 1,
+      },
+      { label: "other", cpuPercent: 2, rssBytes: 30, count: 2 },
+      {
+        label: "server",
+        owner: { type: "t3", label: "server" },
+        cpuPercent: 2,
+        rssBytes: 1,
+        count: 1,
+      },
+      {
+        label: "Claude MCP",
+        owner: { type: "shared", provider: "claude", label: "Claude MCP", threadCount: 2 },
+        cpuPercent: 0.5,
+        rssBytes: 1,
+        count: 1,
+      },
+    ]);
+    expect(snapshot.groups!.reduce((sum, group) => sum + group.count, 0)).toBe(rows.length);
+    expect(snapshot.processes).toHaveLength(1);
+  });
+
+  it("groups by bucket with names, an id fallback and one group for the rest", () => {
+    const owners = new Map<string, ProcessOwner>([
+      ["1:10", { type: "bucket", bucketId: bucketDev }],
+      ["2:20", { type: "bucket", bucketId: bucketCi }],
+      ["3:30", { type: "bucket", bucketId: bucketDev }],
+      ["4:40", { type: "thread", threadId: threadA }],
+    ]);
+    const result = build({
+      owners,
+      groupBy: "bucket",
+      bucketNames: new Map([[bucketDev, "Dev"]]),
+    });
+    expect(result.snapshot.groups).toEqual([
+      {
+        label: "bucket:ci",
+        owner: { type: "bucket", bucketId: bucketCi },
+        bucketId: bucketCi,
+        cpuPercent: 50,
+        rssBytes: 200,
+        count: 1,
+      },
+      { label: "not in a bucket", cpuPercent: 20, rssBytes: 300, count: 1 },
+      {
+        label: "Dev",
+        owner: { type: "bucket", bucketId: bucketDev },
+        bucketId: bucketDev,
+        cpuPercent: 6,
+        rssBytes: 9_100,
+        count: 2,
+      },
+    ]);
+    expect(result.buckets).toEqual([
+      { bucketId: bucketCi, name: "bucket:ci", cpuPercent: 50, rssBytes: 200, count: 1 },
+      { bucketId: bucketDev, name: "Dev", cpuPercent: 6, rssBytes: 9_100, count: 2 },
+    ]);
+  });
+
+  it("breaks a CPU tie between groups by memory", () => {
+    const owners = new Map<string, ProcessOwner>([
+      ["1:10", { type: "bucket", bucketId: bucketDev }],
+      ["2:20", { type: "bucket", bucketId: bucketCi }],
+    ]);
+    const { buckets } = build({ rows: [row(1, 5, 100), row(2, 5, 900)], owners });
+    expect(buckets.map((bucket) => bucket.bucketId)).toEqual([bucketCi, bucketDev]);
+  });
+});
+
+describe("snapshot rows", () => {
+  it("fills a host row from its static only when the start time matches", () => {
+    const sample = hostSample([
+      { pid: 1, cpu: 7, rss: 70 },
+      { pid: 2, startTimeMs: 999 },
+    ]);
+    expect(hostSnapshotRows(sample)).toEqual([
+      {
+        identity: "1:10",
+        pid: 1,
+        ppid: 1,
+        name: "p1",
+        user: "dev",
+        command: "p1 --run",
+        cpuPercent: 7,
+        rssBytes: 70,
+        gpuUtilPercent: null,
+        vramBytes: null,
+      },
+      {
+        identity: "2:999",
+        pid: 2,
+        ppid: 1,
+        name: "",
+        user: "",
+        command: "",
+        cpuPercent: 1,
+        rssBytes: 100,
+        gpuUtilPercent: null,
+        vramBytes: null,
+      },
+    ]);
+  });
+
+  it("sums GPU use across devices, and drops it from every row when one device's walk failed", () => {
+    const gpuProcesses: ReadonlyArray<GpuProcessSample> = [
+      { pid: 1, startTimeMs: 10, deviceId: "gpu-a", utilPercent: 10, vramBytes: 100 },
+      { pid: 1, startTimeMs: 10, deviceId: "gpu-b", utilPercent: 5, vramBytes: null },
+      { pid: 2, startTimeMs: 20, deviceId: "gpu-b", utilPercent: null, vramBytes: 300 },
+    ];
+    const walked = hostSnapshotRows(
+      hostSample([{ pid: 1 }, { pid: 2 }, { pid: 3 }], {
+        gpus: [gpuDevice, gpuDeviceB],
+        gpuProcesses,
+        gpuProcessDevices: bothWalked,
+      }),
+    );
+    expect(walked.map((row) => [row.pid, row.gpuUtilPercent, row.vramBytes])).toEqual([
+      [1, 15, 100],
+      [2, null, 300],
+      [3, null, null],
+    ]);
+
+    const partial = hostSnapshotRows(
+      hostSample([{ pid: 1 }, { pid: 2 }], {
+        gpus: [gpuDevice, gpuDeviceB],
+        gpuProcesses,
+        gpuProcessDevices: ["gpu-a"],
+      }),
+    );
+    expect(partial.map((row) => [row.gpuUtilPercent, row.vramBytes])).toEqual([
+      [null, null],
+      [null, null],
+    ]);
+  });
+
+  it("reads subtree rows with no user and no GPU use", () => {
+    expect(subtreeSnapshotRows([proc(10, 3, 300, { ppid: 4 })])).toEqual([
+      {
+        identity: "10:100",
+        pid: 10,
+        ppid: 4,
+        name: "p10",
+        user: "",
+        command: "p10 --run",
+        cpuPercent: 3,
+        rssBytes: 300,
+        gpuUtilPercent: null,
+        vramBytes: null,
+      },
+    ]);
+  });
+});
+
 function nativeHealth(
   status: NativeTelemetryClient.NativeTelemetryClientHealth["status"],
   hostProcesses?: boolean,
@@ -1016,6 +1352,7 @@ function nativeHealth(
 function telemetryLayer(
   latest: Ref.Ref<ResourceTelemetrySnapshot>,
   holders: Ref.Ref<number>,
+  refresh: ResourceTelemetry["Service"]["refresh"] = Effect.die("unused"),
 ): Layer.Layer<ResourceTelemetry> {
   return Layer.succeed(
     ResourceTelemetry,
@@ -1034,7 +1371,7 @@ function telemetryLayer(
         () => Ref.update(holders, (count) => count - 1),
       ),
       readHistory: () => Effect.die("unused"),
-      refresh: Effect.die("unused"),
+      refresh,
       retry: Effect.die("unused"),
     }),
   );
@@ -1043,11 +1380,17 @@ function telemetryLayer(
 const makeHostProcesses = Effect.fn("test.makeHostProcesses")(function* (
   health: NativeTelemetryClient.NativeTelemetryClientHealth,
   changes: Stream.Stream<NativeTelemetryClient.NativeTelemetryClientHealth> = Stream.empty,
+  overrides: {
+    readonly hostSampleNow?: NativeTelemetryClient.NativeTelemetryClient["Service"]["hostSampleNow"];
+    readonly refresh?: ResourceTelemetry["Service"]["refresh"];
+    readonly latest?: ResourceTelemetrySnapshot;
+  } = {},
 ) {
   const holders = yield* Ref.make(0);
-  const latest = yield* Ref.make(telemetrySnapshot(0));
+  const latest = yield* Ref.make(overrides.latest ?? telemetrySnapshot(0));
   const demands = yield* Ref.make<ReadonlyArray<NativeTelemetryClient.HostSampleDemand>>([]);
   const native = NativeTelemetryClient.layerTest({
+    ...(overrides.hostSampleNow === undefined ? {} : { hostSampleNow: overrides.hostSampleNow }),
     subscribeHealth: Effect.succeed({ latest: health, changes }),
     hostSamples: (demand) =>
       Stream.unwrap(
@@ -1058,7 +1401,9 @@ const makeHostProcesses = Effect.fn("test.makeHostProcesses")(function* (
   });
   const processes = yield* HostProcesses.pipe(
     Effect.provide(
-      hostProcessesLayer.pipe(Layer.provide(Layer.merge(telemetryLayer(latest, holders), native))),
+      hostProcessesLayer.pipe(
+        Layer.provide(Layer.merge(telemetryLayer(latest, holders, overrides.refresh), native)),
+      ),
     ),
   );
   return { processes, holders, latest, demands };
@@ -1134,6 +1479,287 @@ describe("HostProcesses.frames", () => {
         const frame = yield* firstFrame(processes).pipe(Effect.forkChild);
         yield* Queue.offerAll(changes, [nativeHealth("starting"), settled]);
         expect((yield* Fiber.join(frame)).source).toBe(source);
+      }
+    }),
+  );
+});
+
+describe("HostProcesses.snapshot", () => {
+  const snapshotInput = {
+    limit: 20,
+    groupBy: "none" as const,
+    commands: true,
+    bucketNames: new Map(),
+  };
+  const recordingHostSampleNow =
+    (
+      requests: Ref.Ref<ReadonlyArray<unknown>>,
+      result: Effect.Effect<
+        NativeTelemetryClient.NativeHostSample,
+        NativeTelemetryClient.NativeTelemetryClientError
+      >,
+    ): NativeTelemetryClient.NativeTelemetryClient["Service"]["hostSampleNow"] =>
+    (options) =>
+      Ref.update(requests, (all) => [...all, options]).pipe(Effect.andThen(result));
+
+  it.effect("walks the whole host in host mode, skipping the GPU walk at limit 0", () =>
+    Effect.gen(function* () {
+      const requests = yield* Ref.make<ReadonlyArray<unknown>>([]);
+      const { processes } = yield* makeHostProcesses(nativeHealth("healthy", true), Stream.empty, {
+        hostSampleNow: recordingHostSampleNow(
+          requests,
+          Effect.succeed(hostSample(threeRows, { sampledAtUnixMs: 0 })),
+        ),
+      });
+      yield* TestClock.adjust("1500 millis");
+      const { snapshot } = yield* processes.snapshot(snapshotInput);
+      expect(snapshot).toMatchObject({ source: "host", sampleAgeMs: 1_500 });
+      expect(snapshot.processes.map((process) => process.pid)).toEqual([3, 2, 1]);
+
+      yield* processes.snapshot({ ...snapshotInput, limit: 0 });
+      expect(yield* Ref.get(requests)).toEqual([
+        { processes: true, gpus: true, gpuProcesses: true },
+        { processes: true, gpus: false, gpuProcesses: false },
+      ]);
+    }),
+  );
+
+  it.effect("falls back to the T3 subtree when the host walk fails or host mode is missing", () =>
+    Effect.gen(function* () {
+      const failing = recordingHostSampleNow(
+        yield* Ref.make<ReadonlyArray<unknown>>([]),
+        Effect.fail(
+          new NativeTelemetryClient.NativeTelemetryUnavailable({ reason: "monitor restarting" }),
+        ),
+      );
+      for (const health of [nativeHealth("healthy", true), nativeHealth("healthy", false)]) {
+        const { processes } = yield* makeHostProcesses(health, Stream.empty, {
+          hostSampleNow: failing,
+          refresh: Effect.succeed(telemetrySnapshot(0)),
+        });
+        const { snapshot } = yield* processes.snapshot(snapshotInput);
+        expect(snapshot.source).toBe("t3");
+        expect(snapshot.processes.map((process) => process.pid)).toEqual([10]);
+      }
+    }),
+  );
+
+  it.effect("reads the latest subtree when a refresh fails", () =>
+    Effect.gen(function* () {
+      const { processes } = yield* makeHostProcesses(nativeHealth("healthy", false), Stream.empty, {
+        refresh: Effect.fail(
+          new ResourceTelemetryRefreshFailed({ operation: "refresh", cause: new Error("busy") }),
+        ),
+        latest: telemetrySnapshot(0),
+      });
+      expect((yield* processes.snapshot(snapshotInput)).snapshot.source).toBe("t3");
+    }),
+  );
+
+  it.effect.each(["unavailable", "stopped"] as const)(
+    "fails as unavailable when the monitor is %s",
+    (status) =>
+      Effect.gen(function* () {
+        const snapshot = telemetrySnapshot(0);
+        const down = {
+          ...snapshot,
+          health: { ...snapshot.health, native: { ...snapshot.health.native, status } },
+        };
+        const { processes } = yield* makeHostProcesses(nativeHealth("unavailable"), Stream.empty, {
+          refresh: Effect.succeed(down),
+        });
+        const error = yield* processes.snapshot(snapshotInput).pipe(Effect.flip);
+        expect(error).toBeInstanceOf(HostProcessesUnavailable);
+      }),
+  );
+});
+
+describe("unbucketed processes", () => {
+  const threadA = ThreadId.make("thread-a");
+  const bucketDev = MachineBucketId.make("bucket:dev");
+  const owned = new Map<string, ProcessOwner>([
+    ["1:10", { type: "thread", threadId: threadA }],
+    ["2:20", { type: "claimed", claimId: ClaimId.make("claim-1"), threadId: threadA }],
+    ["3:30", { type: "bucket", bucketId: bucketDev }],
+    ["4:40", { type: "provider", provider: ProviderDriverKind.make("codex") }],
+    ["5:50", { type: "t3", label: "server" }],
+    ["6:60", { type: "other" }],
+    ["7:70", { type: "container", id: "0123456789abcdef0123" }],
+  ]);
+  const shareRow = (pid: number, cpu: number, rss: number) => ({
+    identity: `${pid}:${pid * 10}`,
+    cpu,
+    rss,
+  });
+
+  it("counts only other, container and unowned processes, by the larger of CPU and memory", () => {
+    const rows = [
+      shareRow(1, 40, 1_000),
+      shareRow(2, 10, 1_000),
+      shareRow(3, 10, 1_000),
+      shareRow(4, 10, 1_000),
+      shareRow(5, 5, 500),
+      shareRow(6, 20, 100),
+      shareRow(7, 5, 4_400),
+      shareRow(8, 0, 0),
+    ];
+    expect(unbucketedSharePercent(rows, owned)).toBe(50);
+    expect(
+      unbucketedSharePercent(
+        rows.map((row) => ({ ...row, rss: 0 })),
+        owned,
+      ),
+    ).toBe(25);
+    expect(
+      unbucketedSharePercent(
+        rows.map((row) => ({ ...row, cpu: 0 })),
+        owned,
+      ),
+    ).toBe(50);
+    expect(unbucketedSharePercent([shareRow(1, 2, 0), shareRow(6, 1, 0)], owned)).toBe(33.3);
+  });
+
+  it("has no share when no process measured CPU or memory", () => {
+    expect(unbucketedSharePercent([], owned)).toBeNull();
+    expect(unbucketedSharePercent([shareRow(6, 0, 0), shareRow(9, 0, 0)], owned)).toBeNull();
+  });
+
+  const sample = hostSample(
+    [
+      { pid: 1, cpu: 90, rss: 9_000 },
+      { pid: 3, cpu: 80, rss: 8_000 },
+      { pid: 6, cpu: 50, rss: 100 },
+      { pid: 7, cpu: 1, rss: 5_000 },
+      { pid: 8, cpu: 30, rss: 200 },
+      { pid: 9, cpu: 2, rss: 300 },
+      { pid: 10, cpu: 3, rss: 50 },
+    ],
+    {
+      sampledAtUnixMs: 10_000,
+      statics: [
+        hostStatic(1, { name: "zsh" }),
+        hostStatic(3),
+        hostStatic(6, { command: `node ${"x".repeat(5_000)}`, cwd: `/srv/${"w".repeat(600)}` }),
+        hostStatic(7, { containerId: "0123456789abcdef0123" }),
+        hostStatic(8),
+        hostStatic(9),
+        hostStatic(10),
+      ],
+    },
+  );
+  const unbucketed = (limit: number, commands = true) =>
+    buildUnbucketed({
+      sample,
+      owners: owned,
+      nowMs: 12_500,
+      limit,
+      commands,
+      bucketNames: new Map([[bucketDev, "Dev"]]),
+    });
+
+  it("lists the busiest unbucketed by CPU together with the largest by memory", () => {
+    const top = unbucketed(2);
+    expect(top.processes.map((process) => process.pid)).toEqual([6, 7]);
+    expect(top.truncated).toBe(3);
+
+    const three = unbucketed(3);
+    expect(three.processes.map((process) => process.pid)).toEqual([6, 8, 7]);
+    expect(three.truncated).toBe(2);
+
+    const four = unbucketed(4);
+    expect(four.processes.map((process) => process.pid)).toEqual([6, 8, 9, 7]);
+    expect(four.truncated).toBe(1);
+
+    const all = unbucketed(20);
+    expect(all.processes.map((process) => process.pid)).toEqual([6, 8, 10, 9, 7]);
+    expect(all).not.toHaveProperty("truncated");
+    expect(all.sampleAgeMs).toBe(2_500);
+    expect(all.buckets).toEqual([
+      { bucketId: bucketDev, name: "Dev", cpuPercent: 80, rssBytes: 8_000, count: 1 },
+    ]);
+
+    const shareOnly = unbucketed(0);
+    expect(shareOnly.processes).toEqual([]);
+    expect(shareOnly).not.toHaveProperty("truncated");
+    expect(shareOnly.sharePercent).toBe(all.sharePercent);
+  });
+
+  it("fills every slot by memory when one process tops both CPU and memory", () => {
+    const { processes, truncated } = buildUnbucketed({
+      sample: hostSample([
+        { pid: 6, cpu: 50, rss: 9_000 },
+        { pid: 7, cpu: 1, rss: 5_000 },
+        { pid: 8, cpu: 30, rss: 200 },
+        { pid: 9, cpu: 2, rss: 300 },
+      ]),
+      owners: owned,
+      nowMs: 0,
+      limit: 2,
+      commands: false,
+      bucketNames: new Map(),
+    });
+    expect(processes.map((process) => process.pid)).toEqual([6, 7]);
+    expect(truncated).toBe(2);
+  });
+
+  it("fills the fields bucket rules match on, and command and cwd only when asked", () => {
+    const [node, container] = unbucketed(2).processes;
+    expect(node).toEqual({
+      pid: 6,
+      ppid: 1,
+      name: "p6",
+      exe: "/usr/bin/p6",
+      command: `node ${"x".repeat(5_000)}`.slice(0, 512),
+      cwd: `/srv/${"w".repeat(600)}`.slice(0, 512),
+      user: "dev",
+      parent: "zsh",
+      cpuPercent: 50,
+      rssBytes: 100,
+    });
+    expect(container).toMatchObject({ pid: 7, container: "0123456789abcdef0123" });
+    expect(node).not.toHaveProperty("container");
+
+    for (const process of unbucketed(20, false).processes) {
+      expect(process).not.toHaveProperty("command");
+      expect(process).not.toHaveProperty("cwd");
+    }
+  });
+});
+
+describe("HostProcesses.unbucketed", () => {
+  const unbucketedInput = { limit: 20, commands: true, bucketNames: new Map() };
+
+  it.effect("walks the host once without the GPU, and lists every process nothing owns", () =>
+    Effect.gen(function* () {
+      const requests = yield* Ref.make<ReadonlyArray<unknown>>([]);
+      const { processes } = yield* makeHostProcesses(nativeHealth("healthy", true), Stream.empty, {
+        hostSampleNow: (options) =>
+          Ref.update(requests, (all) => [...all, options]).pipe(
+            Effect.as(hostSample(threeRows, { sampledAtUnixMs: 0 })),
+          ),
+      });
+      yield* TestClock.adjust("1500 millis");
+      const result = yield* processes.unbucketed(unbucketedInput);
+      expect(result).toMatchObject({ sharePercent: 100, sampleAgeMs: 1_500 });
+      expect(result.processes.map((process) => process.pid)).toEqual([3, 2, 1]);
+      expect(yield* Ref.get(requests)).toEqual([
+        { processes: true, gpus: false, gpuProcesses: false },
+      ]);
+    }),
+  );
+
+  it.effect("is unavailable off host mode or when the walk fails", () =>
+    Effect.gen(function* () {
+      const failing: NativeTelemetryClient.NativeTelemetryClient["Service"]["hostSampleNow"] = () =>
+        Effect.fail(
+          new NativeTelemetryClient.NativeTelemetryUnavailable({ reason: "monitor restarting" }),
+        );
+      for (const health of [nativeHealth("healthy", false), nativeHealth("healthy", true)]) {
+        const { processes } = yield* makeHostProcesses(health, Stream.empty, {
+          hostSampleNow: failing,
+        });
+        const error = yield* processes.unbucketed(unbucketedInput).pipe(Effect.flip);
+        expect(error).toBeInstanceOf(HostProcessesUnavailable);
       }
     }),
   );

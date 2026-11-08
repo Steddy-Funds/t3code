@@ -9,6 +9,8 @@ import { Button } from "../ui/button";
 import { ProposedPlanCard } from "./ProposedPlanCard";
 import { HtmlRenderFrame } from "./HtmlRenderFrame";
 import { McpAppFrame } from "./McpAppFrame";
+import { InlineMachineCard } from "../nodeResources/InlineMachineCard";
+import { EnvironmentId } from "@t3tools/contracts";
 import { checkpointFileTotals } from "@t3tools/client-runtime/state/thread-checkpoints";
 import { ChangedFilesCard } from "./ChangedFilesTree";
 import { useFileContextMenuHandler } from "../../fileContextMenu";
@@ -276,6 +278,27 @@ export function HtmlRenderTimelineRow({
         htmlRender={row.htmlRender}
         threadRef={ctx.threadRef ?? undefined}
         onFullscreenChange={onFullscreenChange}
+      />
+    </div>
+  );
+}
+
+export function MachineCardTimelineRow({
+  row,
+}: {
+  row: Extract<TimelineRow, { kind: "machine-card" }>;
+}) {
+  const ctx = use(TimelineRowCtx);
+  const { latestRunId } = use(TimelineRowActivityCtx);
+  return (
+    <div className="min-w-0 px-1">
+      <InlineMachineCard
+        environmentId={EnvironmentId.make(row.machineCard.environmentId)}
+        snapshot={row.machineCard.snapshot}
+        capturedAt={row.createdAt}
+        timestampFormat={ctx.timestampFormat}
+        current={row.runId !== null && row.runId === latestRunId}
+        guest={!ctx.liveMachineCards}
       />
     </div>
   );

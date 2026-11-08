@@ -8,8 +8,10 @@ import {
   gpuReadings,
   hasReadableGpu,
   MEMORY_COLUMN,
+  memorySegments,
   poolCellBytes,
   receiveMachineSnapshot,
+  setMemoryOwners,
   snapshotCores,
 } from "./machineSeries";
 
@@ -276,6 +278,23 @@ describe("receiveMachineSnapshot", () => {
     );
     expect(series.memoryPool.total).toBe(cells);
     expect(series.memoryPool.segments).toEqual([{ cells: used, color: "--primary" }]);
+    expect(series.memoryUsage).toEqual({ totalBytes: total, usedBytes: total - available });
+  });
+
+  it("recolours the pool by owner between snapshots, and back to one colour on null", () => {
+    const series = createMachineSeries(1_000, 900_000, 2);
+    // Before any totals there is nothing to split.
+    setMemoryOwners(series, [{ bytes: 8 * GIB, color: "--owner-1" }]);
+    expect(series.memoryPool.total).toBe(0);
+
+    receiveMachineSnapshot(series, snapshot(), T);
+    expect(series.memoryPool.segments).toEqual([
+      { cells: 8, color: "--owner-1" },
+      { cells: 40, color: "--owner-other" },
+    ]);
+
+    setMemoryOwners(series, null);
+    expect(series.memoryPool.segments).toEqual([{ cells: 48, color: "--primary" }]);
   });
 
   it("fills the VRAM pool in 256 MiB cells only when a device reports VRAM", () => {
@@ -297,6 +316,62 @@ describe("receiveMachineSnapshot", () => {
     );
     expect(series.vramPool.total).toBe(96);
     expect(series.vramPool.segments).toEqual([{ cells: 24, color: "--primary" }]);
+  });
+});
+
+describe("memorySegments", () => {
+  it.each<[string, number, ReadonlyArray<{ bytes: number; color: string }> | null, unknown]>([
+    ["used memory in one colour without owners", 48 * GIB, null, [{ cells: 48, color: "--primary" }]],
+    ["used memory in one colour for an empty list", 48 * GIB, [], [{ cells: 48, color: "--primary" }]],
+    [
+      "each owner, then the rest as other",
+      48 * GIB,
+      [
+        { bytes: 10 * GIB, color: "--owner-1" },
+        { bytes: 6 * GIB, color: "--owner-2" },
+      ],
+      [
+        { cells: 10, color: "--owner-1" },
+        { cells: 6, color: "--owner-2" },
+        { cells: 32, color: "--owner-other" },
+      ],
+    ],
+    [
+      "owners summing past used memory, scaled down to fit",
+      20 * GIB,
+      [
+        { bytes: 30 * GIB, color: "--owner-1" },
+        { bytes: 10 * GIB, color: "--owner-2" },
+      ],
+      [
+        { cells: 15, color: "--owner-1" },
+        { cells: 5, color: "--owner-2" },
+      ],
+    ],
+    [
+      "no segment for an owner under half a cell",
+      4 * GIB,
+      [
+        { bytes: 0.2 * GIB, color: "--owner-1" },
+        { bytes: 2 * GIB, color: "--owner-2" },
+      ],
+      [
+        { cells: 2, color: "--owner-2" },
+        { cells: 2, color: "--owner-other" },
+      ],
+    ],
+  ])("draws %s", (_name, used, owners, expected) => {
+    expect(memorySegments(used, GIB, owners)).toEqual(expected);
+  });
+
+  it("never draws past used memory when rounding up", () => {
+    const owners = [0, 1, 2].map((index) => ({ bytes: 1.5 * GIB, color: `--owner-${index + 1}` }));
+    // 4.5 GiB fits in 5 unscaled, but each rounds up to 2 cells; the last gets what is left.
+    expect(memorySegments(5 * GIB, GIB, owners)).toEqual([
+      { cells: 2, color: "--owner-1" },
+      { cells: 2, color: "--owner-2" },
+      { cells: 1, color: "--owner-3" },
+    ]);
   });
 });
 

@@ -32,6 +32,7 @@ upstream; a feature can, from its own branch, when Akiva decides.
 | Machines show stress: sweating icon, hover card, mobile sheet (node resources 1/5) | #61 | 6612446 |
 | Task manager, cross-machine view, NVIDIA and Intel GPUs (node resources 2/5) | #62 | 4c28c14 |
 | Who is using a machine: ownership, claims, buckets, per-thread resources (node resources 3/5) | #63 | 3180ffa |
+| Agents read machine load, load-triggered scheduled tasks, background auto-buckets, inline machine card (node resources 4/5) | #64 | 8c11592 |
 
 Held: #38 (pods notes in the t3-orchestration skill). It edits
 `.agents/skills/t3-orchestration/`, which exists only on
@@ -48,6 +49,7 @@ The Mac runs this tip, which already has them all.
 - #61 Machine verdict (`subscribeMachine`, `subscribeMachineProcesses`): server half only, since the branch stacks on this tip
 - #62 Native monitor v4, GPUs, host processes, history, kill: server half only (`eba584d`), plus the client-runtime frame folder its test reads
 - #63 Ownership, claims, buckets, per-thread resources, MCP tools: server half only (`8256ecc`), with the provider packages' spawn sites
+- #64 `t3_machine_read`, load trigger, auto-buckets built-in: server half only (`8177ce2`)
 
 A feature that changes `apps/server`, or a contract the server reads, is
 merged there too: its branch head with `--no-ff`, never this tip.

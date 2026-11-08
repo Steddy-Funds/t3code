@@ -10,7 +10,6 @@ import {
 import { canSnooze, effectiveSnoozed } from "@t3tools/client-runtime/state/thread-settled";
 import {
   AuthOrchestrationOperateScope,
-  effectiveThreadPriority,
   isBackgroundedThread,
   type ScopedThreadRef,
   type ThreadId,
@@ -32,11 +31,6 @@ import { readEnvironmentScope } from "../state/session";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { environmentServerConfigsAtom } from "../state/server";
 import {
-  loadPauseResumeShown,
-  loadPriorityControlsShown,
-  threadPriorityChoice,
-} from "@t3tools/client-runtime/state/loadPause";
-import {
   readEnvironmentServerConfigLoaded,
   readEnvironmentSupportsAutoSettleOptOut,
   readThreadShell,
@@ -55,6 +49,7 @@ import { threadRuntimeCanArchive } from "@t3tools/client-runtime/state/models";
 import { useCopyToClipboard } from "./useCopyToClipboard";
 import { useNewThreadHandler } from "./useHandleNewThread";
 import { useClientSettings } from "./useSettings";
+import { threadLoadMenuState, useThreadLoadMenuActions } from "./useThreadLoadMenuActions";
 import { canTurnThreadIntoProject, useThreadActions } from "./useThreadActions";
 
 function failureToast(title: string, error: unknown) {
@@ -101,12 +96,7 @@ export function useThreadActionMenu(input: {
   const updateThreadMetadata = useOrchestrationCommand(threadEnvironment.updateMetadata, {
     reportFailure: false,
   });
-  const setThreadPriority = useOrchestrationCommand(threadEnvironment.setPriority, {
-    reportFailure: false,
-  });
-  const resumeLoadPause = useOrchestrationCommand(threadEnvironment.resumeLoadPause, {
-    reportFailure: false,
-  });
+  const runLoadMenuAction = useThreadLoadMenuActions();
   const handleNewThread = useNewThreadHandler();
   const confirmThreadDelete = useClientSettings((s) => s.confirmThreadDelete);
   const confirmThreadArchive = useClientSettings((s) => s.confirmThreadArchive);
@@ -170,13 +160,7 @@ export function useThreadActionMenu(input: {
         snoozePresets,
         canShareWithGuest,
         canTurnIntoProject: canTurnThreadIntoProject(threadRef),
-        priority: loadPriorityControlsShown(serverConfig)
-          ? {
-              choice: threadPriorityChoice(thread.source),
-              effective: effectiveThreadPriority(thread.source),
-            }
-          : undefined,
-        loadPaused: loadPauseResumeShown(serverConfig, thread.loadPause),
+        ...threadLoadMenuState(serverConfig, thread),
       });
       const clicked = await settlePromise(() => api.contextMenu.show(items, position));
       if (clicked._tag === "Failure" || clicked.value === null) return;
@@ -281,28 +265,8 @@ export function useThreadActionMenu(input: {
         case "priority:low":
         case "priority:normal":
         case "priority:default":
-          await reportFailure("Failed to set priority", () =>
-            setThreadPriority({
-              environmentId: threadRef.environmentId,
-              input: {
-                threadId: threadRef.threadId,
-                priority:
-                  action === "priority:low"
-                    ? "low"
-                    : action === "priority:normal"
-                      ? "normal"
-                      : "default",
-              },
-            }),
-          );
-          return;
         case "resume-load-pause":
-          await reportFailure("Failed to resume thread", () =>
-            resumeLoadPause({
-              environmentId: threadRef.environmentId,
-              input: { threadId: threadRef.threadId },
-            }),
-          );
+          await runLoadMenuAction(action, threadRef);
           return;
         case "rename":
           onStartRename();

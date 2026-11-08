@@ -1296,6 +1296,19 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     ) : null;
   const projectLabel = props.projectDisplayName;
   const hoverBranch = twoRow ? thread.branch : null;
+  const loadPauseIndicator = thread.loadPause ? (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <PauseIcon
+            aria-label="Paused for load"
+            className="size-3 shrink-0 text-warning-foreground"
+          />
+        }
+      />
+      <TooltipPopup side="top">Paused for load</TooltipPopup>
+    </Tooltip>
+  ) : null;
   const titleLineIcons = metaLineEmpty && !twoRow ? trailingIcons(remoteMachineIcon) : null;
 
   if (variant !== "card") {
@@ -1360,19 +1373,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
               {title}
               {multiline ? titleLineIcons : null}
               {pinIndicator}
-              {thread.loadPause ? (
-                <Tooltip>
-                  <TooltipTrigger
-                    render={
-                      <PauseIcon
-                        aria-label="Paused for load"
-                        className="size-3 shrink-0 text-warning-foreground"
-                      />
-                    }
-                  />
-                  <TooltipPopup side="top">Paused for load</TooltipPopup>
-                </Tooltip>
-              ) : null}
+              {loadPauseIndicator}
               {multiline ? null : terminalStatusIcon}
               {isRegeneratingTitle ? (
                 <span role="status" className="sr-only">
@@ -1703,6 +1704,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
               {/* Left of the status slot, the pin would slide when hover swaps the
                 label for the wider row controls. */}
               {pinIndicator}
+              {loadPauseIndicator}
               {projectLabel ? (
                 <span className="flex min-w-0 flex-1 font-normal text-secondary-label text-xs">
                   <span

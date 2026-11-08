@@ -1597,6 +1597,9 @@ export const layer = Layer.effect(
           taskId: input.id,
         });
       }
+      if (task.builtIn !== undefined && task.blockedByPolicy !== undefined) {
+        return yield* taskError(task.blockedByPolicy, { taskId: input.id });
+      }
       return yield* runTask(task, "manual").pipe(
         Effect.mapError((cause) =>
           isScheduledTaskError(cause)

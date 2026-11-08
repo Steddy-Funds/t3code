@@ -218,6 +218,14 @@ machine. Agents can create them too, and the list shows who made each one. Total
 "unmeasured" when the machine's resource monitor isn't running, since T3 then sees only its own
 processes. Saving buckets needs a machine on this version of T3 Code or newer.
 
+**Auto-buckets** makes buckets for you. Turn it on or off in the machine's settings, and pick the
+model it uses there; **Auto** picks a fast model from an enabled provider. When processes nothing
+owns pass a quarter of the machine, T3 starts a background thread that groups them into a few
+named buckets, at most once an hour. It only changes buckets it made itself, so a bucket you
+created or edited stays as it is. It shows as the built-in **Machine buckets** task in
+**Settings → Scheduled tasks**, where **Run now** starts it at once. With no provider enabled it
+shows as blocked and doesn't run.
+
 **Claims** tie a process, a container or a cgroup to a thread, so a dev server or a Docker
 container an agent started counts toward that thread. Agents make claims. A claim ends when its
 process exits, its container or cgroup is removed, or its thread is deleted, and when the server
@@ -225,6 +233,10 @@ restarts; archiving a thread keeps them. Removing a claim stops nothing.
 
 To see one thread's use, open the thread's details: **Resources** shows its CPU and memory now,
 the last 10 minutes, and its processes. T3 records this while a turn runs, even with nothing open.
+
+Agents can read the machine too: ask one what is using it, and it can show the machine's state
+as a card in the chat. The card stays live until the next turn starts, then keeps the reading it
+had.
 
 ### Tailscale HTTPS
 

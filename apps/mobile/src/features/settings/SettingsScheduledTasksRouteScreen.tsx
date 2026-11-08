@@ -7,7 +7,7 @@ import {
   managedCapabilityDenial,
   resolveProjectProviderInstanceEnabled,
 } from "@t3tools/contracts";
-import { readEnvironmentScope } from "../../state/session";
+import { readEnvironmentScope, useEnvironmentScope } from "../../state/session";
 import type {
   EnvironmentId,
   ProjectId,
@@ -1552,7 +1552,9 @@ function EnvironmentTasks({
     label: "built-in scheduled task enabled",
     reportFailure: false,
   });
+  const canWriteSettings = useEnvironmentScope(environmentId, AuthSettingsWriteScope);
   const canToggleBuiltIn =
+    canWriteSettings &&
     environment.serverConfig?.environment.capabilities.machineAutoBuckets === true;
   const toggleBuiltIn = async (task: ScheduledTask) => {
     if (!readEnvironmentScope(environmentId, AuthSettingsWriteScope)) return;

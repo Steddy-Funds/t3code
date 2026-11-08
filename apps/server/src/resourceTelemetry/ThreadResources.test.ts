@@ -437,6 +437,44 @@ describe("ThreadResources measuring", () => {
     }),
   );
 
+  it.effect("moves a process claim out of another thread's claimed cgroup", () =>
+    Effect.gen(function* () {
+      const box = resolvedClaim(threadB, "/box.slice");
+      const tool: ResolvedClaim = {
+        claim: {
+          id: ClaimId.make("claim-tool"),
+          threadId: threadA,
+          target: { type: "process", pid: 402, startTimeMs: 4_020 },
+          createdAt: DateTime.makeUnsafe(0),
+          createdBy: { type: "agent", threadId: threadA },
+        },
+      };
+      const state = world({
+        claims: [box, tool],
+        sample: [sampleRow(401, 0, 1_000), sampleRow(402, 0, 2_000)],
+        owners: new Map<string, ProcessOwner>([
+          ["401:4010", { type: "claimed", claimId: box.claim.id, threadId: threadB }],
+          ["402:4020", { type: "claimed", claimId: tool.claim.id, threadId: threadA }],
+        ]),
+      });
+      cgroupFiles(state.files, "/box.slice", { usageUsec: 0, memory: 5_000, procs: [401, 402] });
+      state.files.set("/proc/401/cgroup", "0::/box.slice\n");
+      state.files.set("/proc/402/cgroup", "0::/box.slice\n");
+      const service = yield* makeService(state);
+
+      // Attribution gives 402 to the process claim's thread, so the rollup does too.
+      expect((yield* service.read(threadB)).current).toMatchObject({
+        memoryBytes: 3_000,
+        processCount: 1,
+      });
+      expect((yield* service.read(threadA)).current).toMatchObject({
+        memoryBytes: 2_000,
+        processCount: 1,
+        source: "sample",
+      });
+    }),
+  );
+
   it.effect("sends each member of a split shared root to the thread in its environment", () =>
     Effect.gen(function* () {
       const state = world({
@@ -499,6 +537,8 @@ describe("ThreadResources measuring", () => {
 
       const { current } = yield* service.read(threadA);
       expect(current).toMatchObject({
+        // A first reading has nothing to compare against.
+        cpuPercent: null,
         memoryBytes: 100 * PAGE_SIZE,
         processCount: 2,
         source: "cgroup",
@@ -610,12 +650,20 @@ describe("ThreadResources.read", () => {
 
         yield* TestClock.adjust("1 millis");
         const measured = yield* service.read(threadA);
+        // The only earlier CPU reading is the rollup's, 40 s old: not current.
         expect(measured.current).toMatchObject({
+          cpuPercent: null,
           memoryBytes: 9_000,
           processCount: 2,
           sampleAgeMs: 0,
         });
         expect(measured.history).toHaveLength(1);
+        expect(measured.history[0]?.cpuPercent).toBe(0);
+
+        // 0.5 s of CPU over the 5 s since the last read is 10%.
+        yield* TestClock.adjust("5 seconds");
+        cgroupFiles(state.files, "/a.scope", { usageUsec: 500_000, memory: 9_000, procs: [1, 2] });
+        expect((yield* service.read(threadA)).current?.cpuPercent).toBe(10);
       }),
   );
 

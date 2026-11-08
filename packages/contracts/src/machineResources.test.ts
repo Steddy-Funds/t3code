@@ -2,7 +2,11 @@ import { describe, expect, it } from "vite-plus/test";
 import * as Schema from "effect/Schema";
 
 import { isUnknownUnionMember } from "./baseSchemas.ts";
-import { MachineProcessFrame } from "./machineResources.ts";
+import {
+  MachineProcessFrame,
+  MachineResourcesSettings,
+  type MachineBucketId,
+} from "./machineResources.ts";
 
 // Frames cross the websocket as JSON.
 const decodeWire = Schema.decodeUnknownSync(Schema.toCodecJson(MachineProcessFrame));
@@ -60,5 +64,49 @@ describe("MachineProcessFrame", () => {
     const owner = frame.added[1]?.owner;
     expect(isUnknownUnionMember(owner)).toBe(true);
     expect(owner).toMatchObject({ tag: "type", value: "gpu-pool" });
+  });
+
+  it("drops claims and buckets with kinds from a newer server and keeps the known ones", () => {
+    const provenance = {
+      createdBy: { type: "user" },
+      updatedBy: { type: "user" },
+      updatedAt: "2026-11-07T00:00:00.000Z",
+    };
+    const claim = {
+      id: "claim-1",
+      threadId: "thread-a",
+      target: { type: "process", pid: 7, startTimeMs: 10 },
+      createdAt: "2026-11-07T00:00:00.000Z",
+      createdBy: { type: "agent", threadId: "thread-a" },
+    };
+    const frame = decodeWire({
+      ...base,
+      claims: [
+        claim,
+        { ...claim, id: "claim-2", target: { type: "vm", name: "x" } },
+        { ...claim, id: "claim-3", createdBy: { type: "scheduler" } },
+      ],
+    });
+    expect(frame.claims?.map((entry) => entry.id)).toEqual(["claim-1"]);
+
+    const settings = Schema.decodeSync(Schema.toCodecJson(MachineResourcesSettings))({
+      buckets: {
+        builds: {
+          id: "builds",
+          name: "Builds",
+          rules: [{ field: "command", op: "contains", value: "cargo" }],
+          provenance,
+        },
+        gpu: { id: "gpu", name: "GPU", rules: [{ field: "gpu", device: 0 }], provenance },
+        scheduled: {
+          id: "scheduled",
+          name: "Scheduled",
+          rules: [],
+          provenance: { ...provenance, updatedBy: { type: "scheduler" } },
+        },
+      },
+    });
+    expect(Object.keys(settings.buckets)).toEqual(["builds"]);
+    expect(settings.buckets["builds" as MachineBucketId]?.rules).toHaveLength(1);
   });
 });

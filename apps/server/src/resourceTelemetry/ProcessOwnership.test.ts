@@ -1688,6 +1688,11 @@ describe("ProcessOwnership service", () => {
           const reused = [rows[0]!, rows[1]!, row(3_000_012, TARGET, 9_000)];
           yield* ownership.attribute(reused);
           expect(fakes.calls.env).toEqual([[TARGET_CHILD, 3_000_012], [3_000_012]]);
+
+          // A host-table call (rows with exe) without these processes keeps their entries.
+          yield* ownership.attribute([row(3_000_099, 1, 9_500, { exe: "/usr/bin/top" })]);
+          yield* ownership.attribute(reused);
+          expect(fakes.calls.env).toEqual([[TARGET_CHILD, 3_000_012], [3_000_012]]);
         }),
       ),
     );

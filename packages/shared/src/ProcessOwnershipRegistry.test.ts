@@ -10,7 +10,10 @@ import {
 const SELF = "/user.slice/t3.service";
 const MOVED = "/user.slice/agent-1.scope";
 
-function harness(initial: Record<number, string | undefined> = {}) {
+function harness(
+  initial: Record<number, string | undefined> = {},
+  startTicks?: Map<number, number>,
+) {
   const cgroups = new Map(Object.entries(initial).map(([pid, path]) => [Number(pid), path]));
   const reads: Array<number> = [];
   let now = 1_000;
@@ -21,6 +24,7 @@ function harness(initial: Record<number, string | undefined> = {}) {
     },
     selfCgroup: SELF,
     now: () => now,
+    ...(startTicks === undefined ? {} : { readPidStartTicks: (pid) => startTicks.get(pid) }),
   });
   return {
     registry,
@@ -78,6 +82,26 @@ describe("makeProcessOwnershipRegistry", () => {
     expect(registry.roots()[0]?.cgroup).toEqual({ type: "adopted", cgroup: MOVED });
     registry.roots();
     expect(reads).toEqual([10, 10, 10]);
+  });
+
+  it("adopts a moved cgroup only while the pid is the process it registered", () => {
+    const ticks = new Map([
+      [10, 500],
+      [11, 600],
+    ]);
+    const { registry, move } = harness({ 10: SELF, 11: SELF }, ticks);
+    registry.registerRoot(threadRoot(10));
+    registry.registerRoot(threadRoot(11));
+    expect(registry.roots().map((entry) => entry.cgroup.type)).toEqual(["pending", "pending"]);
+
+    // Pid 11 exits and a stranger in its own scope reuses it.
+    ticks.set(11, 900);
+    move(10, MOVED);
+    move(11, "/user.slice/stranger.scope");
+    const [same, reused] = registry.roots();
+    expect(same?.cgroup).toEqual({ type: "adopted", cgroup: MOVED });
+    expect(reused?.cgroup).toEqual({ type: "none" });
+    expect(reused?.root).not.toHaveProperty("pid");
   });
 
   it("does not re-read adopted or cgroup-less roots", () => {

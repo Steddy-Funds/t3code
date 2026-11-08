@@ -437,10 +437,10 @@ export interface ShellSnapshotOptions {
   readonly threadIds?: ReadonlyArray<ThreadId>;
 }
 
-export interface SubagentTreeEntry {
+/** A live thread and its live `subagent` parent. */
+export interface SubagentLink {
   readonly threadId: ThreadId;
-  /** The `subagent` parent; null for a tree's top. */
-  readonly parentThreadId: ThreadId | null;
+  readonly parentThreadId: ThreadId;
 }
 
 /** What a shell subscriber's trims read from an active thread, without building its shell. */
@@ -543,12 +543,13 @@ export interface ProjectionStoreV2Shape {
     ProjectionStoreV2Error
   >;
   /**
-   * The live threads of the subagent trees holding these threads: up their `subagent` parents,
-   * then down every `subagent` child. Forks start their own tree; deleted threads end a branch.
+   * Every `subagent` link between two live threads, archived ones included. Forks are not
+   * links, and a deleted thread has none, so it ends its branch.
    */
-  readonly listSubagentTrees: (
-    threadIds: ReadonlyArray<ThreadId>,
-  ) => Effect.Effect<ReadonlyArray<SubagentTreeEntry>, ProjectionStoreV2Error>;
+  readonly listSubagentLinks: () => Effect.Effect<
+    ReadonlyArray<SubagentLink>,
+    ProjectionStoreV2Error
+  >;
   /** Threads that are not deleted, archived ones included. */
   readonly countThreads: () => Effect.Effect<number, ProjectionStoreV2Error>;
   /** Every active thread, in shell order. */
@@ -7196,44 +7197,22 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       return rows.map((row) => ThreadId.make(row.thread_id));
     }, Effect.mapError(shellSnapshotReadError));
 
-    const listSubagentTrees = Effect.fn("ProjectionStore.listSubagentTrees")(function* (
-      threadIds: ReadonlyArray<ThreadId>,
-    ) {
-      if (threadIds.length === 0) return [];
-      const rows = yield* sql<{
-        readonly thread_id: string;
-        readonly parent_thread_id: string | null;
-      }>`
-        WITH RECURSIVE
-          up(thread_id) AS (
-            SELECT thread_id FROM orchestration_v2_projection_threads
-            WHERE deleted_at IS NULL AND thread_id IN ${sql.in(threadIds)}
-            UNION
-            SELECT json_extract(t.payload_json, '$.lineage.parentThreadId')
-            FROM orchestration_v2_projection_threads t
-            JOIN up ON t.thread_id = up.thread_id
-            WHERE t.deleted_at IS NULL
-              AND json_extract(t.payload_json, '$.lineage.relationshipToParent') = 'subagent'
-              AND json_extract(t.payload_json, '$.lineage.parentThreadId') IS NOT NULL
-          ),
-          down(thread_id, parent_thread_id) AS (
-            SELECT thread_id,
-              CASE WHEN json_extract(payload_json, '$.lineage.relationshipToParent') = 'subagent'
-                THEN json_extract(payload_json, '$.lineage.parentThreadId') END
-            FROM orchestration_v2_projection_threads
-            WHERE deleted_at IS NULL AND thread_id IN (SELECT thread_id FROM up)
-            UNION
-            SELECT child.thread_id, down.thread_id
-            FROM orchestration_v2_projection_threads child
-            JOIN down ON json_extract(child.payload_json, '$.lineage.parentThreadId') = down.thread_id
-            WHERE child.deleted_at IS NULL
-              AND json_extract(child.payload_json, '$.lineage.relationshipToParent') = 'subagent'
-          )
-        SELECT DISTINCT thread_id, parent_thread_id FROM down
+    const listSubagentLinks = Effect.fn("ProjectionStore.listSubagentLinks")(function* () {
+      const rows = yield* sql<{ readonly thread_id: string; readonly parent_thread_id: string }>`
+        SELECT child.thread_id,
+          json_extract(child.payload_json, '$.lineage.parentThreadId') AS parent_thread_id
+        FROM orchestration_v2_projection_threads child
+        JOIN orchestration_v2_projection_threads parent
+          ON parent.thread_id = json_extract(child.payload_json, '$.lineage.parentThreadId')
+        WHERE child.deleted_at IS NULL
+          AND parent.deleted_at IS NULL
+          AND CASE WHEN json_valid(child.payload_json)
+            THEN json_extract(child.payload_json, '$.lineage.relationshipToParent') = 'subagent'
+            ELSE 0 END
       `;
-      return rows.map((row): SubagentTreeEntry => ({
+      return rows.map((row): SubagentLink => ({
         threadId: ThreadId.make(row.thread_id),
-        parentThreadId: row.parent_thread_id === null ? null : ThreadId.make(row.parent_thread_id),
+        parentThreadId: ThreadId.make(row.parent_thread_id),
       }));
     }, Effect.mapError(shellSnapshotReadError));
 
@@ -7558,7 +7537,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       getPullRequestSnapshot: readOnReader(getPullRequestSnapshot),
       listActiveSubagentThreadIds: readOnReader(listActiveSubagentThreadIds),
       listRunningThreadIds: readOnReader(listRunningThreadIds),
-      listSubagentTrees: readOnReader(listSubagentTrees),
+      listSubagentLinks: readOnReader(listSubagentLinks),
       countThreads: readOnReader(countThreads),
       listActiveShellIndex: readOnReader(listActiveShellIndex),
       readShellSnapshot: readOnReader(readShellSnapshot),

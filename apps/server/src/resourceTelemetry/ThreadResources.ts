@@ -211,18 +211,24 @@ const emptyTotals = (): Totals => ({
 
 const roundCpu = (cpuPercent: number) => Math.round(cpuPercent * 10) / 10;
 
-/** The thread, then its `subagent` descendants in `tree`, breadth first. */
+/** The thread, then its `subagent` descendants through `links`, breadth first. */
 export function lineageOf(
-  tree: ReadonlyArray<ProjectionStoreV2.SubagentTreeEntry>,
+  links: ReadonlyArray<ProjectionStoreV2.SubagentLink>,
   threadId: ThreadId,
 ): ReadonlyArray<ThreadId> {
+  const children = new Map<ThreadId, Array<ThreadId>>();
+  for (const link of links) {
+    const siblings = children.get(link.parentThreadId);
+    if (siblings === undefined) children.set(link.parentThreadId, [link.threadId]);
+    else siblings.push(link.threadId);
+  }
   const lineage = [threadId];
   const seen = new Set(lineage);
   for (let index = 0; index < lineage.length; index++) {
-    for (const entry of tree) {
-      if (entry.parentThreadId !== lineage[index] || seen.has(entry.threadId)) continue;
-      seen.add(entry.threadId);
-      lineage.push(entry.threadId);
+    for (const child of children.get(lineage[index]!) ?? []) {
+      if (seen.has(child)) continue;
+      seen.add(child);
+      lineage.push(child);
     }
   }
   return lineage;
@@ -230,17 +236,16 @@ export function lineageOf(
 
 /** The threads whose lineage holds a running thread: each running thread and its live ancestors. */
 export function lineageRoots(
-  tree: ReadonlyArray<ProjectionStoreV2.SubagentTreeEntry>,
+  links: ReadonlyArray<ProjectionStoreV2.SubagentLink>,
   running: ReadonlySet<ThreadId>,
 ): ReadonlySet<ThreadId> {
-  const parents = new Map(tree.map((entry) => [entry.threadId, entry.parentThreadId]));
+  const parents = new Map(links.map((link) => [link.threadId, link.parentThreadId]));
   const roots = new Set<ThreadId>();
   for (const threadId of running) {
-    let current: ThreadId | null | undefined = threadId;
-    while (current !== null && current !== undefined && !roots.has(current)) {
+    let current: ThreadId | undefined = threadId;
+    while (current !== undefined && !roots.has(current)) {
       roots.add(current);
-      const parent = parents.get(current);
-      current = parent !== null && parent !== undefined && parents.has(parent) ? parent : null;
+      current = parents.get(current);
     }
   }
   return roots;
@@ -587,8 +592,8 @@ const makeWith = Effect.fn("ThreadResources.make")(function* (io: ThreadResource
   });
 
   const lineage: ThreadResourcesShape["lineage"] = (threadId) =>
-    projections.listSubagentTrees([threadId]).pipe(
-      Effect.map((tree) => lineageOf(tree, threadId)),
+    projections.listSubagentLinks().pipe(
+      Effect.map((links) => lineageOf(links, threadId)),
       Effect.orElseSucceed(() => [threadId]),
     );
 
@@ -599,9 +604,10 @@ const makeWith = Effect.fn("ThreadResources.make")(function* (io: ThreadResource
   const rollupNow = Effect.fn("ThreadResources.rollupNow")(function* (
     running: ReadonlySet<ThreadId>,
   ) {
-    const tree = yield* projections.listSubagentTrees([...running]);
+    // Without links, each running thread is its own lineage.
+    const links = yield* projections.listSubagentLinks().pipe(Effect.orElseSucceed(() => []));
     const lineageByRoot = new Map(
-      [...lineageRoots(tree, running)].map((root) => [root, lineageOf(tree, root)]),
+      [...lineageRoots(links, running)].map((root) => [root, lineageOf(links, root)]),
     );
     const { atMs, totals } = yield* measure(new Set([...lineageByRoot.values()].flat()));
     const byThread = new Map<ThreadId, ThreadResourceTotals>();

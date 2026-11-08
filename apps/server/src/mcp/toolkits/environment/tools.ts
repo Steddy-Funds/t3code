@@ -90,7 +90,7 @@ const EnvironmentPreferencesTool = Tool.make("t3_environment_preferences_update"
 const MachineReadTool = Tool.make("t3_machine_read", {
   ...shared,
   description:
-    "Read this machine's load: verdict (stressed or not, and why), totals, per-core CPU %, GPUs, bucket totals and running threads' usage. `processes` adds the busiest processes (`limit`, default 20) and `groupBy` totals, or with `unbucketed: true` those no thread, claim or bucket owns and their share; `threadId` adds that thread's usage with its subagent threads'. `show: true` also shows the user a live card.",
+    "Read this machine's load: verdict (stressed or not, and why), totals, per-core CPU %, GPUs, bucket totals and running threads' usage. `processes` adds the busiest processes (`limit`, default 20) and `groupBy` totals, or with `unbucketed: true` those no thread, claim or bucket owns and their share; `threadId` adds that thread's usage, its subagents' included. `show: true` also shows the user a live card.",
   parameters: Schema.Struct({
     environmentId: OrchestratorMcpEnvironmentTarget,
     processes: Schema.optionalKey(

@@ -109,3 +109,37 @@ A WSL backend needs a Linux monitor even though Electron runs on Windows. Window
 desktop packages currently supply only the Windows executable, so native process
 telemetry for the WSL backend is unavailable. The inherited Electron power feed
 still works.
+
+## Load management
+
+Off unless `machineResources.loadManagement.enabled`. Two independent halves act on the verdict.
+
+**`t3 guard`** ([`cli/guard.ts`](../../apps/server/src/cli/guard.ts)) runs inside provider
+sandboxes and pod containers, often with no access to the server's `node_modules`. It is
+therefore its own `guard.mjs` bundle of `node:*` plus our packages only
+([`vite.config.ts`](../../apps/server/vite.config.ts) fails the build if a dependency sneaks in),
+and reads a resolved `guard.json` rather than calling the server
+([`LoadGuard`](../../apps/server/src/resourceTelemetry/LoadGuard.ts)). It spawns the command
+`detached` and signals the negative pid, so a kill reaches the whole group and never the guard.
+The limit follows: anything the command moves into a new session (`setsid`, a daemonising
+double fork) or another container (`docker exec`) escapes the kill.
+
+**Pauses** ([`LoadPauseWorker`](../../apps/server/src/orchestration-v2/LoadPauseWorker.ts),
+policy in [`LoadPausePolicy`](../../apps/server/src/orchestration-v2/LoadPausePolicy.ts)) interrupt
+and later continue a thread, never SIGSTOP it. The traps:
+
+- **Record before acting.** The `thread.load-pause.set` command, carrying the containers it will
+  pause, commits before any `docker pause`. Every path that clears the pause (resume, archive,
+  delete, lane off) unpauses from that record, so a crash between the two leaves at worst an
+  unpause that finds nothing to do, never a container frozen with no owner.
+- **Startup reconcile.** The first sweep after start, and every switch from on to off, clears
+  every recorded pause, archived threads included. Pauses never survive a restart, so no
+  in-memory state needs persisting.
+- **Never act on:** a container any non-victim still claims, a container whose cgroup holds the
+  server itself, and, after a fresh `docker inspect` under the claim's `DOCKER_HOST`, one whose
+  full id or state no longer matches or whose pid is 1 or the server's
+  ([`LoadPauseDocker`](../../apps/server/src/orchestration-v2/LoadPauseDocker.ts)). Claims and
+  the pause episode are re-read just before each `docker pause`, since a claim or a user resume
+  can land between selection and action. Unpause gets the same identity check, so a container recreated since is left alone.
+- **Never pause** a thread the user can see or is needed by: see `isPausable` in the policy. The
+  focus lease is the `thread` `BackgroundScope` that fork clients report.

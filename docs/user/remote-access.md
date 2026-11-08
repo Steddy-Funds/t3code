@@ -241,25 +241,26 @@ had.
 
 #### Load management
 
-Load management keeps background agents from overloading a machine. It is off by default; turn
-on **Load management** in the machine's settings. The switch reaches only agent sessions and
+Load management keeps background agents from overloading a machine. It is off by default; turn on
+**Load management** in the same machine settings as its limits. It reaches only agent sessions and
 terminals started after you change it, so restart a running agent to include it.
 
-While it is on, agents run heavy builds and test suites through `t3 guard`, which stops the
-command if the machine stays stressed for the **Guard hold** time. The guard looks at CPU and
+While it is on, agents run heavy builds and test suites as `"$T3CODE_GUARD" -- <command>`. If the
+machine stays stressed for the **Guard hold** time, the guard stops the command and exits with code
+75, and the agent waits for the machine to free up before trying again. The guard looks at CPU and
 RAM only, not GPUs.
 
-T3 also pauses low-priority threads whose work makes up a real share of the load while the machine
-is stressed. A paused thread shows **Paused for load** in its header and a pause mark in the
-sidebar, and continues on its own when the machine clears, or after 30 minutes at most. Use
-**Resume now** to continue it at once, or **Set priority Normal** so it is never paused. Sending
-the thread a message also resumes it. Threads you are looking at, threads waiting on you, and
-threads coordinating other agents are never paused. Turning load management off resumes every
-paused thread.
+When the machine stays stressed for the **Pause hold** time, T3 also pauses low-priority threads
+that cause a real share of the load, along with Docker containers only those threads claimed. A
+paused thread shows **Paused for load** and continues on its own when the machine clears, or after
+30 minutes at most. **Resume now** continues it at once, and so does sending it a message. Turning
+load management off resumes every paused thread.
 
-Backgrounded threads are low priority by default. To change a thread's priority on web and
-desktop, use **Priority** in the thread's ⋯ menu or its details. The task manager lists each
-thread's priority, and paused threads with it.
+Backgrounded threads are low priority unless you set one to **Normal**; set **Priority** to **Low**
+or **Normal** in a thread's ⋯ menu or its details. T3 never pauses a normal-priority thread, a
+thread you are looking at or opened in the last 15 minutes, a thread waiting on your approval or
+answer, a thread coordinating other agents, a thread whose delegated agents are still working, or
+a delegated thread its parent is waiting on.
 
 ### Tailscale HTTPS
 

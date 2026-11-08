@@ -1,5 +1,11 @@
-import type { MachineIndicatorView } from "@t3tools/client-runtime/state/machineFormat";
+import {
+  formatPercent,
+  type MachineIndicatorView,
+} from "@t3tools/client-runtime/state/machineFormat";
+import type { MachineProcessRow } from "@t3tools/client-runtime/state/machineProcessFrames";
 import type { GpuDeviceSample, MachineTotalsSummary } from "@t3tools/contracts";
+
+import { totalsBy } from "../ownership/processOwners";
 
 /** Every row's core grid has this many cells, so the columns line up across machines. */
 export const CORE_GRID_CELLS = 20;
@@ -134,4 +140,19 @@ export function vramTotal(gpus: ReadonlyArray<GpuDeviceSample> | undefined): Vra
     totalBytes += gpu.vramTotalBytes;
   }
   return totalBytes === 0 ? null : { usedBytes, totalBytes };
+}
+
+/**
+ * The busiest owner over the rows the row stream carries. The stream sends only each machine's
+ * busiest processes, so the sum is a floor and reads "≥", never as the owner's total.
+ */
+export function topOwnerShare(
+  rows: ReadonlyArray<MachineProcessRow>,
+  keyOf: (row: MachineProcessRow) => string | null,
+): { readonly key: string; readonly text: string } | null {
+  let top: { key: string; cpu: number } | null = null;
+  for (const [key, totals] of totalsBy(rows, keyOf)) {
+    if (top === null || totals.cpu > top.cpu) top = { key, cpu: totals.cpu };
+  }
+  return top === null ? null : { key: top.key, text: `≥${formatPercent(top.cpu)}` };
 }

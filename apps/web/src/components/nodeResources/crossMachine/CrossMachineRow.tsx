@@ -28,12 +28,12 @@ import { useEnvironmentScope } from "~/state/session";
 
 import { documentVisibleAtom } from "../documentVisible";
 import { ownerNamesAtom } from "../ownership/ownerNames";
-import { ownerBucketId, ownerThreadId, totalsBy } from "../ownership/processOwners";
+import { ownerBucketId, ownerThreadId } from "../ownership/processOwners";
 import { OwnerChip } from "../primitives/OwnerChip";
 import { ownerLabel } from "../primitives/OwnerLabel";
 import { runningThreadCountAtom } from "../runningThreads";
 import { CORE_HISTORY_MS, CrossMachineCores } from "./CrossMachineCores";
-import { loadPerCore, vramTotal } from "./crossMachineModel";
+import { loadPerCore, topOwnerShare, vramTotal } from "./crossMachineModel";
 
 type SnapshotResult = AsyncResult.AsyncResult<MachineStatusSnapshot, unknown>;
 type ProcessesResult = AsyncResult.AsyncResult<MachineProcessTable, unknown>;
@@ -42,7 +42,7 @@ const NO_SNAPSHOT: Atom.Atom<SnapshotResult> = Atom.make(AsyncResult.initial());
 const NO_PROCESSES: Atom.Atom<ProcessesResult> = Atom.make(AsyncResult.initial());
 const POOL_CELLS = 20;
 const TOP_PROCESSES = 3;
-// Owner sums are over the busiest rows only; ten keeps the stream small and rarely misses the top.
+// Owner sums are over the busiest rows only (shown as "≥"); ten keeps the stream small.
 const TOP_OWNER_ROWS = 10;
 
 /** What the "Top consumer" column sums by; owner modes fall back to processes on older servers. */
@@ -242,22 +242,21 @@ function TopConsumerCell({
     return <span className="truncate text-muted-foreground">Needs the resource monitor</span>;
   }
   if (topBy !== "process") {
-    const totals = totalsBy(table.rows, (row) =>
+    const share = topOwnerShare(table.rows, (row) =>
       topBy === "thread" ? ownerThreadId(row.owner) : ownerBucketId(row.owner),
     );
-    const [topKey, topTotals] =
-      [...totals].toSorted(([, a], [, b]) => b.cpu - a.cpu)[0] ?? [];
-    if (topKey !== undefined && topTotals !== undefined) {
+    if (share !== null) {
       const owner =
         topBy === "thread"
-          ? ({ type: "thread", threadId: ThreadId.make(topKey) } as const)
-          : ({ type: "bucket", bucketId: MachineBucketId.make(topKey) } as const);
+          ? ({ type: "thread", threadId: ThreadId.make(share.key) } as const)
+          : ({ type: "bucket", bucketId: MachineBucketId.make(share.key) } as const);
       return (
-        <span className="flex min-w-0 items-baseline gap-1.5">
+        <span
+          className="flex min-w-0 items-baseline gap-1.5"
+          title={`At least this much, from the ${TOP_OWNER_ROWS} busiest processes`}
+        >
           <OwnerChip label={ownerLabel(owner, names)} />
-          <span className="shrink-0 font-mono text-2xs tabular-nums">
-            {formatPercent(topTotals.cpu)}
-          </span>
+          <span className="shrink-0 font-mono text-2xs tabular-nums">{share.text}</span>
         </span>
       );
     }

@@ -509,17 +509,31 @@ export function applyServerSettingsPatch(
     };
   }
   const merged = deepMerge(current, patchForMerge);
+  const autoBucketsModel = machineResourcesPatch?.autoBuckets?.modelSelection;
   const next =
-    bucketsPatch === undefined
+    bucketsPatch === undefined && autoBucketsModel === undefined
       ? merged
       : {
           ...merged,
           machineResources: {
             ...merged.machineResources,
-            buckets: mergeSettingsEntries(
-              merged.machineResources.buckets,
-              stampedBucketEntries(bucketsPatch),
-            ),
+            ...(bucketsPatch === undefined
+              ? {}
+              : {
+                  buckets: mergeSettingsEntries(
+                    merged.machineResources.buckets,
+                    stampedBucketEntries(bucketsPatch),
+                  ),
+                }),
+            // Replaced whole: deepMerge would keep options from the previous model.
+            ...(autoBucketsModel === undefined
+              ? {}
+              : {
+                  autoBuckets: {
+                    ...merged.machineResources.autoBuckets,
+                    modelSelection: autoBucketsModel,
+                  },
+                }),
           },
         };
   const nextWithReplacementsBase = {

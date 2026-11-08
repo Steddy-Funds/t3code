@@ -6,6 +6,7 @@ import { AuthMcpClientAccess } from "./auth.ts";
 import {
   ContextTransferId,
   EnvironmentId,
+  ForwardCompatibleArray,
   IsoDateTime,
   MessageId,
   NodeId,
@@ -67,7 +68,7 @@ const OrchestratorMcpSchedule = Schema.Union([
   OrchestratorMcpScheduleFromJsonString,
 ]).annotate({
   description:
-    "Trigger: {type:'interval',everyMs}, {type:'fixed_time',timeOfDay,weekdays?}, {type:'once',runAt}, or {type:'webhook'}.",
+    "Trigger: {type:'interval',everyMs}, {type:'fixed_time',timeOfDay,weekdays?}, {type:'once',runAt}, {type:'webhook'}, or {type:'load',condition}.",
 });
 
 const OrchestratorMcpTargetOptionsFromRecord = Schema.Record(
@@ -715,7 +716,8 @@ export type OrchestratorMcpListScheduledTasksInput =
   typeof OrchestratorMcpListScheduledTasksInput.Type;
 
 export const OrchestratorMcpListScheduledTasksResult = Schema.Struct({
-  tasks: Schema.Array(OrchestratorMcpScheduledTask),
+  // A peer's newer schedule types drop out of a forwarded list instead of failing it.
+  tasks: ForwardCompatibleArray(OrchestratorMcpScheduledTask),
 });
 export type OrchestratorMcpListScheduledTasksResult =
   typeof OrchestratorMcpListScheduledTasksResult.Type;

@@ -359,6 +359,10 @@
       "types": "./src/hostTotals.ts",
       "import": "./src/hostTotals.ts"
     },
+    "./machineBuckets": {
+      "types": "./src/machineBuckets.ts",
+      "import": "./src/machineBuckets.ts"
+    },
     "./processProviderGroup": {
       "types": "./src/processProviderGroup.ts",
       "import": "./src/processProviderGroup.ts"

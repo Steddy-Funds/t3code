@@ -691,3 +691,42 @@ it.effect("refuses what a linked environment cannot take before anything leaves"
     }),
   ).pipe(Effect.provide(NodeHttpServer.layerTest)),
 );
+
+it.effect("refuses a load schedule for a peer without load schedules, in either form", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const seen = yield* Ref.make<Seen>(nothingSeen);
+      const linkSession = yield* Ref.make("");
+      const b = yield* serveBox(seen, linkSession);
+      const a = yield* makeLaptop;
+      yield* linkTo(a.links, b, "auto");
+      yield* Ref.set(linkSession, (yield* b.linkedSessions)[0]!.sessionId);
+      yield* Ref.set(b.bearers, []);
+
+      const load = {
+        type: "load",
+        condition: { metric: "cpuPercent", op: ">=", threshold: 90, sustainSeconds: 60 },
+      };
+      const scheduleThere = (schedule: unknown) =>
+        a.call("thread:laptop-full", "schedule_task", {
+          environmentId: box.environmentId,
+          projectId: boxProject,
+          prompt: "Pause the benchmarks.",
+          schedule,
+        });
+      for (const schedule of [load, JSON.stringify(load)]) {
+        expect(failureOf(yield* scheduleThere(schedule))).toMatchObject({
+          code: "invalid_request",
+          message:
+            "Box runs a T3 Code version without load schedules. Update it, or schedule the task here.",
+        });
+      }
+      expect(yield* Ref.get(b.bearers)).toEqual([]);
+
+      // Other schedules still go to the same peer.
+      const hourly = yield* scheduleThere({ type: "interval", everyMs: 3_600_000 });
+      expect(failureOf(hourly)?.message ?? "").not.toContain("load schedules");
+      expect((yield* Ref.get(b.bearers)).length).toBeGreaterThan(0);
+    }),
+  ).pipe(Effect.provide(NodeHttpServer.layerTest)),
+);

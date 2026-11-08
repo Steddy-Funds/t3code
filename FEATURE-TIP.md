@@ -35,6 +35,7 @@ upstream; a feature can, from its own branch, when Akiva decides.
 | Agents read machine load, load-triggered scheduled tasks, background auto-buckets, inline machine card (node resources 4/5) | #64 | 8c11592 |
 | Load management: guarded runs, auto-pause of low-priority agents and their containers, thread priorities; off by default (node resources 5/5) | #65 | 59cd8f9 |
 | Thread cost as one lineage total, last pull cached | #66 | 6a6c02a |
+| Thread cost in three digits with K and M; turns as an icon | #67 | 6023b1b |
 
 Held: #38 (pods notes in the t3-orchestration skill). It edits
 `.agents/skills/t3-orchestration/`, which exists only on

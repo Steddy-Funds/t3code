@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 import * as Schema from "effect/Schema";
 
+import { isUnknownUnionMember } from "./baseSchemas.ts";
 import { MachineProcessFrame } from "./machineResources.ts";
 
 // Frames cross the websocket as JSON.
@@ -44,5 +45,20 @@ describe("MachineProcessFrame", () => {
     expect(frame.added[0]?.owner).toEqual({ type: "thread", threadId: "thread-a" });
     expect(frame.claims?.[0]).toMatchObject({ id: "claim-1", measurable: false });
     expect(encodeWire(frame)).toEqual(wire);
+  });
+
+  it("decodes an owner kind from a newer server as unknown on that row only", () => {
+    const frame = decodeWire({
+      ...base,
+      added: [
+        { ...base.added[0], owner: { type: "thread", threadId: "thread-a" } },
+        { ...base.added[0], key: 1, pid: 8, owner: { type: "gpu-pool", poolId: "p" } },
+      ],
+      rows: { key: [0, 1], cpu: [1, 2], rss: [4, 8] },
+    });
+    expect(frame.added[0]?.owner).toEqual({ type: "thread", threadId: "thread-a" });
+    const owner = frame.added[1]?.owner;
+    expect(isUnknownUnionMember(owner)).toBe(true);
+    expect(owner).toMatchObject({ tag: "type", value: "gpu-pool" });
   });
 });

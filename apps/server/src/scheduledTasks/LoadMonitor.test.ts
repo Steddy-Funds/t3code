@@ -25,6 +25,7 @@ import * as HostResources from "../resourceTelemetry/HostResources.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
 import {
   ARMED,
+  DEFAULT_CLEAR_MIN_SECONDS,
   monitorLayer as loadMonitorLayer,
   LOAD_COOLDOWN_MS,
   type LoadReading,
@@ -255,13 +256,32 @@ describe("stepMonitor", () => {
       false,
     ],
     ["an unknown value never clears", fired(0), load(), unknown, 120_000, fired(0), false],
+    ["the default clear starts its streak", fired(0), load(), cool, 5_000, fired(0, 5_000), false],
     [
-      "clears on the default clear",
-      fired(0),
+      "the default clear holds at least a minute",
+      fired(0, 5_000),
       load(),
       cool,
-      5_000,
+      64_999,
+      fired(0, 5_000),
+      false,
+    ],
+    [
+      "the default clear completes after a minute",
+      fired(0, 5_000),
+      load(),
+      cool,
+      65_000,
       { phase: "cleared", firedAt: 0 },
+      false,
+    ],
+    [
+      "the default clear holds as long as a longer condition sustain",
+      fired(0, 5_000),
+      load({ sustainSeconds: 90 }),
+      cool,
+      94_999,
+      fired(0, 5_000),
       false,
     ],
     [
@@ -505,14 +525,13 @@ describe("LoadMonitor layer", () => {
         yield* monitor.advance(2 * TICK_MS);
         const [first] = yield* monitor.fires;
         expect(first).toBeDefined();
+        // The default clear holds a minute; the cooldown has passed by then.
         yield* monitor.setTotals(cpu(50));
-        yield* monitor.advance(TICK_MS);
-        yield* monitor.setTotals(cpu(95));
-        yield* monitor.advance(
-          first!.at + LOAD_COOLDOWN_MS - TICK_MS - (yield* Clock.currentTimeMillis),
-        );
+        yield* monitor.advance(DEFAULT_CLEAR_MIN_SECONDS * 1000);
         expect(yield* monitor.fires).toHaveLength(1);
-        yield* monitor.advance(4 * TICK_MS);
+        yield* monitor.advance(2 * TICK_MS);
+        yield* monitor.setTotals(cpu(95));
+        yield* monitor.advance(2 * TICK_MS);
         const fires = yield* monitor.fires;
         expect(fires).toHaveLength(2);
         expect(fires[1]!.at - first!.at).toBeGreaterThanOrEqual(LOAD_COOLDOWN_MS);
@@ -521,7 +540,7 @@ describe("LoadMonitor layer", () => {
     ),
   );
 
-  it.effect("flapping around the threshold fires at most once a minute, each after a clear", () =>
+  it.effect("flapping around the threshold fires once: a dip under a minute does not clear", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const monitor = yield* monitorHarness();
@@ -530,10 +549,7 @@ describe("LoadMonitor layer", () => {
           yield* monitor.setTotals(cpu(tick % 2 === 0 ? 95 : 50));
           yield* monitor.advance(TICK_MS);
         }
-        const fires = yield* monitor.fires;
-        expect(fires.length).toBeGreaterThanOrEqual(2);
-        expect(fires.length).toBeLessThanOrEqual(10);
-        for (const gap of gaps(fires)) expect(gap).toBeGreaterThanOrEqual(LOAD_COOLDOWN_MS);
+        expect(yield* monitor.fires).toHaveLength(1);
       }),
     ),
   );

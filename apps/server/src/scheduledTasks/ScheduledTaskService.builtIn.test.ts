@@ -28,7 +28,9 @@ import * as ManagedProjectFolders from "../project/ManagedProjectFolders.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
-import { builtInTasksLayer } from "./LoadMonitor.ts";
+import * as HostProcesses from "../resourceTelemetry/HostProcesses.ts";
+import * as HostResources from "../resourceTelemetry/HostResources.ts";
+import { builtInTasksLayer, monitorLayer, UNBUCKETED_INTERVAL_MS } from "./LoadMonitor.ts";
 import * as ScheduledTaskService from "./ScheduledTaskService.ts";
 
 const SCRATCH = ProjectId.make("project:scratch");
@@ -150,11 +152,12 @@ const ordinaryTask = {
 it.effect("creates the built-in row from settings, follows the switch and writes it once", () =>
   withService(({ service, scratch }) =>
     Effect.gen(function* () {
-      // Switched off from the start: no row, and the scratch project is left alone.
+      // Switched off from the start, the row is still there, off.
       yield* service.ensureBuiltInTasks(settings({ providers: true, autoBuckets: false }));
-      assert.isUndefined(yield* builtInRow(service));
-      assert.equal(scratch.calls, 0);
+      const initial = yield* builtInRow(service);
+      assert.isFalse(initial?.enabled);
 
+      yield* TestClock.adjust("1 minute");
       yield* service.ensureBuiltInTasks(settings({ providers: true }));
       const created = yield* builtInRow(service);
       assert.deepInclude(created, {
@@ -163,7 +166,7 @@ it.effect("creates the built-in row from settings, follows the switch and writes
         enabled: true,
         builtIn: "machine-buckets",
         runtimeMode: "auto",
-        projectId: SCRATCH,
+        projectId: ProjectId.make("builtin:scratch"),
         threadId: null,
         modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4-mini" },
       });
@@ -180,17 +183,17 @@ it.effect("creates the built-in row from settings, follows the switch and writes
       assert.equal(again?.updatedAt, created?.updatedAt);
       assert.lengthOf((yield* service.list()).tasks, 1);
 
-      const callsWhileOn = scratch.calls;
+      yield* TestClock.adjust("1 minute");
       yield* service.ensureBuiltInTasks(settings({ providers: true, autoBuckets: false }));
       const off = yield* builtInRow(service);
       assert.isFalse(off?.enabled);
-      assert.equal(off?.projectId, SCRATCH);
-      assert.equal(scratch.calls, callsWhileOn);
       assert.notEqual(off?.updatedAt, created?.updatedAt);
-      assert.equal(off?.createdAt, created?.createdAt);
+      assert.equal(off?.createdAt, initial?.createdAt);
 
       yield* service.ensureBuiltInTasks(settings({ providers: true }));
       assert.isTrue((yield* builtInRow(service))?.enabled);
+      // Only a run prepares the scratch project.
+      assert.equal(scratch.calls, 0);
     }),
   ),
 );
@@ -255,7 +258,7 @@ it.effect("refuses to edit, switch or delete the built-in row, and only that row
 );
 
 it.effect("starts the built-in run's thread, tags it, then sends the prompt", () =>
-  withService(({ service, commands }) =>
+  withService(({ service, commands, scratch }) =>
     Effect.gen(function* () {
       yield* service.ensureBuiltInTasks(settings({ providers: true }));
       yield* service.triggerLoad(BUILT_IN, "1000");
@@ -270,6 +273,9 @@ it.effect("starts the built-in run's thread, tags it, then sends the prompt", ()
         ],
       );
       const [launch, backgrounded, machineBuckets, send] = commands.map(({ input }) => input);
+      assert.equal(scratch.calls, 1);
+      assert.equal(launch?.projectId, SCRATCH);
+      assert.equal(send?.projectId, SCRATCH);
       assert.equal(launch?.title, "Machine buckets");
       assert.equal(launch?.runtimeMode, "auto");
       assert.notProperty(launch, "initialMessage");
@@ -466,4 +472,58 @@ it.effect("skips the built-in when the unowned processes are mostly the ones it 
       assert.equal(launches(commands), 2);
     }),
   ),
+);
+
+it.effect(
+  "re-fires the built-in at each hourly read while the share holds, so only the caps limit it",
+  () =>
+    Effect.gen(function* () {
+      const commands: Array<Command> = [];
+      const unowned = yield* Ref.make<ReadonlyArray<string>>(["postgres"]);
+      const host = Layer.mergeAll(
+        Scheduler.layer,
+        Layer.mock(HostResources.HostResources)({ ticks: Stream.never, status: Stream.never }),
+        Layer.mock(HostProcesses.HostProcesses)({
+          unbucketed: () =>
+            Ref.get(unowned).pipe(
+              Effect.map((names) => ({
+                sharePercent: 40,
+                sampleAgeMs: 0,
+                buckets: [],
+                processes: names.map((name, pid) => ({
+                  pid,
+                  ppid: 1,
+                  name,
+                  exe: `/usr/bin/${name}`,
+                  user: "user",
+                  cpuPercent: 10,
+                  rssBytes: 1,
+                })),
+              })),
+            ),
+        }),
+      );
+      const context = yield* Layer.build(
+        monitorLayer.pipe(
+          Layer.provideMerge(serviceLayer(commands, new Set())),
+          Layer.provide(host),
+          Layer.provide(Layer.fresh(SqlitePersistence.layerMemory)),
+        ),
+      );
+      const service = Context.get(context, ScheduledTaskService.ScheduledTaskService);
+      yield* service.ensureBuiltInTasks(settings({ providers: true }));
+      yield* TestClock.adjust("10 seconds");
+      assert.equal(launches(commands), 1);
+
+      // The next hourly read fires again; the 6 h cooldown skips it.
+      yield* TestClock.adjust(UNBUCKETED_INTERVAL_MS);
+      assert.equal(launches(commands), 1);
+
+      // Past 6 h the same set is skipped, and a changed set runs.
+      yield* TestClock.adjust(5 * UNBUCKETED_INTERVAL_MS);
+      assert.equal(launches(commands), 1);
+      yield* Ref.set(unowned, ["redis"]);
+      yield* TestClock.adjust(UNBUCKETED_INTERVAL_MS);
+      assert.equal(launches(commands), 2);
+    }).pipe(Effect.scoped),
 );

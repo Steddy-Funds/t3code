@@ -176,6 +176,8 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   processSigterm: Schema.optionalKey(Schema.Boolean),
   /** Saves and runs `load` scheduled tasks; older servers reject the schedule on decode. */
   loadSchedules: Schema.optionalKey(Schema.Boolean),
+  /** Runs the built-in auto-buckets task and saves `machineResources.autoBuckets`; older servers drop the key. */
+  machineAutoBuckets: Schema.optionalKey(Schema.Boolean),
 });
 export type ExecutionEnvironmentCapabilities = typeof ExecutionEnvironmentCapabilities.Type;
 

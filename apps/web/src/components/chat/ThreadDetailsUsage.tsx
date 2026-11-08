@@ -7,7 +7,12 @@ import type {
   ThreadUsageScope,
   UsageLimitSourceSnapshots,
 } from "@t3tools/contracts";
-import { formatCount, formatTokens, formatUsd } from "@t3tools/shared/usageFormat";
+import {
+  formatCompactUsd,
+  formatCount,
+  formatTokens,
+  formatUsd,
+} from "@t3tools/shared/usageFormat";
 import {
   collectProviderUsageLimits,
   formatDuration,
@@ -16,6 +21,7 @@ import {
   paceOf,
   remainingPercent,
 } from "@t3tools/shared/usageLimits";
+import { MessagesSquareIcon } from "lucide-react";
 import { useEffect, type ReactNode } from "react";
 
 import { usePrimarySettings } from "../../hooks/useSettings";
@@ -177,7 +183,9 @@ export function ThreadDetailsCost({
   const title =
     scope.threads > 1 ? `Lineage, ${formatCount(scope.threads)} threads` : "This thread";
   const tokens = formatTokens(inputTokens(scope) + scope.totals.outputTokens);
-  const activity = `${formatCount(scope.providerTurns)} turns, ${formatActive(scope.activeMs)}`;
+  const turns = formatCount(scope.providerTurns);
+  const active = formatActive(scope.activeMs);
+  const activity = <ActivityLines scope={scope} now={now} title={title} />;
 
   return (
     <ThreadDetailsSection
@@ -196,11 +204,18 @@ export function ThreadDetailsCost({
         />
         <Separator />
         <Segment
-          label="Activity"
-          value={activity}
-          ariaValue={`${activity} active`}
-          tooltip={<ActivityLines scope={scope} now={now} title={title} />}
+          label="Turns"
+          value={
+            <>
+              <MessagesSquareIcon aria-hidden className="size-3.5" />
+              {turns}
+            </>
+          }
+          ariaValue={turns}
+          tooltip={activity}
         />
+        <Separator />
+        <Segment label="Active" value={active} ariaValue={active} tooltip={activity} />
       </div>
     </ThreadDetailsSection>
   );
@@ -229,7 +244,7 @@ function CostSegment({
   return (
     <Segment
       label={label}
-      value={priced ? `~${formatUsd(scope.costUsd)}` : "Unpriced"}
+      value={priced ? formatCompactUsd(scope.costUsd) : "Unpriced"}
       ariaValue={priced ? `about ${formatUsd(scope.costUsd)}` : "no price available"}
       tooltip={
         <>
@@ -269,12 +284,12 @@ function CostSegment({
 function Segment({
   label,
   value,
-  ariaValue = value,
+  ariaValue,
   tooltip,
 }: {
   readonly label: string;
-  readonly value: string;
-  readonly ariaValue?: string;
+  readonly value: ReactNode;
+  readonly ariaValue: string;
   readonly tooltip: ReactNode;
 }) {
   return (
@@ -284,7 +299,7 @@ function Segment({
           <span
             tabIndex={0}
             aria-label={`${label}: ${ariaValue}`}
-            className="flex h-6 cursor-default items-center whitespace-nowrap rounded-lg px-1.5 outline-none hover:bg-black/[0.035] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring data-popup-open:bg-black/[0.035] dark:hover:bg-white/[0.08] dark:data-popup-open:bg-white/[0.08]"
+            className="flex h-6 cursor-default items-center gap-1 whitespace-nowrap rounded-lg px-1.5 outline-none hover:bg-black/[0.035] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring data-popup-open:bg-black/[0.035] dark:hover:bg-white/[0.08] dark:data-popup-open:bg-white/[0.08]"
           />
         }
       >

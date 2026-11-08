@@ -135,8 +135,8 @@ function TaskManagerOverview({
   // Without a GPU flag the process list waits for one; say why when no sample is coming.
   const processesUnavailable =
     hasGpu !== null ? null : view.unreachable ? "Machine unreachable" : failure;
-  // One process stream for the list, the memory pool's owner colours and Buckets & claims. A
-  // hidden tab passes no GPU flag, so it closes too; sort, columns and filter stay.
+  // One process stream for the list, the memory pool's owner colours and Buckets & claims. It
+  // closes on the Threads tab and in a hidden browser tab; sort, columns and filter stay.
   const processListState = useMachineProcessListState();
   const canReadDiagnostics = useEnvironmentScope(environmentId, AuthDiagnosticsReadScope);
   const processes = machineProcessesSource({
@@ -145,6 +145,7 @@ function TaskManagerOverview({
     hasGpu: visible ? hasGpu : null,
     canReadDiagnostics,
     hidden: processListState.hidden,
+    tab: processListState.tab,
   });
 
   const canOperateTerminal = useEnvironmentScope(environmentId, AuthTerminalOperateScope);

@@ -192,7 +192,12 @@ const GROUP_BY: ReadonlyArray<{ readonly value: ProcessGroupBy; readonly label: 
   { value: "provider", label: "Provider" },
 ];
 
+/** The task manager's list tabs. Only Threads leaves the process stream unread. */
+export type TaskManagerTab = "processes" | "threads" | "buckets";
+
 export interface MachineProcessListState {
+  readonly tab: TaskManagerTab;
+  readonly setTab: (tab: TaskManagerTab) => void;
   readonly table: ProcessTableState;
   readonly hidden: ReadonlySet<ColumnId>;
   readonly setHidden: (hidden: ReadonlySet<ColumnId>) => void;
@@ -202,20 +207,24 @@ export interface MachineProcessListState {
   readonly setGroupBy: (groupBy: ProcessGroupBy) => void;
 }
 
-/** Sort, expansion, columns, filter and grouping, held above the tabs so they survive a switch. */
+/**
+ * The open tab, plus sort, expansion, columns, filter and grouping, held above the tabs so they
+ * survive a switch and the page can close the process stream on Threads.
+ */
 export function useMachineProcessListState(): MachineProcessListState {
+  const [tab, setTab] = useState<TaskManagerTab>("processes");
   const table = useProcessTableState(DEFAULT_SORT);
   const [hidden, setHidden] = useState<ReadonlySet<ColumnId>>(DEFAULT_HIDDEN);
   const [filter, setFilter] = useState("");
   const [groupBy, setGroupBy] = useState<ProcessGroupBy>("thread");
-  return { table, hidden, setHidden, filter, setFilter, groupBy, setGroupBy };
+  return { tab, setTab, table, hidden, setHidden, filter, setFilter, groupBy, setGroupBy };
 }
 
 /**
  * The task manager's one process stream: the whole table (or the T3 subtree on servers without
  * the host walk) at the page's tick, shared by the list, the memory pool and Buckets & claims.
  * It waits for the GPU flag so it opens once with the right input; a null flag is not yet known,
- * or a hidden tab.
+ * or a hidden browser tab.
  */
 export function machineProcessesSource(input: {
   readonly environmentId: EnvironmentId;
@@ -223,8 +232,13 @@ export function machineProcessesSource(input: {
   readonly hasGpu: boolean | null;
   readonly canReadDiagnostics: boolean;
   readonly hidden: ReadonlySet<ColumnId>;
+  readonly tab: TaskManagerTab;
 }): Atom.Atom<ProcessesResult> {
-  if (!input.canReadDiagnostics || input.hasGpu === null) return NO_PROCESSES;
+  // The pool above the tabs still shows on Threads, but owner colours alone don't justify a
+  // whole process table per tick; without frames the pool draws used memory in one colour.
+  if (!input.canReadDiagnostics || input.hasGpu === null || input.tab === "threads") {
+    return NO_PROCESSES;
+  }
   // Per-process GPU columns cost the host a DRM fdinfo or NVML walk, so ask only while shown.
   const gpuProcesses =
     input.hasGpu && [...GPU_COLUMNS].some((column) => !input.hidden.has(column));

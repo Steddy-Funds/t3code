@@ -424,6 +424,11 @@ export function attributeRows(input: AttributionInput): Map<string, ProcessOwner
     return bucketId ?? undefined;
   };
   const bucketOf = nearestMarked(tree, ownBucket);
+  const autoBucketIds = new Set(
+    input.buckets
+      .filter((bucket) => bucket.provenance.updatedBy.type === "auto")
+      .map((bucket) => bucket.id),
+  );
 
   const serverRow = tree.byPid.get(input.serverPid);
   const serverChildOf = nearestMarked(tree, (row) =>
@@ -446,8 +451,11 @@ export function attributeRows(input: AttributionInput): Map<string, ProcessOwner
       return { type: "claimed", claimId: claim.claim.id, threadId: claim.claim.threadId };
     }
     const bucketId = bucketOf(row);
-    if (bucketId !== undefined) return { type: "bucket", bucketId };
     const serverChild = serverChildOf(row);
+    // Auto-buckets group what nothing owns; the server's own children stay T3's.
+    if (bucketId !== undefined && !(serverChild !== undefined && autoBucketIds.has(bucketId))) {
+      return { type: "bucket", bucketId };
+    }
     if (serverChild !== undefined) {
       const group = childGroup(serverChild.name, serverChild.command);
       const isProvider = processProviderGroup(serverChild.name, serverChild.command) !== undefined;

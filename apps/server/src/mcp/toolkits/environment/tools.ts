@@ -5,15 +5,27 @@ import {
   ClaimId,
   ClaimTarget,
   ExecutionEnvironmentDescriptor,
+  GpuDeviceSample,
+  MACHINE_PROCESS_SNAPSHOT_MAX_LIMIT,
   MachineBucket,
   MachineBucketId,
   MachineBucketInput,
+  MachineProcessSnapshot,
+  MachineProcessSnapshotGroupBy,
+  MachineTotalsSummary,
+  MachineVerdict,
+  MachineVerdictReason,
+  NonNegativeInt,
   OrchestratorMcpEnvironmentTarget,
   OrchestratorMcpFailure,
+  PositiveInt,
   ServerSettings,
   ServerSettingsPatch,
   ThreadId,
+  ThreadResourcePoint,
+  ThreadResourceTotals,
 } from "@t3tools/contracts";
+import { MachineCardSnapshot } from "@t3tools/shared/toolOutput";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Schema from "effect/Schema";
 import { Tool, Toolkit } from "effect/ai";
@@ -75,6 +87,88 @@ const EnvironmentPreferencesTool = Tool.make("t3_environment_preferences_update"
   }),
   success: Schema.Struct(PreferenceFields),
 }).annotate(Tool.Destructive, true);
+const MachineReadTool = Tool.make("t3_machine_read", {
+  ...shared,
+  description:
+    "Read this machine's load: verdict (stressed or not, and why), totals, per-core CPU %, GPUs, bucket totals and running threads' usage. `processes` adds the busiest processes (`limit`, default 20) and `groupBy` totals, or with `unbucketed: true` those no thread, claim or bucket owns and their share; `threadId` adds that thread's usage. `show: true` also shows the user a live card.",
+  parameters: Schema.Struct({
+    environmentId: OrchestratorMcpEnvironmentTarget,
+    processes: Schema.optionalKey(
+      Schema.Struct({
+        groupBy: Schema.optionalKey(MachineProcessSnapshotGroupBy),
+        limit: Schema.optionalKey(
+          Schema.Int.check(
+            Schema.isBetween({ minimum: 1, maximum: MACHINE_PROCESS_SNAPSHOT_MAX_LIMIT }),
+          ),
+        ),
+        unbucketed: Schema.optionalKey(Schema.Boolean),
+      }),
+    ),
+    threadId: Schema.optionalKey(ThreadId),
+    show: Schema.optionalKey(Schema.Boolean),
+  }),
+  success: Schema.Struct({
+    verdict: MachineVerdict,
+    reason: Schema.NullOr(MachineVerdictReason),
+    sampleAgeMs: NonNegativeInt,
+    totals: Schema.NullOr(MachineTotalsSummary),
+    perCore: Schema.Array(Schema.Number),
+    gpus: Schema.optionalKey(Schema.Array(GpuDeviceSample)),
+    buckets: Schema.optionalKey(
+      Schema.Array(
+        Schema.Struct({
+          bucketId: MachineBucketId,
+          name: Schema.String,
+          cpuPercent: Schema.Number,
+          rssBytes: NonNegativeInt,
+          count: NonNegativeInt,
+        }),
+      ),
+    ),
+    runningThreads: Schema.Array(
+      Schema.Struct({ threadId: ThreadId, title: Schema.String, usage: ThreadResourceTotals }),
+    ),
+    processes: Schema.optionalKey(MachineProcessSnapshot),
+    unbucketed: Schema.optionalKey(
+      Schema.Struct({
+        sharePercent: Schema.NullOr(Schema.Number),
+        sampleAgeMs: NonNegativeInt,
+        processes: Schema.Array(
+          Schema.Struct({
+            pid: NonNegativeInt,
+            ppid: NonNegativeInt,
+            name: Schema.String,
+            exe: Schema.String,
+            command: Schema.optionalKey(Schema.String),
+            cwd: Schema.optionalKey(Schema.String),
+            user: Schema.String,
+            container: Schema.optionalKey(Schema.String),
+            parent: Schema.optionalKey(Schema.String),
+            cpuPercent: Schema.Number,
+            rssBytes: NonNegativeInt,
+          }),
+        ),
+        truncated: Schema.optionalKey(PositiveInt),
+      }),
+    ),
+    processesUnavailable: Schema.optionalKey(Schema.String),
+    thread: Schema.optionalKey(
+      Schema.Struct({
+        threadId: ThreadId,
+        current: Schema.NullOr(ThreadResourceTotals),
+        recent: Schema.Array(ThreadResourcePoint),
+      }),
+    ),
+    machineCard: Schema.optionalKey(
+      Schema.Struct({
+        environmentId: ExecutionEnvironmentDescriptor.fields.environmentId,
+        snapshot: MachineCardSnapshot,
+      }),
+    ),
+  }),
+})
+  .annotate(Tool.Readonly, true)
+  .annotate(Tool.Destructive, false);
 const MachineBucketsTool = Tool.make("t3_machine_buckets", {
   ...shared,
   dependencies: [...shared.dependencies, SecureRandom.SecureRandom],
@@ -116,6 +210,7 @@ const ResourceClaimTool = Tool.make("t3_resource_claim", {
 export const EnvironmentToolkit = Toolkit.make(
   EnvironmentReadTool,
   EnvironmentPreferencesTool,
+  MachineReadTool,
   MachineBucketsTool,
   ResourceClaimTool,
 );

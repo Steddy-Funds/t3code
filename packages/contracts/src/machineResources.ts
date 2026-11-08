@@ -11,6 +11,7 @@ import {
   ThreadId,
   TrimmedNonEmptyString,
 } from "./baseSchemas.ts";
+import { ModelSelection } from "./modelSelection.ts";
 import { ProviderDriverKind } from "./providerInstance.ts";
 
 export const GpuVendor = Schema.Literals(["nvidia", "intel"]);
@@ -321,11 +322,21 @@ const ReceivedBuckets = Schema.Record(Schema.String, Schema.Unknown).pipe(
   ),
 );
 
+/** The built-in task that groups unbucketed processes. A null model means the cheapest available. */
+export const MachineAutoBucketsSettings = Schema.Struct({
+  enabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  modelSelection: Schema.NullOr(ModelSelection).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
+});
+export type MachineAutoBucketsSettings = typeof MachineAutoBucketsSettings.Type;
+
 export const MachineResourcesSettings = Schema.Struct({
   thresholds: MachineThresholds.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_MACHINE_THRESHOLDS)),
   ),
   buckets: ReceivedBuckets.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+  autoBuckets: MachineAutoBucketsSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
 });
 export type MachineResourcesSettings = typeof MachineResourcesSettings.Type;
 
@@ -336,6 +347,13 @@ export const MachineResourcesSettingsPatch = Schema.Struct({
     Schema.Record(MachineBucketId, Schema.NullOr(MachineBucketPatchEntry)).check(
       Schema.isMaxProperties(MACHINE_BUCKETS_MAX),
     ),
+  ),
+  /** `modelSelection` replaces the stored one whole; null returns to automatic. */
+  autoBuckets: Schema.optionalKey(
+    Schema.Struct({
+      enabled: Schema.optionalKey(Schema.Boolean),
+      modelSelection: Schema.optionalKey(Schema.NullOr(ModelSelection)),
+    }),
   ),
 });
 export type MachineResourcesSettingsPatch = typeof MachineResourcesSettingsPatch.Type;
@@ -516,3 +534,47 @@ export const SubscribeMachineProcessesInput = Schema.Struct({
   threadId: Schema.optionalKey(ThreadId),
 });
 export type SubscribeMachineProcessesInput = typeof SubscribeMachineProcessesInput.Type;
+
+export const MACHINE_PROCESS_SNAPSHOT_MAX_LIMIT = 200;
+
+export const MachineProcessSnapshotGroupBy = Schema.Literals(["none", "owner", "bucket"]);
+export type MachineProcessSnapshotGroupBy = typeof MachineProcessSnapshotGroupBy.Type;
+
+/** One process walk for an agent (`t3_machine_read`); not streamed to clients. */
+export const MachineProcessSnapshot = Schema.Struct({
+  sampleAgeMs: NonNegativeInt,
+  source: MachineProcessSource,
+  /** Top by CPU together with top by memory, busiest first. */
+  processes: Schema.Array(
+    Schema.Struct({
+      pid: PositiveInt,
+      ppid: NonNegativeInt,
+      name: Schema.String,
+      user: Schema.String,
+      /** Only for callers not reaching this machine through a peer link. */
+      command: Schema.optionalKey(Schema.String),
+      /** Percent of one core. */
+      cpuPercent: Schema.Number,
+      rssBytes: NonNegativeInt,
+      gpuUtilPercent: Schema.optionalKey(Schema.Number),
+      vramBytes: Schema.optionalKey(NonNegativeInt),
+      owner: Schema.optionalKey(ReceivedProcessOwner),
+    }),
+  ),
+  /** Every process counted once, busiest group first. */
+  groups: Schema.optionalKey(
+    Schema.Array(
+      Schema.Struct({
+        label: Schema.String,
+        owner: Schema.optionalKey(ReceivedProcessOwner),
+        bucketId: Schema.optionalKey(MachineBucketId),
+        cpuPercent: Schema.Number,
+        rssBytes: NonNegativeInt,
+        count: PositiveInt,
+      }),
+    ),
+  ),
+  /** Processes left out past the limit. */
+  truncated: Schema.optionalKey(PositiveInt),
+});
+export type MachineProcessSnapshot = typeof MachineProcessSnapshot.Type;

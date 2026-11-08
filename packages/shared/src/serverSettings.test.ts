@@ -693,6 +693,38 @@ describe("serverSettings helpers", () => {
     expect(thresholdsOnly.machineResources.buckets).toEqual(removed.machineResources.buckets);
   });
 
+  it("replaces the auto-buckets model whole and keeps it when only enabled changes", () => {
+    const withOptions = createModelSelection(ProviderInstanceId.make("codex"), "gpt-5.4", [
+      { id: "effort", value: "high" },
+    ]);
+    const plain = { instanceId: ProviderInstanceId.make("claudeAgent"), model: "claude-haiku" };
+    const chosen = applyServerSettingsPatch(DEFAULT_SERVER_SETTINGS, {
+      machineResources: { autoBuckets: { modelSelection: withOptions } },
+    });
+    expect(chosen.machineResources.autoBuckets).toEqual({
+      enabled: true,
+      modelSelection: withOptions,
+    });
+
+    const switched = applyServerSettingsPatch(chosen, {
+      machineResources: { autoBuckets: { modelSelection: plain } },
+    });
+    expect(switched.machineResources.autoBuckets.modelSelection).toStrictEqual(plain);
+
+    const disabled = applyServerSettingsPatch(switched, {
+      machineResources: { autoBuckets: { enabled: false } },
+    });
+    expect(disabled.machineResources.autoBuckets).toStrictEqual({
+      enabled: false,
+      modelSelection: plain,
+    });
+    expect(
+      applyServerSettingsPatch(disabled, {
+        machineResources: { autoBuckets: { modelSelection: null } },
+      }).machineResources.autoBuckets,
+    ).toStrictEqual({ enabled: false, modelSelection: null });
+  });
+
   it("replaces and removes individual usage prices without clobbering other models", () => {
     const prices = { inputCostPerMillionTokens: 2, outputCostPerMillionTokens: 8 };
     const current = applyServerSettingsPatch(DEFAULT_SERVER_SETTINGS, {

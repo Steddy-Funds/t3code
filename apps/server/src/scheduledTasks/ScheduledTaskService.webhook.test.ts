@@ -631,6 +631,132 @@ it.effect.each(queuedDeliveryCases)(
     }),
 );
 
+const loadSchedule = {
+  type: "load",
+  condition: { metric: "cpuPercent", op: ">=", threshold: 90, sustainSeconds: 0 },
+} as const;
+const loadTaskInput = (overrides: Record<string, unknown> = {}) =>
+  webhookTaskInput({
+    id: "scheduled-task:load",
+    prompt: "The machine is busy; pause the benchmarks.",
+    schedule: loadSchedule,
+    ...overrides,
+  });
+const loadCommandId = (episode: string) => `scheduled-task:scheduled-task:load:load:${episode}`;
+
+const loadSkipCases = [
+  {
+    change: "paused",
+    apply: (service: ScheduledTaskService.ScheduledTaskService["Service"]) =>
+      loadTaskInput({ enabled: false }).pipe(Effect.flatMap(service.upsert)),
+  },
+  {
+    change: "switched to an interval trigger",
+    apply: (service: ScheduledTaskService.ScheduledTaskService["Service"]) =>
+      loadTaskInput({ schedule: { type: "interval", everyMs: 3_600_000 } }).pipe(
+        Effect.flatMap(service.upsert),
+      ),
+  },
+  {
+    change: "deleted",
+    apply: (service: ScheduledTaskService.ScheduledTaskService["Service"]) =>
+      service.delete({ id: "scheduled-task:load" as never }),
+  },
+] as const;
+
+it.effect.each(loadSkipCases)("a load trigger does nothing once the task is $change", ({ apply }) =>
+  withService(({ service, launches }) =>
+    Effect.gen(function* () {
+      const { task } = yield* service.upsert(yield* loadTaskInput());
+      assert.equal(task.nextRunAt, null);
+      yield* apply(service);
+      yield* service.triggerLoad(task.id, "1000");
+      yield* service.triggerLoad("scheduled-task:never-saved" as never, "1000");
+      assert.equal(yield* Queue.size(launches), 0);
+    }),
+  ),
+);
+
+it.effect("a load trigger while the task runs is skipped, and run now is refused", () =>
+  Effect.gen(function* () {
+    const gate = yield* Deferred.make<void>();
+    yield* withService(
+      ({ service, launches }) =>
+        Effect.gen(function* () {
+          const { task } = yield* service.upsert(yield* loadTaskInput());
+          const first = yield* service.triggerLoad(task.id, "1000").pipe(Effect.forkChild);
+          assert.equal((yield* Queue.take(launches)).commandId, loadCommandId("1000"));
+          yield* service.triggerLoad(task.id, "2000");
+          const runNow = yield* service.runNow({ id: task.id }).pipe(Effect.flip);
+          assert.equal(runNow.message, "Schedule task is already running.");
+          yield* Deferred.succeed(gate, undefined);
+          yield* Fiber.join(first);
+          assert.equal(yield* Queue.size(launches), 0);
+        }),
+      { gate },
+    );
+  }),
+);
+
+it.effect("one load episode dispatches one command however often it is triggered", () =>
+  Effect.gen(function* () {
+    const completedLaunches = new Set<string>();
+    yield* withService(
+      ({ service, launches }) =>
+        Effect.gen(function* () {
+          const { task } = yield* service.upsert(yield* loadTaskInput());
+          yield* service.triggerLoad(task.id, "1000");
+          yield* service.triggerLoad(task.id, "1000");
+          yield* service.triggerLoad(task.id, "65000");
+          const commandIds = [
+            (yield* Queue.take(launches)).commandId,
+            (yield* Queue.take(launches)).commandId,
+          ];
+          assert.deepEqual(commandIds, [loadCommandId("1000"), loadCommandId("65000")]);
+          assert.equal(yield* Queue.size(launches), 0);
+          assert.deepEqual([...completedLaunches], commandIds);
+        }),
+      { completedLaunches },
+    );
+  }),
+);
+
+it.effect("run now starts a load task as a manual run with its own command", () =>
+  withService(({ service, launches }) =>
+    Effect.gen(function* () {
+      const { task } = yield* service.upsert(yield* loadTaskInput());
+      yield* service.runNow({ id: task.id });
+      const launched = yield* Queue.take(launches);
+      assert.match(launched.commandId, /^scheduled-task:scheduled-task:load:\d+:manual$/);
+      assert.equal(launched.initialMessage?.text, "The machine is busy; pause the benchmarks.");
+      yield* service.triggerLoad(task.id, "1000");
+      assert.equal((yield* Queue.take(launches)).commandId, loadCommandId("1000"));
+    }),
+  ),
+);
+
+it.effect("lists the readable tasks when one row cannot be decoded, and marks built-ins", () =>
+  withService(({ service, sql }) =>
+    Effect.gen(function* () {
+      yield* service.upsert(yield* loadTaskInput());
+      // Upsert refuses built-in ids, so the built-in row is renamed into place.
+      yield* service.upsert(yield* loadTaskInput({ id: "scheduled-task:to-builtin" }));
+      yield* sql`UPDATE scheduled_tasks SET task_id = 'builtin:machine-buckets' WHERE task_id = 'scheduled-task:to-builtin'`;
+      yield* service.upsert(yield* webhookTaskInput());
+      yield* sql`UPDATE scheduled_tasks SET schedule_json = '{"type":"on_commit"}' WHERE task_id = 'scheduled-task:hook'`;
+      const { tasks } = yield* service.list();
+      assert.deepEqual(tasks.map((task) => [task.id, task.builtIn]).sort(), [
+        ["builtin:machine-buckets", "machine-buckets"],
+        ["scheduled-task:load", undefined],
+      ]);
+      assert.deepEqual(
+        tasks.find((task) => task.id === "scheduled-task:load")?.schedule,
+        loadSchedule,
+      );
+    }),
+  ),
+);
+
 it.effect("a save without a secret keeps a secret changed after it was read", () =>
   withService(({ service }) =>
     Effect.gen(function* () {

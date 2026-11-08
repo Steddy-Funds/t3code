@@ -271,6 +271,8 @@ export const make = Effect.gen(function* () {
       machineResources: true,
       machineOwnership: true,
       processSigterm: true,
+      loadSchedules: true,
+      machineAutoBuckets: true,
       npmReleaseLookup: true,
       ...(serverSelfUpdate === null ? {} : { serverSelfUpdate }),
       ...(serverInstallation === null ? {} : { serverInstallation }),

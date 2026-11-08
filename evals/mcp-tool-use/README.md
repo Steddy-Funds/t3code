@@ -27,6 +27,7 @@ Cases are JSON lines in `cases/`, one file per area. The case schema in `run.ts`
 - `kind`: `bad` reproduces a mistake, `guard` protects correct behavior, `control` is ordinary work.
 - `experience`: the real mistake, in a sentence. `source`: where it happened.
 - `setup`: the fake thread, its `world` (repo, branch, files, PRs, pages), `priorTurns`, and `mocks` for tool results.
+- `productPrompt`: use a prompt T3 Code itself sends, such as `machine-buckets` (the built-in Machine buckets task), as the user turn instead of `prompt`, so the case grades the shipped text.
 - `setup.priorTurns[].toolCalls[].resultFile`: load a repository-relative file as the tool result instead of copying its contents into the case. An empty `prompt` resumes a top-level thread after its last prior tool result without adding a user message. Side-chat and subagent setups require a nonempty prompt.
 - `expect`: the checks, such as `calls`, `callsMustNot`, `maxCalls`, `order`, `shellMust`, `textMust`, `finalTextMust` (the last text, once the turn ended), and `linked`. A call's `args` match partially: `~text` is a case-insensitive substring, `"<=N"` / `">=N"` bound a number, `null` matches a missing key, and keys may be dotted paths. Device cases also use `device` to check every child brief, forbid raw UI commands, bound failed device actions per user turn, and require artifact paths in completed final answers. Secrets cases use `secret` (see [Secrets cases](#secrets-cases)).
 
@@ -112,7 +113,13 @@ This API replay measures routing and recovery decisions. Screenshots return prod
 
 ## Machine resources cases
 
-`cases/machine-resources.ndjson` checks `t3_resource_claim`: an agent asked to count a container it started toward its thread claims it, and a control where restarting that container claims nothing.
+`cases/machine-resources.ndjson` checks `t3_resource_claim` and `t3_machine_read`. An agent asked to count a container it started toward its thread claims it, and restarting that container claims nothing. An agent asked whether the machine is overloaded reads `t3_machine_read` and names the verdict and the busy thread, and editing a test runner's worker count reads nothing.
+
+`auto-buckets-groups-unbucketed` runs the built-in Machine buckets task through `productPrompt`: it must group unowned load into rule-based buckets and leave the user's own bucket alone.
+
+## Load schedule cases
+
+`cases/load-schedules.ndjson` checks the `load` schedule. Asked to rerun tests when a slammed machine frees up, an agent schedules a `<=` load task bound to the thread whose prompt deletes the task, never a sleep loop or an interval. The control keeps a nightly request on `fixed_time`.
 
 ## Threads vs tasks cases
 

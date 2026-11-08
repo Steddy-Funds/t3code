@@ -30,6 +30,7 @@ import { formatRelativeTimeLabel, formatUpcomingTimestamp } from "../../timestam
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { formatContextWindowCompactionMessage } from "./ContextWindowMeter.logic";
 import { ThreadDetailsSection } from "./ThreadDetailsSection";
+import { readCachedThreadUsage, saveCachedThreadUsage } from "./threadUsageCache";
 
 const PACE_LABEL: Record<LimitPace, string> = {
   ahead: "Ahead of pace",
@@ -145,7 +146,7 @@ export function ThreadDetailsContext({ usage }: { readonly usage: ContextWindowS
   );
 }
 
-/** List-price cost, tokens, and activity for the thread and, when it has relatives, its lineage. */
+/** List-price cost, tokens, and activity summed over the thread's whole lineage, root included. */
 export function ThreadDetailsCost({
   environmentId,
   threadId,
@@ -162,12 +163,21 @@ export function ThreadDetailsCost({
   useEffect(() => {
     if (completedAt) refresh();
   }, [completedAt, refresh]);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- write each fresh pull to localStorage
+  useEffect(() => {
+    if (query.data) saveCachedThreadUsage(environmentId, threadId, query.data);
+  }, [environmentId, threadId, query.data]);
   const nowMinute = useNowMinute();
   const now = Date.parse(`${nowMinute}:00Z`);
-  const usage = query.data;
-  if (!usage || usage.thread.providerTurns === 0) return null;
+  // The last pull paints at once; the live query replaces it when it answers.
+  const usage = query.data ?? readCachedThreadUsage(environmentId, threadId);
+  if (!usage || usage.lineage.providerTurns === 0) return null;
+  const scope = usage.lineage;
   const pricingKnown = usage.pricing.status !== "unavailable";
-  const showLineage = usage.lineage.threads > 1;
+  const title =
+    scope.threads > 1 ? `Lineage, ${formatCount(scope.threads)} threads` : "This thread";
+  const tokens = formatTokens(inputTokens(scope) + scope.totals.outputTokens);
+  const activity = `${formatCount(scope.providerTurns)} turns, ${formatActive(scope.activeMs)}`;
 
   return (
     <ThreadDetailsSection
@@ -176,37 +186,20 @@ export function ThreadDetailsCost({
       showHeading={false}
     >
       <div className="flex min-h-6 flex-wrap items-center px-1 text-xs font-medium text-muted-foreground tabular-nums">
-        <CostSegment label="Thread cost" scope={usage.thread} pricingKnown={pricingKnown} />
-        {showLineage ? (
-          <>
-            <Separator />
-            <CostSegment
-              label={`Lineage, ${formatCount(usage.lineage.threads)} threads`}
-              scope={usage.lineage}
-              pricingKnown={pricingKnown}
-            />
-          </>
-        ) : null}
+        <CostSegment label="Cost" scope={scope} pricingKnown={pricingKnown} />
         <Separator />
         <Segment
           label="Tokens"
-          value={formatTokens(inputTokens(usage.thread) + usage.thread.totals.outputTokens)}
-          ariaValue={`${formatTokens(inputTokens(usage.thread) + usage.thread.totals.outputTokens)} tokens`}
-          tooltip={<TokenBreakdown scope={usage.thread} title="This thread" />}
+          value={tokens}
+          ariaValue={`${tokens} tokens`}
+          tooltip={<TokenBreakdown scope={scope} title={title} />}
         />
         <Separator />
         <Segment
           label="Activity"
-          value={`${formatCount(usage.thread.providerTurns)} turns, ${formatActive(usage.thread.activeMs)}`}
-          ariaValue={`${formatCount(usage.thread.providerTurns)} turns, ${formatActive(usage.thread.activeMs)} active`}
-          tooltip={
-            <>
-              <ActivityLines scope={usage.thread} now={now} title="This thread" />
-              {showLineage ? (
-                <ActivityLines scope={usage.lineage} now={now} title="Lineage" />
-              ) : null}
-            </>
-          }
+          value={activity}
+          ariaValue={`${activity} active`}
+          tooltip={<ActivityLines scope={scope} now={now} title={title} />}
         />
       </div>
     </ThreadDetailsSection>

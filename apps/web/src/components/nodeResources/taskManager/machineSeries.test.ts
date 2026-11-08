@@ -321,8 +321,18 @@ describe("receiveMachineSnapshot", () => {
 
 describe("memorySegments", () => {
   it.each<[string, number, ReadonlyArray<{ bytes: number; color: string }> | null, unknown]>([
-    ["used memory in one colour without owners", 48 * GIB, null, [{ cells: 48, color: "--primary" }]],
-    ["used memory in one colour for an empty list", 48 * GIB, [], [{ cells: 48, color: "--primary" }]],
+    [
+      "used memory in one colour without owners",
+      48 * GIB,
+      null,
+      [{ cells: 48, color: "--primary" }],
+    ],
+    [
+      "used memory in one colour for an empty list",
+      48 * GIB,
+      [],
+      [{ cells: 48, color: "--primary" }],
+    ],
     [
       "each owner, then the rest as other",
       48 * GIB,

@@ -11,7 +11,10 @@ export interface MachineOwnerNames extends OwnerNames {
 }
 
 interface NameTables {
-  readonly threads: ReadonlyMap<ThreadId, { readonly title: string; readonly projectId: ProjectId }>;
+  readonly threads: ReadonlyMap<
+    ThreadId,
+    { readonly title: string; readonly projectId: ProjectId }
+  >;
   readonly buckets: ReadonlyMap<MachineBucketId, string>;
 }
 
@@ -35,22 +38,20 @@ function sameMap<K, V>(
 // Thread shells change on every thread event; readers render only when a title, project or
 // bucket name changes.
 const nameTablesAtom = Atom.family((environmentId: EnvironmentId) =>
-  Atom.make(
-    (get): NameTables => ({
-      threads: new Map(
-        get(environmentThreadShells.environmentThreadsAtom(environmentId)).map((thread) => [
-          thread.id,
-          { title: thread.title, projectId: thread.projectId },
-        ]),
-      ),
-      buckets: new Map(
-        Object.values(
-          get(serverEnvironment.configValueAtom(environmentId))?.settings.machineResources
-            .buckets ?? {},
-        ).map((bucket) => [bucket.id, bucket.name]),
-      ),
-    }),
-  ).pipe(Atom.withEquality(sameTables), Atom.withLabel(`machine-owner-names:${environmentId}`)),
+  Atom.make((get): NameTables => ({
+    threads: new Map(
+      get(environmentThreadShells.environmentThreadsAtom(environmentId)).map((thread) => [
+        thread.id,
+        { title: thread.title, projectId: thread.projectId },
+      ]),
+    ),
+    buckets: new Map(
+      Object.values(
+        get(serverEnvironment.configValueAtom(environmentId))?.settings.machineResources.buckets ??
+          {},
+      ).map((bucket) => [bucket.id, bucket.name]),
+    ),
+  })).pipe(Atom.withEquality(sameTables), Atom.withLabel(`machine-owner-names:${environmentId}`)),
 );
 
 /** Names for owner chips and id columns on one machine; stable until a name changes. */

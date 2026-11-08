@@ -95,7 +95,9 @@ describe("topMemoryOwners", () => {
 
   it("keeps each owner's colour when the same five trade ranks", () => {
     const rising = owners.slice(0, 5).map((owner, index) => row(owner, { rss: (index + 1) * MIB }));
-    const falling = owners.slice(0, 5).map((owner, index) => row(owner, { rss: (5 - index) * MIB }));
+    const falling = owners
+      .slice(0, 5)
+      .map((owner, index) => row(owner, { rss: (5 - index) * MIB }));
     const colors = (rows: ReadonlyArray<MachineProcessRow>) =>
       Object.fromEntries(topMemoryOwners(rows).map(({ key, color }) => [key, color]));
     expect(colors(falling)).toEqual(colors(rising));

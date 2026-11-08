@@ -26,7 +26,7 @@ export interface OwnerLabel {
 const SHORT_ID = 8;
 const CONTAINER_ID = 12;
 
-export const providerName = (provider: ProviderDriverKind): string =>
+const providerName = (provider: ProviderDriverKind): string =>
   PROVIDER_DISPLAY_NAMES[provider] ?? provider;
 
 const threadName = (threadId: ThreadId, names: OwnerNames) =>

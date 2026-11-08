@@ -36,7 +36,7 @@ const isEditableField = (value: unknown): value is EditableField =>
   EDITABLE_FIELDS.some((field) => field === value);
 
 /** One match rule: field, op and value, or a thread. Pins are not edited here (see `BucketRuleList`). */
-export function BucketRuleField({
+function BucketRuleField({
   rule,
   threads,
   onChange,

@@ -154,10 +154,7 @@ function setup({
   return { registry, processes: Atom.make(AsyncResult.success(table)) };
 }
 
-async function renderBuckets({
-  registry,
-  processes,
-}: ReturnType<typeof setup>) {
+async function renderBuckets({ registry, processes }: ReturnType<typeof setup>) {
   const screen = await render(
     <RegistryContext value={registry}>
       <TaskManagerBuckets environmentId={environmentId} processes={processes} />
@@ -233,7 +230,11 @@ describe("TaskManagerBuckets", () => {
   it.each<[ClaimTarget, string, string]>([
     [{ type: "process", pid: 42, startTimeMs: 0 }, "PID 42 + descendants", "process exits"],
     [{ type: "container", id: "pod-web" }, "pod-web", "container is removed"],
-    [{ type: "cgroup", path: "/system.slice/foo.service" }, "/system.slice/foo.service", "cgroup is removed"],
+    [
+      { type: "cgroup", path: "/system.slice/foo.service" },
+      "/system.slice/foo.service",
+      "cgroup is removed",
+    ],
   ])("says when a %o claim ends", async (target, targetText, ends) => {
     await using view = await renderBuckets(setup({ claims: [claim({ target })] }));
     await expect.element(view.screen.getByRole("heading", { name: "Claims" })).toBeVisible();
@@ -263,9 +264,7 @@ describe("TaskManagerBuckets", () => {
 
   it("says claims need diagnostics access", async () => {
     await using view = await renderBuckets(setup({ canReadDiagnostics: false }));
-    await expect
-      .element(view.screen.getByText("Claims need diagnostics access"))
-      .toBeVisible();
+    await expect.element(view.screen.getByText("Claims need diagnostics access")).toBeVisible();
     expect(view.screen.getByText("PID 42 + descendants").query()).toBeNull();
   });
 });

@@ -32,7 +32,11 @@ export function ownedAgentSlice(stateDir: string): string {
 }
 
 /** systemd nests `a-b-c.slice` under `a.slice/a-b.slice`; the scope's cgroup follows from that. */
-export function scopeControlGroup(managerControlGroup: string, slice: string, unit: string): string {
+export function scopeControlGroup(
+  managerControlGroup: string,
+  slice: string,
+  unit: string,
+): string {
   const parts = slice.replace(/\.slice$/, "").split("-");
   const slices = parts.map((_, index) => `${parts.slice(0, index + 1).join("-")}.slice`);
   return [managerControlGroup, ...slices, unit].join("/");

@@ -59,9 +59,7 @@ const server = () => identity(process.pid, 1, process.pid, process.pid, "server"
 
 describe("terminatePosixOwnedProcessTree", () => {
   it("parses unified cgroup paths and escaped cgroup2 mountinfo", () => {
-    expect(parseUnifiedCgroupPath("0::/user.slice/app.scope\n")).toBe(
-      "/user.slice/app.scope",
-    );
+    expect(parseUnifiedCgroupPath("0::/user.slice/app.scope\n")).toBe("/user.slice/app.scope");
     expect(parseUnifiedCgroupPath("0::/one\n0::/two\n")).toBeUndefined();
     expect(AcpSessionRuntime.isSafeCgroupPath("/user.slice/app.scope")).toBe(true);
     expect(AcpSessionRuntime.isSafeCgroupPath("/user.slice/../escape")).toBe(false);
@@ -223,9 +221,7 @@ describe("terminatePosixOwnedProcessTree", () => {
     const outputPath = NodePath.join(scratch, "argv output");
     NodeFS.mkdirSync(leasePath);
     NodeFS.writeFileSync(NodePath.join(leasePath, "cgroup.procs"), "");
-    const relativePath = parseUnifiedCgroupPath(
-      NodeFS.readFileSync("/proc/self/cgroup", "utf8"),
-    );
+    const relativePath = parseUnifiedCgroupPath(NodeFS.readFileSync("/proc/self/cgroup", "utf8"));
     expect(relativePath).toBeDefined();
     const lease: AcpSessionRuntime.AcpLinuxCgroupLease = {
       contains: () => false,

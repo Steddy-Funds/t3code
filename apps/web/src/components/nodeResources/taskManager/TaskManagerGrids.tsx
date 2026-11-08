@@ -4,11 +4,7 @@ import {
   memoryUsedBytes,
 } from "@t3tools/client-runtime/state/machineFormat";
 import { useAtomSubscribe, useAtomValue } from "@effect/atom-react";
-import type {
-  EnvironmentId,
-  MachineStatusSnapshot,
-  MachineVerdictRule,
-} from "@t3tools/contracts";
+import type { EnvironmentId, MachineStatusSnapshot, MachineVerdictRule } from "@t3tools/contracts";
 import { AsyncResult, type Atom } from "effect/reactivity";
 
 import { useStableCallback } from "~/hooks/useStableCallback";
@@ -136,10 +132,7 @@ function MemoryOwnerLegend({
         </li>
       ))}
       <li>
-        <OwnerChip
-          label={{ kind: "other", text: "other" }}
-          color={`var(${OTHER_OWNER_COLOR})`}
-        />
+        <OwnerChip label={{ kind: "other", text: "other" }} color={`var(${OTHER_OWNER_COLOR})`} />
       </li>
     </ul>
   );

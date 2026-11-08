@@ -438,7 +438,9 @@ export function nextHostFrames(
   const rows =
     input.threadId === undefined
       ? hostRows(sample)
-      : hostRows(sample).filter((row) => isOwnedBy(input.owners?.get(row.identity), input.threadId));
+      : hostRows(sample).filter((row) =>
+          isOwnedBy(input.owners?.get(row.identity), input.threadId),
+        );
   const { selected, truncated } = selectTop(rows, input.top, hostByCpu, hostByRss);
   // The columns follow the request; a sample without GPU rows sends null (unmeasured) once, so
   // the client never keeps a stale value after GPUs turn off.

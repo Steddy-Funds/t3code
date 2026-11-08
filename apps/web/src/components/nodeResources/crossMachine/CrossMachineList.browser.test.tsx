@@ -365,7 +365,9 @@ describe("CrossMachineList", () => {
       const toggle = list.screen.getByRole("group", { name: "Top consumer by" });
       await userEvent.click(toggle.getByRole("button", { name: label }));
 
-      await vi.waitFor(() => expect(list.row("alpha").children[6]?.textContent).toBe("t3-server12%"));
+      await vi.waitFor(() =>
+        expect(list.row("alpha").children[6]?.textContent).toBe("t3-server12%"),
+      );
     },
   );
 

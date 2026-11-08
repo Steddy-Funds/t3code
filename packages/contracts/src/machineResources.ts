@@ -311,7 +311,8 @@ const ReceivedBuckets = Schema.Record(Schema.String, Schema.Unknown).pipe(
       decode: (buckets) => {
         const kept: Record<string, (typeof MachineBucket)["Encoded"]> = {};
         for (const [id, bucket] of Object.entries(buckets)) {
-          if (Option.isSome(decodesAsBucket(bucket))) kept[id] = bucket as (typeof MachineBucket)["Encoded"];
+          if (Option.isSome(decodesAsBucket(bucket)))
+            kept[id] = bucket as (typeof MachineBucket)["Encoded"];
         }
         return kept;
       },
@@ -327,10 +328,6 @@ export const MachineResourcesSettings = Schema.Struct({
   buckets: ReceivedBuckets.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
 });
 export type MachineResourcesSettings = typeof MachineResourcesSettings.Type;
-
-export const DEFAULT_MACHINE_RESOURCES_SETTINGS: MachineResourcesSettings = Schema.decodeSync(
-  MachineResourcesSettings,
-)({});
 
 export const MachineResourcesSettingsPatch = Schema.Struct({
   thresholds: Schema.optionalKey(MachineThresholdsPatch),

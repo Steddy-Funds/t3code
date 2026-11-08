@@ -1,5 +1,5 @@
 /** Where the unified (v2) hierarchy is mounted on the host. */
-export const CGROUP_MOUNT = "/sys/fs/cgroup";
+const CGROUP_MOUNT = "/sys/fs/cgroup";
 
 /** The unified cgroup path in `/proc/<pid>/cgroup`, or undefined outside cgroup v2. */
 export function parseUnifiedCgroupPath(contents: string): string | undefined {

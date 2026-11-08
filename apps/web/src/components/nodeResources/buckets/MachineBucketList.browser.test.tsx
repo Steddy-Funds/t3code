@@ -56,7 +56,11 @@ import { MachineBucketList } from "./MachineBucketList";
 
 const environmentId = EnvironmentId.make("machine-a");
 
-const bucket = (id: string, name: string, overrides: Partial<MachineBucket> = {}): MachineBucket => ({
+const bucket = (
+  id: string,
+  name: string,
+  overrides: Partial<MachineBucket> = {},
+): MachineBucket => ({
   id: MachineBucketId.make(id),
   name,
   rules: [{ field: "exe", op: "equals", value: "cargo" }],

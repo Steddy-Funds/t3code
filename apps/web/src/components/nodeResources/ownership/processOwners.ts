@@ -5,13 +5,7 @@ import { type OwnerNames, ownerLabel } from "../primitives/OwnerLabel";
 import type { ProcessGroup } from "../processTable/processRows";
 
 /** Owner colours, defined in index.css. Resource views only: the memory pool and owner dots. */
-export const OWNER_COLORS = [
-  "--owner-1",
-  "--owner-2",
-  "--owner-3",
-  "--owner-4",
-  "--owner-5",
-] as const;
+const OWNER_COLORS = ["--owner-1", "--owner-2", "--owner-3", "--owner-4", "--owner-5"] as const;
 export const OTHER_OWNER_COLOR = "--owner-other";
 
 const OTHER_KEY = "other";
@@ -151,11 +145,7 @@ export function ownerGroupOf(
 }
 
 /** A case-insensitive match on name, command, PID, user, owner and the owner's ids. */
-export function processMatches(
-  row: MachineProcessRow,
-  query: string,
-  names: OwnerNames,
-): boolean {
+export function processMatches(row: MachineProcessRow, query: string, names: OwnerNames): boolean {
   const needle = query.trim().toLowerCase();
   if (needle.length === 0) return true;
   const haystack = [

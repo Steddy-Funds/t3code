@@ -12,5 +12,7 @@ export function ownershipWrites(input: {
   readonly canWrite: boolean;
 }): OwnershipWrites {
   if (!input.canWrite || !input.config) return "hidden";
-  return input.config.environment.capabilities.machineOwnership === true ? "allowed" : "olderServer";
+  return input.config.environment.capabilities.machineOwnership === true
+    ? "allowed"
+    : "olderServer";
 }

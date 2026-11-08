@@ -507,7 +507,8 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             }),
         ),
       );
-      const cgroup = scopeUnit === undefined ? undefined : yield* agentScope.controlGroup(scopeUnit);
+      const cgroup =
+        scopeUnit === undefined ? undefined : yield* agentScope.controlGroup(scopeUnit);
       yield* Effect.acquireRelease(
         Effect.sync(() =>
           ownership.registerRoot({

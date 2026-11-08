@@ -1702,7 +1702,8 @@ export const makeMuseAdapterV2 = Effect.fn("makeMuseAdapterV2")(function* (
         // Observe raw exit before acquisition: inherited stdout can also block startup cleanup.
         yield* Deferred.await(processExited).pipe(Effect.andThen(stopScope), Effect.forkIn(scope));
         // The SDK hides the pid, so the root is the scope's cgroup alone.
-        const cgroup = scopeUnit === undefined ? undefined : yield* agentScope.controlGroup(scopeUnit);
+        const cgroup =
+          scopeUnit === undefined ? undefined : yield* agentScope.controlGroup(scopeUnit);
         if (cgroup !== undefined) {
           const releaseRoot = ownership.registerRoot({
             cgroup,

@@ -4176,9 +4176,7 @@ describe("AcpAdapterV2", () => {
       const leasePath = yield* fileSystem.makeTempDirectoryScoped();
       const procsPath = path.join(leasePath, "cgroup.procs");
       yield* fileSystem.writeFileString(procsPath, "");
-      const relativePath = parseUnifiedCgroupPath(
-        NodeFS.readFileSync("/proc/self/cgroup", "utf8"),
-      );
+      const relativePath = parseUnifiedCgroupPath(NodeFS.readFileSync("/proc/self/cgroup", "utf8"));
       // No unified cgroup on this host means no lease is possible, so there is
       // nothing for this test to exercise.
       if (relativePath === undefined) return;

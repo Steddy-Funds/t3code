@@ -90,7 +90,11 @@ export function measureUnits(
     if (entry.cgroup.type !== "adopted") continue;
     const owner = entry.root.owner;
     if (owner.type === "thread") {
-      units.push({ threadId: ThreadId.make(owner.threadId), cgroup: entry.cgroup.cgroup, split: false });
+      units.push({
+        threadId: ThreadId.make(owner.threadId),
+        cgroup: entry.cgroup.cgroup,
+        split: false,
+      });
     } else {
       // Shared and T3 units are still units: they keep their processes out of outer claims.
       units.push({
@@ -121,7 +125,8 @@ export function parseProcStat(
   const utime = Number(fields[11]);
   const stime = Number(fields[12]);
   const start = Number(fields[19]);
-  if (!Number.isFinite(utime) || !Number.isFinite(stime) || !Number.isFinite(start)) return undefined;
+  if (!Number.isFinite(utime) || !Number.isFinite(stime) || !Number.isFinite(start))
+    return undefined;
   return { cpuTicks: utime + stime, startTicks: start };
 }
 
@@ -144,10 +149,7 @@ export function cpuPercentBetween(
 const CPU_CURRENT_MAX_AGE_MS = 10_000;
 
 /** Whether `cpuPercentBetween` measured a real interval short enough to call current. */
-export function cpuIsCurrent(
-  previous: { readonly atMs: number } | undefined,
-  atMs: number,
-): boolean {
+function cpuIsCurrent(previous: { readonly atMs: number } | undefined, atMs: number): boolean {
   if (previous === undefined) return false;
   const elapsed = atMs - previous.atMs;
   return elapsed >= 1_000 && elapsed < CPU_CURRENT_MAX_AGE_MS;
@@ -174,9 +176,7 @@ export function boundRings(
 ): Map<ThreadId, ReadonlyArray<Point>> {
   if (rings.size <= MAX_THREADS) return new Map(rings);
   const lastAt = (ring: ReadonlyArray<Point>) => ring.at(-1)?.atMs ?? 0;
-  return new Map(
-    [...rings].toSorted((a, b) => lastAt(b[1]) - lastAt(a[1])).slice(0, MAX_THREADS),
-  );
+  return new Map([...rings].toSorted((a, b) => lastAt(b[1]) - lastAt(a[1])).slice(0, MAX_THREADS));
 }
 
 export const historyPoints = (
@@ -261,7 +261,7 @@ const readDirectoriesOrEmpty = (path: string) => {
   }
 };
 
-export const liveIo = (): ThreadResourcesIo => ({
+const liveIo = (): ThreadResourcesIo => ({
   readFile: readFileOrUndefined,
   readDirectories: readDirectoriesOrEmpty,
   pageSize: livePageSize(),
@@ -288,7 +288,7 @@ export class ThreadResources extends Context.Reference<ThreadResourcesShape>(
   },
 ) {}
 
-export const makeWith = Effect.fn("ThreadResources.make")(function* (io: ThreadResourcesIo) {
+const makeWith = Effect.fn("ThreadResources.make")(function* (io: ThreadResourcesIo) {
   const registry = yield* ProcessOwnershipRegistry;
   const ownership = yield* ProcessOwnership;
   const native = yield* NativeTelemetryClient.NativeTelemetryClient;
@@ -301,8 +301,10 @@ export const makeWith = Effect.fn("ThreadResources.make")(function* (io: ThreadR
   const memberThreads = new Map<string, ThreadId | null>();
   const pidCgroups = new Map<string, string | null>();
   let rings = new Map<ThreadId, ReadonlyArray<Point>>();
-  let latest: { readonly atMs: number; readonly totals: ReadonlyMap<ThreadId, ThreadResourceTotals> } =
-    { atMs: 0, totals: new Map() };
+  let latest: {
+    readonly atMs: number;
+    readonly totals: ReadonlyMap<ThreadId, ThreadResourceTotals>;
+  } = { atMs: 0, totals: new Map() };
   let lastRollupAtMs: number | null = null;
 
   const readProcs = (directory: string) =>
@@ -388,9 +390,7 @@ export const makeWith = Effect.fn("ThreadResources.make")(function* (io: ThreadR
    * (pid-only roots, process claims, and everything on macOS and Windows) come from one
    * `sampleNow` of the T3 subtree, attributed so each process has one owner.
    */
-  const measure = Effect.fn("ThreadResources.measure")(function* (
-    threads: ReadonlySet<ThreadId>,
-  ) {
+  const measure = Effect.fn("ThreadResources.measure")(function* (threads: ReadonlySet<ThreadId>) {
     const atMs = yield* Clock.currentTimeMillis;
     const seen = new Set<string>();
     const roots = registry.roots();
@@ -445,8 +445,7 @@ export const makeWith = Effect.fn("ThreadResources.make")(function* (io: ThreadR
         reading.memoryBytes - nested.reduce((sum, inner) => sum + inner.memoryBytes, 0),
       );
       // cgroup.procs lists only the cgroup's own processes, so walk its sub-cgroups too.
-      entry.processCount +=
-        reading.procs.length + countDescendantProcs(unit.cgroup, unit.subtract);
+      entry.processCount += reading.procs.length + countDescendantProcs(unit.cgroup, unit.subtract);
       entry.cgroup = true;
     }
 
@@ -562,22 +561,22 @@ export const makeWith = Effect.fn("ThreadResources.make")(function* (io: ThreadR
     ),
   );
 
-  const read: ThreadResourcesShape["read"] = Effect.fn("ThreadResources.read")(function* (
-    threadId,
-  ) {
-    const nowMs = yield* Clock.currentTimeMillis;
-    const recent = latest.totals.get(threadId);
-    const current =
-      recent !== undefined && nowMs - latest.atMs <= ROLLUP_FRESH_MS
-        ? { ...recent, sampleAgeMs: Math.max(0, Math.round(nowMs - latest.atMs)) }
-        : yield* lock.withPermits(1)(
-            Effect.map(measure(new Set([threadId])), ({ totals }) => {
-              const entry = totals.get(threadId);
-              return entry === undefined ? null : toTotals(entry, 0, true);
-            }),
-          );
-    return { current, history: historyPoints(rings.get(threadId) ?? [], nowMs) };
-  });
+  const read: ThreadResourcesShape["read"] = Effect.fn("ThreadResources.read")(
+    function* (threadId) {
+      const nowMs = yield* Clock.currentTimeMillis;
+      const recent = latest.totals.get(threadId);
+      const current =
+        recent !== undefined && nowMs - latest.atMs <= ROLLUP_FRESH_MS
+          ? { ...recent, sampleAgeMs: Math.max(0, Math.round(nowMs - latest.atMs)) }
+          : yield* lock.withPermits(1)(
+              Effect.map(measure(new Set([threadId])), ({ totals }) => {
+                const entry = totals.get(threadId);
+                return entry === undefined ? null : toTotals(entry, 0, true);
+              }),
+            );
+      return { current, history: historyPoints(rings.get(threadId) ?? [], nowMs) };
+    },
+  );
 
   return {
     read,
@@ -605,9 +604,6 @@ const register = Effect.fn("ThreadResources.register")(function* (service: Threa
 });
 
 export const layerWith = (io: ThreadResourcesIo) =>
-  Layer.effect(
-    ThreadResources,
-    Effect.tap(makeWith(io), register),
-  );
+  Layer.effect(ThreadResources, Effect.tap(makeWith(io), register));
 
 export const layer = Layer.unwrap(Effect.sync(() => layerWith(liveIo())));

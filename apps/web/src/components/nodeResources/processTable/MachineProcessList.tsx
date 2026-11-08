@@ -13,7 +13,11 @@ import { machineResources } from "~/state/machineResources";
 import { useEnvironmentScope } from "~/state/session";
 
 import { type MachineOwnerNames, ownerNamesAtom } from "../ownership/ownerNames";
-import { type OwnerPalette, ownerPaletteAtom, type ProcessesResult } from "../ownership/ownerPalette";
+import {
+  type OwnerPalette,
+  ownerPaletteAtom,
+  type ProcessesResult,
+} from "../ownership/ownerPalette";
 import {
   ownerBucketId,
   ownerGroupOf,
@@ -40,7 +44,7 @@ import {
 import { useProcessSignal } from "./useProcessSignal";
 
 export type { ProcessesResult };
-export const NO_PROCESSES: Atom.Atom<ProcessesResult> = Atom.make(AsyncResult.initial());
+const NO_PROCESSES: Atom.Atom<ProcessesResult> = Atom.make(AsyncResult.initial());
 
 type ColumnId =
   | "pid"
@@ -240,8 +244,7 @@ export function machineProcessesSource(input: {
     return NO_PROCESSES;
   }
   // Per-process GPU columns cost the host a DRM fdinfo or NVML walk, so ask only while shown.
-  const gpuProcesses =
-    input.hasGpu && [...GPU_COLUMNS].some((column) => !input.hidden.has(column));
+  const gpuProcesses = input.hasGpu && [...GPU_COLUMNS].some((column) => !input.hidden.has(column));
   return machineResources.machineProcesses(input.environmentId, {
     intervalMs: Math.max(input.tick, 1000),
     ...(gpuProcesses ? { gpuProcesses: true } : {}),

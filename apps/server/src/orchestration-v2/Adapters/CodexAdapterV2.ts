@@ -1484,7 +1484,8 @@ export const makeCodexAppServerSpawnCommand = Effect.fn(
     env: input.env,
     shared: true,
   });
-  const cgroup = launch.unit === undefined ? undefined : yield* agentScope.controlGroup(launch.unit);
+  const cgroup =
+    launch.unit === undefined ? undefined : yield* agentScope.controlGroup(launch.unit);
   const spawnCommand = yield* resolveSpawnCommand(launch.command, launch.args, {
     ...(input.env === undefined ? {} : { env: input.env }),
     ...(input.extendEnv === undefined ? {} : { extendEnv: input.extendEnv }),

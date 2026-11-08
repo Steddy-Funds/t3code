@@ -212,7 +212,8 @@ export function memorySegments(
     segments.push({ cells, color: owner.color });
     assigned += cells;
   }
-  if (usedCells > assigned) segments.push({ cells: usedCells - assigned, color: OTHER_OWNER_COLOR });
+  if (usedCells > assigned)
+    segments.push({ cells: usedCells - assigned, color: OTHER_OWNER_COLOR });
   return segments;
 }
 

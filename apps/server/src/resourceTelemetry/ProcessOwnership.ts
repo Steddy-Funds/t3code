@@ -573,7 +573,7 @@ const readLivePidStartTicks = (platform: NodeJS.Platform) => (pid: number) => {
   return stat === undefined ? undefined : parseProcStatStartTicks(stat);
 };
 
-export const makeLiveIo = Effect.fn("ProcessOwnership.makeLiveIo")(function* () {
+const makeLiveIo = Effect.fn("ProcessOwnership.makeLiveIo")(function* () {
   const platform = yield* HostProcess.Platform;
   const runner = yield* ProcessRunner.ProcessRunner;
   const readPidCgroup = readLivePidCgroup(platform);
@@ -1038,8 +1038,6 @@ export const layerRegistry = Layer.effect(
     });
   }),
 );
-
-export const layerWith = (io: ProcessOwnershipIo) => Layer.effect(ProcessOwnership, makeWith(io));
 
 export const layer = Layer.effect(
   ProcessOwnership,

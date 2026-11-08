@@ -1,36 +1,4 @@
-import type { ResourceTelemetryProcess, ResourceTelemetrySourceStatus } from "@t3tools/contracts";
-
-export function processIdentityKey(process: Pick<ResourceTelemetryProcess, "identity">): string {
-  return `${process.identity.pid}:${process.identity.startTimeMs}`;
-}
-
-export function visibleResourceTelemetryProcesses(
-  processes: ReadonlyArray<ResourceTelemetryProcess>,
-  collapsed: ReadonlySet<string>,
-): ReadonlyArray<ResourceTelemetryProcess> {
-  const childrenByParent = new Map<number, ResourceTelemetryProcess[]>();
-  for (const process of processes) {
-    const children = childrenByParent.get(process.ppid) ?? [];
-    children.push(process);
-    childrenByParent.set(process.ppid, children);
-  }
-
-  const hidden = new Set<string>();
-  const hideDescendants = (pid: number): void => {
-    for (const child of childrenByParent.get(pid) ?? []) {
-      const key = processIdentityKey(child);
-      if (hidden.has(key)) continue;
-      hidden.add(key);
-      hideDescendants(child.identity.pid);
-    }
-  };
-  for (const process of processes) {
-    if (collapsed.has(processIdentityKey(process))) {
-      hideDescendants(process.identity.pid);
-    }
-  }
-  return processes.filter((process) => !hidden.has(processIdentityKey(process)));
-}
+import type { ResourceTelemetrySourceStatus } from "@t3tools/contracts";
 
 export function shouldShowResourceMonitorRetry(input: {
   readonly nativeStatus: ResourceTelemetrySourceStatus | null;

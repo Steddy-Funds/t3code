@@ -1,4 +1,8 @@
-import type { MachineTotalsSummary, MachineVerdictReason } from "@t3tools/contracts";
+import type {
+  GpuDeviceSample,
+  MachineTotalsSummary,
+  MachineVerdictReason,
+} from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
@@ -6,6 +10,8 @@ import {
   formatMachineReason,
   formatPerCore,
   formatProcessMemory,
+  gpuRowValues,
+  gpuTrippedRule,
   type MachineIndicatorView,
   machineVerdictText,
   memoryUsedPercent,
@@ -197,5 +203,57 @@ describe("topProcessesByName", () => {
 
   it("returns nothing for no rows", () => {
     expect(topProcessesByName([], "cpu", 3)).toEqual([]);
+  });
+});
+
+const gpu = (overrides: Partial<GpuDeviceSample> = {}): GpuDeviceSample => ({
+  id: "0000:01:00.0",
+  vendor: "nvidia",
+  name: "RTX 4090",
+  status: "active",
+  utilPercent: 37.4,
+  vramTotalBytes: 24 * GIB,
+  vramUsedBytes: 6 * GIB,
+  sharedMemory: false,
+  ...overrides,
+});
+
+describe("gpuRowValues", () => {
+  it.each<[string, Partial<GpuDeviceSample>, ReturnType<typeof gpuRowValues>]>([
+    ["active", {}, { note: null, util: "37%", vram: "6.0 / 24.0 GiB" }],
+    [
+      "shared memory says so",
+      { vendor: "intel", sharedMemory: true, vramTotalBytes: 8 * GIB, vramUsedBytes: GIB },
+      { note: null, util: "37%", vram: "1.0 / 8.0 GiB shared" },
+    ],
+    ["no util", { utilPercent: null }, { note: null, util: null, vram: "6.0 / 24.0 GiB" }],
+    ["no VRAM total", { vramTotalBytes: null }, { note: null, util: "37%", vram: null }],
+    ["zero VRAM total", { vramTotalBytes: 0 }, { note: null, util: "37%", vram: null }],
+    ["no VRAM used", { vramUsedBytes: null }, { note: null, util: "37%", vram: null }],
+    [
+      "suspended shows only its state",
+      { status: "suspended" },
+      { note: "Suspended", util: null, vram: null },
+    ],
+    [
+      "unavailable shows only its state",
+      { status: "unavailable" },
+      { note: "Unavailable", util: null, vram: null },
+    ],
+  ])("%s", (_name, overrides, expected) => {
+    expect(gpuRowValues(gpu(overrides))).toEqual(expected);
+  });
+});
+
+describe("gpuTrippedRule", () => {
+  const id = "0000:01:00.0";
+  it.each<[string, MachineVerdictReason | null, string | null]>([
+    ["no reason", null, null],
+    ["VRAM on this device", reason({ rule: "gpuVram", deviceId: id }), "gpuVram"],
+    ["util on this device", reason({ rule: "gpuUtil", deviceId: id }), "gpuUtil"],
+    ["another device", reason({ rule: "gpuUtil", deviceId: "0000:02:00.0" }), null],
+    ["a host rule", reason({ rule: "load" }), null],
+  ])("%s", (_name, verdictReason, expected) => {
+    expect(gpuTrippedRule(verdictReason, id)).toBe(expected);
   });
 });

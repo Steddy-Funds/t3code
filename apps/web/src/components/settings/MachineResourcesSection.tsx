@@ -35,6 +35,8 @@ interface ThresholdField {
 const isPatchValid = Schema.is(MachineThresholdsPatch);
 const notWindows = (os: ExecutionEnvironmentPlatformOs) => os !== "windows";
 const everywhere = () => true;
+// The monitor reads NVIDIA and Intel GPUs on Linux and Windows only.
+const hasGpuCollection = (os: ExecutionEnvironmentPlatformOs) => os !== "darwin";
 const HOLD_BOUNDS = "Use 0 to 3600 seconds.";
 const PERCENT_BOUNDS = "Use a percent above 0, up to 100.";
 
@@ -74,6 +76,33 @@ const THRESHOLD_FIELDS: ReadonlyArray<ThresholdField> = [
     scale: 1,
     boundsMessage: PERCENT_BOUNDS,
     appliesTo: (os) => os !== "darwin",
+  },
+  {
+    key: "gpuVramUsedPercent",
+    title: "GPU memory used",
+    description: "VRAM used on an NVIDIA GPU. Stressed at or above.",
+    unit: "%",
+    scale: 1,
+    boundsMessage: PERCENT_BOUNDS,
+    appliesTo: hasGpuCollection,
+  },
+  {
+    key: "gpuUtilPercent",
+    title: "GPU busy",
+    description: "Utilisation of any GPU. A suspended GPU is never woken to check.",
+    unit: "%",
+    scale: 1,
+    boundsMessage: PERCENT_BOUNDS,
+    appliesTo: hasGpuCollection,
+  },
+  {
+    key: "gpuUtilHoldMs",
+    title: "GPU busy hold",
+    description: "How long a GPU must stay busy before the machine counts as stressed.",
+    unit: "s",
+    scale: 1 / 1000,
+    boundsMessage: HOLD_BOUNDS,
+    appliesTo: hasGpuCollection,
   },
   {
     key: "enterHoldMs",

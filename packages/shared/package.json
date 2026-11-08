@@ -351,6 +351,10 @@
       "types": "./src/hostTotals.ts",
       "import": "./src/hostTotals.ts"
     },
+    "./processProviderGroup": {
+      "types": "./src/processProviderGroup.ts",
+      "import": "./src/processProviderGroup.ts"
+    },
     "./nodeVerdict": {
       "types": "./src/nodeVerdict.ts",
       "import": "./src/nodeVerdict.ts"

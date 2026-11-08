@@ -187,6 +187,21 @@ when a connected machine goes from fine to stressed while desktop or in-app noti
 are on; turn off **Machine becomes stressed** in **Settings → General → Notifications** to stop
 it. Machines running an older T3 Code version keep the plain icon.
 
+#### Task manager
+
+Open **Machines** at the bottom of the sidebar to see every machine in one list, worst first,
+or click a machine's icon to open its task manager. The command palette has both as well.
+A task manager shows CPU, memory, load, and GPU graphs over the last 15 minutes or hour, the
+machine's processes, and the T3 threads running on it.
+
+To end a process, use its kill button. **Kill** asks the process to exit; **Force kill** stops
+it at once and can lose unsaved work. On Windows there is a single **Kill**. T3 Code refuses to
+signal itself, the resource monitor, or a process that has since exited and had its ID reused.
+Killing needs the `environment:maintain` permission.
+
+**Open terminal** starts a shell in the machine's home directory. It needs the
+`terminal:operate` permission.
+
 ### Tailscale HTTPS
 
 Join both devices to the same tailnet. In the desktop app, enable **Tailscale

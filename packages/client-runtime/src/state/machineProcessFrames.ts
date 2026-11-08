@@ -9,6 +9,9 @@ export interface MachineProcessRow extends MachineProcessAdded {
   readonly cpu: number;
   /** Resident bytes. */
   readonly rss: number;
+  /** GPU util percent and VRAM bytes; absent unless the stream carries GPU columns, null where unmeasured. */
+  readonly gpuUtil?: number | null;
+  readonly vram?: number | null;
 }
 
 export interface MachineProcessTable {
@@ -33,12 +36,18 @@ interface KeyedTable {
 function foldFrame(table: KeyedTable, frame: MachineProcessFrame): void {
   for (const key of frame.removed) table.entries.delete(key);
   for (const added of frame.added) table.entries.set(added.key, { ...added, cpu: 0, rss: 0 });
-  const { key, cpu, rss } = frame.rows;
+  const { key, cpu, rss, gpuUtil, vram } = frame.rows;
   for (let index = 0; index < key.length; index++) {
     const entry = table.entries.get(key[index]!);
     // A row for a key the table never received is unusable without its static fields.
     if (entry === undefined) continue;
-    table.entries.set(entry.key, { ...entry, cpu: cpu[index]!, rss: rss[index]! });
+    table.entries.set(entry.key, {
+      ...entry,
+      cpu: cpu[index]!,
+      rss: rss[index]!,
+      ...(gpuUtil === undefined ? {} : { gpuUtil: gpuUtil[index] ?? null }),
+      ...(vram === undefined ? {} : { vram: vram[index] ?? null }),
+    });
   }
   table.sequence = frame.sequence;
   table.sampleAgeMs = frame.sampleAgeMs;

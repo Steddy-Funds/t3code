@@ -4,6 +4,8 @@ import {
   formatPercent,
   formatPerCore,
   formatProcessMemory,
+  gpuRowValues,
+  gpuTrippedRule,
   machineVerdictText,
   memoryUsedBytes,
   memoryUsedPercent,
@@ -11,11 +13,14 @@ import {
 } from "@t3tools/client-runtime/state/machineFormat";
 import type { MachineIndicator } from "@t3tools/client-runtime/state/machineIndicator";
 import type { MachineProcessTable } from "@t3tools/client-runtime/state/machineProcessFrames";
-import type {
-  EnvironmentId,
-  MachineStatusSnapshot,
-  MachineTotalsSummary,
-  MachineVerdictRule,
+import {
+  AuthDiagnosticsReadScope,
+  type EnvironmentId,
+  type GpuDeviceSample,
+  type MachineStatusSnapshot,
+  type MachineTotalsSummary,
+  type MachineVerdictReason,
+  type MachineVerdictRule,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Option from "effect/Option";
@@ -26,6 +31,7 @@ import { Platform, ScrollView, View } from "react-native";
 
 import { cn } from "../../lib/cn";
 import { machineIndicator, machineResources } from "../../state/machineResources";
+import { useEnvironmentScope } from "../../state/session";
 import { AppActivityIndicator } from "../ui/AppActivityIndicator";
 import { AppText as Text } from "../ui/AppText";
 import { Sheet } from "../ui/Sheet";
@@ -84,12 +90,7 @@ function LiveMachine(props: {
   );
   // Already open for the app's life (startMachineStatus), so its cached totals show at once.
   const status = useAtomValue(machineResources.machine(props.environmentId));
-  const processes = useAtomValue(
-    machineResources.machineProcesses(props.environmentId, {
-      intervalMs: PROCESS_SAMPLE_MS,
-      top: PROCESS_TOP,
-    }),
-  );
+  const canReadDiagnostics = useEnvironmentScope(props.environmentId, AuthDiagnosticsReadScope);
   const snapshot: MachineStatusSnapshot | null =
     Option.getOrNull(AsyncResult.value(live)) ?? Option.getOrNull(AsyncResult.value(status));
   const totals = snapshot?.totals ?? null;
@@ -102,11 +103,25 @@ function LiveMachine(props: {
         <>
           <CpuSection totals={totals} perCore={snapshot.sample?.perCore} rule={rule} />
           <MemorySection totals={totals} rule={rule} />
+          {snapshot.sample?.gpus && snapshot.sample.gpus.length > 0 ? (
+            <GpuSection gpus={snapshot.sample.gpus} reason={props.indicator.reason} />
+          ) : null}
         </>
       ) : null}
-      <ProcessesSection result={processes} />
+      {canReadDiagnostics ? <LiveProcesses environmentId={props.environmentId} /> : null}
     </>
   );
+}
+
+/** Mounted only with diagnostics access, so the process stream never opens without it. */
+function LiveProcesses(props: { readonly environmentId: EnvironmentId }) {
+  const processes = useAtomValue(
+    machineResources.machineProcesses(props.environmentId, {
+      intervalMs: PROCESS_SAMPLE_MS,
+      top: PROCESS_TOP,
+    }),
+  );
+  return <ProcessesSection result={processes} />;
 }
 
 function SectionTitle(props: { readonly title: string; readonly value?: ReactNode }) {
@@ -234,19 +249,50 @@ function MemorySection(props: {
   );
 }
 
+function GpuSection(props: {
+  readonly gpus: ReadonlyArray<GpuDeviceSample>;
+  readonly reason: MachineVerdictReason | null;
+}) {
+  return (
+    <View className="gap-1">
+      <SectionTitle title={props.gpus.length === 1 ? "GPU" : "GPUs"} />
+      {props.gpus.map((gpu) => {
+        const values = gpuRowValues(gpu);
+        const tripped = gpuTrippedRule(props.reason, gpu.id);
+        return (
+          <View key={gpu.id} className="flex-row items-baseline gap-2">
+            <Text className="flex-1 text-sm text-foreground" numberOfLines={1}>
+              {gpu.name}
+            </Text>
+            {values.note ? (
+              <Text className="text-sm text-foreground-muted">{values.note}</Text>
+            ) : null}
+            {values.vram ? (
+              <Text className={cn("text-sm tabular-nums", trippedClassName(tripped === "gpuVram"))}>
+                {values.vram}
+              </Text>
+            ) : null}
+            {values.util ? (
+              <Text className={cn("text-sm tabular-nums", trippedClassName(tripped === "gpuUtil"))}>
+                {values.util}
+              </Text>
+            ) : null}
+          </View>
+        );
+      })}
+    </View>
+  );
+}
+
 function ProcessesSection(props: {
   readonly result: AsyncResult.AsyncResult<MachineProcessTable, unknown>;
 }) {
   if (AsyncResult.isFailure(props.result)) {
-    const needsScope = Predicate.isTagged(
-      Cause.squash(props.result.cause),
-      "EnvironmentAuthorizationError",
-    );
-    return (
-      <Text className="text-sm text-foreground-muted">
-        {needsScope ? "Process list needs diagnostics access" : "Process list unavailable"}
-      </Text>
-    );
+    // A scope revoked mid-stream: no process list, like a session that never had it.
+    if (Predicate.isTagged(Cause.squash(props.result.cause), "EnvironmentAuthorizationError")) {
+      return null;
+    }
+    return <Text className="text-sm text-foreground-muted">Process list unavailable</Text>;
   }
   const table = Option.getOrNull(AsyncResult.value(props.result));
   if (table === null) return null;

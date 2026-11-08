@@ -216,7 +216,7 @@ export function startAppServices(): AppRouter {
   startSlowRpcRequestToasts();
   startHostFreezeToasts();
   machineIndicator.startMachineStatus(appAtomRegistry);
-  startMachineStressNotifications();
+  startMachineStressNotifications(router);
   startLegacyThreadMigrationToast();
   startPermissionUpdateNotices(router);
   startThreadNotifications(appAtomRegistry, router);

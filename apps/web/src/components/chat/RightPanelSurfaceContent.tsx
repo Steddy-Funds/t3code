@@ -33,6 +33,11 @@ const DevicePanel = lazy(() =>
   import("../device/DevicePanel").then((module) => ({ default: module.DevicePanel })),
 );
 const FilePreviewPanel = lazy(() => import("../files/FilePreviewPanel"));
+const TaskManagerView = lazy(() =>
+  import("../nodeResources/TaskManagerView").then((module) => ({
+    default: module.TaskManagerView,
+  })),
+);
 
 type RightPanelTerminalProps = Omit<
   PersistentThreadTerminalPanelProps,
@@ -193,6 +198,14 @@ export function RightPanelSurfaceContent(props: {
               useRightPanelStore.getState().show(threadRef);
             }}
           />
+        </Suspense>
+      );
+    case "machine":
+      return (
+        <Suspense fallback={null}>
+          <div className="h-full min-h-0 overflow-y-auto p-3">
+            <TaskManagerView environmentId={surface.environmentId} />
+          </div>
         </Suspense>
       );
     case "files":

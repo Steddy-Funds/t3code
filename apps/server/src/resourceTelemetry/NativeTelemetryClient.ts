@@ -1,15 +1,24 @@
 import type {
+  GpuDeviceSample,
   HostPowerSnapshot,
   ResourceMonitorCapabilities,
   ResourceMonitorCommand,
   ResourceMonitorEvent,
   ResourceMonitorExternalProcess,
+  ResourceMonitorGpuTotalsEvent,
   ResourceMonitorHelloEvent,
+  ResourceMonitorHostProcessStatic,
+  ResourceMonitorHostSampleEvent,
+  ResourceMonitorHostSampleOptions,
+  ResourceMonitorHostTotalsEvent,
   ResourceMonitorProcessTableEntry,
+  ResourceMonitorProtocolVersion,
   ResourceMonitorSnapshotEvent,
   ResourceTelemetrySourceStatus,
 } from "@t3tools/contracts";
 import {
+  MAX_CLAIMED_PROCESSES,
+  RESOURCE_MONITOR_LEGACY_PROTOCOL_VERSION,
   RESOURCE_MONITOR_PROTOCOL_VERSION,
   ResourceMonitorCommand as ResourceMonitorCommandSchema,
   ResourceMonitorEvent as ResourceMonitorEventSchema,
@@ -48,6 +57,13 @@ const HANDSHAKE_TIMEOUT = Duration.seconds(5);
 const SAMPLE_REQUEST_TIMEOUT = Duration.seconds(5);
 const PROCESS_TABLE_REQUEST_TIMEOUT = Duration.seconds(5);
 const HISTORY_REQUEST_TIMEOUT = Duration.seconds(15);
+// A one-shot host sample walks every process and reads static fields for all of them.
+const HOST_SAMPLE_REQUEST_TIMEOUT = Duration.seconds(15);
+const HOST_TOTALS_REQUEST_TIMEOUT = Duration.seconds(5);
+const GPU_TOTALS_REQUEST_TIMEOUT = Duration.seconds(5);
+// A full host sample with static fields for thousands of processes runs to a few MiB.
+const MAX_LINE_BYTES = 32 * 1024 * 1024;
+const MIN_HOST_SAMPLE_INTERVAL_MS = 1_000;
 const INITIAL_RESTART_DELAY = Duration.millis(500);
 const MAX_RESTART_DELAY = Duration.seconds(10);
 const FAILURE_WINDOW_MS = 60_000;
@@ -79,7 +95,14 @@ export class NativeTelemetryHandshakeTimedOut extends Schema.TaggedError<NativeT
 class NativeTelemetryRequestTimedOut extends Schema.TaggedError<NativeTelemetryRequestTimedOut>()(
   "NativeTelemetryRequestTimedOut",
   {
-    operation: Schema.Literals(["processTable", "readHistory", "sampleNow"]),
+    operation: Schema.Literals([
+      "processTable",
+      "readHistory",
+      "sampleNow",
+      "hostSampleNow",
+      "hostTotals",
+      "gpuTotals",
+    ]),
     timeoutMs: Schema.Number,
   },
 ) {
@@ -180,6 +203,23 @@ export interface NativeTelemetrySnapshot {
   readonly snapshot: ResourceMonitorSnapshotEvent;
 }
 
+export type HostProcessStatics = ReadonlyMap<number, ResourceMonitorHostProcessStatic>;
+
+export interface NativeHostSample {
+  readonly generation: number;
+  readonly sample: ResourceMonitorHostSampleEvent;
+  /**
+   * Static fields by pid for this generation, folded before publishing, so a subscriber that
+   * missed a sample still has every identity. Check `startTimeMs` against the row.
+   */
+  readonly statics: HostProcessStatics;
+}
+
+export interface HostSampleDemand extends ResourceMonitorHostSampleOptions {
+  /** Raised to at least 1 s. */
+  readonly intervalMs: number;
+}
+
 export class NativeTelemetryClient extends Context.Service<
   NativeTelemetryClient,
   {
@@ -199,6 +239,25 @@ export class NativeTelemetryClient extends Context.Service<
       ReadonlyArray<ResourceMonitorProcessTableEntry>,
       NativeTelemetryClientError
     >;
+    /**
+     * Host-wide samples while the stream runs. Concurrent streams share one native stream at
+     * the fastest interval and the union of fields. Emits nothing from a monitor without
+     * `capabilities.hostProcesses`.
+     */
+    readonly hostSamples: (
+      demand: HostSampleDemand,
+    ) => Stream.Stream<NativeHostSample, NativeTelemetryClientError>;
+    readonly hostSampleNow: (
+      options: ResourceMonitorHostSampleOptions,
+    ) => Effect.Effect<NativeHostSample, NativeTelemetryClientError>;
+    /** macOS memory pressure, available memory and swap; null fields elsewhere. */
+    readonly hostTotals: Effect.Effect<ResourceMonitorHostTotalsEvent, NativeTelemetryClientError>;
+    /** Device totals only, no process walk; suspended devices are never woken. */
+    readonly gpuTotals: Effect.Effect<ReadonlyArray<GpuDeviceSample>, NativeTelemetryClientError>;
+    /** Claimed process roots; kept apart from Electron's external processes and resent on restart. */
+    readonly setClaimedProcesses: (
+      processes: ReadonlyArray<ResourceMonitorExternalProcess>,
+    ) => Effect.Effect<void, NativeTelemetryClientError>;
     readonly retry: Effect.Effect<boolean>;
     readonly health: Effect.Effect<NativeTelemetryClientHealth>;
     readonly subscribeHealth: Effect.Effect<
@@ -233,6 +292,93 @@ interface PendingHistoryRequest {
     NativeTelemetryClientError
   >;
   readonly snapshots: ReadonlyArray<ResourceMonitorSnapshotEvent>;
+}
+
+type RequestOperation = NativeTelemetryRequestTimedOut["operation"];
+
+type PendingReplies<A> = Ref.Ref<Map<string, Deferred.Deferred<A, NativeTelemetryClientError>>>;
+
+const HOST_STREAMING_OFF: HostSampleDemand = {
+  intervalMs: 0,
+  processes: false,
+  gpus: false,
+  gpuProcesses: false,
+};
+
+/** The fastest interval and the union of fields over every open host stream. */
+export function combineHostSampleDemand(
+  demands: Iterable<HostSampleDemand>,
+  gpusAllowed: boolean,
+): HostSampleDemand {
+  let combined = HOST_STREAMING_OFF;
+  for (const demand of demands) {
+    const intervalMs = Math.max(MIN_HOST_SAMPLE_INTERVAL_MS, Math.round(demand.intervalMs));
+    combined = {
+      intervalMs:
+        combined.intervalMs === 0 ? intervalMs : Math.min(combined.intervalMs, intervalMs),
+      processes: combined.processes || demand.processes,
+      gpus: combined.gpus || (gpusAllowed && demand.gpus),
+      gpuProcesses: combined.gpuProcesses || (gpusAllowed && demand.gpuProcesses),
+    };
+  }
+  return combined;
+}
+
+function sameHostSampleDemand(left: HostSampleDemand, right: HostSampleDemand): boolean {
+  return (
+    left.intervalMs === right.intervalMs &&
+    left.processes === right.processes &&
+    left.gpus === right.gpus &&
+    left.gpuProcesses === right.gpuProcesses
+  );
+}
+
+/**
+ * Applies one sample's static fields to the generation's table. Identities missing from the
+ * sample's process columns are dropped; the previous table is reused when nothing changed.
+ */
+export function foldHostStatics(
+  previous: HostProcessStatics,
+  sample: ResourceMonitorHostSampleEvent,
+): HostProcessStatics {
+  const base = sample.staticReset ? new Map<number, ResourceMonitorHostProcessStatic>() : previous;
+  const columns = sample.processes;
+  if (!columns) return base;
+  const live = new Set(columns.pid);
+  const added = sample.added ?? [];
+  let pruned = false;
+  for (const pid of base.keys()) {
+    if (!live.has(pid)) {
+      pruned = true;
+      break;
+    }
+  }
+  if (!pruned && added.length === 0) return base;
+  const next = new Map<number, ResourceMonitorHostProcessStatic>();
+  for (const [pid, entry] of base) {
+    if (live.has(pid)) next.set(pid, entry);
+  }
+  for (const entry of added) next.set(entry.pid, entry);
+  return next;
+}
+
+function protocolVersionOf(current: ClientState): ResourceMonitorProtocolVersion {
+  return Option.match(current.hello, {
+    onNone: () => RESOURCE_MONITOR_LEGACY_PROTOCOL_VERSION,
+    onSome: (hello) => hello.version,
+  });
+}
+
+/** A monitor binary built before v4 lacks the host, claim and GPU commands. */
+function speaksV4(current: ClientState): boolean {
+  return protocolVersionOf(current) === RESOURCE_MONITOR_PROTOCOL_VERSION;
+}
+
+function isSupportedProtocolVersion(version: number): boolean {
+  return (
+    version === RESOURCE_MONITOR_PROTOCOL_VERSION ||
+    version === RESOURCE_MONITOR_LEGACY_PROTOCOL_VERSION
+  );
 }
 
 const initialState: ClientState = {
@@ -325,6 +471,8 @@ const encodeMonitorCommand = Schema.encodeEffect(
 const isProtocolMismatch = Schema.is(NativeTelemetryProtocolMismatch);
 const isDecodeFailed = Schema.is(NativeTelemetryDecodeFailed);
 const isCommandFailed = Schema.is(NativeTelemetryCommandFailed);
+const isExited = Schema.is(NativeTelemetryExited);
+const isStreamClosed = Schema.is(NativeTelemetryStreamClosed);
 
 export function eventVersion(value: unknown): number | undefined {
   if (typeof value !== "object" || value === null) return undefined;
@@ -397,6 +545,27 @@ export const make = Effect.fn("resourceTelemetry.nativeTelemetryClient.make")(fu
     >(),
   );
   const pendingHistories = yield* Ref.make(new Map<string, PendingHistoryRequest>());
+  const pendingHostSamples: PendingReplies<NativeHostSample> = yield* Ref.make(new Map());
+  const pendingHostTotals: PendingReplies<ResourceMonitorHostTotalsEvent> = yield* Ref.make(
+    new Map(),
+  );
+  const pendingGpuTotals: PendingReplies<ResourceMonitorGpuTotalsEvent> = yield* Ref.make(
+    new Map(),
+  );
+  const claimedProcesses = yield* Ref.make<ReadonlyArray<ResourceMonitorExternalProcess>>([]);
+  const hostDemands = yield* Ref.make(new Map<number, HostSampleDemand>());
+  const nextHostDemandId = yield* Ref.make(0);
+  const appliedHostDemand = yield* Ref.make(HOST_STREAMING_OFF);
+  const hostMutex = yield* Semaphore.make(1);
+  const hostStatics = yield* Ref.make<{
+    readonly generation: number;
+    readonly table: HostProcessStatics;
+  }>({ generation: -1, table: new Map() });
+  const hostSamplePubSub = yield* PubSub.sliding<NativeHostSample>(4);
+  // GPU code runs inside the monitor: after a crash with GPU work in flight (a GPU request, or host
+  // streaming with GPUs), or the monitor's own `gpu-unavailable`, GPUs stay off until restart.
+  const gpuState = yield* Ref.make({ off: false });
+  const gpuRequestsInFlight = yield* Ref.make(0);
   const snapshots = yield* PubSub.sliding<NativeTelemetrySnapshot>(8);
   const healthChanges = yield* PubSub.sliding<NativeTelemetryClientHealth>(4);
   const retryQueue = yield* Queue.sliding<void>(1);
@@ -416,6 +585,14 @@ export const make = Effect.fn("resourceTelemetry.nativeTelemetryClient.make")(fu
     const samples = yield* Ref.getAndSet(pendingSamples, new Map());
     const processTables = yield* Ref.getAndSet(pendingProcessTables, new Map());
     const histories = yield* Ref.getAndSet(pendingHistories, new Map());
+    const replies = [
+      ...(yield* Ref.getAndSet(pendingHostSamples, new Map())).values(),
+      ...(yield* Ref.getAndSet(pendingHostTotals, new Map())).values(),
+      ...(yield* Ref.getAndSet(pendingGpuTotals, new Map())).values(),
+    ];
+    yield* Effect.forEach(replies, (deferred) => Deferred.fail(deferred, error), {
+      discard: true,
+    });
     yield* Effect.forEach(samples.values(), (deferred) => Deferred.fail(deferred, error), {
       discard: true,
     });
@@ -453,6 +630,65 @@ export const make = Effect.fn("resourceTelemetry.nativeTelemetryClient.make")(fu
         ),
       ),
     );
+
+  const resolvePending = <A>(pending: PendingReplies<A>, requestId: string, value: A) =>
+    Ref.modify(pending, (current) => {
+      const deferred = current.get(requestId);
+      if (!deferred) return [undefined, current] as const;
+      const next = new Map(current);
+      next.delete(requestId);
+      return [deferred, next] as const;
+    }).pipe(
+      Effect.flatMap((deferred) => (deferred ? Deferred.succeed(deferred, value) : Effect.void)),
+      Effect.asVoid,
+    );
+
+  const commandableV4Handle = Ref.get(state).pipe(
+    Effect.map((current) =>
+      canCommandNativeTelemetrySidecar(current.status, Option.isSome(current.handle)) &&
+      speaksV4(current)
+        ? current.handle
+        : Option.none(),
+    ),
+  );
+
+  const gpusAllowed = Ref.get(gpuState).pipe(Effect.map((gpu) => !gpu.off));
+
+  const withGpuInFlight = <A, E>(
+    gpuWork: boolean,
+    effect: Effect.Effect<A, E>,
+  ): Effect.Effect<A, E> =>
+    gpuWork
+      ? Effect.acquireUseRelease(
+          Ref.update(gpuRequestsInFlight, (count) => count + 1),
+          () => effect,
+          () => Ref.update(gpuRequestsInFlight, (count) => count - 1),
+        )
+      : effect;
+
+  const gpuWorkInFlight = Effect.all([
+    Ref.get(gpuRequestsInFlight),
+    Ref.get(appliedHostDemand),
+  ]).pipe(Effect.map(([requests, demand]) => requests > 0 || demand.gpus || demand.gpuProcesses));
+
+  /** Sends the combined host demand when it differs from what the monitor already has. */
+  const applyHostDemand: Effect.Effect<void, NativeTelemetryClientError> = hostMutex.withPermits(1)(
+    Effect.gen(function* () {
+      const handle = yield* commandableV4Handle;
+      if (Option.isNone(handle)) return;
+      const demand = combineHostSampleDemand(
+        (yield* Ref.get(hostDemands)).values(),
+        yield* gpusAllowed,
+      );
+      if (sameHostSampleDemand(demand, yield* Ref.get(appliedHostDemand))) return;
+      yield* writeCommand(handle.value, {
+        version: RESOURCE_MONITOR_PROTOCOL_VERSION,
+        type: "setHostStreaming",
+        ...demand,
+      });
+      yield* Ref.set(appliedHostDemand, demand);
+    }),
+  );
 
   const processEvent = (
     event: ResourceMonitorEvent,
@@ -544,7 +780,37 @@ export const make = Effect.fn("resourceTelemetry.nativeTelemetryClient.make")(fu
             yield* Deferred.succeed(completed.value.deferred, completed.value.snapshots);
           }
         });
+      case "hostSample":
+        return Effect.gen(function* () {
+          const statics = yield* Ref.modify(hostStatics, (current) => {
+            const table = foldHostStatics(
+              current.generation === generation ? current.table : new Map(),
+              event,
+            );
+            return [table, { generation, table }] as const;
+          });
+          const hostSample = { generation, sample: event, statics } satisfies NativeHostSample;
+          // A requested sample carries the caller's fields, not the streams' combined ones.
+          if (event.requestId) {
+            yield* resolvePending(pendingHostSamples, event.requestId, hostSample);
+          } else {
+            yield* PubSub.publish(hostSamplePubSub, hostSample);
+          }
+        });
+      case "hostTotals":
+        return resolvePending(pendingHostTotals, event.requestId, event);
+      case "gpuTotals":
+        return resolvePending(pendingGpuTotals, event.requestId, event);
       case "error":
+        if (event.code === "gpu-unavailable") {
+          // The monitor turned its GPUs off; the rest of it is healthy.
+          return Ref.update(gpuState, (current) => ({ ...current, off: true })).pipe(
+            Effect.andThen(
+              Effect.logWarning("Resource monitor turned GPUs off", { message: event.message }),
+            ),
+            Effect.andThen(applyHostDemand),
+          );
+        }
         return Ref.update(state, (current) => ({
           ...current,
           status: "degraded" as const,
@@ -600,7 +866,9 @@ export const make = Effect.fn("resourceTelemetry.nativeTelemetryClient.make")(fu
 
       const helloDeferred = yield* Deferred.make<ResourceMonitorHelloEvent>();
       const eventFiber = yield* handle.stdout.pipe(
-        Stream.pipeThroughChannel(Ndjson.decode({ ignoreEmptyLines: true })),
+        Stream.pipeThroughChannel(
+          Ndjson.decode({ ignoreEmptyLines: true, maxLineBytes: MAX_LINE_BYTES }),
+        ),
         Stream.mapEffect(
           (
             value,
@@ -609,7 +877,7 @@ export const make = Effect.fn("resourceTelemetry.nativeTelemetryClient.make")(fu
             NativeTelemetryProtocolMismatch | NativeTelemetryDecodeFailed
           > => {
             const version = eventVersion(value);
-            if (version !== undefined && version !== RESOURCE_MONITOR_PROTOCOL_VERSION) {
+            if (version !== undefined && !isSupportedProtocolVersion(version)) {
               return Effect.fail(
                 new NativeTelemetryProtocolMismatch({
                   expectedVersion: RESOURCE_MONITOR_PROTOCOL_VERSION,
@@ -632,7 +900,12 @@ export const make = Effect.fn("resourceTelemetry.nativeTelemetryClient.make")(fu
       );
       yield* handle.stderr.pipe(Stream.runDrain, Effect.ignore, Effect.forkScoped);
 
-      const hello = yield* Deferred.await(helloDeferred).pipe(
+      // A reader that fails before hello (protocol mismatch, bad JSON) explains the failure;
+      // waiting on hello alone would report it as a handshake timeout.
+      const decoderEffect = Fiber.join(eventFiber).pipe(
+        Effect.andThen(Effect.fail(new NativeTelemetryStreamClosed())),
+      );
+      const hello = yield* Effect.raceFirst(Deferred.await(helloDeferred), decoderEffect).pipe(
         Effect.timeoutOption(HANDSHAKE_TIMEOUT),
         Effect.flatMap(
           Option.match({
@@ -653,7 +926,7 @@ export const make = Effect.fn("resourceTelemetry.nativeTelemetryClient.make")(fu
         (control) =>
           Effect.gen(function* () {
             yield* writeCommand(handle, {
-              version: RESOURCE_MONITOR_PROTOCOL_VERSION,
+              version: hello.version,
               type: "configure",
               rootPid: process.pid,
               sampleIntervalMs: control.sampleIntervalMs,
@@ -661,9 +934,17 @@ export const make = Effect.fn("resourceTelemetry.nativeTelemetryClient.make")(fu
             });
             if (control.liveSubscriberCount > 0) {
               yield* writeCommand(handle, {
-                version: RESOURCE_MONITOR_PROTOCOL_VERSION,
+                version: hello.version,
                 type: "setStreaming",
                 enabled: true,
+              });
+            }
+            const claimed = yield* Ref.get(claimedProcesses);
+            if (hello.version === RESOURCE_MONITOR_PROTOCOL_VERSION && claimed.length > 0) {
+              yield* writeCommand(handle, {
+                version: hello.version,
+                type: "setClaimedProcesses",
+                processes: [...claimed],
               });
             }
           }),
@@ -675,10 +956,13 @@ export const make = Effect.fn("resourceTelemetry.nativeTelemetryClient.make")(fu
       );
 
       yield* writeCommand(handle, {
-        version: RESOURCE_MONITOR_PROTOCOL_VERSION,
+        version: hello.version,
         type: "setExternalProcesses",
         processes: [...(yield* Ref.get(externalProcesses))],
       });
+      // A new monitor starts with host streaming off.
+      yield* Ref.set(appliedHostDemand, HOST_STREAMING_OFF);
+      yield* applyHostDemand;
 
       const exitEffect = handle.exitCode.pipe(
         Effect.mapError(
@@ -691,9 +975,6 @@ export const make = Effect.fn("resourceTelemetry.nativeTelemetryClient.make")(fu
         Effect.flatMap((exitCode) =>
           Effect.fail(new NativeTelemetryExited({ exitCode: Number(exitCode) })),
         ),
-      );
-      const decoderEffect = Fiber.join(eventFiber).pipe(
-        Effect.andThen(Effect.fail(new NativeTelemetryStreamClosed())),
       );
       return yield* Effect.raceFirst(exitEffect, decoderEffect);
     }),
@@ -717,6 +998,10 @@ export const make = Effect.fn("resourceTelemetry.nativeTelemetryClient.make")(fu
       }
 
       const error = result.failure;
+      const crashed = (isExited(error) && error.exitCode !== 0) || isStreamClosed(error);
+      // Read before failPending settles the in-flight requests.
+      const gpuBusy = crashed && (yield* gpuWorkInFlight);
+      yield* Ref.update(gpuState, (gpu) => ({ off: gpu.off || gpuBusy }));
       const now = DateTime.toEpochMillis(yield* DateTime.now);
       const recentFailures = retainRecentNativeTelemetryFailures(failures, now);
       if (recentFailures.length === 0) {
@@ -785,7 +1070,7 @@ export const make = Effect.fn("resourceTelemetry.nativeTelemetryClient.make")(fu
       const handle = Option.getOrThrow(current.handle);
       if (previous.sampleIntervalMs !== next.sampleIntervalMs) {
         yield* writeCommand(handle, {
-          version: RESOURCE_MONITOR_PROTOCOL_VERSION,
+          version: protocolVersionOf(current),
           type: "setSampleInterval",
           sampleIntervalMs: next.sampleIntervalMs,
         });
@@ -794,7 +1079,7 @@ export const make = Effect.fn("resourceTelemetry.nativeTelemetryClient.make")(fu
       const isStreaming = next.liveSubscriberCount > 0;
       if (wasStreaming !== isStreaming) {
         yield* writeCommand(handle, {
-          version: RESOURCE_MONITOR_PROTOCOL_VERSION,
+          version: protocolVersionOf(current),
           type: "setStreaming",
           enabled: isStreaming,
         });
@@ -849,7 +1134,7 @@ export const make = Effect.fn("resourceTelemetry.nativeTelemetryClient.make")(fu
       const current = yield* Ref.get(state);
       if (!canCommandNativeTelemetrySidecar(current.status, Option.isSome(current.handle))) return;
       yield* writeCommand(Option.getOrThrow(current.handle), {
-        version: RESOURCE_MONITOR_PROTOCOL_VERSION,
+        version: protocolVersionOf(current),
         type: "setExternalProcesses",
         processes: [...processes],
       });
@@ -883,7 +1168,7 @@ export const make = Effect.fn("resourceTelemetry.nativeTelemetryClient.make")(fu
       return next;
     });
     return yield* writeCommand(Option.getOrThrow(current.handle), {
-      version: RESOURCE_MONITOR_PROTOCOL_VERSION,
+      version: protocolVersionOf(current),
       type: "readHistory",
       requestId,
       windowMs: Math.max(0, Math.round(windowMs)),
@@ -939,7 +1224,7 @@ export const make = Effect.fn("resourceTelemetry.nativeTelemetryClient.make")(fu
       return next;
     });
     return yield* writeCommand(Option.getOrThrow(current.handle), {
-      version: RESOURCE_MONITOR_PROTOCOL_VERSION,
+      version: protocolVersionOf(current),
       type: "sampleNow",
       requestId,
     }).pipe(
@@ -995,7 +1280,7 @@ export const make = Effect.fn("resourceTelemetry.nativeTelemetryClient.make")(fu
       return next;
     });
     return yield* writeCommand(Option.getOrThrow(current.handle), {
-      version: RESOURCE_MONITOR_PROTOCOL_VERSION,
+      version: protocolVersionOf(current),
       type: "processTable",
       requestId,
     }).pipe(
@@ -1026,6 +1311,145 @@ export const make = Effect.fn("resourceTelemetry.nativeTelemetryClient.make")(fu
     );
   });
 
+  // Untraced: host samples and per-view GPU totals call this about twice a second.
+  const requestV4 = Effect.fnUntraced(function* <A>(
+    operation: RequestOperation,
+    pending: PendingReplies<A>,
+    timeout: Duration.Duration,
+    command: (requestId: string) => ResourceMonitorCommand,
+  ) {
+    const current = yield* Ref.get(state);
+    if (!canCommandNativeTelemetrySidecar(current.status, Option.isSome(current.handle))) {
+      return yield* new NativeTelemetryUnavailable({
+        reason: Option.getOrElse(current.lastError, () => "sidecar is not running"),
+      });
+    }
+    if (!speaksV4(current)) {
+      return yield* new NativeTelemetryUnavailable({
+        reason: `the resource monitor binary predates '${operation}'; rebuild it with \`vp run build:resource-monitor\``,
+      });
+    }
+    const requestId = yield* random
+      .uuidV4()
+      .pipe(
+        Effect.mapError(
+          (cause) => new NativeTelemetryCommandFailed({ operation: "createRequestId", cause }),
+        ),
+      );
+    const deferred = yield* Deferred.make<A, NativeTelemetryClientError>();
+    yield* Ref.update(pending, (replies) => new Map(replies).set(requestId, deferred));
+    return yield* writeCommand(Option.getOrThrow(current.handle), command(requestId)).pipe(
+      Effect.andThen(
+        Deferred.await(deferred).pipe(
+          Effect.timeoutOption(timeout),
+          Effect.flatMap(
+            Option.match({
+              onNone: () =>
+                Effect.fail(
+                  new NativeTelemetryRequestTimedOut({
+                    operation,
+                    timeoutMs: Duration.toMillis(timeout),
+                  }),
+                ),
+              onSome: Effect.succeed,
+            }),
+          ),
+        ),
+      ),
+      Effect.ensuring(
+        Ref.update(pending, (replies) => {
+          const next = new Map(replies);
+          next.delete(requestId);
+          return next;
+        }),
+      ),
+    );
+  });
+
+  const hostSamples: NativeTelemetryClient["Service"]["hostSamples"] = (demand) =>
+    Stream.unwrap(
+      Effect.gen(function* () {
+        const subscription = yield* PubSub.subscribe(hostSamplePubSub);
+        yield* Effect.acquireRelease(
+          Ref.modify(nextHostDemandId, (id) => [id, id + 1] as const).pipe(
+            Effect.tap((id) =>
+              Ref.update(hostDemands, (demands) => new Map(demands).set(id, demand)),
+            ),
+          ),
+          (id) =>
+            Ref.update(hostDemands, (demands) => {
+              const next = new Map(demands);
+              next.delete(id);
+              return next;
+            }).pipe(Effect.andThen(applyHostDemand), Effect.ignore),
+        );
+        yield* applyHostDemand;
+        return Stream.fromSubscription(subscription);
+      }),
+    );
+
+  const hostSampleNow: NativeTelemetryClient["Service"]["hostSampleNow"] = Effect.fn(
+    "NativeTelemetryClient.hostSampleNow",
+  )(function* (options) {
+    const allowed = yield* gpusAllowed;
+    const fields = {
+      processes: options.processes,
+      gpus: allowed && options.gpus,
+      gpuProcesses: allowed && options.gpuProcesses,
+    };
+    return yield* withGpuInFlight(
+      fields.gpus || fields.gpuProcesses,
+      requestV4("hostSampleNow", pendingHostSamples, HOST_SAMPLE_REQUEST_TIMEOUT, (requestId) => ({
+        version: RESOURCE_MONITOR_PROTOCOL_VERSION,
+        type: "hostSampleNow",
+        requestId,
+        ...fields,
+      })),
+    );
+  });
+
+  const hostTotals: NativeTelemetryClient["Service"]["hostTotals"] = requestV4(
+    "hostTotals",
+    pendingHostTotals,
+    HOST_TOTALS_REQUEST_TIMEOUT,
+    (requestId) => ({ version: RESOURCE_MONITOR_PROTOCOL_VERSION, type: "hostTotals", requestId }),
+  );
+
+  const gpuTotals: NativeTelemetryClient["Service"]["gpuTotals"] = Effect.gen(function* () {
+    if (!(yield* gpusAllowed)) return [];
+    const capabilities = Option.getOrUndefined((yield* Ref.get(state)).hello)?.capabilities;
+    if (capabilities?.gpuNvidia === false && capabilities.gpuIntel === false) return [];
+    const reply = yield* withGpuInFlight(
+      true,
+      requestV4("gpuTotals", pendingGpuTotals, GPU_TOTALS_REQUEST_TIMEOUT, (requestId) => ({
+        version: RESOURCE_MONITOR_PROTOCOL_VERSION,
+        type: "gpuTotals",
+        requestId,
+      })),
+    );
+    // No `gpus` means this one query failed, which is not the same as no GPUs.
+    if (reply.gpus === undefined) {
+      return yield* new NativeTelemetryCommandFailed({
+        operation: "gpuTotals",
+        cause: "GPU query failed",
+      });
+    }
+    return reply.gpus;
+  });
+
+  const setClaimedProcesses: NativeTelemetryClient["Service"]["setClaimedProcesses"] =
+    Effect.fnUntraced(function* (processes) {
+      const claimed = processes.slice(0, MAX_CLAIMED_PROCESSES);
+      yield* Ref.set(claimedProcesses, claimed);
+      const handle = yield* commandableV4Handle;
+      if (Option.isNone(handle)) return;
+      yield* writeCommand(handle.value, {
+        version: RESOURCE_MONITOR_PROTOCOL_VERSION,
+        type: "setClaimedProcesses",
+        processes: [...claimed],
+      });
+    });
+
   const health = currentHealth;
 
   return NativeTelemetryClient.of({
@@ -1048,6 +1472,11 @@ export const make = Effect.fn("resourceTelemetry.nativeTelemetryClient.make")(fu
     setHostPowerState,
     sampleNow,
     processTable,
+    hostSamples,
+    hostSampleNow,
+    hostTotals,
+    gpuTotals,
+    setClaimedProcesses,
     retry: Ref.get(state).pipe(
       Effect.flatMap((current) =>
         !canRequestNativeTelemetryRetry(current.status, Option.isSome(current.handle))
@@ -1111,6 +1540,23 @@ export const layerTest = (
           reason: "No resource monitor process table was configured for this test.",
         }),
       ),
+      hostSamples: () => Stream.empty,
+      hostSampleNow: Effect.fn("NativeTelemetryClient.hostSampleNow")(function () {
+        return Effect.fail(
+          new NativeTelemetryUnavailable({
+            reason: "No resource monitor host sample was configured for this test.",
+          }),
+        );
+      }),
+      hostTotals: Effect.fail(
+        new NativeTelemetryUnavailable({
+          reason: "No resource monitor host totals were configured for this test.",
+        }),
+      ),
+      gpuTotals: Effect.succeed([]),
+      setClaimedProcesses: Effect.fn("NativeTelemetryClient.setClaimedProcesses")(function () {
+        return Effect.void;
+      }),
       retry: Effect.succeed(false),
       health,
       subscribeHealth:

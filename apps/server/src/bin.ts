@@ -32,6 +32,15 @@ if (
   } else if (command === "__managed-chatgpt-token") {
     const { runManagedChatGptTokenCli } = await import("./cli/managedChatGptToken.ts");
     await runManagedChatGptTokenCli(process.argv.slice(3));
+  } else if (command === "guard") {
+    // Single executables have no guard.mjs beside them, so their launcher runs `t3 guard`.
+    const { runGuard } = await import("./cli/guard.ts");
+    process.exitCode = await runGuard({
+      argv: process.argv.slice(3),
+      // oxlint-disable-next-line t3code/no-global-process-runtime -- Fast path outside Effect.
+      platform: process.platform,
+      env: process.env,
+    });
   } else if (command === "acp-mcp-bridge" || command === "acp-mcp-call") {
     const { runAcpMcpCliFastPath } = await import("./mcp/AcpMcpStdioBridge.ts");
     await runAcpMcpCliFastPath(command, process.argv.slice(3));

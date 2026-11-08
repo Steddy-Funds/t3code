@@ -3415,6 +3415,21 @@ describe("OrchestratorMcpService thread list", () => {
     shell("thread:a-snoozed", "project:a", true),
     shell("thread:a-awake", "project:a", false),
     shell("thread:b-snoozed", "project:b", true),
+    {
+      ...shell("thread:c-paused", "project:c", false),
+      tags: ["backgrounded"],
+      loadPause: {
+        runId: RunId.make("run:c-paused"),
+        episodeId: "episode:1",
+        pausedAt: "2026-01-01T00:00:00.000Z",
+        reason: { rule: "loadPerCore", value: 4, threshold: 3, shareOfLoad: 0.8 },
+        containersPaused: [],
+      },
+    },
+    {
+      ...shell("thread:c-pinned-normal", "project:c", false),
+      tags: ["backgrounded", "priority:normal"],
+    },
   ];
   const service = layerOrchestratorService.pipe(
     Layer.provide(
@@ -3456,6 +3471,32 @@ describe("OrchestratorMcpService thread list", () => {
         [
           ["thread:a-snoozed", "project:a"],
           ["thread:b-snoozed", "project:b"],
+        ],
+      );
+    }).pipe(Effect.provide(service)),
+  );
+
+  it.effect("summarizes a thread's load pause and effective priority", () =>
+    Effect.gen(function* () {
+      const mcp = yield* OrchestratorMcpService.OrchestratorMcpService;
+      const listed = yield* mcp.listThreads(client, { projectId: ProjectId.make("project:c") });
+      assert.deepStrictEqual(
+        listed.threads.map(({ threadId, loadPaused, effectivePriority }) => ({
+          threadId,
+          loadPaused,
+          effectivePriority,
+        })),
+        [
+          {
+            threadId: ThreadId.make("thread:c-paused"),
+            loadPaused: true,
+            effectivePriority: "low",
+          },
+          {
+            threadId: ThreadId.make("thread:c-pinned-normal"),
+            loadPaused: undefined,
+            effectivePriority: "normal",
+          },
         ],
       );
     }).pipe(Effect.provide(service)),

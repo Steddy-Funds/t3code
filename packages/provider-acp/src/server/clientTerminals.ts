@@ -9,6 +9,7 @@ import * as Stream from "effect/Stream";
 import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as EffectAcpErrors from "effect-acp/errors";
+import { GuardEnvironment } from "@t3tools/shared/GuardEnvironment";
 import { ProcessOwnershipRegistry } from "@t3tools/shared/ProcessOwnershipRegistry";
 import type * as EffectAcpSchema from "effect-acp/compat";
 import * as NodeBuffer from "node:buffer";
@@ -154,6 +155,7 @@ export const makeAcpClientTerminals = Effect.fn("makeAcpClientTerminals")(functi
 ): Effect.fn.Return<AcpClientTerminals, never, ChildProcessSpawner.ChildProcessSpawner> {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const ownership = yield* ProcessOwnershipRegistry;
+  const guard = yield* GuardEnvironment;
   const forceKillAfter = options.forceKillAfter ?? "5 seconds";
   const creationPermit = yield* Semaphore.make(1);
   const terminals = new Map<string, ManagedAcpTerminal>();
@@ -221,12 +223,19 @@ export const makeAcpClientTerminals = Effect.fn("makeAcpClientTerminals")(functi
             (request.env ?? []).map((variable) => [variable.name, variable.value] as const),
           );
           const sessionEnvironment = options.environmentForSession?.(request.sessionId);
+          const guardEnvironment = guard.env();
           const environment =
             options.environment === undefined &&
             sessionEnvironment === undefined &&
-            (request.env?.length ?? 0) === 0
+            (request.env?.length ?? 0) === 0 &&
+            Object.keys(guardEnvironment).length === 0
               ? undefined
-              : { ...options.environment, ...sessionEnvironment, ...requestEnvironment };
+              : {
+                  ...options.environment,
+                  ...guardEnvironment,
+                  ...sessionEnvironment,
+                  ...requestEnvironment,
+                };
           const terminalScope = yield* Scope.make();
           const child = yield* restore(
             spawner

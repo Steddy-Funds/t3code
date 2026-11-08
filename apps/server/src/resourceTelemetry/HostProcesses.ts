@@ -832,8 +832,8 @@ export function unbucketedSharePercent(
   return shares.length === 0 ? null : Math.round(Math.max(...shares) * 10) / 10;
 }
 
-// Enough for a bucket rule; the auto-buckets agent reads up to 50 of these.
-const UNBUCKETED_COMMAND_MAX_CHARS = 4096;
+// Enough for a bucket rule; the auto-buckets agent reads up to 50 of each per run.
+const UNBUCKETED_TEXT_MAX_CHARS = SNAPSHOT_COMMAND_MAX_CHARS;
 
 /** The busiest unbucketed processes with the fields bucket rules match on, and the share. */
 export function buildUnbucketed(input: {
@@ -866,8 +866,8 @@ export function buildUnbucketed(input: {
       exe: entry?.exe ?? "",
       ...(input.commands
         ? {
-            command: (entry?.command ?? "").slice(0, UNBUCKETED_COMMAND_MAX_CHARS),
-            cwd: entry?.cwd ?? "",
+            command: (entry?.command ?? "").slice(0, UNBUCKETED_TEXT_MAX_CHARS),
+            cwd: (entry?.cwd ?? "").slice(0, UNBUCKETED_TEXT_MAX_CHARS),
           }
         : {}),
       user: entry?.user ?? "",

@@ -290,7 +290,7 @@ function AutoBucketsSettings({
     <>
       <SettingsRow
         title="Auto-buckets"
-        description="When processes nothing owns pass a quarter of this machine, a background thread groups them into buckets."
+        description="When processes nothing owns pass a quarter of what's running, a background thread groups them into buckets."
         control={
           <Switch
             checked={autoBuckets.enabled}

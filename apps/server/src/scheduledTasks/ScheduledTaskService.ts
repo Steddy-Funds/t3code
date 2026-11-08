@@ -2,7 +2,7 @@ import {
   CommandId,
   MessageId,
   PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
-  type ProjectId,
+  ProjectId,
   ScheduledTask,
   ScheduledTaskError,
   ScheduledTaskId,
@@ -377,6 +377,7 @@ function webhookEndpoint(
 
 export const MACHINE_BUCKETS_TASK_ID = ScheduledTaskId.make("builtin:machine-buckets");
 const MACHINE_BUCKETS_TITLE = "Machine buckets";
+const MACHINE_BUCKETS_PROJECT_PLACEHOLDER = ProjectId.make("builtin:scratch");
 const NO_PROVIDER = "No provider available";
 const BUILT_IN_REJECTED =
   "This task is built in. Turn it on or off with Auto-buckets in this machine's settings.";
@@ -461,8 +462,19 @@ const decodeRow = Effect.fnUntraced(
     ),
 );
 
+/** Polls re-read every row, so one bad row warns once per task id per process. */
+const warnUndecodableOnce = (warned: Set<string>, taskId: string, cause: unknown) =>
+  warned.has(taskId)
+    ? Effect.void
+    : Effect.sync(() => warned.add(taskId)).pipe(
+        Effect.andThen(
+          Effect.logWarning("Skipping undecodable schedule task row", { taskId, cause }),
+        ),
+      );
+
 export const listDueTasks = Effect.fn("ScheduledTaskService.listDueTasks")(function* (
   now: DateTime.DateTime,
+  warnedUndecodable: Set<string> = new Set(),
 ) {
   const sql = yield* SqlClient.SqlClient;
   const rows = yield* sql<ScheduledTaskRow>`
@@ -485,10 +497,7 @@ export const listDueTasks = Effect.fn("ScheduledTaskService.listDueTasks")(funct
         });
       }
     } else {
-      yield* Effect.logWarning("Skipping undecodable schedule task row", {
-        taskId: row.task_id,
-        cause: decoded.failure,
-      });
+      yield* warnUndecodableOnce(warnedUndecodable, row.task_id, decoded.failure);
     }
   }
   return tasks;
@@ -539,6 +548,7 @@ export const layer = Layer.effect(
       ReadonlyMap<ScheduledTaskId, ReadonlyArray<number>>
     >(new Map());
     const activeRuns = yield* Ref.make<ReadonlySet<ScheduledTaskId>>(new Set());
+    const warnedUndecodable = new Set<string>();
     // The built-in's last background run, in memory: the cooldown covers a restart.
     const machineBucketsLast = yield* Ref.make<{
       readonly threadId: ThreadId | null;
@@ -593,11 +603,7 @@ export const layer = Layer.effect(
       for (const row of rows) {
         const decoded = yield* Effect.result(decodeRow(row, origin));
         if (Result.isSuccess(decoded)) tasks.push(withPolicy(decoded.success));
-        else
-          yield* Effect.logWarning("Skipping undecodable schedule task row", {
-            taskId: row.task_id,
-            cause: decoded.failure,
-          });
+        else yield* warnUndecodableOnce(warnedUndecodable, row.task_id, decoded.failure);
       }
       return tasks;
     });
@@ -1055,9 +1061,13 @@ export const layer = Layer.effect(
           creationSource: active.creationSource,
         };
         // Bucket writes are `auto` only from a tagged thread, so the tags land before the prompt.
-        const launchMachineBuckets = threadLaunch.launch(launchInput).pipe(
-          Effect.map((launched) => launched.threadId),
-          Effect.tap((threadId) =>
+        const launchMachineBuckets = managedFolders.ensureScratchProject.pipe(
+          Effect.flatMap(({ projectId }) =>
+            threadLaunch
+              .launch({ ...launchInput, projectId })
+              .pipe(Effect.map((launched) => ({ projectId, threadId: launched.threadId }))),
+          ),
+          Effect.tap(({ threadId }) =>
             Effect.forEach(
               [BACKGROUNDED_THREAD_TAG, MACHINE_BUCKETS_THREAD_TAG],
               (tag) =>
@@ -1071,9 +1081,9 @@ export const layer = Layer.effect(
               { discard: true },
             ),
           ),
-          Effect.tap((threadId) =>
+          Effect.tap(({ projectId, threadId }) =>
             threadManagement.sendToThread({
-              projectId: active.projectId,
+              projectId,
               commandId: CommandId.make(`${commandId}:message`),
               threadId,
               messageId,
@@ -1085,6 +1095,7 @@ export const layer = Layer.effect(
               creationSource: active.creationSource,
             }),
           ),
+          Effect.map(({ threadId }) => threadId),
         );
 
         // Capture defects and interrupts too so dispatch failures still reach markCompleted.
@@ -1269,7 +1280,7 @@ export const layer = Layer.effect(
         }
         return;
       }
-      const tasks = yield* listDueTasks(now).pipe(
+      const tasks = yield* listDueTasks(now, warnedUndecodable).pipe(
         Effect.mapError((cause) => taskError("Could not list schedule tasks.", { cause })),
       );
       const due = tasks.flatMap((task) =>
@@ -1700,36 +1711,21 @@ export const layer = Layer.effect(
       const model = resolveMachineBucketsModel(settings);
       const block =
         model === null ? NO_PROVIDER : managedRuntimeModeDenial(managedPolicy.summary, "auto");
-      const on = settings.machineResources.autoBuckets.enabled;
       const existing = yield* findTask(MACHINE_BUCKETS_TASK_ID);
       const blockChanged = machineBucketsBlock !== block;
       machineBucketsBlock = block;
-      // Scratch is prepared only for a row that can run; switched off, no row is needed.
-      if (!on && existing === null) {
-        if (blockChanged) yield* notifyChanged;
-        return;
-      }
-      const projectId =
-        !on && existing !== null
-          ? existing.projectId
-          : (yield* managedFolders.ensureScratchProject.pipe(
-              Effect.mapError((cause) =>
-                taskError("Could not prepare the scratch project for auto-buckets.", {
-                  taskId: MACHINE_BUCKETS_TASK_ID,
-                  cause,
-                }),
-              ),
-            )).projectId;
       const desired = {
         title: MACHINE_BUCKETS_TITLE,
         prompt: MACHINE_BUCKETS_PROMPT,
-        enabled: on && block === undefined,
+        enabled: settings.machineResources.autoBuckets.enabled && block === undefined,
         schedule: MACHINE_BUCKETS_SCHEDULE,
-        projectId,
+        // Each run resolves the scratch project itself, so startup never creates it.
+        projectId: existing?.projectId ?? MACHINE_BUCKETS_PROJECT_PLACEHOLDER,
         threadId: null,
         workspaceStrategy: { type: "root" },
         // The row needs some model while blocked; it never runs with it.
         modelSelection: model ?? existing?.modelSelection ?? settings.textGenerationModelSelection,
+        // Not auto-accept-edits: Codex then sends approvals to the user, and nobody watches this run.
         runtimeMode: "auto",
         interactionMode: "default",
       } satisfies Partial<ScheduledTask>;

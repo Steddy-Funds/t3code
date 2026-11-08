@@ -94,6 +94,12 @@ export function conditionHolds(condition: LoadCondition, reading: LoadReading): 
   return condition.op === ">=" ? value >= condition.threshold : value <= condition.threshold;
 }
 
+/** Without a `clear`, the negated condition holds at least a minute so a flap does not re-arm. */
+export const DEFAULT_CLEAR_MIN_SECONDS = 60;
+const clearSustainSeconds = (schedule: ScheduledTaskLoadSchedule) =>
+  schedule.clear?.sustainSeconds ??
+  Math.max(schedule.condition.sustainSeconds, DEFAULT_CLEAR_MIN_SECONDS);
+
 function clearHolds(schedule: ScheduledTaskLoadSchedule, reading: LoadReading): boolean {
   if (schedule.clear !== undefined) return conditionHolds(schedule.clear, reading);
   return (
@@ -156,7 +162,7 @@ export function stepMonitor(
         return { state: { ...state, clearingSince: null }, fired: false };
       }
       const clearingSince = state.clearingSince ?? now;
-      const clearSustainMs = (schedule.clear?.sustainSeconds ?? 0) * 1000;
+      const clearSustainMs = clearSustainSeconds(schedule) * 1000;
       return {
         state:
           now - clearingSince < clearSustainMs
@@ -278,6 +284,10 @@ export const monitorLayer = Layer.effectDiscard(
         unbucketedReadAt = now;
         const unbucketedSharePercent = yield* readUnbucketedShare;
         yield* Ref.update(reading, (latest) => ({ ...latest, unbucketedSharePercent }));
+        // The built-in re-arms at each read, so only its service caps (6 h, in flight,
+        // changed set) limit it; a skipped fire would otherwise latch until restart.
+        const builtIn = states.get(ScheduledTaskService.MACHINE_BUCKETS_TASK_ID);
+        if (builtIn !== undefined && builtIn.state.phase !== "holding") builtIn.state = ARMED;
       }
       const current = yield* Ref.get(reading);
       const byId = new Map(tasks.map((task) => [task.id, task]));

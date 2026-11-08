@@ -16,7 +16,10 @@ requests one sample a minute and exports process totals by group
 ([`ProcessGroupMetrics`](../../apps/server/src/resourceTelemetry/ProcessGroupMetrics.ts)),
 because the user asked for continuous telemetry. Groups are a fixed set named after
 the server's direct children, never process IDs or threads, so the series count
-stays bounded as agents come and go. History therefore covers only time with a live
+stays bounded as agents come and go. Per-thread ownership
+([`ProcessOwnership`](../../apps/server/src/resourceTelemetry/ProcessOwnership.ts)) runs only
+on process-table frames, so it costs nothing without a viewer; its claims stay in memory and
+end with the process, the container or the thread. History therefore covers only time with a live
 subscriber, plus on-demand and export samples. Consuming host power for background scheduling must not retain
 live diagnostics. There is no telemetry database or recurring shell-probe fallback.
 

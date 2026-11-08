@@ -31,6 +31,7 @@ import type * as EffectAcpProtocol from "effect-acp/protocol";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
 import { AgentScope, AgentScopeThreadId, RAISE_OOM_SCORE_LINE } from "@t3tools/shared/AgentScope";
 import * as HostProcess from "@t3tools/shared/HostProcess";
+import { parseUnifiedCgroupPath } from "@t3tools/shared/cgroup";
 
 import { signalProcessGroup } from "@t3tools/provider-core/server/processGroup";
 import { appendAcpStderrTail, sanitizeAcpStderrExcerpt } from "./stderr.ts";
@@ -222,11 +223,6 @@ function decodeMountInfoPath(value: string): string {
   return value.replace(/\\([0-7]{3})/g, (_match, octal: string) =>
     String.fromCharCode(Number.parseInt(octal, 8)),
   );
-}
-
-export function parseUnifiedCgroupPath(contents: string): string | undefined {
-  const matches = [...contents.matchAll(/^0::(\/.*)$/gm)];
-  return matches.length === 1 ? matches[0]![1] : undefined;
 }
 
 export function isSafeCgroupPath(value: string): boolean {

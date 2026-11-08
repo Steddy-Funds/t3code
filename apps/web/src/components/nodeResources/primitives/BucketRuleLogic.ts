@@ -1,29 +1,23 @@
-import type { ThreadId } from "@t3tools/contracts";
+import {
+  type BucketRule,
+  MACHINE_BUCKET_MAX_RULES,
+  MACHINE_BUCKET_RULE_VALUE_MAX,
+  MachineBucketRuleField,
+  MachineBucketRuleOp,
+  type ThreadId,
+} from "@t3tools/contracts";
 
-// Stand-in for the nr3-ownership `BucketRule` (b3 shape); swap for the contract import once
-// `machineResources.ts` carries it.
-export const BUCKET_MATCH_FIELDS = [
-  "command",
-  "exe",
-  "cwd",
-  "user",
-  "container",
-  "parent",
-] as const;
-export const BUCKET_MATCH_OPS = ["equals", "contains", "glob"] as const;
-export type BucketMatchField = (typeof BUCKET_MATCH_FIELDS)[number];
-export type BucketMatchOp = (typeof BUCKET_MATCH_OPS)[number];
-
-export type BucketRule =
-  | { readonly field: BucketMatchField; readonly op: BucketMatchOp; readonly value: string }
-  | { readonly field: "thread"; readonly threadId: ThreadId }
-  | { readonly field: "pid"; readonly pid: number; readonly startTimeMs: number };
+export const BUCKET_MATCH_FIELDS = MachineBucketRuleField.literals;
+export const BUCKET_MATCH_OPS = MachineBucketRuleOp.literals;
+export type BucketMatchField = MachineBucketRuleField;
+export type BucketMatchOp = MachineBucketRuleOp;
+export type { BucketRule };
 
 export type BucketRuleField = BucketRule["field"];
 type MatchRule = Extract<BucketRule, { readonly op: BucketMatchOp }>;
 
-export const MAX_BUCKET_RULES = 16;
-export const MAX_RULE_VALUE_LENGTH = 1024;
+export const MAX_BUCKET_RULES = MACHINE_BUCKET_MAX_RULES;
+export const MAX_RULE_VALUE_LENGTH = MACHINE_BUCKET_RULE_VALUE_MAX;
 
 export const FIELD_LABELS: Record<BucketRuleField, string> = {
   command: "command",

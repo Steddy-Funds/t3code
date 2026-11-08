@@ -347,6 +347,9 @@ import {
   ResourceTelemetrySnapshot,
 } from "./resourceTelemetry.ts";
 import {
+  BucketEditedError,
+  MachineBucketLimitError,
+  MachineClaimsReleaseInput,
   MachineProcessFrame,
   MachineStatusSnapshot,
   SubscribeMachineInput,
@@ -547,6 +550,7 @@ export const WS_METHODS = {
   serverCheckOtlpEndpoint: "server.checkOtlpEndpoint",
   serverPrepareTriage: "server.prepareTriage",
   serverSignalProcess: "server.signalProcess",
+  machineClaimsRelease: "machine.claims.release",
   serverReportClientActivity: "server.reportClientActivity",
   serverGetUsageSummary: "server.getUsageSummary",
   serverRefreshUsageRates: "server.refreshUsageRates",
@@ -842,7 +846,13 @@ const WsServerUpdateSettingsRpc = Rpc.make(WS_METHODS.serverUpdateSettings, {
     providerInstanceMutation: Schema.optionalKey(ProviderInstanceMutation),
   }),
   success: ServerSettings,
-  error: Schema.Union([ServerSettingsError, EnvironmentAuthorizationError]),
+  // Bucket errors only answer fork clients writing `machineResources.buckets`.
+  error: Schema.Union([
+    ServerSettingsError,
+    BucketEditedError,
+    MachineBucketLimitError,
+    EnvironmentAuthorizationError,
+  ]),
 });
 
 const WsServerDiscoverSourceControlRpc = Rpc.make(WS_METHODS.serverDiscoverSourceControl, {
@@ -2017,6 +2027,11 @@ const WsSubscribeMachineRpc = Rpc.make(WS_METHODS.subscribeMachine, {
   stream: true,
 });
 
+const WsMachineClaimsReleaseRpc = Rpc.make(WS_METHODS.machineClaimsRelease, {
+  payload: MachineClaimsReleaseInput,
+  error: EnvironmentAuthorizationError,
+});
+
 const WsSubscribeMachineProcessesRpc = Rpc.make(WS_METHODS.subscribeMachineProcesses, {
   payload: SubscribeMachineProcessesInput,
   success: MachineProcessFrame,
@@ -2087,6 +2102,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerRefreshUsageRatesRpc,
   WsServerGetThreadUsageRpc,
   WsServerSignalProcessRpc,
+  WsMachineClaimsReleaseRpc,
   WsScheduledTasksSubscribeRpc,
   WsScheduledTasksUpsertRpc,
   WsScheduledTasksSetEnabledRpc,

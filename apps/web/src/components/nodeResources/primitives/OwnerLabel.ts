@@ -1,23 +1,12 @@
-import { PROVIDER_DISPLAY_NAMES, type ProviderDriverKind, type ThreadId } from "@t3tools/contracts";
+import {
+  PROVIDER_DISPLAY_NAMES,
+  type MachineBucketId,
+  type ProcessOwner,
+  type ProviderDriverKind,
+  type ThreadId,
+} from "@t3tools/contracts";
 
-// Stand-in for the nr3-ownership contract types (b3 shapes); swap for imports from
-// `@t3tools/contracts` once `machineResources.ts` carries them.
-export type MachineBucketId = string & { readonly MachineBucketId: unique symbol };
-export type ClaimId = string & { readonly ClaimId: unique symbol };
-export type ProcessOwner =
-  | { readonly type: "thread"; readonly threadId: ThreadId; readonly terminalId?: string }
-  | {
-      readonly type: "shared";
-      readonly provider: ProviderDriverKind;
-      readonly label: string;
-      readonly threadCount: number;
-    }
-  | { readonly type: "t3"; readonly label: string }
-  | { readonly type: "claimed"; readonly claimId: ClaimId; readonly threadId: ThreadId }
-  | { readonly type: "bucket"; readonly bucketId: MachineBucketId }
-  | { readonly type: "provider"; readonly provider: ProviderDriverKind }
-  | { readonly type: "container"; readonly id: string }
-  | { readonly type: "other" };
+export type { ClaimId, MachineBucketId, ProcessOwner } from "@t3tools/contracts";
 
 export type OwnerKind = ProcessOwner["type"];
 

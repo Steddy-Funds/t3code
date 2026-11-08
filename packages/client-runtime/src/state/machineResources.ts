@@ -16,7 +16,10 @@ import {
   type MachineProcessTable,
 } from "./machineProcessFrames.ts";
 import { markMachineHistoryArrival } from "./machineHistory.ts";
-import { createEnvironmentRpcSubscriptionAtomFamily } from "./runtime.ts";
+import {
+  createEnvironmentRpcCommand,
+  createEnvironmentRpcSubscriptionAtomFamily,
+} from "./runtime.ts";
 
 const MACHINE_STATUS_LABEL = "machine:status";
 const MACHINE_PROCESSES_LABEL = "machine:processes";
@@ -79,5 +82,11 @@ export function createMachineResourcesAtoms<R, E>(
   const machineProcesses = (environmentId: EnvironmentId, input: SubscribeMachineProcessesInput) =>
     processes({ environmentId, input });
 
-  return { machine, machineProcesses };
+  // Guarded by `machine.claims.release`; read `releaseClaim.permissionAtom` for availability.
+  const releaseClaim = createEnvironmentRpcCommand(runtime, {
+    label: "machine:claims:release",
+    tag: WS_METHODS.machineClaimsRelease,
+  });
+
+  return { machine, machineProcesses, releaseClaim };
 }

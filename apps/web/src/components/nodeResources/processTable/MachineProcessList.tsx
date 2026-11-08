@@ -81,7 +81,10 @@ const COLUMNS: ReadonlyArray<ProcessColumn<MachineProcessRow> & { readonly id: C
     align: "end",
     sortValue: (row) => row.gpuUtil ?? -1,
     render: (row) => (row.gpuUtil == null ? null : formatPercent(row.gpuUtil)),
-    total: (rows) => formatPercent(sum(rows, (row) => row.gpuUtil ?? 0)),
+    total: (rows) => {
+      const total = measuredSum(rows, (row) => row.gpuUtil);
+      return total === null ? null : formatPercent(total);
+    },
   },
   {
     id: "vram",
@@ -90,7 +93,10 @@ const COLUMNS: ReadonlyArray<ProcessColumn<MachineProcessRow> & { readonly id: C
     align: "end",
     sortValue: (row) => row.vram ?? -1,
     render: (row) => (row.vram == null ? null : formatProcessMemory(row.vram)),
-    total: (rows) => formatProcessMemory(sum(rows, (row) => row.vram ?? 0)),
+    total: (rows) => {
+      const total = measuredSum(rows, (row) => row.vram);
+      return total === null ? null : formatProcessMemory(total);
+    },
   },
   {
     id: "command",
@@ -234,6 +240,20 @@ export function MachineProcessList({
 
 function sum(rows: ReadonlyArray<MachineProcessRow>, value: (row: MachineProcessRow) => number) {
   return rows.reduce((total, row) => total + value(row), 0);
+}
+
+/** Null unless every row was measured: a total over unmeasured rows would understate. */
+function measuredSum(
+  rows: ReadonlyArray<MachineProcessRow>,
+  value: (row: MachineProcessRow) => number | null | undefined,
+): number | null {
+  let total = 0;
+  for (const row of rows) {
+    const current = value(row);
+    if (current == null) return null;
+    total += current;
+  }
+  return total;
 }
 
 function errorMessage(cause: Cause.Cause<unknown>): string {

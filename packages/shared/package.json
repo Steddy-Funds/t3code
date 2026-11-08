@@ -339,6 +339,14 @@
       "types": "./src/AgentScope.ts",
       "import": "./src/AgentScope.ts"
     },
+    "./cgroup": {
+      "types": "./src/cgroup.ts",
+      "import": "./src/cgroup.ts"
+    },
+    "./ProcessOwnershipRegistry": {
+      "types": "./src/ProcessOwnershipRegistry.ts",
+      "import": "./src/ProcessOwnershipRegistry.ts"
+    },
     "./managedPolicyFile": {
       "types": "./src/managedPolicyFile.ts",
       "import": "./src/managedPolicyFile.ts"

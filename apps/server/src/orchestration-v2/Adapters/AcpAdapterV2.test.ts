@@ -60,6 +60,7 @@ import { writeFakeCli } from "@t3tools/provider-testing/fakeCli";
 import * as TestProviderHost from "@t3tools/provider-testing/TestProviderHost";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import * as AcpSessionRuntime from "@t3tools/provider-acp/server/AcpSessionRuntime";
+import { parseUnifiedCgroupPath } from "@t3tools/shared/cgroup";
 import {
   ACP_EMPTY_OPTION_VALUE,
   ACP_SESSION_MODE_OPTION_ID,
@@ -4175,7 +4176,7 @@ describe("AcpAdapterV2", () => {
       const leasePath = yield* fileSystem.makeTempDirectoryScoped();
       const procsPath = path.join(leasePath, "cgroup.procs");
       yield* fileSystem.writeFileString(procsPath, "");
-      const relativePath = AcpSessionRuntime.parseUnifiedCgroupPath(
+      const relativePath = parseUnifiedCgroupPath(
         NodeFS.readFileSync("/proc/self/cgroup", "utf8"),
       );
       // No unified cgroup on this host means no lease is possible, so there is

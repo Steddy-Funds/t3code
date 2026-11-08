@@ -1,4 +1,5 @@
 import type {
+  Claim,
   MachineProcessAdded,
   MachineProcessFrame,
   MachineProcessSource,
@@ -22,6 +23,8 @@ export interface MachineProcessTable {
   readonly rows: ReadonlyArray<MachineProcessRow>;
   /** Rows the server left out past its row cap. */
   readonly truncated: number;
+  /** The machine's claims; absent from a server without ownership. */
+  readonly claims?: ReadonlyArray<Claim>;
 }
 
 interface KeyedTable {
@@ -30,6 +33,7 @@ interface KeyedTable {
   sampleAgeMs: number;
   source: MachineProcessSource;
   truncated: number;
+  claims: ReadonlyArray<Claim> | undefined;
   readonly entries: Map<number, MachineProcessRow>;
 }
 
@@ -53,6 +57,7 @@ function foldFrame(table: KeyedTable, frame: MachineProcessFrame): void {
   table.sampleAgeMs = frame.sampleAgeMs;
   table.source = frame.source;
   table.truncated = frame.truncated ?? 0;
+  if (frame.claims !== undefined) table.claims = frame.claims;
 }
 
 function toTable(table: KeyedTable): MachineProcessTable {
@@ -63,6 +68,7 @@ function toTable(table: KeyedTable): MachineProcessTable {
     source: table.source,
     rows: [...table.entries.values()],
     truncated: table.truncated,
+    ...(table.claims === undefined ? {} : { claims: table.claims }),
   };
 }
 
@@ -73,6 +79,7 @@ function emptyTable(frame: MachineProcessFrame): KeyedTable {
     sampleAgeMs: frame.sampleAgeMs,
     source: frame.source,
     truncated: 0,
+    claims: undefined,
     entries: new Map(),
   };
 }

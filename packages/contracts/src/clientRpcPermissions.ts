@@ -23,6 +23,8 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [WS_METHODS.serverCheckOtlpEndpoint]: AuthSettingsWriteScope,
   // Signals any process on the host (pid and start time rechecked server-side).
   [WS_METHODS.serverSignalProcess]: AuthEnvironmentMaintainScope,
+  // Releasing a claim changes which thread a process counts toward, and what load pause may stop.
+  [WS_METHODS.machineClaimsRelease]: AuthEnvironmentMaintainScope,
   [WS_METHODS.serverRefreshProviders]: AuthOrchestrationReadScope,
   [WS_METHODS.pullRequestsRunAction]: AuthSourceControlWriteScope,
   [WS_METHODS.pullRequestsUpdate]: AuthSourceControlWriteScope,

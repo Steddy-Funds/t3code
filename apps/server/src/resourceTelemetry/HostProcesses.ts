@@ -1,9 +1,11 @@
 import {
   MACHINE_PROCESSES_MAX_ROWS,
   MACHINE_PROCESSES_MIN_INTERVAL_MS,
+  type Claim,
   type GpuProcessSample,
   type MachineProcessAdded,
   type MachineProcessFrame,
+  type ProcessOwner,
   type ResourceTelemetryProcess,
   type ResourceTelemetrySnapshot,
   type SubscribeMachineProcessesInput,
@@ -18,6 +20,7 @@ import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 
 import * as NativeTelemetryClient from "./NativeTelemetryClient.ts";
+import { ProcessOwnership, type OwnershipRow } from "./ProcessOwnership.ts";
 import * as ResourceTelemetry from "./ResourceTelemetry.ts";
 
 export class HostProcesses extends Context.Service<
@@ -37,6 +40,10 @@ export interface FrameBuilderState {
   readonly nextKey: number;
   /** Process identity → key for every row the client currently holds. */
   readonly keys: ReadonlyMap<string, number>;
+  /** The owner each key was last sent with; a changed owner re-adds the row. */
+  readonly owners: ReadonlyMap<number, ProcessOwner>;
+  /** The claims last sent, by reference; a new array is sent again. */
+  readonly claims: ReadonlyArray<Claim> | null;
   readonly lastReadAtMs: number | null;
 }
 
@@ -45,6 +52,8 @@ export const initialFrameBuilderState: FrameBuilderState = {
   sequence: -1,
   nextKey: 0,
   keys: new Map(),
+  owners: new Map(),
+  claims: null,
   lastReadAtMs: null,
 };
 
@@ -55,6 +64,9 @@ export interface FrameInput {
   readonly monitorAvailable: boolean;
   readonly processes: ReadonlyArray<ResourceTelemetryProcess>;
   readonly top: number | undefined;
+  /** By process key; rows without one are sent without an owner. */
+  readonly owners?: ReadonlyMap<string, ProcessOwner>;
+  readonly claims?: ReadonlyArray<Claim>;
 }
 
 const identityOf = (process: ResourceTelemetryProcess) =>
@@ -91,7 +103,11 @@ export function selectProcesses(
   return selectTop(processes, top, byCpu, byRss);
 }
 
-function staticFields(key: number, process: ResourceTelemetryProcess): MachineProcessAdded {
+function staticFields(
+  key: number,
+  process: ResourceTelemetryProcess,
+  owner: ProcessOwner | undefined,
+): MachineProcessAdded {
   return {
     key,
     pid: process.identity.pid,
@@ -100,7 +116,38 @@ function staticFields(key: number, process: ResourceTelemetryProcess): MachinePr
     name: process.name,
     user: "",
     command: process.command,
+    ...(owner === undefined ? {} : { owner }),
   };
+}
+
+function isSameOwner(a: ProcessOwner | undefined, b: ProcessOwner | undefined): boolean {
+  if (a === b) return true;
+  if (a === undefined || b === undefined || a.type !== b.type) return false;
+  const left: Record<string, unknown> = a;
+  const right: Record<string, unknown> = b;
+  const fields = Object.keys(left);
+  return (
+    fields.length === Object.keys(right).length &&
+    fields.every((field) => left[field] === right[field])
+  );
+}
+
+/** The subtree's processes as attribution reads them; it has no user, cwd or cgroup. */
+export function subtreeOwnershipRows(
+  processes: ReadonlyArray<ResourceTelemetryProcess>,
+): Array<OwnershipRow> {
+  return processes.map((process) => ({
+    pid: process.identity.pid,
+    ppid: process.ppid,
+    startTimeMs: process.identity.startTimeMs,
+    name: process.name,
+    command: process.command,
+    exe: "",
+    cwd: "",
+    user: "",
+    cgroup: "",
+    containerId: "",
+  }));
 }
 
 /** The next frame for one subscriber, or null when no new sample arrived since the last frame. */
@@ -118,15 +165,20 @@ export function nextFrame(
 
   let nextKey = full ? 0 : state.nextKey;
   const keys = new Map<string, number>();
+  const owners = new Map<number, ProcessOwner>();
   const added: Array<MachineProcessAdded> = [];
   const rows = { key: [] as Array<number>, cpu: [] as Array<number>, rss: [] as Array<number> };
   for (const process of selected) {
     const identity = identityOf(process);
+    const owner = input.owners?.get(identity);
     let key = previousKeys.get(identity);
     if (key === undefined) {
       key = nextKey++;
-      added.push(staticFields(key, process));
+      added.push(staticFields(key, process, owner));
+    } else if (!isSameOwner(state.owners.get(key), owner)) {
+      added.push(staticFields(key, process, owner));
     }
+    if (owner !== undefined) owners.set(key, owner);
     keys.set(identity, key);
     rows.key.push(key);
     rows.cpu.push(process.cpuPercent);
@@ -147,6 +199,9 @@ export function nextFrame(
     added,
     removed,
     rows,
+    ...(input.claims !== undefined && (full || input.claims !== state.claims)
+      ? { claims: input.claims }
+      : {}),
     ...(truncated > 0 ? { truncated } : {}),
   };
   return [
@@ -156,6 +211,8 @@ export function nextFrame(
       sequence,
       nextKey,
       keys,
+      owners,
+      claims: input.claims ?? null,
       lastReadAtMs: input.readAtMs,
     },
   ];
@@ -178,6 +235,10 @@ export interface HostFrameBuilderState {
   readonly sent: ReadonlyMap<number, SentValues>;
   /** Keys added with empty statics; re-added named once the monitor reads them. */
   readonly unnamed: ReadonlySet<number>;
+  /** The owner each key was last sent with; a changed owner re-adds the row. */
+  readonly owners: ReadonlyMap<number, ProcessOwner>;
+  /** The claims last sent, by reference; a new array is sent again. */
+  readonly claims: ReadonlyArray<Claim> | null;
   readonly lastSampledAtMs: number | null;
 }
 
@@ -188,6 +249,8 @@ export const initialHostFrameBuilderState: HostFrameBuilderState = {
   keys: new Map(),
   sent: new Map(),
   unnamed: new Set(),
+  owners: new Map(),
+  claims: null,
   lastSampledAtMs: null,
 };
 
@@ -197,6 +260,9 @@ export interface HostFrameInput {
   readonly intervalMs: number;
   readonly top: number | undefined;
   readonly gpuProcesses: boolean;
+  /** By process key, over every process in the sample. */
+  readonly owners?: ReadonlyMap<string, ProcessOwner>;
+  readonly claims?: ReadonlyArray<Claim>;
 }
 
 interface HostRow {
@@ -213,6 +279,32 @@ const hostByRss = (a: HostRow, b: HostRow) => b.rss - a.rss;
 
 // One decimal is all a table shows, and it keeps idle rows unchanged between frames.
 const roundCpu = (percent: number) => Math.round(percent * 10) / 10;
+
+/** Every process in a host sample as attribution reads it, statics "" where unread. */
+export function hostOwnershipRows(
+  sample: NativeTelemetryClient.NativeHostSample["sample"],
+  statics: NativeTelemetryClient.HostProcessStatics,
+): Array<OwnershipRow> {
+  const columns = sample.processes;
+  if (!columns) return [];
+  return columns.pid.map((pid, index) => {
+    const startTimeMs = columns.startTimeMs[index]!;
+    const known = statics.get(pid);
+    const entry = known?.startTimeMs === startTimeMs ? known : undefined;
+    return {
+      pid,
+      ppid: columns.ppid[index]!,
+      startTimeMs,
+      name: entry?.name ?? "",
+      command: entry?.command ?? "",
+      exe: entry?.exe ?? "",
+      cwd: entry?.cwd ?? "",
+      user: entry?.user ?? "",
+      cgroup: entry?.cgroup ?? "",
+      containerId: entry?.containerId ?? "",
+    };
+  });
+}
 
 function hostRows(sample: NativeTelemetryClient.NativeHostSample["sample"]): Array<HostRow> {
   const columns = sample.processes;
@@ -246,6 +338,16 @@ function gpuUseByIdentity(
   return byIdentity;
 }
 
+/**
+ * Whether every device's process walk succeeded. A process's GPU columns sum over devices, so
+ * one failed walk leaves every process unmeasured rather than showing a partial number.
+ */
+function isEveryGpuWalked(sample: NativeTelemetryClient.NativeHostSample["sample"]): boolean {
+  if (sample.gpuProcesses === undefined || sample.gpuProcessDevices === undefined) return false;
+  const walked = new Set(sample.gpuProcessDevices);
+  return (sample.gpus ?? []).every((device) => walked.has(device.id));
+}
+
 function knownStatics(row: HostRow, statics: NativeTelemetryClient.HostProcessStatics) {
   const known = statics.get(row.pid);
   return known?.startTimeMs === row.startTimeMs ? known : undefined;
@@ -255,6 +357,7 @@ function hostStaticFields(
   key: number,
   row: HostRow,
   statics: NativeTelemetryClient.HostProcessStatics,
+  owner: ProcessOwner | undefined,
 ): MachineProcessAdded {
   // A process the monitor could not read keeps its row with empty static fields.
   const entry = knownStatics(row, statics);
@@ -267,6 +370,7 @@ function hostStaticFields(
     user: entry?.user ?? "",
     command: entry?.command ?? "",
     ...(entry?.containerId ? { containerId: entry.containerId } : {}),
+    ...(owner === undefined ? {} : { owner }),
   };
 }
 
@@ -321,7 +425,7 @@ export function nextHostFrames(
   // The columns follow the request; a sample without GPU rows sends null (unmeasured) once, so
   // the client never keeps a stale value after GPUs turn off.
   const gpuColumns = input.gpuProcesses;
-  const gpuMeasured = sample.gpuProcesses !== undefined;
+  const gpuMeasured = isEveryGpuWalked(sample);
   const gpuUse = gpuMeasured ? gpuUseByIdentity(sample.gpuProcesses ?? []) : new Map();
   const previousKeys = full ? new Map<string, number>() : state.keys;
   let nextKey = full ? 0 : state.nextKey;
@@ -329,6 +433,7 @@ export function nextHostFrames(
   const keys = new Map<string, number>();
   const sent = new Map<number, SentValues>();
   const unnamed = new Set<number>();
+  const owners = new Map<number, ProcessOwner>();
   const parts: Array<{ added: Array<MachineProcessAdded>; rows: FrameRows }> = [];
   let part = { added: [] as Array<MachineProcessAdded>, rows: emptyRows(gpuColumns) };
   let partBytes = 0;
@@ -341,14 +446,19 @@ export function nextHostFrames(
         ? [row.cpu, row.rss, use ? use.util : 0, use ? use.vram : 0]
         : [row.cpu, row.rss, null, null];
     const named = knownStatics(row, statics) !== undefined;
-    if (key !== undefined && state.unnamed.has(key) && named) {
+    const owner = input.owners?.get(row.identity);
+    if (
+      key !== undefined &&
+      ((state.unnamed.has(key) && named) || !isSameOwner(state.owners.get(key), owner))
+    ) {
       // Re-added with its values: the client resets a row's values when it is added.
-      part.added.push(hostStaticFields(key, row, statics));
+      part.added.push(hostStaticFields(key, row, statics, owner));
       pushRow(part.rows, key, values);
+      if (!named) unnamed.add(key);
     } else if (key === undefined) {
       key = nextKey++;
       if (!named) unnamed.add(key);
-      const added = hostStaticFields(key, row, statics);
+      const added = hostStaticFields(key, row, statics, owner);
       const bytes = addedBytes(added);
       if (full && partBytes > 0 && partBytes + bytes > MAX_ADDED_BYTES_PER_PART) {
         parts.push(part);
@@ -371,6 +481,7 @@ export function nextHostFrames(
       }
       if (!named) unnamed.add(key);
     }
+    if (owner !== undefined) owners.set(key, owner);
     keys.set(row.identity, key);
     sent.set(key, values);
   }
@@ -399,6 +510,9 @@ export function nextHostFrames(
       removed: last ? removed : [],
       rows: current.rows,
       ...(last && input.gpuProcesses && sample.gpus ? { gpus: sample.gpus } : {}),
+      ...(last && input.claims !== undefined && (full || input.claims !== state.claims)
+        ? { claims: input.claims }
+        : {}),
       ...(last && truncated > 0 ? { truncated } : {}),
     };
   });
@@ -411,6 +525,8 @@ export function nextHostFrames(
       keys,
       sent,
       unnamed,
+      owners,
+      claims: input.claims ?? null,
       lastSampledAtMs: sample.sampledAtUnixMs,
     },
   ];
@@ -445,6 +561,7 @@ const supportsHostProcesses = Effect.fn("HostProcesses.supportsHostProcesses")(f
 const make = Effect.fn("makeHostProcesses")(function* () {
   const telemetry = yield* ResourceTelemetry.ResourceTelemetry;
   const native = yield* NativeTelemetryClient.NativeTelemetryClient;
+  const ownership = yield* ProcessOwnership;
 
   const hostFrames = (input: SubscribeMachineProcessesInput) =>
     Stream.unwrap(
@@ -456,17 +573,24 @@ const make = Effect.fn("makeHostProcesses")(function* () {
           .hostSamples({ intervalMs, processes: true, gpus: gpuProcesses, gpuProcesses })
           .pipe(
             Stream.mapEffect((sample) =>
-              Effect.flatMap(Clock.currentTimeMillis, (nowMs) =>
-                Ref.modify(builder, (state) =>
+              Effect.gen(function* () {
+                const owners = yield* ownership.attribute(
+                  hostOwnershipRows(sample.sample, sample.statics),
+                );
+                const claims = yield* ownership.claims;
+                const nowMs = yield* Clock.currentTimeMillis;
+                return yield* Ref.modify(builder, (state) =>
                   nextHostFrames(state, {
                     sample,
                     nowMs,
                     intervalMs,
                     top: input.top,
                     gpuProcesses,
+                    owners,
+                    claims,
                   }),
-                ),
-              ),
+                );
+              }),
             ),
             Stream.flatMap((frames) => Stream.fromIterable(frames)),
             // The subtree fallback never fails; neither does the host stream from a viewer's side.
@@ -487,6 +611,8 @@ const make = Effect.fn("makeHostProcesses")(function* () {
             Effect.gen(function* () {
               const snapshot = yield* telemetry.latest;
               const nowMs = yield* Clock.currentTimeMillis;
+              const owners = yield* ownership.attribute(subtreeOwnershipRows(snapshot.processes));
+              const claims = yield* ownership.claims;
               return yield* Ref.modify(builder, (state) =>
                 nextFrame(state, {
                   generation: snapshot.health.restartCount,
@@ -495,6 +621,8 @@ const make = Effect.fn("makeHostProcesses")(function* () {
                   monitorAvailable: isMonitorAvailable(snapshot),
                   processes: snapshot.processes,
                   top: input.top,
+                  owners,
+                  claims,
                 }),
               );
             }),

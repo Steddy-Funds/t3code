@@ -691,6 +691,19 @@ describe("serverSettings helpers", () => {
       machineResources: { thresholds: { exitFactor: 0.5 } },
     });
     expect(thresholdsOnly.machineResources.buckets).toEqual(removed.machineResources.buckets);
+
+    const held = applyServerSettingsPatch(thresholdsOnly, {
+      machineResources: { loadManagement: { guardHoldSeconds: 30, pauseHoldSeconds: 15 } },
+    });
+    const enabledOnly = applyServerSettingsPatch(held, {
+      machineResources: { loadManagement: { enabled: true } },
+    });
+    expect(enabledOnly.machineResources.loadManagement).toEqual({
+      enabled: true,
+      guardHoldSeconds: 30,
+      pauseHoldSeconds: 15,
+    });
+    expect(enabledOnly.machineResources.thresholds).toEqual(held.machineResources.thresholds);
   });
 
   it("replaces the auto-buckets model whole and keeps it when only enabled changes", () => {

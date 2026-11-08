@@ -26,5 +26,21 @@ export function isBackgroundedThread(thread: {
   return thread.tags?.includes(BACKGROUNDED_THREAD_TAG) === true;
 }
 
+/** Threads with this tag coordinate other agents; load management never pauses them. */
+export const ORCHESTRATOR_THREAD_TAG = "orchestrator";
+export const LOW_PRIORITY_THREAD_TAG = "priority:low";
+export const NORMAL_PRIORITY_THREAD_TAG = "priority:normal";
+
+export type ThreadPriority = "low" | "normal";
+
+/** Load management may pause only low-priority threads. */
+export function effectiveThreadPriority(thread: {
+  readonly tags?: ReadonlyArray<string> | undefined;
+}): ThreadPriority {
+  if (thread.tags?.includes(NORMAL_PRIORITY_THREAD_TAG)) return "normal";
+  if (thread.tags?.includes(LOW_PRIORITY_THREAD_TAG)) return "low";
+  return isBackgroundedThread(thread) ? "low" : "normal";
+}
+
 /** Bucket writes from a thread with this tag are `auto`: they never change a bucket someone else edited. */
 export const MACHINE_BUCKETS_THREAD_TAG = "machine-buckets";

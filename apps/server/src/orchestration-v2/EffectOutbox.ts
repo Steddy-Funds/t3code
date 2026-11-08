@@ -4,6 +4,8 @@ import {
   CommandId,
   MessageId,
   NodeId,
+  type OrchestrationV2LoadPause,
+  OrchestrationV2LoadPausedContainer,
   ProviderSessionId,
   RunAttemptId,
   ProviderApprovalDecision,
@@ -107,6 +109,12 @@ export const OrchestrationEffectRequestV2 = Schema.Union([
   Schema.Struct({
     type: Schema.Literal("machine-claims.cleanup"),
   }),
+  /** Unpauses a cleared pause's containers, then continues its interrupted run when set. */
+  Schema.Struct({
+    type: Schema.Literal("load-pause.cleanup"),
+    containersPaused: Schema.Array(OrchestrationV2LoadPausedContainer),
+    continuation: Schema.optional(Schema.Struct({ runId: RunId, episodeId: Schema.String })),
+  }),
   Schema.Struct({
     type: Schema.Literal("attachment.cleanup"),
     attachmentIds: Schema.Array(Schema.String),
@@ -125,6 +133,29 @@ export const OrchestrationEffectRequestV2 = Schema.Union([
 ]);
 export type OrchestrationEffectRequestV2 = typeof OrchestrationEffectRequestV2.Type;
 
+/** Null when the pause has no containers to unpause and no run to continue. */
+export function loadPauseCleanupEffect(input: {
+  readonly commandId: CommandId;
+  readonly threadId: ThreadId;
+  readonly loadPause: OrchestrationV2LoadPause;
+  readonly continueRun: boolean;
+}): PendingOrchestrationEffectV2 | null {
+  const { loadPause } = input;
+  if (loadPause.containersPaused.length === 0 && !input.continueRun) return null;
+  return {
+    id: `effect:${input.commandId}:load-pause.cleanup`,
+    commandId: input.commandId,
+    threadId: input.threadId,
+    request: {
+      type: "load-pause.cleanup",
+      containersPaused: loadPause.containersPaused,
+      ...(input.continueRun
+        ? { continuation: { runId: loadPause.runId, episodeId: loadPause.episodeId } }
+        : {}),
+    },
+  };
+}
+
 export const REPLAY_SAFE_EFFECT_TYPES_AFTER_PROCESS_LOSS = [
   "provider-runtime.continue",
   "provider-session.detach",
@@ -134,6 +165,7 @@ export const REPLAY_SAFE_EFFECT_TYPES_AFTER_PROCESS_LOSS = [
   "terminal.cleanup",
   "preview.cleanup",
   "machine-claims.cleanup",
+  "load-pause.cleanup",
   "attachment.cleanup",
   "thread-title.generate",
   "delegated-tasks.stop",

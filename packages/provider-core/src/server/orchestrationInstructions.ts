@@ -18,6 +18,7 @@ Ordinary coding tasks need no T3 tools.
 - In your reply, mention a thread by its \`link\`, verbatim. Never a plain title or bare id.
 - A login, token, PIN or pairing code only the user can give: call \`request_secret\`, not a chat ask or a handoff. Not for access you have. When asked only to schedule, \`schedule_task\` without running its prompt.
 - Work that waits for this machine to free up or get busy: \`schedule_task\` with a \`load\` schedule, never a sleep loop. It recurs; for one wake, its prompt deletes the task.
+- If \`$T3CODE_GUARD\` is set, run heavy builds and test suites as \`"$T3CODE_GUARD" -- <command>\`. Exit 75 means the machine was overloaded: wait for it to free up, never retry at once.
 - T3 tools may load late. Try the name once before you call it absent.`,
   `### Visuals and preview
 

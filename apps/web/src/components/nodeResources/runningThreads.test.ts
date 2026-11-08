@@ -1,8 +1,14 @@
-import { EnvironmentId, type OrchestrationV2ThreadShell, ThreadId } from "@t3tools/contracts";
+import {
+  EnvironmentId,
+  type OrchestrationV2LoadPause,
+  type OrchestrationV2ThreadShell,
+  RunId,
+  ThreadId,
+} from "@t3tools/contracts";
 import { type Atom, AtomRegistry } from "effect/reactivity";
 import { describe, expect, it, vi } from "vite-plus/test";
 
-type Shell = Pick<OrchestrationV2ThreadShell, "id" | "title" | "status">;
+type Shell = Pick<OrchestrationV2ThreadShell, "id" | "title" | "status" | "tags" | "loadPause">;
 
 vi.mock(import("~/state/threads"), async () => {
   const { Atom } = await import("effect/reactivity");
@@ -15,7 +21,7 @@ vi.mock(import("~/state/threads"), async () => {
 
 import { environmentThreadShells } from "~/state/threads";
 
-import { runningThreadCountAtom, runningThreadsAtom } from "./runningThreads";
+import { type RunningThread, runningThreadCountAtom, runningThreadsAtom } from "./runningThreads";
 
 const machineA = EnvironmentId.make("machine-a");
 const machineB = EnvironmentId.make("machine-b");
@@ -25,6 +31,29 @@ const shell = (id: string, status: Shell["status"], title = `Thread ${id}`): She
   title,
   status,
 });
+
+/** The atom's row for `shell(id, status, title)`, with no tags and no pause. */
+const row = (
+  id: string,
+  status: Shell["status"],
+  title = `Thread ${id}`,
+  extra: Partial<RunningThread> = {},
+): RunningThread => ({
+  id: ThreadId.make(id),
+  title,
+  status,
+  priority: "normal",
+  loadPaused: false,
+  ...extra,
+});
+
+const loadPause: OrchestrationV2LoadPause = {
+  runId: RunId.make("run:paused"),
+  episodeId: "episode:1",
+  pausedAt: "2026-11-08T10:00:00.000Z",
+  reason: { rule: "load", value: 4, threshold: 3, shareOfLoad: 0.5 },
+  containersPaused: [],
+};
 
 const STATUSES: ReadonlyArray<Shell["status"]> = [
   "idle",
@@ -67,10 +96,10 @@ describe("runningThreadsAtom", () => {
     );
 
     expect(registry.get(runningThreadsAtom(machineA))).toEqual([
-      shell("t-preparing", "preparing"),
-      shell("t-queued", "queued"),
-      shell("t-starting", "starting"),
-      shell("t-running", "running"),
+      row("t-preparing", "preparing"),
+      row("t-queued", "queued"),
+      row("t-starting", "starting"),
+      row("t-running", "running"),
     ]);
     expect(registry.get(runningThreadCountAtom(machineA))).toBe(4);
   });
@@ -96,11 +125,44 @@ describe("runningThreadsAtom", () => {
     expect([threads.length, counts.length]).toEqual(settled);
 
     set(machineA, [{ ...running, title: "Renamed" }]);
-    expect(threads.at(-1)).toEqual([shell("a", "running", "Renamed")]);
+    expect(threads.at(-1)).toEqual([row("a", "running", "Renamed")]);
     expect(threads.length).toBe(settled[0]! + 1);
 
     set(machineA, [{ ...running, status: "queued" }]);
-    expect(threads.at(-1)).toEqual([shell("a", "queued")]);
+    expect(threads.at(-1)).toEqual([row("a", "queued")]);
+
+    const before = threads.length;
+    set(machineA, [{ ...running, status: "queued", tags: ["backgrounded"] }]);
+    expect(threads.at(-1)).toEqual([row("a", "queued", undefined, { priority: "low" })]);
+    set(machineA, [{ ...running, status: "queued", tags: ["backgrounded"], loadPause }]);
+    expect(threads.at(-1)).toEqual([
+      row("a", "queued", undefined, { priority: "low", loadPaused: true }),
+    ]);
+    expect(threads.length).toBe(before + 2);
+  });
+
+  it("derives priority from tags, keeps load-paused threads listed and leaves them out of the count", () => {
+    const { registry, set } = setup();
+    set(machineA, [
+      shell("plain", "running"),
+      { ...shell("bg", "running"), tags: ["backgrounded"] },
+      { ...shell("bg-normal", "running"), tags: ["backgrounded", "priority:normal"] },
+      { ...shell("low", "queued"), tags: ["priority:low"] },
+      // The pause interrupted its run, so the shell reads interrupted.
+      { ...shell("paused", "interrupted"), tags: ["backgrounded"], loadPause },
+      { ...shell("paused-idle", "idle"), loadPause },
+      { ...shell("done", "interrupted"), loadPause: null },
+    ]);
+
+    expect(registry.get(runningThreadsAtom(machineA))).toEqual([
+      row("plain", "running"),
+      row("bg", "running", undefined, { priority: "low" }),
+      row("bg-normal", "running"),
+      row("low", "queued", undefined, { priority: "low" }),
+      row("paused", "interrupted", undefined, { priority: "low", loadPaused: true }),
+      row("paused-idle", "idle", undefined, { loadPaused: true }),
+    ]);
+    expect(registry.get(runningThreadCountAtom(machineA))).toBe(4);
   });
 
   it("moves the count with the list", () => {

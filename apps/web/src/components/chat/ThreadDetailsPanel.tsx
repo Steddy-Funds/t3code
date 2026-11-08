@@ -40,7 +40,24 @@ import {
   THREAD_DETAILS_PANEL_ICON_CLASS,
   THREAD_DETAILS_PANEL_LABEL_CLASS,
 } from "./threadDetailsPanelStyles";
-import { Menu, MenuPopup } from "../ui/menu";
+import { Menu, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "../ui/menu";
+import { useAtomValue } from "@effect/atom-react";
+import { effectiveThreadPriority } from "@t3tools/contracts";
+import {
+  loadPriorityControlsShown,
+  threadPriorityChoice,
+  type ThreadPriorityChoice,
+} from "@t3tools/client-runtime/state/loadPause";
+import {
+  isAtomCommandInterrupted,
+  squashAtomCommandFailure,
+} from "@t3tools/client-runtime/state/runtime";
+import { useQuietThreadShell } from "../../state/entities";
+import { serverEnvironment } from "../../state/server";
+import { threadEnvironment } from "../../state/threads";
+import { useOrchestrationCommand } from "../../state/use-orchestration-command";
+import { Button } from "../ui/button";
+import { toastManager } from "../ui/toast";
 
 const GitActionsControl = memo(BaseGitActionsControl);
 
@@ -267,6 +284,13 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
                 />
               ) : null}
 
+              {density === "full" && !props.draftId ? (
+                <ThreadDetailsPriority
+                  environmentId={props.environmentId}
+                  threadId={props.threadId}
+                />
+              ) : null}
+
               {visible.usage ? <ThreadDetailsUsage {...props.usage} /> : null}
 
               {visible.context && props.usage.contextWindow ? (
@@ -320,5 +344,59 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
         );
       }}
     </ThreadDetailsCard>
+  );
+}
+
+/** Hidden unless the server pauses for load and the lane is on. */
+function ThreadDetailsPriority(props: { environmentId: EnvironmentId; threadId: ThreadId }) {
+  const config = useAtomValue(serverEnvironment.configValueAtom(props.environmentId));
+  const thread = useQuietThreadShell(props);
+  const setPriority = useOrchestrationCommand(threadEnvironment.setPriority, {
+    reportFailure: false,
+  });
+  if (!thread || !loadPriorityControlsShown(config)) return null;
+  const choice = threadPriorityChoice(thread.source);
+  const effective = effectiveThreadPriority(thread.source) === "low" ? "Low" : "Normal";
+  const change = async (priority: ThreadPriorityChoice) => {
+    const result = await setPriority({
+      environmentId: props.environmentId,
+      input: { threadId: props.threadId, priority },
+    });
+    if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+      const error = squashAtomCommandFailure(result);
+      toastManager.add({
+        type: "error",
+        title: "Could not set priority",
+        description: error instanceof Error ? error.message : "An error occurred.",
+      });
+    }
+  };
+  return (
+    <ThreadDetailsSection
+      headingId="thread-details-priority-heading"
+      title="Priority"
+      showHeading={false}
+    >
+      <div className="flex min-h-6 items-center gap-2 px-1 text-xs font-medium text-muted-foreground">
+        <span>Priority</span>
+        <Menu>
+          <MenuTrigger render={<Button size="xs" variant="ghost" />}>
+            {choice === "default" ? `${effective} (default)` : effective}
+          </MenuTrigger>
+          <MenuPopup align="start">
+            <MenuRadioGroup
+              value={choice}
+              onValueChange={(value: ThreadPriorityChoice) => {
+                if (value !== choice) void change(value);
+              }}
+            >
+              <MenuRadioItem value="low">Low</MenuRadioItem>
+              <MenuRadioItem value="normal">Normal</MenuRadioItem>
+              <MenuRadioItem value="default">Default (low when backgrounded)</MenuRadioItem>
+            </MenuRadioGroup>
+          </MenuPopup>
+        </Menu>
+      </div>
+    </ThreadDetailsSection>
   );
 }

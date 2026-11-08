@@ -364,6 +364,10 @@ export function readEnvironmentSupportsServerBrowser(environmentId: EnvironmentI
   );
 }
 
+export function readEnvironmentServerConfig(environmentId: EnvironmentId) {
+  return appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId);
+}
+
 export function readEnvironmentServerConfigLoaded(environmentId: EnvironmentId): boolean {
   return appAtomRegistry.get(environmentServerConfigsAtom).has(environmentId);
 }

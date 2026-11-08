@@ -25,6 +25,7 @@ import {
 } from "@t3tools/contracts";
 import type { MuseSettings } from "../settings.ts";
 import { AgentScope } from "@t3tools/shared/AgentScope";
+import { GuardEnvironment } from "@t3tools/shared/GuardEnvironment";
 import { ProcessOwnershipRegistry } from "@t3tools/shared/ProcessOwnershipRegistry";
 import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
 import * as Cause from "effect/Cause";
@@ -273,6 +274,7 @@ export const makeMuseAdapterV2 = Effect.fn("makeMuseAdapterV2")(function* (
   const mcpSessions = yield* McpProviderSessions.McpProviderSessions;
   const agentScope = yield* AgentScope;
   const ownership = yield* ProcessOwnershipRegistry;
+  const guard = yield* GuardEnvironment;
 
   const protocolError = (detail: string, payload?: unknown) =>
     new ProviderAdapter.ProviderAdapterProtocolError({
@@ -1683,7 +1685,7 @@ export const makeMuseAdapterV2 = Effect.fn("makeMuseAdapterV2")(function* (
         const epoch = ++hostEpoch;
         const mcpSession = yield* mcpSessions.read(input.threadId);
         const environment = McpProviderSession.withAgentDeviceEnvironment(
-          options.environment,
+          { ...options.environment, ...guard.env() },
           mcpSession,
         );
         const launch = yield* agentScope.wrap({

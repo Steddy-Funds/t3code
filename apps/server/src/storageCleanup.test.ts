@@ -172,6 +172,28 @@ describe("V2 storage cleanup eligibility", () => {
     ).toBe(false);
   });
 
+  it("retains an ended run's worktree while its thread is load paused", () => {
+    const paused = {
+      runId: RunId.make("run"),
+      episodeId: "episode:1",
+      pausedAt: "2026-01-01T00:00:00.000Z",
+      reason: { rule: "loadPerCore", value: 4, threshold: 3, shareOfLoad: 0.8 },
+      containersPaused: [],
+    };
+    for (const [loadPause, idle] of [
+      [paused, false],
+      [null, true],
+    ] as const) {
+      expect(
+        storageCleanupThreadIdle(
+          { ...candidateWithStatus("interrupted"), loadPause },
+          NOW_MS,
+          DEFAULT_SERVER_SETTINGS,
+        ),
+      ).toBe(idle);
+    }
+  });
+
   it("retains a queued prompt before the new run has been projected", () => {
     expect(
       storageCleanupThreadIdle(

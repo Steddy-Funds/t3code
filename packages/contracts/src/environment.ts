@@ -178,6 +178,10 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   loadSchedules: Schema.optionalKey(Schema.Boolean),
   /** Runs the built-in auto-buckets task and saves `machineResources.autoBuckets`; older servers drop the key. */
   machineAutoBuckets: Schema.optionalKey(Schema.Boolean),
+  /** Writes guard.json and the `t3 guard` launcher, injects `T3CODE_GUARD`, and saves `machineResources.loadManagement`. */
+  loadGuard: Schema.optionalKey(Schema.Boolean),
+  /** Pauses low-priority threads while the machine is stressed; older servers never pause. */
+  loadPause: Schema.optionalKey(Schema.Boolean),
 });
 export type ExecutionEnvironmentCapabilities = typeof ExecutionEnvironmentCapabilities.Type;
 

@@ -32,6 +32,7 @@ import { resolveSpawnCommand } from "@t3tools/shared/shell";
 import { AgentScope, AgentScopeThreadId, RAISE_OOM_SCORE_LINE } from "@t3tools/shared/AgentScope";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { parseUnifiedCgroupPath } from "@t3tools/shared/cgroup";
+import { GuardEnvironment } from "@t3tools/shared/GuardEnvironment";
 import { ProcessOwnershipRegistry } from "@t3tools/shared/ProcessOwnershipRegistry";
 
 import { signalProcessGroup } from "@t3tools/provider-core/server/processGroup";
@@ -1438,11 +1439,12 @@ export const make = Effect.fn("AcpSessionRuntime.make")(function* (
           ...wrapCommandForLinuxCgroup(linuxCgroupLease, containedTargetCommand, spawnCommand.args),
           shell: false,
         };
+  const agentEnvironment = { ...options.spawn.env, ...(yield* GuardEnvironment).env() };
   const spawnEnvironment =
     linuxCgroupLease === undefined
-      ? options.spawn.env
+      ? agentEnvironment
       : {
-          ...options.spawn.env,
+          ...agentEnvironment,
           ELECTRON_RUN_AS_NODE: "1",
           T3_ACP_CGROUP_WRAPPER: "1",
         };

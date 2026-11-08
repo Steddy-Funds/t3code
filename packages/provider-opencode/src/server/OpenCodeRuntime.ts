@@ -35,6 +35,7 @@ import * as OpenCodeServerLedger from "./OpenCodeServerLedger.ts";
 import { collectStreamAsString } from "@t3tools/provider-core/server/snapshotProbe";
 import * as NetService from "@t3tools/shared/Net";
 import { AgentScope } from "@t3tools/shared/AgentScope";
+import { GuardEnvironment } from "@t3tools/shared/GuardEnvironment";
 import { ProcessOwnershipRegistry } from "@t3tools/shared/ProcessOwnershipRegistry";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { compareSemverVersions, parseSemver } from "@t3tools/shared/semver";
@@ -426,6 +427,7 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
   const serverLedger = yield* OpenCodeServerLedger.OpenCodeServerLedger;
   const agentScope = yield* AgentScope;
   const ownership = yield* ProcessOwnershipRegistry;
+  const guard = yield* GuardEnvironment;
   // npm's Windows shim lets the child escape libuv kill-on-close; run its executable directly.
   const resolveCommand = (command: string, args: ReadonlyArray<string>, env?: NodeJS.ProcessEnv) =>
     resolveSpawnCommand(command, args, { ...(env ? { env } : {}), bypassNpmShim: true });
@@ -540,6 +542,7 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
           shell: spawnCommand.shell,
           env: {
             ...input.environment,
+            ...guard.env(),
             ...(serverPassword !== undefined ? { OPENCODE_SERVER_PASSWORD: serverPassword } : {}),
             // The value is set explicitly (rather than relying on inheritance) because
             // `extendEnv` is false whenever `input.environment` is provided.

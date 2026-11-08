@@ -38,6 +38,7 @@ import {
 import { makeKeyedCoalescingWorker } from "@t3tools/shared/KeyedCoalescingWorker";
 import * as KeyedLock from "@t3tools/shared/KeyedLock";
 import { AgentScope } from "@t3tools/shared/AgentScope";
+import { GuardEnvironment } from "@t3tools/shared/GuardEnvironment";
 import { ProcessOwnershipRegistry } from "@t3tools/shared/ProcessOwnershipRegistry";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { mergePathEntries } from "@t3tools/shared/shell";
@@ -1523,6 +1524,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
   const architecture = yield* HostProcess.Architecture;
   const agentScope = yield* AgentScope;
   const ownership = yield* ProcessOwnershipRegistry;
+  const guard = yield* GuardEnvironment;
   // Inherit the full environment minus createTerminalSpawnEnv's blocklist; allowlists silently drop user tooling variables.
   const baseEnv = options.env ?? process.env;
   const shellResolver = options.shellResolver ?? (() => defaultShellResolver(platform, baseEnv));
@@ -2448,12 +2450,16 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         Effect.andThen(
           Effect.gen(function* () {
             const shellCandidates = resolveShellCandidates(shellResolver, platform, baseEnv);
-            const terminalEnv = createTerminalSpawnEnv(
-              baseEnv,
-              session.runtimeEnv,
-              platform,
-              yield* HostProcess.HomeDirectory,
-            );
+            // After the spawn env strips every inherited T3CODE_* key.
+            const terminalEnv = {
+              ...createTerminalSpawnEnv(
+                baseEnv,
+                session.runtimeEnv,
+                platform,
+                yield* HostProcess.HomeDirectory,
+              ),
+              ...guard.env(),
+            };
             // Append managed install directories so agent commands resolve without shadowing user/system tools.
             if (
               options.managedBinaryCacheDir !== undefined &&

@@ -82,6 +82,7 @@ import {
   mcpAppToolResourceUri,
 } from "@t3tools/shared/mcpApp";
 import { AgentScope } from "@t3tools/shared/AgentScope";
+import { GuardEnvironment } from "@t3tools/shared/GuardEnvironment";
 import { ProcessOwnershipRegistry } from "@t3tools/shared/ProcessOwnershipRegistry";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { applyClaudePromptEffortPrefix } from "@t3tools/shared/model";
@@ -1167,6 +1168,7 @@ export const layerQueryRunner: Layer.Layer<
     const hostEnvironment = yield* HostProcess.Environment;
     const portDiscovery = yield* PortScanner.PortDiscovery;
     const ownership = yield* ProcessOwnershipRegistry;
+    const guardEnvironment = yield* GuardEnvironment;
 
     return ClaudeAgentSdkQueryRunner.of({
       allocateSessionId: random.uuidV4(),
@@ -1195,6 +1197,7 @@ export const layerQueryRunner: Layer.Layer<
             env: {
               ...(sdkOptions.env ?? hostEnvironment),
               [PortScanner.AGENT_THREAD_ENV]: input.threadId,
+              ...guardEnvironment.env(),
             },
           };
           // The SDK can prepend a scope wrapper to native binaries; script entries run through node.

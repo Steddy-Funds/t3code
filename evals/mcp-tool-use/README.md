@@ -121,6 +121,10 @@ This API replay measures routing and recovery decisions. Screenshots return prod
 
 `cases/load-schedules.ndjson` checks the `load` schedule. Asked to rerun tests when a slammed machine frees up, an agent schedules a `<=` load task bound to the thread whose prompt deletes the task, never a sleep loop or an interval. The control keeps a nightly request on `fixed_time`.
 
+## Load guard cases
+
+`cases/load-guard.ndjson` checks the `t3 guard` line. With `T3CODE_GUARD` in the world's environment, as T3 sets it while load management is on, an agent asked for the full test suite runs it as `"$T3CODE_GUARD" -- <command>`. The controls run the suite bare when the variable is unset, and read code without the guard.
+
 ## Threads vs tasks cases
 
 `cases/threads-vs-tasks.ndjson` covers explicit thread requests, delegated and background work, lifecycle operations, child permissions, and ordinary code requests using words like "thread" and "task". The native-subagent case is Claude-only. All scenarios use authored Acme data.

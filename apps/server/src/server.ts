@@ -188,6 +188,7 @@ import * as ResourceAttribution from "./resourceTelemetry/ResourceAttribution.ts
 import * as ResourceMonitorBinary from "./resourceTelemetry/ResourceMonitorBinary.ts";
 import * as ProcessGroupMetrics from "./resourceTelemetry/ProcessGroupMetrics.ts";
 import * as ProcessOwnership from "./resourceTelemetry/ProcessOwnership.ts";
+import * as LoadGuard from "./resourceTelemetry/LoadGuard.ts";
 import * as ThreadResources from "./resourceTelemetry/ThreadResources.ts";
 import * as ResourceTelemetry from "./resourceTelemetry/ResourceTelemetry.ts";
 import * as AntigravityUsage from "./provider/Drivers/AntigravityUsage.ts";
@@ -1222,6 +1223,8 @@ const layerMakeServer = Layer.unwrap(
       Layer.provideMerge(AgentScopeLive.layer),
       // Every spawn site registers into this one registry; the default is a no-op.
       Layer.provideMerge(ProcessOwnership.layerRegistry),
+      // Spawn sites read the guard env at spawn; the default injects nothing.
+      Layer.provideMerge(LoadGuard.layer.pipe(Layer.provide(layerServerSettings))),
       Layer.provideMerge(layerPlatformServices),
     );
   }),

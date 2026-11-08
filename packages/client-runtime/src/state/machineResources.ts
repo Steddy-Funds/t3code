@@ -1,9 +1,12 @@
 import {
   type EnvironmentId,
+  type MachineStatusSnapshot,
   type SubscribeMachineInput,
   type SubscribeMachineProcessesInput,
   WS_METHODS,
 } from "@t3tools/contracts";
+import * as Clock from "effect/Clock";
+import * as Effect from "effect/Effect";
 import * as Stream from "effect/Stream";
 import { Atom } from "effect/reactivity";
 
@@ -12,6 +15,7 @@ import {
   createMachineProcessFrameApplier,
   type MachineProcessTable,
 } from "./machineProcessFrames.ts";
+import { markMachineHistoryArrival } from "./machineHistory.ts";
 import { createEnvironmentRpcSubscriptionAtomFamily } from "./runtime.ts";
 
 const MACHINE_STATUS_LABEL = "machine:status";
@@ -26,13 +30,35 @@ export function createMachineResourcesAtoms<R, E>(
     tag: WS_METHODS.subscribeMachine,
     idleTtlMs: 60_000,
   });
+  // Views with the same input share one stream, but the server sends history on the first
+  // snapshot only, so every later snapshot keeps that same history object for a view that joins
+  // late. Readers seed when the object changes, not on every snapshot.
   const live = createEnvironmentRpcSubscriptionAtomFamily(runtime, {
     label: MACHINE_STATUS_LABEL,
     tag: WS_METHODS.subscribeMachine,
     idleTtlMs: 0,
+    transform: (snapshots) =>
+      Stream.suspend(() => {
+        let history: MachineStatusSnapshot["history"];
+        return snapshots.pipe(
+          Stream.mapEffect((snapshot) => {
+            if (snapshot.history === undefined) {
+              return Effect.succeed(history === undefined ? snapshot : { ...snapshot, history });
+            }
+            const first = snapshot.history;
+            history = first;
+            return Clock.currentTimeMillis.pipe(
+              Effect.map((now) => {
+                markMachineHistoryArrival(first, now);
+                return snapshot;
+              }),
+            );
+          }),
+        );
+      }),
   });
   const machine = (environmentId: EnvironmentId, input: SubscribeMachineInput = {}) =>
-    input.intervalMs === undefined
+    input.intervalMs === undefined && input.historyMs === undefined
       ? status({ environmentId, input: {} })
       : live({ environmentId, input });
 

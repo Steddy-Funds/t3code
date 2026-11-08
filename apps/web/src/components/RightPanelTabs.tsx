@@ -94,6 +94,8 @@ import {
   useSharedPullRequestSummary,
 } from "~/state/pullRequests";
 import { useEnvironmentQuery } from "~/state/query";
+import { useEnvironmentIdentities, useEnvironmentMachines } from "~/state/environments";
+import { EnvironmentMachineIcon } from "~/components/EnvironmentMachineIcon";
 import { COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS } from "~/workspaceTitlebar";
 
 import { PreviewPanelShell, type PreviewPanelMode } from "./preview/PreviewPanelShell";
@@ -594,6 +596,8 @@ function surfaceTitle(
       return surface.title ?? surface.target?.name ?? "Device";
     case "side-chat":
       return "Side chat";
+    case "machine":
+      return "Machine";
     case "preview": {
       const snapshot = surface.resourceId ? sessions[surface.resourceId] : null;
       if (!snapshot || snapshot.navStatus._tag === "Idle") return "Browser";
@@ -684,6 +688,8 @@ function SurfaceIcon({
       return <PullRequestGlyph.link className="size-3 shrink-0" />;
     case "side-chat":
       return <SideChatTabIcon environmentId={environmentId} threadId={surface.threadId} />;
+    case "machine":
+      return <MachineTabIcon environmentId={surface.environmentId} />;
     case "device":
       return surface.target?.platform === "ios" ? (
         <AppleIcon className="size-3 shrink-0" />
@@ -693,6 +699,17 @@ function SurfaceIcon({
         <Smartphone className="size-3 shrink-0" />
       );
   }
+}
+
+function MachineTabIcon(props: { environmentId: EnvironmentId }) {
+  const kind = useEnvironmentMachines().get(props.environmentId) ?? "server";
+  return (
+    <EnvironmentMachineIcon
+      kind={kind}
+      environmentId={props.environmentId}
+      className="size-3 shrink-0"
+    />
+  );
 }
 
 /** What a side chat tab's dot shows and its title's accessible name says. */
@@ -905,7 +922,10 @@ function RightPanelTab(
       ? scopeThreadRef(props.environmentId, surface.threadId)
       : null,
   );
-  const title = sideChatShell?.title ?? props.title;
+  const machineLabel = useEnvironmentIdentities().find(
+    (identity) => surface.kind === "machine" && identity.environmentId === surface.environmentId,
+  )?.label;
+  const title = sideChatShell?.title ?? machineLabel ?? props.title;
   const sideChatState = sideChatTabState(sideChatShell);
   const content = (
     <>

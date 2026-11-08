@@ -6,6 +6,7 @@ import { useClosedViewStore } from "./closedViewStore";
 import { reopenClosedView } from "./reopenClosedView";
 import {
   hostRightPanel,
+  machineSurface,
   migratePersistedRightPanelState,
   pullRequestSurface,
   pullRequestSurfaceId,
@@ -653,6 +654,7 @@ describe("rightPanelStore", () => {
     { kind: "plan", isOpen: true },
     { kind: "agents", isOpen: true },
     { kind: "agents", isOpen: false },
+    { kind: "bogus", isOpen: true },
   ])("drops $kind with isOpen=$isOpen and falls back", ({ kind, isOpen }) => {
     expect(
       migratePersistedRightPanelState({
@@ -686,6 +688,74 @@ describe("rightPanelStore", () => {
         },
       },
       threadPanelVisibilityByThreadKey: {},
+    });
+  });
+
+  it("opens a machine tab once and activates it again on a second open", () => {
+    const store = useRightPanelStore.getState();
+    const studio = "studio" as EnvironmentId;
+    store.openMachine(refA, studio);
+    store.open(refA, "diff");
+    store.openMachine(refA, studio);
+    const state = selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA);
+    expect(state.isOpen).toBe(true);
+    expect(state.activeSurfaceId).toBe("machine:studio");
+    expect(state.surfaces.filter((surface) => surface.kind === "machine")).toEqual([
+      { id: "machine:studio", kind: "machine", environmentId: studio },
+    ]);
+  });
+
+  describe("saved machine tabs", () => {
+    const studio = "studio" as EnvironmentId;
+    const savedPanel = (machine: unknown) => ({
+      byThreadKey: {
+        "env-1:thread-A": {
+          isOpen: true,
+          activeSurfaceId: "diff",
+          surfaces: [{ id: "diff", kind: "diff" }, machine],
+        },
+      },
+    });
+    const diffOnly = {
+      isOpen: true,
+      activeSurfaceId: "diff",
+      surfaces: [{ id: "diff", kind: "diff" }],
+    };
+
+    it.each([
+      { label: "no environmentId", machine: { id: "machine:studio", kind: "machine" } },
+      {
+        label: "a non-string environmentId",
+        machine: { id: "machine:7", kind: "machine", environmentId: 7 },
+      },
+      {
+        label: "an id for another machine",
+        machine: { id: "machine:other", kind: "machine", environmentId: "studio" },
+      },
+      { label: "a null surface", machine: null },
+    ])("drops one with $label", ({ machine }) => {
+      expect(migratePersistedRightPanelState(savedPanel(machine)).byThreadKey).toEqual({
+        "env-1:thread-A": diffOnly,
+      });
+    });
+
+    it("keeps a valid one through a same-version load and through a migration", async () => {
+      const { storage, name, version } = useRightPanelStore.persist.getOptions();
+      expect(version).toBe(14);
+      const valid = machineSurface(studio);
+      const bogus = { id: "bogus", kind: "bogus" };
+      const saved = savedPanel(valid);
+      saved.byThreadKey["env-1:thread-A"].surfaces.push(bogus);
+
+      for (const savedVersion of [version!, version! - 1]) {
+        useRightPanelStore.setState(useRightPanelStore.getInitialState());
+        await storage!.setItem(name!, { state: saved as never, version: savedVersion });
+        await useRightPanelStore.persist.rehydrate();
+        expect(
+          selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA).surfaces,
+        ).toEqual([{ id: "diff", kind: "diff" }, valid]);
+        expect((await storage!.getItem(name!))?.version).toBe(14);
+      }
     });
   });
 

@@ -1,5 +1,4 @@
-// @effect-diagnostics nodeBuiltinImport:off globalTimers:off globalDate:off - plain Node so the `t3 guard` CLI can share it.
-import * as NodeChildProcess from "node:child_process";
+// @effect-diagnostics nodeBuiltinImport:off globalDate:off - plain Node so the `t3 guard` CLI can share it.
 import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
 
@@ -28,26 +27,45 @@ export interface HostTotals {
   readonly memoryAvailableBytes: number;
   readonly swapTotalBytes: number;
   readonly swapUsedBytes: number;
-  /** macOS only, from the pressure reader; null elsewhere or before its first report. */
+  /** macOS only, from the native monitor; null elsewhere or without it. */
   readonly memoryPressure: MachineMemoryPressure | null;
+  /** Absent without a native monitor, so the GPU rules skip. */
   readonly gpus?: ReadonlyArray<HostGpuTotals>;
+}
+
+/** Device totals from the monitor's `gpuTotals`, with VRAM as a share of the device's own. */
+export function hostGpuTotals(
+  devices: ReadonlyArray<{
+    readonly id: string;
+    readonly name: string;
+    readonly vendor: HostGpuTotals["vendor"];
+    readonly status: HostGpuTotals["status"];
+    readonly utilPercent: number | null;
+    readonly vramTotalBytes: number | null;
+    readonly vramUsedBytes: number | null;
+  }>,
+): ReadonlyArray<HostGpuTotals> {
+  return devices.map((device) => ({
+    id: device.id,
+    name: device.name,
+    vendor: device.vendor,
+    status: device.status,
+    utilPercent: device.utilPercent,
+    vramUsedPercent:
+      device.vramTotalBytes !== null && device.vramTotalBytes > 0 && device.vramUsedBytes !== null
+        ? (device.vramUsedBytes / device.vramTotalBytes) * 100
+        : null,
+  }));
 }
 
 export type CpuCounters = ReadonlyArray<{ readonly idle: number; readonly total: number }>;
 
-export interface DarwinPressureSample {
-  readonly pressure: MachineMemoryPressure;
-  readonly swapTotalBytes: number;
-  readonly swapUsedBytes: number;
-  readonly availableMemoryBytes: number | null;
-}
-
-export interface DarwinPressureReader {
-  readonly latest: () => DarwinPressureSample | null;
-  readonly pid: () => number | undefined;
-  /** Closes our end of the pipe only; the loop's next write fails and it exits on its own. */
-  readonly closeReader: () => void;
-  readonly stop: () => void;
+/** Host totals Node cannot read, from the native monitor (macOS pressure, available memory, swap). */
+export interface NativeHostTotals {
+  readonly memoryPressure: MachineMemoryPressure | null;
+  readonly memoryAvailableBytes: number | null;
+  readonly swapTotalBytes: number | null;
+  readonly swapUsedBytes: number | null;
 }
 
 export function readCpuCounters(): CpuCounters {
@@ -97,121 +115,6 @@ export function parseProcMeminfo(text: string) {
   };
 }
 
-export function parseVmStatAvailableBytes(output: string): number | null {
-  const pageSize = /page size of (\d+) bytes/.exec(output)?.[1];
-  const free = /^Pages free:\s+(\d+)\./m.exec(output)?.[1];
-  const inactive = /^Pages inactive:\s+(\d+)\./m.exec(output)?.[1];
-  const speculative = /^Pages speculative:\s+(\d+)\./m.exec(output)?.[1];
-  if (!pageSize || !free || !inactive || !speculative) return null;
-  // vm_stat excludes speculative from free; add it once, without overlapping purgeable pages.
-  const available = (Number(free) + Number(inactive) + Number(speculative)) * Number(pageSize);
-  return Number.isSafeInteger(available) && Number(pageSize) > 0 ? available : null;
-}
-
-const SWAP_UNIT_BYTES: Record<string, number> = { K: 1024, M: 1024 ** 2, G: 1024 ** 3 };
-
-function parseSwapSize(value: string, unit: string): number {
-  return Math.round(Number(value) * (SWAP_UNIT_BYTES[unit] ?? 1));
-}
-
-/** `kern.memorystatus_vm_pressure_level`: 1 normal, 2 warn, 4 critical. */
-function memoryPressureFromLevel(level: number): MachineMemoryPressure | null {
-  if (level === 1) return "normal";
-  if (level === 2) return "warn";
-  if (level === 4) return "critical";
-  return null;
-}
-
-/** One block of the pressure loop: the two `sysctl -n` lines, then `vm_stat`. */
-export function parseDarwinPressureBlock(block: string): DarwinPressureSample | null {
-  const [levelLine = "", swapLine = ""] = block.trimStart().split("\n", 2);
-  const pressure = memoryPressureFromLevel(Number(levelLine.trim()));
-  const swap = /total = ([\d.]+)([KMG])\s+used = ([\d.]+)([KMG])/.exec(swapLine);
-  if (pressure === null || swap === null) return null;
-  return {
-    pressure,
-    swapTotalBytes: parseSwapSize(swap[1]!, swap[2]!),
-    swapUsedBytes: parseSwapSize(swap[3]!, swap[4]!),
-    availableMemoryBytes: parseVmStatAvailableBytes(block),
-  };
-}
-
-const DARWIN_BLOCK_END = "===";
-
-// The one always-on child (docs/internals/resource-telemetry.md). It exits when its parent dies
-// or a write to the pipe fails, so a crashed or closed server never leaves it running.
-export const DARWIN_PRESSURE_LOOP = `while kill -0 $PPID 2>/dev/null; do { sysctl -n kern.memorystatus_vm_pressure_level vm.swapusage && vm_stat && echo ${DARWIN_BLOCK_END}; } || exit 0; sleep 5; done`;
-
-const DARWIN_RESTART_DELAY_MS = 30_000;
-// A loop that dies this soon after spawning (e.g. sysctl missing) will not recover by retrying.
-const DARWIN_EARLY_EXIT_MS = 5_000;
-const DARWIN_MAX_EARLY_EXITS = 3;
-
-export function startDarwinPressureReader(
-  options: { readonly shell?: string; readonly script?: string } = {},
-): DarwinPressureReader {
-  let latest: DarwinPressureSample | null = null;
-  let stopped = false;
-  let restartTimer: ReturnType<typeof setTimeout> | undefined;
-  let child: ReturnType<typeof NodeChildProcess.spawn> | undefined;
-  let earlyExits = 0;
-
-  const start = () => {
-    let buffered = "";
-    const startedAt = Date.now();
-    const current = NodeChildProcess.spawn(
-      options.shell ?? "/bin/sh",
-      ["-c", options.script ?? DARWIN_PRESSURE_LOOP],
-      {
-        stdio: ["ignore", "pipe", "ignore"],
-      },
-    );
-    child = current;
-    current.stdout?.setEncoding("utf8");
-    current.stdout?.on("data", (chunk: string) => {
-      buffered += chunk;
-      let end = buffered.indexOf(`\n${DARWIN_BLOCK_END}\n`);
-      while (end !== -1) {
-        latest = parseDarwinPressureBlock(buffered.slice(0, end)) ?? latest;
-        buffered = buffered.slice(end + DARWIN_BLOCK_END.length + 2);
-        end = buffered.indexOf(`\n${DARWIN_BLOCK_END}\n`);
-      }
-    });
-    current.on("error", () => {});
-    current.on("exit", () => {
-      if (child === current) child = undefined;
-      if (stopped) return;
-      earlyExits = Date.now() - startedAt < DARWIN_EARLY_EXIT_MS ? earlyExits + 1 : 0;
-      if (earlyExits >= DARWIN_MAX_EARLY_EXITS) {
-        // No pressure from here on, so the verdict falls back to the load rule alone.
-        latest = null;
-        return;
-      }
-      restartTimer = setTimeout(start, DARWIN_RESTART_DELAY_MS);
-      restartTimer.unref?.();
-    });
-  };
-  start();
-
-  const closeReader = () => {
-    stopped = true;
-    if (restartTimer !== undefined) clearTimeout(restartTimer);
-    child?.stdout?.destroy();
-  };
-
-  return {
-    latest: () => latest,
-    pid: () => child?.pid,
-    closeReader,
-    stop: () => {
-      // The pipe close alone ends the loop; the signal just ends it sooner.
-      closeReader();
-      child?.kill("SIGTERM");
-      child = undefined;
-    },
-  };
-}
-
 async function readLinuxMeminfo() {
   try {
     return parseProcMeminfo(await NodeFSP.readFile("/proc/meminfo", "utf8"));
@@ -225,7 +128,8 @@ export async function readHostTotals(
   prev: CpuCounters | null,
   options: {
     readonly platform?: NodeJS.Platform;
-    readonly darwin?: DarwinPressureReader | undefined;
+    /** macOS reads pressure, available memory and swap only from here; without it they stay unknown. */
+    readonly native?: NativeHostTotals | null;
   } = {},
 ): Promise<{ totals: HostTotals; next: CpuCounters }> {
   // oxlint-disable-next-line t3code/no-global-process-runtime -- Plain Node module shared with the t3 guard CLI; callers can pass platform.
@@ -248,12 +152,12 @@ export async function readHostTotals(
       swapUsedBytes = meminfo.swapUsedBytes;
     }
   } else if (platform === "darwin") {
-    const darwin = options.darwin?.latest() ?? null;
-    if (darwin !== null) {
-      memoryAvailableBytes = darwin.availableMemoryBytes ?? memoryAvailableBytes;
-      swapTotalBytes = darwin.swapTotalBytes;
-      swapUsedBytes = darwin.swapUsedBytes;
-      memoryPressure = darwin.pressure;
+    const native = options.native ?? null;
+    if (native !== null) {
+      memoryAvailableBytes = native.memoryAvailableBytes ?? memoryAvailableBytes;
+      swapTotalBytes = native.swapTotalBytes ?? 0;
+      swapUsedBytes = native.swapUsedBytes ?? 0;
+      memoryPressure = native.memoryPressure;
     }
   }
   return {

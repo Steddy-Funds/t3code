@@ -147,6 +147,10 @@
       "types": "./src/state/machineResources.ts",
       "default": "./src/state/machineResources.ts"
     },
+    "./state/machineHistory": {
+      "types": "./src/state/machineHistory.ts",
+      "default": "./src/state/machineHistory.ts"
+    },
     "./state/machineProcessFrames": {
       "types": "./src/state/machineProcessFrames.ts",
       "default": "./src/state/machineProcessFrames.ts"

@@ -31,10 +31,28 @@ plus a 30 s heartbeat. Clients judge staleness by their own receipt time, so the
 must stay well inside the client's 75 s expiry. Per-core samples run on their own fiber only
 while a view subscribes with an interval.
 
-On macOS the RAM rule needs the memory-pressure level, which Node cannot read. Until the
-native monitor reports host totals, one long-lived `sh` loop runs `sysctl` and `vm_stat`
-every 5 s into a pipe the server owns. It is the one exception to "no recurring shell
-probe": it exits when its parent dies or a write to the pipe fails.
+On macOS the RAM rule needs the memory-pressure level, which Node cannot read, so each tick
+asks the native monitor for `hostTotals`. Without a monitor, or while it restarts, memory reads
+unknown and the load rule still works; there is no shell fallback. Each tick also asks for
+`gpuTotals`, merged into the totals for the GPU rules; without a monitor they skip.
+
+The same tick feeds a one-hour ring of Float32Array columns (totals, per-core, GPU devices),
+bounded at 512 KB. Only the first snapshot of a subscription that asks for `historyMs`
+carries it, quantised to permille, so a heartbeat never repeats it.
+
+The monitor's host mode (protocol 4) walks every process on the machine, not just the
+server's tree, so it runs only while a view streams it (`setHostStreaming`) or on one
+request (`hostSampleNow`), and it frees its process table when streaming stops. Host samples
+never enter history. Static fields (command, cwd, user, cgroup) are read once per process
+identity, and the client keeps that table per monitor generation. `gpuTotals` reads device
+totals only, so it rides the always-on 5 s tick, and live views reuse that tick's reading
+rather than querying at their own rate; a suspended GPU is never woken to read it. Each vendor
+backend counts its own failures and turns off alone after three in a row; the monitor sends
+`gpu-unavailable` only when the last one does. GPU code runs inside the monitor, so a crash
+while GPU work was in flight (a pending GPU request, or host streaming with GPUs) also blames
+the GPUs. After either, GPUs stay off until the server restarts; a crash with no GPU work in
+flight restarts the monitor with GPUs on. A protocol 3 binary still works without the host
+features.
 
 History has independent bounds for age, snapshot count, process rows, and retained
 bytes. A count limit alone cannot bound memory when command lines vary in size.
@@ -55,6 +73,11 @@ unconstrained states. Headless servers leave unavailable power data unknown.
   Electron and native start times have different precision, so merging allows a
   small tolerance. Process signaling rechecks the native identity with a fresh
   sample.
+- Kill sends SIGTERM and Force kill sends SIGKILL. Servers older than host mode accept
+  only INT and KILL, so clients offer those there. On Windows every signal is
+  TerminateProcess, so there is a single Kill. The server refuses pid 1 and below, itself
+  and its ancestors, the monitor, and any process whose start time no longer matches the
+  fresh sample, so a reused PID is never signalled.
 - Snapshot sequence numbers belong to a monitor generation. Comparing them across
   restarts would discard the new monitor's samples until its sequence caught up.
 - Sampling can miss a process that starts and exits between samples. Cumulative

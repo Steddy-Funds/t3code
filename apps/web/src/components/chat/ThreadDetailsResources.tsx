@@ -146,8 +146,7 @@ function ResourcesBody({
     return (
       <p className="px-2.5 text-xs text-muted-foreground">
         Cursor runs inside the T3 server, so only the shells it starts are counted. None are running
-        now. To count a dev server it started, ask the agent to claim it, or claim it from the task
-        manager.
+        now. To count a dev server it started, ask the agent to claim it.
       </p>
     );
   }

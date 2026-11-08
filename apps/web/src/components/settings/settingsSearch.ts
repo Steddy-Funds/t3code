@@ -1235,6 +1235,14 @@ export const SETTINGS_SEARCH_ITEMS = [
     secretsFeatureOnly: true,
   },
   {
+    id: "scheduled-task-load-monitor",
+    title: "Load monitor",
+    to: "/settings/scheduled-tasks",
+    searchTerms: [
+      "when machine is busy stressed load cpu memory gpu scheduled task trigger on load wake",
+    ],
+  },
+  {
     id: "archive",
     title: "Archived threads",
     to: "/settings/archived",

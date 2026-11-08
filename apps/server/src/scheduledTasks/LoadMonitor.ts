@@ -25,6 +25,8 @@ export const RELEASE_JITTER_MIN_MS = 20_000;
 export const RELEASE_JITTER_MAX_MS = 40_000;
 /** The unbucketed share needs a full process walk, so it is read at most this often. */
 export const UNBUCKETED_INTERVAL_MS = 3_600_000;
+/** Matches the run's own `t3_machine_read` limit, so both see the same top processes. */
+const MACHINE_BUCKETS_UNOWNED_LIMIT = 50;
 
 /** What the monitors compare against on one tick. */
 export interface LoadReading {
@@ -238,14 +240,28 @@ export const monitorLayer = Layer.effectDiscard(
       );
     const releaseGap = Random.nextIntBetween(RELEASE_JITTER_MIN_MS, RELEASE_JITTER_MAX_MS);
 
+    // The built-in skips a fire whose unowned set its last run already saw; a failed read sees none.
+    const readUnowned = (id: ScheduledTaskId): Effect.Effect<ReadonlyArray<string> | undefined> =>
+      id !== ScheduledTaskService.MACHINE_BUCKETS_TASK_ID
+        ? Effect.undefined
+        : hostProcesses
+            .unbucketed({
+              limit: MACHINE_BUCKETS_UNOWNED_LIMIT,
+              commands: false,
+              bucketNames: new Map(),
+            })
+            .pipe(
+              Effect.map((result) => result.processes.map(ScheduledTaskService.unownedProcessKey)),
+              Effect.orElseSucceed(() => []),
+            );
+
     const trigger = (id: ScheduledTaskId, episode: string) =>
-      scheduledTasks
-        .triggerLoad(id, episode)
-        .pipe(
-          Effect.catch((cause) =>
-            Effect.logWarning("Load-triggered schedule task failed", { taskId: id, cause }),
-          ),
-        );
+      readUnowned(id).pipe(
+        Effect.flatMap((unowned) => scheduledTasks.triggerLoad(id, episode, unowned)),
+        Effect.catch((cause) =>
+          Effect.logWarning("Load-triggered schedule task failed", { taskId: id, cause }),
+        ),
+      );
 
     // Every 5 s for the server's lifetime; a span per tick would only add noise.
     const evaluate = Effect.fnUntraced(function* () {

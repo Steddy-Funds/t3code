@@ -273,6 +273,8 @@ export class ScheduledTaskService extends Context.Service<
     readonly triggerLoad: (
       id: ScheduledTaskId,
       episode: string,
+      /** The built-in's unowned processes at fire time, keyed by `unownedProcessKey`. */
+      unowned?: ReadonlyArray<string>,
     ) => Effect.Effect<void, ScheduledTaskError>;
     /** Keeps built-in rows in step with settings; the server calls it on every settings change. */
     readonly ensureBuiltInTasks: (
@@ -383,6 +385,29 @@ const BUILT_IN_REJECTED =
 const BUILT_IN_TASKS: ReadonlyMap<string, NonNullable<ScheduledTask["builtIn"]>> = new Map([
   [MACHINE_BUCKETS_TASK_ID, "machine-buckets"],
 ]);
+
+/** Background runs of the built-in start at most this often; its row's last run start survives restarts. */
+const MACHINE_BUCKETS_COOLDOWN_MS = 6 * 60 * 60 * 1000;
+const MACHINE_BUCKETS_MIN_NEW_SHARE = 0.3;
+
+/** A container counts as one program; any other process by its name. */
+export const unownedProcessKey = (process: {
+  readonly name: string;
+  readonly container?: string;
+}): string => (process.container === undefined ? process.name : `container:${process.container}`);
+
+/** Whether enough of `next` is new since the last run's set to be worth another run. */
+export function unownedSetChanged(
+  previous: ReadonlySet<string> | null,
+  next: ReadonlyArray<string>,
+): boolean {
+  const distinct = new Set(next);
+  if (distinct.size === 0) return false;
+  if (previous === null) return true;
+  let added = 0;
+  for (const key of distinct) if (!previous.has(key)) added += 1;
+  return added / distinct.size >= MACHINE_BUCKETS_MIN_NEW_SHARE;
+}
 
 /** Fires once the unbucketed share reaches 25 % and re-arms once it falls to 15 %. */
 const MACHINE_BUCKETS_SCHEDULE: ScheduledTask["schedule"] = {
@@ -514,6 +539,11 @@ export const layer = Layer.effect(
       ReadonlyMap<ScheduledTaskId, ReadonlyArray<number>>
     >(new Map());
     const activeRuns = yield* Ref.make<ReadonlySet<ScheduledTaskId>>(new Set());
+    // The built-in's last background run, in memory: the cooldown covers a restart.
+    const machineBucketsLast = yield* Ref.make<{
+      readonly threadId: ThreadId | null;
+      readonly unowned: ReadonlySet<string> | null;
+    }>({ threadId: null, unowned: null });
     // Notifications re-emit the full list; slow subscribers need only the newest dirty signal.
     const changesPubSub = yield* PubSub.sliding<void>(1);
     const dueTasks = DueHint.make();
@@ -845,6 +875,32 @@ export const layer = Layer.effect(
         ),
     );
 
+    const machineBucketsSkipReason = Effect.fnUntraced(function* (
+      task: ScheduledTask,
+      now: DateTime.DateTime,
+      unowned: ReadonlyArray<string> | undefined,
+    ) {
+      const lastRunAt = task.lastRunAt === null ? Option.none() : DateTime.make(task.lastRunAt);
+      if (
+        Option.isSome(lastRunAt) &&
+        DateTime.toEpochMillis(now) - DateTime.toEpochMillis(lastRunAt.value) <
+          MACHINE_BUCKETS_COOLDOWN_MS
+      ) {
+        return "cooldown";
+      }
+      const last = yield* Ref.get(machineBucketsLast);
+      if (last.threadId !== null) {
+        const shell = yield* threadManagement
+          .getThreadShell(last.threadId)
+          .pipe(Effect.orElseSucceed(() => null));
+        if (shell !== null && shell.activeRunId !== null) return "last run still working";
+      }
+      if (unowned !== undefined && !unownedSetChanged(last.unowned, unowned)) {
+        return "unowned processes unchanged";
+      }
+      return null;
+    });
+
     const runTask = Effect.fn("ScheduledTaskService.runTask")(function* (
       task: ScheduledTask,
       trigger: "scheduled" | "manual" | "webhook" | "load",
@@ -855,6 +911,7 @@ export const layer = Layer.effect(
       },
       /** Names the load episode, so one episode dispatches one command however often it fires. */
       loadEpisode?: string,
+      unowned?: ReadonlyArray<string>,
     ) {
       // Nobody waits on these triggers, so a deleted or busy task is skipped, not an error.
       const unattended = trigger === "scheduled" || trigger === "load";
@@ -898,6 +955,14 @@ export const layer = Layer.effect(
         }
         if (trigger === "load" && (!active.enabled || active.schedule.type !== "load")) {
           return { task: active, threadId: null, dispatchFailed: false };
+        }
+        const backgroundBuiltIn = trigger === "load" && active.builtIn === "machine-buckets";
+        if (backgroundBuiltIn) {
+          const skip = yield* machineBucketsSkipReason(active, startedAt, unowned);
+          if (skip !== null) {
+            yield* Effect.logInfo("Skipping auto-buckets run", { reason: skip });
+            return { task: active, threadId: null, dispatchFailed: false };
+          }
         }
         // Reject queued deliveries after pause, same-id recreation or trigger changes.
         if (webhook !== undefined) {
@@ -1049,6 +1114,12 @@ export const layer = Layer.effect(
               );
 
         const runSucceeded = result._tag === "Success";
+        if (backgroundBuiltIn && result._tag === "Success") {
+          yield* Ref.update(machineBucketsLast, (last) => ({
+            threadId: result.value,
+            unowned: unowned === undefined ? last.unowned : new Set(unowned),
+          }));
+        }
         if (webhook !== undefined && runSucceeded) yield* Ref.set(webhook.dispatched, true);
         const completedAt = yield* localNow;
         const lastRunStatus = runSucceeded ? ("succeeded" as const) : ("failed" as const);
@@ -1611,10 +1682,10 @@ export const layer = Layer.effect(
 
     const triggerLoad: ScheduledTaskService["Service"]["triggerLoad"] = Effect.fn(
       "ScheduledTaskService.triggerLoad",
-    )(function* (id, episode) {
+    )(function* (id, episode, unowned) {
       const task = yield* findTask(id);
       if (task === null || !task.enabled || task.schedule.type !== "load") return;
-      yield* runTask(task, "load", undefined, episode).pipe(
+      yield* runTask(task, "load", undefined, episode, unowned).pipe(
         Effect.mapError((cause) =>
           isScheduledTaskError(cause)
             ? cause
@@ -1629,19 +1700,30 @@ export const layer = Layer.effect(
       const model = resolveMachineBucketsModel(settings);
       const block =
         model === null ? NO_PROVIDER : managedRuntimeModeDenial(managedPolicy.summary, "auto");
-      const { projectId } = yield* managedFolders.ensureScratchProject.pipe(
-        Effect.mapError((cause) =>
-          taskError("Could not prepare the scratch project for auto-buckets.", {
-            taskId: MACHINE_BUCKETS_TASK_ID,
-            cause,
-          }),
-        ),
-      );
+      const on = settings.machineResources.autoBuckets.enabled;
       const existing = yield* findTask(MACHINE_BUCKETS_TASK_ID);
+      const blockChanged = machineBucketsBlock !== block;
+      machineBucketsBlock = block;
+      // Scratch is prepared only for a row that can run; switched off, no row is needed.
+      if (!on && existing === null) {
+        if (blockChanged) yield* notifyChanged;
+        return;
+      }
+      const projectId =
+        !on && existing !== null
+          ? existing.projectId
+          : (yield* managedFolders.ensureScratchProject.pipe(
+              Effect.mapError((cause) =>
+                taskError("Could not prepare the scratch project for auto-buckets.", {
+                  taskId: MACHINE_BUCKETS_TASK_ID,
+                  cause,
+                }),
+              ),
+            )).projectId;
       const desired = {
         title: MACHINE_BUCKETS_TITLE,
         prompt: MACHINE_BUCKETS_PROMPT,
-        enabled: settings.machineResources.autoBuckets.enabled && block === undefined,
+        enabled: on && block === undefined,
         schedule: MACHINE_BUCKETS_SCHEDULE,
         projectId,
         threadId: null,
@@ -1651,8 +1733,6 @@ export const layer = Layer.effect(
         runtimeMode: "auto",
         interactionMode: "default",
       } satisfies Partial<ScheduledTask>;
-      const blockChanged = machineBucketsBlock !== block;
-      machineBucketsBlock = block;
       const unchanged =
         existing !== null &&
         Object.entries(desired).every(

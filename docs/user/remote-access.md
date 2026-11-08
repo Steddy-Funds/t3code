@@ -221,10 +221,10 @@ processes. Saving buckets needs a machine on this version of T3 Code or newer.
 **Auto-buckets** makes buckets for you. Turn it on or off in the machine's settings, and pick the
 model it uses there; **Auto** picks a fast model from an enabled provider. When processes nothing
 owns pass a quarter of the machine, T3 starts a background thread that groups them into a few
-named buckets, at most once an hour. It only changes buckets it made itself, so a bucket you
-created or edited stays as it is. It shows as the built-in **Machine buckets** task in
-**Settings → Scheduled tasks**, where **Run now** starts it at once. With no provider enabled it
-shows as blocked and doesn't run.
+named buckets. It runs at most every 6 hours, and only when new processes appear. It only changes
+buckets it made itself, so a bucket you created or edited stays as it is. It shows as the built-in
+**Machine buckets** task in **Settings → Scheduled tasks**, where **Run now** starts it at once.
+With no provider enabled it shows as blocked and doesn't run.
 
 **Claims** tie a process, a container or a cgroup to a thread, so a dev server or a Docker
 container an agent started counts toward that thread. Agents make claims. A claim ends when its

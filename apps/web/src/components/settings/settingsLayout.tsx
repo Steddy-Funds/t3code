@@ -11,7 +11,13 @@ import {
 } from "@t3tools/contracts";
 import * as Equal from "effect/Equal";
 import { useLocation, useNavigate } from "@tanstack/react-router";
-import { createContext, type ComponentPropsWithoutRef, type ReactNode, useContext } from "react";
+import {
+  createContext,
+  type ComponentPropsWithoutRef,
+  type ReactNode,
+  useContext,
+  useState,
+} from "react";
 
 import {
   PRIMARY_SETTINGS_UNAVAILABLE_MESSAGE,
@@ -155,6 +161,17 @@ function scrollAndFocusSettingsTarget(target: HTMLElement, highlight = true): vo
 
 export function useSettingsSearchTargetId(): string | null {
   return useContext(SettingsSearchTargetContext).targetId;
+}
+
+/** A collapsible panel that opens whenever a settings link targets it, then stays user-controlled. */
+export function useOpenWhenTargeted(targeted: boolean) {
+  const [open, setOpen] = useState(targeted);
+  const [wasTargeted, setWasTargeted] = useState(targeted);
+  if (targeted !== wasTargeted) {
+    setWasTargeted(targeted);
+    if (targeted) setOpen(true);
+  }
+  return [open, setOpen] as const;
 }
 
 export function useSettingsSearchTarget<T extends HTMLElement>(id: string | undefined) {

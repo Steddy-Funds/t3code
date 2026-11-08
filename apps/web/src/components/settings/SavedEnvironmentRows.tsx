@@ -25,7 +25,7 @@ import * as Option from "effect/Option";
 
 import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
 import { cn } from "../../lib/utils";
-import { SettingsRow, useSettingsSearchTargetId } from "./settingsLayout";
+import { SettingsRow, useOpenWhenTargeted, useSettingsSearchTargetId } from "./settingsLayout";
 import { searchableSetting } from "./settingsSearch";
 import { EnvironmentIconMenu } from "./EnvironmentIconPicker";
 import { EnvironmentRoutesList } from "./EnvironmentRoutesList";
@@ -124,8 +124,9 @@ export function SavedBackendListRow({
   const [diagnosisOpen, setDiagnosisOpen] = useState(false);
   const environmentId = environment.environmentId;
   const targetId = environmentSettingsTargetId(environmentId);
-  const linkedHere = useSettingsSearchTargetId() === targetId;
-  const [machineSettingsOpen, setMachineSettingsOpen] = useState(linkedHere);
+  const [machineSettingsOpen, setMachineSettingsOpen] = useOpenWhenTargeted(
+    useSettingsSearchTargetId() === targetId,
+  );
   const unsupported = environment.connection.phase === "unsupported";
   const blocked = unsupported && !hasSavedBearerRoute(environment.entry);
   const enabled = environment.entry.enabled && !unsupported;

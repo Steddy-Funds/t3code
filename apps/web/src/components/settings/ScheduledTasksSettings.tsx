@@ -749,7 +749,8 @@ function ScheduledTaskRow({
       toastManager.add(
         stackedThreadToast({
           type: "error",
-          title: "Could not update scheduled task",
+          title:
+            action === "run" ? "Could not run scheduled task" : "Could not update scheduled task",
           description: String(squashAtomCommandFailure(result)),
         }),
       );
@@ -866,7 +867,10 @@ function ScheduledTaskRow({
   );
 }
 
-/** T3 keeps a built-in task in step with its setting; the switch writes that setting. */
+/**
+ * T3 keeps a built-in task in step with its setting; the switch shows and writes that setting,
+ * so it reads on while a block (shown in the row) keeps the task off.
+ */
 function BuiltInTaskSwitch({
   environmentId,
   task,
@@ -875,12 +879,20 @@ function BuiltInTaskSwitch({
   readonly task: ScheduledTask;
 }) {
   const config = useAtomValue(serverEnvironment.configValueAtom(environmentId));
+  const settingEnabled = useAtomValue(
+    serverEnvironment.settingsValueAtom(environmentId),
+    (settings) => settings?.machineResources.autoBuckets.enabled,
+  );
   const canWrite = useEnvironmentScope(environmentId, AuthSettingsWriteScope);
   const updateSettings = useUpdateEnvironmentSettings(environmentId);
-  const writable = canWrite && config?.environment.capabilities.machineAutoBuckets === true;
+  // Without the setting, a blocked row's `enabled` says nothing about what a flip would write.
+  const writable =
+    canWrite &&
+    config?.environment.capabilities.machineAutoBuckets === true &&
+    (settingEnabled !== undefined || task.blockedByPolicy === undefined);
   return (
     <Switch
-      checked={task.enabled}
+      checked={settingEnabled ?? task.enabled}
       disabled={!writable}
       aria-label={`Enable ${task.title}`}
       onCheckedChange={(enabled) =>

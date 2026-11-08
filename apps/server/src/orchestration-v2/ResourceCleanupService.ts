@@ -9,9 +9,11 @@ import { resolveAttachmentRelativePath } from "../attachmentPaths.ts";
 import { parseAttachmentFileExtension, resolveAttachmentPathById } from "../attachmentStore.ts";
 import * as ServerConfig from "../config.ts";
 import * as PreviewManager from "../preview/Manager.ts";
+import * as ProcessRunner from "../processRunner.ts";
 import { ProcessOwnership } from "../resourceTelemetry/ProcessOwnership.ts";
 import * as ScheduledTaskService from "../scheduledTasks/ScheduledTaskService.ts";
 import * as TerminalManager from "../terminal/Manager.ts";
+import * as LoadPauseDocker from "./LoadPauseDocker.ts";
 
 export class ResourceCleanupError extends Schema.TaggedError<ResourceCleanupError>()(
   "ResourceCleanupError",
@@ -56,11 +58,21 @@ export const layer = Layer.effect(
     const config = yield* ServerConfig.ServerConfig;
     const scheduledTasks = yield* ScheduledTaskService.ScheduledTaskService;
     const ownership = yield* ProcessOwnership;
+    const docker = yield* LoadPauseDocker.make;
     return {
       cleanupMachineClaims: ownership.releaseThread,
-      // The load pause worker (PR5 layer 2) supplies the docker unpause.
       unpauseLoadPausedContainers: Effect.fn("ResourceCleanupService.unpauseLoadPausedContainers")(
-        function* () {},
+        function* (containers: ReadonlyArray<OrchestrationV2LoadPausedContainer>) {
+          for (const container of containers) {
+            yield* docker
+              .unpause(container)
+              .pipe(
+                Effect.catch((error) =>
+                  Effect.logWarning("Could not unpause a load-paused container", { error }),
+                ),
+              );
+          }
+        },
       ),
       cleanupScheduledTasks: Effect.fn("ResourceCleanupService.cleanupScheduledTasks")(function (
         threadId: ThreadId,
@@ -129,4 +141,4 @@ export const layer = Layer.effect(
       }),
     };
   }),
-);
+).pipe(Layer.provide(ProcessRunner.layer));

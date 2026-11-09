@@ -6,37 +6,38 @@ upstream; a feature can, from its own branch, when Akiva decides.
 
 ## Included
 
-| Feature                                                             | PR  | Merge   |
-| ------------------------------------------------------------------- | --- | ------- |
-| Two-finger swipe to reply                                           | #39 | e920434 |
-| Cmd/Option section reply (built on #39)                             | #40 | 7b822bb |
-| Cmd+swipe to one bullet, Cmd-only sections, composer blank-line fix | #41 | 44c451d |
-| A highlighted bullet keeps its marker in place                      | #42 | 727e87c |
-| Cmd+swipe replies to one image                                      | #43 | 3d319a8 |
-| Cmd+swipe a sidebar thread to mention it                            | #44 | 336207d |
-| A swipe replies to a section by default, with a setting             | #45 | 615ed49 |
-| A swipe beside a message's sections replies to the nearest one      | #46 | 947cea5 |
-| Cmd+Shift+Enter docks the composer as a full-height editor          | #47 | 0940962 |
-| PR review sidebar section; Awaiting children in lineage             | #49 | 7bf63d6 |
-| Sidebar names what a waiting thread waits on (agents, PR)           | #50 | 627adaf |
-| Background threads: Backgrounded section, thread menu and MCP       | #51 | b610ba6 |
-| Appearance > Sidebar details: hide branch and model                 | #52 | fd65dd9 |
-| Sidebar counts every live agent in a thread's tree, badge at 2+     | #53 | 36a450e |
-| Sidebar cards fit in two rows without the branch                    | #54 | ab7770f |
-| Agent badge hover shows the lineage tree; owner only for forks      | #55 | 699d8da |
-| Thread details: cost, tokens and activity for thread and lineage    | #56 | 1e9ea81 |
-| Lineage tree rows open their thread; card hover shows the branch    | #57 | 958cfe7 |
-| Sidebar machine toggle; machine in thread header; copy branch       | #58 | 796dfab |
-| Sidebar cards drop the empty icon group's gap                       | #59 | 3f45500 |
-| Thread cost and activity on one line, labels on hover | #60 | 4f50cad |
-| Machines show stress: sweating icon, hover card, mobile sheet (node resources 1/5) | #61 | 6612446 |
-| Task manager, cross-machine view, NVIDIA and Intel GPUs (node resources 2/5) | #62 | 4c28c14 |
-| Who is using a machine: ownership, claims, buckets, per-thread resources (node resources 3/5) | #63 | 3180ffa |
-| Agents read machine load, load-triggered scheduled tasks, background auto-buckets, inline machine card (node resources 4/5) | #64 | 8c11592 |
+| Feature                                                                                                                                       | PR  | Merge   |
+| --------------------------------------------------------------------------------------------------------------------------------------------- | --- | ------- |
+| Two-finger swipe to reply                                                                                                                     | #39 | e920434 |
+| Cmd/Option section reply (built on #39)                                                                                                       | #40 | 7b822bb |
+| Cmd+swipe to one bullet, Cmd-only sections, composer blank-line fix                                                                           | #41 | 44c451d |
+| A highlighted bullet keeps its marker in place                                                                                                | #42 | 727e87c |
+| Cmd+swipe replies to one image                                                                                                                | #43 | 3d319a8 |
+| Cmd+swipe a sidebar thread to mention it                                                                                                      | #44 | 336207d |
+| A swipe replies to a section by default, with a setting                                                                                       | #45 | 615ed49 |
+| A swipe beside a message's sections replies to the nearest one                                                                                | #46 | 947cea5 |
+| Cmd+Shift+Enter docks the composer as a full-height editor                                                                                    | #47 | 0940962 |
+| PR review sidebar section; Awaiting children in lineage                                                                                       | #49 | 7bf63d6 |
+| Sidebar names what a waiting thread waits on (agents, PR)                                                                                     | #50 | 627adaf |
+| Background threads: Backgrounded section, thread menu and MCP                                                                                 | #51 | b610ba6 |
+| Appearance > Sidebar details: hide branch and model                                                                                           | #52 | fd65dd9 |
+| Sidebar counts every live agent in a thread's tree, badge at 2+                                                                               | #53 | 36a450e |
+| Sidebar cards fit in two rows without the branch                                                                                              | #54 | ab7770f |
+| Agent badge hover shows the lineage tree; owner only for forks                                                                                | #55 | 699d8da |
+| Thread details: cost, tokens and activity for thread and lineage                                                                              | #56 | 1e9ea81 |
+| Lineage tree rows open their thread; card hover shows the branch                                                                              | #57 | 958cfe7 |
+| Sidebar machine toggle; machine in thread header; copy branch                                                                                 | #58 | 796dfab |
+| Sidebar cards drop the empty icon group's gap                                                                                                 | #59 | 3f45500 |
+| Thread cost and activity on one line, labels on hover                                                                                         | #60 | 4f50cad |
+| Machines show stress: sweating icon, hover card, mobile sheet (node resources 1/5)                                                            | #61 | 6612446 |
+| Task manager, cross-machine view, NVIDIA and Intel GPUs (node resources 2/5)                                                                  | #62 | 4c28c14 |
+| Who is using a machine: ownership, claims, buckets, per-thread resources (node resources 3/5)                                                 | #63 | 3180ffa |
+| Agents read machine load, load-triggered scheduled tasks, background auto-buckets, inline machine card (node resources 4/5)                   | #64 | 8c11592 |
 | Load management: guarded runs, auto-pause of low-priority agents and their containers, thread priorities; off by default (node resources 5/5) | #65 | 59cd8f9 |
-| Thread cost as one lineage total, last pull cached | #66 | 6a6c02a |
-| Thread cost in three digits with K and M; turns as an icon | #67 | 6023b1b |
-| Thread resources cover subagents; `-` for unmeasured; thread details opens a focused machine tab (node resources 6) | #68 | 04bf4fe |
+| Thread cost as one lineage total, last pull cached                                                                                            | #66 | 6a6c02a |
+| Thread cost in three digits with K and M; turns as an icon                                                                                    | #67 | 6023b1b |
+| Thread resources cover subagents; `-` for unmeasured; thread details opens a focused machine tab (node resources 6)                           | #68 | 04bf4fe |
+| Gamba mode: a Mario Party DS coin each time an agent turn finishes, subagents included (Labs)                                                 | #69 | 2958408 |
 
 Held: #38 (pods notes in the t3-orchestration skill). It edits
 `.agents/skills/t3-orchestration/`, which exists only on
@@ -56,6 +57,7 @@ The Mac runs this tip, which already has them all.
 - #64 `t3_machine_read`, load trigger, auto-buckets built-in: server half only (`8177ce2`)
 - #65 Load guard (`t3 guard`), load pause with docker pause and startup reconcile, priorities: server half only (`6ea90d5`), with the provider packages' guard env injection
 - #68 Thread resources cover the subagent lineage: server half only (`680f646`)
+- #69 Gamba mode's `nativeSubagentsCompleted` thread shell count (whole branch; the client half is inert on a server)
 
 A feature that changes `apps/server`, or a contract the server reads, is
 merged there too: its branch head with `--no-ff`, never this tip.

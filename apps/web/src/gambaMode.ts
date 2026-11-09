@@ -19,18 +19,24 @@ const MAX_COIN_BACKLOG_SECONDS = 20 * COIN_SPACING_SECONDS;
 
 let nextCoinAt = 0;
 
-async function playCoins(count: number) {
+async function playCoins(count: number, { preview = false } = {}) {
   const context = runningAudioContext();
   if (!context) return;
   try {
     const decoded = await loadAudioBuffer(context, coinUrl);
-    if (!getClientSettings().gambaModeEnabled || context.state !== "running") return;
+    const { gambaModeEnabled, gambaModeVolume } = getClientSettings();
+    if (!gambaModeEnabled || context.state !== "running") return;
+    // A slider drag previews only while no coin is waiting, so it never builds a backlog.
+    if (preview && nextCoinAt > context.currentTime) return;
+    // Squared, so the slider tracks perceived loudness rather than amplitude.
+    const gain = new GainNode(context, { gain: (gambaModeVolume / 100) ** 2 });
+    gain.connect(context.destination);
     for (let coin = 0; coin < count; coin += 1) {
       const startAt = Math.max(context.currentTime, nextCoinAt);
       if (startAt - context.currentTime > MAX_COIN_BACKLOG_SECONDS) return;
       const source = context.createBufferSource();
       source.buffer = decoded;
-      source.connect(context.destination);
+      source.connect(gain);
       source.start(startAt);
       nextCoinAt = startAt + COIN_SPACING_SECONDS;
     }
@@ -40,6 +46,12 @@ async function playCoins(count: number) {
 }
 
 const unlockCoin = () => unlockAudio([coinUrl]);
+
+/** One coin at the current volume, for the settings slider. Called from its gesture. */
+export function previewGambaCoin() {
+  unlockCoin();
+  void playCoins(1, { preview: true });
+}
 
 /** Plays a coin each time any agent turn completes, subagents included, on every connected environment. */
 export function startGambaMode(registry: AtomRegistry.AtomRegistry): () => void {

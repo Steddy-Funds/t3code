@@ -124,6 +124,10 @@ export const DEFAULT_SNOOZE_PRESETS: ReadonlyArray<SnoozePresetSetting> = [
   { kind: "at", day: "monday", time: "09:00" },
 ];
 
+export const GambaModeVolume = Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 100 }));
+export type GambaModeVolume = typeof GambaModeVolume.Type;
+const DEFAULT_GAMBA_MODE_VOLUME: GambaModeVolume = 50;
+
 export const MIN_GLASS_OPACITY = 40;
 export const MAX_GLASS_OPACITY = 100;
 export const GlassOpacity = Schema.Int.check(
@@ -481,6 +485,9 @@ export const ClientSettingsSchema = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed(false)),
   ),
   gambaModeEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  gambaModeVolume: GambaModeVolume.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_GAMBA_MODE_VOLUME)),
+  ),
   // Retired Labs toggle. Still read as the default for the Usage item in threadDetailsItems.
   threadDetailsUsageEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   // Sparse show/hide overrides for thread details card items. Missing ids use the client's
@@ -1822,6 +1829,7 @@ export const ClientSettingsPatch = Schema.Struct({
   boringSidebarEnabled: Schema.optionalKey(Schema.Boolean),
   boringSidebarMultilineRows: Schema.optionalKey(Schema.Boolean),
   gambaModeEnabled: Schema.optionalKey(Schema.Boolean),
+  gambaModeVolume: Schema.optionalKey(GambaModeVolume),
   threadDetailsUsageEnabled: Schema.optionalKey(Schema.Boolean),
   threadDetailsItems: Schema.optionalKey(Schema.Record(Schema.String, Schema.Boolean)),
   legacySidebarEnabled: Schema.optionalKey(Schema.Boolean),

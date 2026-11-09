@@ -469,7 +469,7 @@ export const SETTINGS_SEARCH_ITEMS = [
     id: "gamba-mode",
     title: "Gamba mode",
     to: "/settings/labs",
-    searchTerms: ["beta coin sound turn finished subagents swarm audio casino"],
+    searchTerms: ["beta coin sound volume turn finished subagents swarm audio casino"],
   },
   {
     id: "guest-links",

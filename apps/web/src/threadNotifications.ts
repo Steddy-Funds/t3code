@@ -122,10 +122,11 @@ export function setNotificationBadge(count: number) {
 
 let audioContext: AudioContext | undefined;
 const buffers = new Map<string, Promise<AudioBuffer>>();
+const preloaded = new Set<string>();
 /** When each sound's current playback ends, on the audio context's clock. */
 const playingUntil = new Map<string, number>();
 
-function loadNotificationBuffer(context: AudioContext, url: string): Promise<AudioBuffer> {
+export function loadAudioBuffer(context: AudioContext, url: string): Promise<AudioBuffer> {
   let buffer = buffers.get(url);
   if (!buffer) {
     buffer = fetch(url)
@@ -140,27 +141,39 @@ function loadNotificationBuffer(context: AudioContext, url: string): Promise<Aud
   return buffer;
 }
 
-/** Called from a gesture so browsers allow later background playback. */
-export function unlockNotificationAudio() {
-  const firstUnlock = audioContext === undefined;
+/**
+ * Called from a gesture so browsers allow later background playback. Fetches and decodes `urls`
+ * during interaction so the first sound is ready when it is needed.
+ */
+export function unlockAudio(urls: ReadonlyArray<string>) {
   audioContext ??= new AudioContext();
   void audioContext.resume().catch(() => undefined);
-  if (!firstUnlock) return;
-  // Fetch and decode during interaction so the first alert is ready when the thread finishes.
-  for (const url of [completionUrl, inputUrl]) {
-    void loadNotificationBuffer(audioContext, url).catch(() => undefined);
+  // Once per sound: a failed preload is retried when the sound plays, not on every keypress.
+  for (const url of urls) {
+    if (preloaded.has(url)) continue;
+    preloaded.add(url);
+    void loadAudioBuffer(audioContext, url).catch(() => undefined);
   }
+}
+
+/** The shared context once a gesture unlocked it, or null while playback is not allowed. */
+export function runningAudioContext(): AudioContext | null {
+  return audioContext?.state === "running" ? audioContext : null;
+}
+
+export function unlockNotificationAudio() {
+  unlockAudio([completionUrl, inputUrl]);
 }
 
 export async function playNotificationSound(
   kind: "completion" | "input",
   shouldPlay: () => boolean,
 ) {
-  if (!audioContext || audioContext.state !== "running") return;
-  const context = audioContext;
+  const context = runningAudioContext();
+  if (!context) return;
   const url = kind === "completion" ? completionUrl : inputUrl;
   try {
-    const decoded = await loadNotificationBuffer(context, url);
+    const decoded = await loadAudioBuffer(context, url);
     if (!shouldPlay() || context.state !== "running") return;
     // Coalesce same-sound bursts after decode to avoid clipping; input and completion alerts keep separate slots.
     if (context.currentTime < (playingUntil.get(url) ?? 0)) return;

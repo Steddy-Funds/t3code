@@ -67,6 +67,7 @@ const clientSettings: ClientSettings = {
   boringSidebarEnabled: false,
   boringSidebarMultilineRows: false,
   swipeReplyTarget: "message",
+  gambaModeEnabled: false,
   threadDetailsUsageEnabled: false,
   threadDetailsItems: {},
   legacySidebarEnabled: false,

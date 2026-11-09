@@ -21,6 +21,7 @@ export function LabsSettingsPanel() {
       <SettingsSection id="beta" title="Beta">
         <BoringSidebarRow />
         <BoringSidebarMultilineRow />
+        <GambaModeRow />
         {/* Clerk is only mounted when this build has T3 Connect. */}
         {hasCloudPublicConfig() ? <GuestLinksRowWithSignIn /> : <GuestLinksRow />}
         <LinkedEnvironmentsRow />
@@ -66,6 +67,24 @@ function BoringSidebarMultilineRow() {
             updateSettings({ boringSidebarMultilineRows: Boolean(checked) })
           }
           aria-label="Two-line folder rows"
+        />
+      }
+    />
+  );
+}
+
+function GambaModeRow() {
+  const settings = useScopedSettings();
+  const updateSettings = useUpdateScopedSettings();
+  return (
+    <SettingsRow
+      {...searchableSetting("gamba-mode")}
+      description="Play a coin every time an agent finishes a turn, subagents included, so you can hear how busy the swarm is."
+      control={
+        <Switch
+          checked={settings.gambaModeEnabled}
+          onCheckedChange={(checked) => updateSettings({ gambaModeEnabled: Boolean(checked) })}
+          aria-label="Gamba mode"
         />
       }
     />

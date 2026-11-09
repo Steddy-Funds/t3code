@@ -2140,6 +2140,8 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
   /** Excludes wakes and agent messages that advance latestUserMessageAt through the user role. */
   latestUserAuthoredMessageAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   hasActionableProposedPlan: Schema.Boolean,
+  /** Provider-native subagents that finished. They have no runs, so clients count their turns here. Omitted at 0. */
+  nativeSubagentsCompleted: Schema.optional(NonNegativeInt),
   pendingBackgroundTasks: Schema.optional(Schema.Array(OrchestrationV2PendingBackgroundTask)).pipe(
     Schema.withDecodingDefault(Effect.succeed([])),
   ),

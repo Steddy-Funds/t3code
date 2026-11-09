@@ -1,8 +1,10 @@
 import { useAuth } from "@clerk/react";
 import { Link } from "@tanstack/react-router";
+import type { CSSProperties } from "react";
 import { managedCapabilityDenial } from "@t3tools/contracts";
 
 import { hasCloudPublicConfig } from "~/cloud/publicConfig";
+import { previewGambaCoin } from "~/gambaMode";
 import { useT3ConnectAuthPrompt } from "../clerk/useT3ConnectAuthPrompt";
 import { Button } from "../ui/button";
 import { Switch } from "../ui/switch";
@@ -76,6 +78,7 @@ function BoringSidebarMultilineRow() {
 function GambaModeRow() {
   const settings = useScopedSettings();
   const updateSettings = useUpdateScopedSettings();
+  const volume = settings.gambaModeVolume;
   return (
     <SettingsRow
       {...searchableSetting("gamba-mode")}
@@ -87,7 +90,42 @@ function GambaModeRow() {
           aria-label="Gamba mode"
         />
       }
-    />
+    >
+      {settings.gambaModeEnabled ? (
+        <div className="mt-3 flex items-center gap-3 pb-3.5 sm:w-72">
+          <output
+            className="min-w-12 rounded-md bg-muted px-2 py-1 text-center font-mono text-xs font-medium tabular-nums text-foreground"
+            htmlFor="gamba-mode-volume"
+          >
+            {volume}%
+          </output>
+          <input
+            aria-label="Gamba mode volume"
+            className="settings-slider min-w-0 flex-1"
+            id="gamba-mode-volume"
+            max={100}
+            min={0}
+            onChange={(event) => {
+              const gambaModeVolume = Number(event.currentTarget.value);
+              if (Number.isInteger(gambaModeVolume) && gambaModeVolume >= 0) {
+                updateSettings({ gambaModeVolume });
+              }
+            }}
+            onPointerUp={previewGambaCoin}
+            onKeyUp={previewGambaCoin}
+            step={5}
+            style={
+              {
+                "--settings-slider-progress": `${volume}%`,
+                "--settings-slider-fill-offset": `${0.5 - volume / 100}rem`,
+              } as CSSProperties
+            }
+            type="range"
+            value={volume}
+          />
+        </div>
+      ) : null}
+    </SettingsRow>
   );
 }
 

@@ -65,6 +65,7 @@ const clientSettings: ClientSettings = {
   sidebarThreadSortOrder: "created_at",
   boringSidebarEnabled: false,
   boringSidebarMultilineRows: false,
+  gambaModeEnabled: false,
   threadDetailsUsageEnabled: false,
   threadDetailsItems: {},
   legacySidebarEnabled: false,

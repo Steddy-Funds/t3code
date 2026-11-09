@@ -1110,6 +1110,7 @@ type ShellItemCountRow = {
   readonly thread_id: string;
   readonly item_count: number;
   readonly runless_item_count: number;
+  readonly native_subagents_completed: number;
 };
 
 const encodeTimelineSources = Schema.encodeEffect(
@@ -1700,6 +1701,11 @@ export function threadShellFromProjection(
     hasActionableProposedPlan: projection.plans.some(
       (plan) => plan.kind === "proposed_plan" && plan.status === "active",
     ),
+    ...nativeSubagentsCompletedField(
+      projection.subagents.filter(
+        (subagent) => subagent.origin === "provider_native" && subagent.status === "completed",
+      ).length,
+    ),
     pendingBackgroundTasks: [...pendingBackgroundTasks],
     providerInstanceHistory: providerInstanceHistoryForShell({
       threadId: projection.thread.id,
@@ -1731,6 +1737,10 @@ export function threadShellFromProjection(
     loadPause: projection.thread.loadPause ?? null,
     deletedAt: projection.thread.deletedAt,
   };
+}
+
+function nativeSubagentsCompletedField(count: number) {
+  return count === 0 ? {} : { nativeSubagentsCompleted: count };
 }
 
 function providerInstanceHistoryForShell(input: {
@@ -1810,6 +1820,7 @@ type ShellThreadState = {
   readonly latestUserMessageAt: DateTime.Utc | null;
   readonly latestUserAuthoredMessageAt: DateTime.Utc | null;
   readonly hasActionableProposedPlan: boolean;
+  readonly nativeSubagentsCompleted: number;
   readonly pendingBackgroundTasks: OrchestrationV2ThreadShell["pendingBackgroundTasks"];
   readonly providerInstanceHistory: OrchestrationV2ThreadShell["providerInstanceHistory"];
   readonly goal: OrchestrationV2ThreadShell["goal"];
@@ -1973,6 +1984,7 @@ function shellFromState(input: {
     latestUserMessageAt: input.state.latestUserMessageAt,
     latestUserAuthoredMessageAt: input.state.latestUserAuthoredMessageAt,
     hasActionableProposedPlan: input.state.hasActionableProposedPlan,
+    ...nativeSubagentsCompletedField(input.state.nativeSubagentsCompleted),
     pendingBackgroundTasks: input.state.pendingBackgroundTasks,
     providerInstanceHistory: input.state.providerInstanceHistory,
     goal: input.state.goal,
@@ -6424,7 +6436,13 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           SUM(CASE WHEN counts.run_id IS NULL OR r.status <> 'rolled_back'
             THEN counts.item_count ELSE 0 END) AS item_count,
           SUM(CASE WHEN counts.run_id IS NULL THEN counts.item_count ELSE 0 END)
-            AS runless_item_count
+            AS runless_item_count,
+          (
+            SELECT COUNT(*) FROM orchestration_v2_projection_subagents subagent
+            WHERE subagent.thread_id = counts.thread_id
+              AND subagent.origin = 'provider_native'
+              AND subagent.status = 'completed'
+          ) AS native_subagents_completed
         FROM (
           SELECT thread_id, run_id, COUNT(*) AS item_count
           FROM orchestration_v2_projection_turn_items
@@ -6506,7 +6524,11 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           (row) =>
             [
               ThreadId.make(row.thread_id),
-              { itemCount: row.item_count, runlessItemCount: row.runless_item_count },
+              {
+                itemCount: row.item_count,
+                runlessItemCount: row.runless_item_count,
+                nativeSubagentsCompleted: row.native_subagents_completed,
+              },
             ] as const,
         ),
       );
@@ -6763,7 +6785,11 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         readonly itemCountsByThreadId: ReadonlyMap<ThreadId, Map<RunId, number>>;
         readonly shellItemCountsByThreadId: ReadonlyMap<
           ThreadId,
-          { readonly itemCount: number; readonly runlessItemCount: number }
+          {
+            readonly itemCount: number;
+            readonly runlessItemCount: number;
+            readonly nativeSubagentsCompleted: number;
+          }
         >;
         readonly providerThreadsByThreadId: ReadonlyMap<
           ThreadId,
@@ -6920,6 +6946,8 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               : DateTime.makeUnsafe(row.latest_user_message_at),
           latestUserAuthoredMessageAt,
           hasActionableProposedPlan: row.has_actionable_proposed_plan === 1,
+          nativeSubagentsCompleted:
+            shellItemCountsByThreadId.get(thread.id)?.nativeSubagentsCompleted ?? 0,
           pendingBackgroundTasks,
           providerInstanceHistory: providerInstanceHistoryForShell({
             threadId: thread.id,

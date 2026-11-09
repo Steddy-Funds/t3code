@@ -1647,6 +1647,13 @@ const runlessNativeSubagentNeedsRecovery = Effect.gen(function* () {
       (yield* store.getRecoveryThreadIds("runtime")).includes(threadId),
       status !== "completed",
     );
+    const expected = status === "completed" ? 1 : undefined;
+    assert.equal((yield* store.getThreadShell(threadId))?.nativeSubagentsCompleted, expected);
+    assert.equal(
+      ProjectionStore.threadShellFromProjection(yield* store.getThreadProjection(threadId))
+        .nativeSubagentsCompleted,
+      expected,
+    );
   }
 });
 

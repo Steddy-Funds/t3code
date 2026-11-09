@@ -472,6 +472,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["beta boring sidebar folder rows multiline branch pull request details"],
   },
   {
+    id: "gamba-mode",
+    title: "Gamba mode",
+    to: "/settings/labs",
+    searchTerms: ["beta coin sound turn finished subagents swarm audio casino"],
+  },
+  {
     id: "guest-links",
     title: "Guest links",
     to: "/settings/labs",

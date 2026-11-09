@@ -38,6 +38,7 @@ upstream; a feature can, from its own branch, when Akiva decides.
 | Thread cost in three digits with K and M; turns as an icon                                                                                    | #67 | 6023b1b |
 | Thread resources cover subagents; `-` for unmeasured; thread details opens a focused machine tab (node resources 6)                           | #68 | 04bf4fe |
 | Gamba mode: a Mario Party DS coin each time an agent turn finishes, subagents included (Labs)                                                 | #69 | 2958408 |
+| Gamba mode volume (Labs), and a de-hissed, softened coin                                                                                      | #70 | d710e1b |
 
 Held: #38 (pods notes in the t3-orchestration skill). It edits
 `.agents/skills/t3-orchestration/`, which exists only on

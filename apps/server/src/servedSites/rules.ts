@@ -89,7 +89,7 @@ export const stoppableProcessTree = (
     if (entry === undefined) return [];
     const running =
       member.startTimeMs === undefined
-        ? entry.name === member.name
+        ? entry.startTimeMs === undefined && entry.name === member.name
         : isAlive(member.pid, member.startTimeMs);
     return running ? [entry] : [];
   });

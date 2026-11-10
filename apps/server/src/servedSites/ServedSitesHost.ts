@@ -311,7 +311,8 @@ export const layerProcesses = Layer.effect(
         if (left.length > 0) yield* signal(left, "SIGKILL", refused);
         if (tripped) return yield* guardTripped;
         if (refused.size === 0) return;
-        const after = (yield* readTree([...seen.values()])) ?? [...seen.values()];
+        const after = yield* readTree([...seen.values()]);
+        if (after === null) return yield* guardTripped;
         if (after.some((entry) => refused.has(entry.pid))) {
           return yield* failed("Could not signal some of its processes.");
         }

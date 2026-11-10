@@ -2,6 +2,7 @@ import { expect, it } from "@effect/vitest";
 import {
   EnvironmentId,
   ProviderInstanceId,
+  type RuntimeMode,
   type ServedSite,
   ServedSiteId,
   ThreadId,
@@ -41,11 +42,14 @@ const site = (id: string, owner: ThreadId): ServedSite => ({
   removedAt: null,
 });
 
-const harness = (linkOrigin?: {
-  sessionId: string;
-  label: string;
-  access: "approval-required";
-}) => {
+const harness = (
+  linkOrigin?: {
+    sessionId: string;
+    label: string;
+    access: "approval-required";
+  },
+  runtimeMode: RuntimeMode = "full-access",
+) => {
   const calls: Array<string> = [];
   const mine = site("mine", threadId);
   const dependencies = Layer.mergeAll(
@@ -63,7 +67,11 @@ const harness = (linkOrigin?: {
     }),
     Layer.mock(ThreadManagement.ThreadManagementService)({
       getThreadShell: (id) =>
-        Effect.succeed({ ...liveThreadShell(id), worktreePath: "/worktree", linkOrigin }),
+        Effect.succeed({
+          ...liveThreadShell(id, { runtimeMode }),
+          worktreePath: "/worktree",
+          linkOrigin,
+        }),
     }),
     Layer.mock(ProjectService.ProjectService)({}),
     Layer.mock(ServedSites.ServedSites)({
@@ -118,6 +126,38 @@ it.effect("publishes from the caller's worktree and lists only the caller's site
       .pipe(Stream.unwrap, Stream.runCollect, Effect.provide(dependencies));
     expect(published.at(-1)?.result).toMatchObject({ projectCwd: "/worktree" });
     expect(listed.at(-1)?.result).toEqual({ sites: [expect.objectContaining({ id: "mine" })] });
+    expect(calls).toEqual(["publish"]);
+  }),
+);
+
+it.effect("stops only the caller's own sites", () =>
+  Effect.gen(function* () {
+    const { calls, dependencies, toolkit } = harness();
+    const kit = yield* toolkit;
+    const theirs = yield* kit
+      .handle("t3_site_stop", { siteId: ServedSiteId.make("theirs") })
+      .pipe(Stream.unwrap, Stream.runCollect, Effect.provide(dependencies));
+    const mine = yield* kit
+      .handle("t3_site_stop", { siteId: ServedSiteId.make("mine") })
+      .pipe(Stream.unwrap, Stream.runCollect, Effect.provide(dependencies));
+    expect(theirs.at(-1)?.result).toMatchObject({ code: "invalid_request" });
+    expect(mine.at(-1)?.result).toMatchObject({ id: "mine" });
+    expect(calls).toEqual(["stop"]);
+  }),
+);
+
+it.effect("takes a stop command only from a full-access thread", () =>
+  Effect.gen(function* () {
+    const { calls, dependencies, toolkit } = harness(undefined, "auto-accept-edits");
+    const kit = yield* toolkit;
+    const withCommand = yield* kit
+      .handle("t3_site_publish", { port: 3000, stopCommand: "make down" })
+      .pipe(Stream.unwrap, Stream.runCollect, Effect.provide(dependencies));
+    const without = yield* kit
+      .handle("t3_site_publish", { port: 3000 })
+      .pipe(Stream.unwrap, Stream.runCollect, Effect.provide(dependencies));
+    expect(withCommand.at(-1)?.result).toMatchObject({ code: "invalid_request" });
+    expect(without.at(-1)?.result).toMatchObject({ id: "mine" });
     expect(calls).toEqual(["publish"]);
   }),
 );

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "@effect/vitest";
 import {
   DEFAULT_SERVER_SETTINGS,
+  EnvironmentId,
   type ResourceMonitorProcessTableEntry,
   type ServedSite,
   ServedSiteError,
@@ -17,6 +18,7 @@ import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 
 import * as ServerConfig from "../config.ts";
+import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as ServedSitesRepository from "../persistence/ServedSites.ts";
 import * as Settings from "../serverSettings.ts";
 import * as ServedSites from "./ServedSites.ts";
@@ -27,10 +29,11 @@ const HOOK = ["/hooks/expose-site"];
 const MAGIC_DNS = "box.tailnet.ts.net";
 const PID = 4242;
 const START = 50_000;
+const ENVIRONMENT_ID = EnvironmentId.make("environment:sites");
 
-const entry = (pid: number, startTimeMs: number): ResourceMonitorProcessTableEntry => ({
+const entry = (pid: number, startTimeMs: number, ppid = 1): ResourceMonitorProcessTableEntry => ({
   pid,
-  ppid: 1,
+  ppid,
   name: "node",
   startTimeMs,
 });
@@ -57,7 +60,13 @@ const storedSite = (overrides: Partial<ServedSite> & Pick<ServedSite, "id">): Se
 interface Options {
   readonly hookPrefix?: ReadonlyArray<string>;
   readonly stored?: ReadonlyArray<ServedSite>;
-  readonly routePorts?: ReadonlyArray<number>;
+  /** Serve routes already on the node: serve port to the local port it proxies. */
+  readonly routes?: ReadonlyArray<readonly [servePort: number, localPort: number]>;
+  /** Pids holding the published port's listening socket; default: PID. */
+  readonly listenerPids?: ReadonlyArray<number>;
+  /** How many unserve calls fail before one succeeds. */
+  readonly unserveFailures?: number;
+  readonly stopGroupsError?: string;
   readonly serveError?: (servePort: number) => string | null;
   readonly hook?: (argv: ReadonlyArray<string>) => Host.HookRun;
   /** What signaling the process groups does to the table; default: the pids exit. */
@@ -69,6 +78,9 @@ const harness = Effect.fn("harness")(function* (options: Options = {}) {
     table: [entry(PID, START)] as ReadonlyArray<ResourceMonitorProcessTableEntry>,
     tableFails: false,
     rows: new Map((options.stored ?? []).map((site) => [site.id, site])),
+    routes: new Map(options.routes ?? []),
+    unserveFailures: options.unserveFailures ?? 0,
+    hookEnv: [] as Array<Readonly<Record<string, string>>>,
     serves: [] as Array<{ servePort: number; localPort: number }>,
     unserves: [] as Array<number>,
     hookArgv: [] as Array<ReadonlyArray<string>>,
@@ -89,21 +101,39 @@ const harness = Effect.fn("harness")(function* (options: Options = {}) {
     }),
     Layer.succeed(Host.SiteTailscale, {
       magicDnsName: Effect.succeed(MAGIC_DNS),
-      servePorts: Effect.sync(() => new Set(options.routePorts ?? [])),
+      routes: Effect.sync(() => {
+        const routes = new Map(state.routes);
+        return {
+          ports: new Set(routes.keys()),
+          proxies: (servePort: number, localPort: number) => routes.get(servePort) === localPort,
+        };
+      }),
       serve: (input) =>
         Effect.suspend(() => {
           state.serves.push(input);
           const error = options.serveError?.(input.servePort) ?? null;
-          return error === null
-            ? Effect.void
-            : Effect.fail(new ServedSiteError({ reason: "failed", detail: error }));
+          if (error !== null) {
+            return Effect.fail(new ServedSiteError({ reason: "failed", detail: error }));
+          }
+          state.routes.set(input.servePort, input.localPort);
+          return Effect.void;
         }),
-      unserve: (servePort) => Effect.sync(() => void state.unserves.push(servePort)),
+      unserve: (servePort) =>
+        Effect.suspend(() => {
+          if (state.unserveFailures > 0) {
+            state.unserveFailures -= 1;
+            return Effect.fail(new ServedSiteError({ reason: "failed", detail: "serve is stuck" }));
+          }
+          state.unserves.push(servePort);
+          state.routes.delete(servePort);
+          return Effect.void;
+        }),
     }),
     Layer.succeed(Host.SiteHookRunner, {
       run: (input) =>
         Effect.sync(() => {
           state.hookArgv.push(input.argv);
+          state.hookEnv.push(input.env);
           return (
             options.hook?.(input.argv) ??
             ({ _tag: "exited", code: 0, stdout: "https://web.example.com\n", stderr: "" } as const)
@@ -118,10 +148,17 @@ const harness = Effect.fn("harness")(function* (options: Options = {}) {
       ).pipe(Effect.ensuring(Deferred.succeed(reconciled, undefined))),
       isListening: () => Effect.succeed(true),
       portOwner: () => Effect.succeed(null),
+      listenerPids: () => Effect.succeed(options.listenerPids ?? [PID]),
       stopProcessGroups: (pids) =>
-        Effect.sync(() => {
+        Effect.suspend(() => {
           state.stoppedGroups.push(pids);
+          if (options.stopGroupsError !== undefined) {
+            return Effect.fail(
+              new ServedSiteError({ reason: "failed", detail: options.stopGroupsError }),
+            );
+          }
           (options.onStopGroups ?? dropPids)(pids);
+          return Effect.void;
         }),
       runStopCommand: (input) =>
         Effect.sync(() => {
@@ -134,6 +171,9 @@ const harness = Effect.fn("harness")(function* (options: Options = {}) {
         ...DEFAULT_SERVER_SETTINGS,
         servedSites: { publicExposeCommand: options.hookPrefix ?? [] },
       }),
+    }),
+    Layer.mock(ServerEnvironment.ServerEnvironment)({
+      getEnvironmentId: Effect.succeed(ENVIRONMENT_ID),
     }),
     Layer.succeed(ServerConfig.ServerConfig, {
       baseDir: "/t3-base",
@@ -199,7 +239,12 @@ describe("ServedSites", () => {
     () =>
       Effect.scoped(
         Effect.gen(function* () {
-          const { state, publish } = yield* harness({ routePorts: [3000, 10_000] });
+          const { state, publish } = yield* harness({
+            routes: [
+              [3000, 9000],
+              [10_000, 9001],
+            ],
+          });
           yield* Effect.flip(publish({ name: "Web App", visibility: "public" }));
           const first = yield* publish({ name: "Web App" });
           const second = yield* publish({ name: "Web App" });
@@ -231,6 +276,14 @@ describe("ServedSites", () => {
           publicUrl: "https://web.example.com",
         });
         expect(state.hookArgv).toEqual([[...HOOK, "expose", "web", "http://127.0.0.1:3000"]]);
+        expect(state.hookEnv).toEqual([
+          {
+            T3_SITE_ID: site.id,
+            T3_SITE_THREAD_ID: threadId,
+            T3_SITE_PROJECT_CWD: "/repo",
+            T3_ENVIRONMENT_ID: ENVIRONMENT_ID,
+          },
+        ]);
       }),
     ),
   );
@@ -255,6 +308,7 @@ describe("ServedSites", () => {
           detail: error,
         });
         expect(state.hookArgv.at(-1)).toEqual([...HOOK, "unexpose", "web"]);
+        expect(state.hookEnv.at(-1)).toMatchObject({ T3_ENVIRONMENT_ID: ENVIRONMENT_ID });
         expect(state.unserves).toEqual([3000]);
         expect(yield* sites.list).toMatchObject([
           { status: "failed", removedReason: "publish-failed", lastError: error, publicUrl: null },
@@ -277,6 +331,65 @@ describe("ServedSites", () => {
         expect(yield* sites.list).toMatchObject([
           { status: "failed", removedReason: "publish-failed", lastError: "serve is off" },
         ]);
+      }),
+    ),
+  );
+
+  it.effect.each<{
+    readonly name: string;
+    readonly pids: ReadonlyArray<number>;
+    readonly accepted: boolean;
+  }>([
+    { name: "the listener", pids: [PID], accepted: true },
+    { name: "the listener's parent", pids: [PID - 1], accepted: true },
+    { name: "the listener's child", pids: [PID + 1], accepted: true },
+    { name: "an unrelated process", pids: [PID + 7], accepted: false },
+    { name: "the listener and an unrelated process", pids: [PID, PID + 7], accepted: false },
+  ])("pins $name to the port only when it serves the port", ({ pids, accepted }) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { state, publish } = yield* harness();
+        state.table = [
+          entry(PID - 1, START),
+          entry(PID, START, PID - 1),
+          entry(PID + 1, START, PID),
+          entry(PID + 7, START),
+        ];
+        const result = yield* Effect.result(publish({ pids }));
+        if (accepted) {
+          expect(result).toMatchObject({ _tag: "Success", success: { status: "live" } });
+        } else {
+          expect(result).toMatchObject({
+            _tag: "Failure",
+            failure: { reason: "invalid", detail: `pid ${PID + 7} is not serving port 3000` },
+          });
+          expect(state.serves).toEqual([]);
+        }
+      }),
+    ),
+  );
+
+  it.effect("keeps a site whose teardown failed and retries it on the next tick", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { state, publish, dropPids, byId } = yield* harness({ unserveFailures: 1 });
+        const site = yield* publish();
+        dropPids([PID]);
+        yield* tick;
+        expect(yield* byId(site.id)).toMatchObject({
+          status: "live",
+          teardownPending: { reason: "pids-exited" },
+          lastError: expect.stringContaining("serve is stuck"),
+        });
+        expect(state.routes.has(3000)).toBe(true);
+        yield* tick;
+        expect(yield* byId(site.id)).toMatchObject({
+          status: "removed",
+          removedReason: "pids-exited",
+          lastError: null,
+        });
+        expect((yield* byId(site.id))?.teardownPending).toBeUndefined();
+        expect(state.unserves).toEqual([3000]);
       }),
     ),
   );
@@ -315,7 +428,7 @@ describe("ServedSites", () => {
     Effect.scoped(
       Effect.gen(function* () {
         const { state, publish, byId } = yield* harness({ hookPrefix: HOOK });
-        state.table = [entry(PID, START), entry(PID + 1, START)];
+        state.table = [entry(PID, START), entry(PID + 1, START, PID)];
         const site = yield* publish({ visibility: "public", pids });
         state.table = table(state);
         yield* tick;
@@ -386,6 +499,22 @@ describe("ServedSites", () => {
         }),
       ),
     );
+    it.effect("a signal stop refused for a shared group goes back to live with the error", () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { sites, state, publish } = yield* harness({
+            stopGroupsError: "Its process group also holds the T3 server or an agent.",
+          });
+          const site = yield* publish();
+          expect(yield* sites.stop({ siteId: site.id })).toMatchObject({
+            status: "live",
+            lastError: "Its process group also holds the T3 server or an agent.",
+          });
+          expect(state.stoppedGroups).toEqual([[PID]]);
+          expect(state.unserves).toEqual([]);
+        }),
+      ),
+    );
   });
 
   it.effect("reconciles stored sites on start", () =>
@@ -404,6 +533,7 @@ describe("ServedSites", () => {
             }),
             storedSite({ id: id("stopping"), status: "stopping", servePort: 3003 }),
             storedSite({ id: id("live"), servePort: 3004 }),
+            storedSite({ id: id("taken"), servePort: 3006 }),
             storedSite({ id: id("unserved"), servePort: 3005 }),
             storedSite({
               id: id("removed"),
@@ -413,6 +543,13 @@ describe("ServedSites", () => {
             }),
           ],
           serveError: (port) => (port === 3005 ? "serve is off" : null),
+          routes: [
+            [3001, 3000],
+            [3002, 3000],
+            [3003, 3000],
+            [3004, 3000],
+            [3006, 4000],
+          ],
         });
         const byName = (list: ReadonlyArray<ServedSite>, name: string) =>
           list.find((site) => site.id === id(name));
@@ -430,6 +567,11 @@ describe("ServedSites", () => {
         expect(byName(list, "stopping")).toMatchObject({ status: "live" });
         expect(byName(list, "live")).toMatchObject({ status: "live", lastError: null });
         expect(byName(list, "removed")).toMatchObject({ status: "removed" });
+        expect(byName(list, "taken")).toMatchObject({
+          status: "failed",
+          lastError: ServedSites.ROUTE_TAKEN(3006),
+        });
+        expect(state.routes.get(3006)).toBe(4000);
         expect(state.unserves.toSorted()).toEqual([3001, 3002]);
         expect(state.hookArgv).toEqual([[...HOOK, "unexpose", "site-dead"]]);
         expect(state.serves.map((each) => each.servePort)).toEqual([3003, 3004, 3005]);

@@ -52,7 +52,7 @@ import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
-import { useQuietThreadShell } from "../../state/entities";
+import { useQuietThreadProjection, useQuietThreadShell } from "../../state/entities";
 import { serverEnvironment } from "../../state/server";
 import { threadEnvironment } from "../../state/threads";
 import { useOrchestrationCommand } from "../../state/use-orchestration-command";
@@ -414,12 +414,32 @@ const AUTONOMY_LABELS: Record<ThreadAutonomy, string> = {
 };
 
 function ThreadDetailsFlags(props: { environmentId: EnvironmentId; threadId: ThreadId }) {
-  const thread = useQuietThreadShell(props);
+  const shell = useQuietThreadShell(props);
+  return shell ? (
+    <ThreadDetailsAutonomy {...props} autonomy={threadAutonomy(shell.source)} />
+  ) : (
+    <ThreadDetailsFlagsFromProjection {...props} />
+  );
+}
+
+/** Provider subagent children have no thread shell; their projection carries the tags. */
+function ThreadDetailsFlagsFromProjection(props: {
+  environmentId: EnvironmentId;
+  threadId: ThreadId;
+}) {
+  const thread = useQuietThreadProjection(props)?.projection.thread;
+  return thread ? <ThreadDetailsAutonomy {...props} autonomy={threadAutonomy(thread)} /> : null;
+}
+
+function ThreadDetailsAutonomy(props: {
+  environmentId: EnvironmentId;
+  threadId: ThreadId;
+  autonomy: ThreadAutonomy;
+}) {
+  const { autonomy } = props;
   const setAutonomy = useOrchestrationCommand(threadEnvironment.setAutonomy, {
     reportFailure: false,
   });
-  if (!thread) return null;
-  const autonomy = threadAutonomy(thread.source);
   const change = async (next: ThreadAutonomy) => {
     const result = await setAutonomy({
       environmentId: props.environmentId,

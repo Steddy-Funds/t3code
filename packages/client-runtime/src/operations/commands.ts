@@ -1,7 +1,10 @@
 import { remapComposerContextAttachments } from "@t3tools/shared/composerContextReferences";
 import {
+  type ThreadAutonomy,
   type ThreadLinkedPullRequest,
   CommandId,
+  AUTONOMY_OFF_THREAD_TAG,
+  AUTONOMY_ON_THREAD_TAG,
   LOW_PRIORITY_THREAD_TAG,
   NORMAL_PRIORITY_THREAD_TAG,
   CheckpointId,
@@ -546,6 +549,29 @@ export const setThreadPriority = Effect.fn("EnvironmentCommands.setThreadPriorit
     threadId: input.threadId,
     tag: NORMAL_PRIORITY_THREAD_TAG,
     tagged: input.priority === "normal",
+  });
+});
+
+export interface SetThreadAutonomyInput extends ThreadCommandInput {
+  readonly autonomy: ThreadAutonomy;
+}
+export const setThreadAutonomy = Effect.fn("EnvironmentCommands.setThreadAutonomy")(function* (
+  input: SetThreadAutonomyInput,
+) {
+  const commandId = yield* allocateCommandId(input);
+  yield* dispatch({
+    type: "thread.tag.set",
+    commandId: CommandId.make(`${commandId}:on`),
+    threadId: input.threadId,
+    tag: AUTONOMY_ON_THREAD_TAG,
+    tagged: input.autonomy === "on",
+  });
+  return yield* dispatch({
+    type: "thread.tag.set",
+    commandId: CommandId.make(`${commandId}:off`),
+    threadId: input.threadId,
+    tag: AUTONOMY_OFF_THREAD_TAG,
+    tagged: input.autonomy === "off",
   });
 });
 

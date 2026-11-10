@@ -1,7 +1,24 @@
+import type { ThreadAutonomy } from "@t3tools/contracts";
+
 /** Session-invariant; harnesses with a native system-prompt append can carry it once per session. */
 export const PULL_REQUEST_LINKING_INSTRUCTIONS = `<pull_request_linking>
 Link each PR you create, take over, or push to: link_pull_request, or link_pull_requests for several, full URL, every stack layer, as your next call. Host tools do not link for you. If linking fails, say so. Skip PRs you only read or review, and PRs named only as background. Call watch_pull_request when asked to monitor or babysit, or when work you were asked to do, such as a merge, still waits on checks or reviews, even after an earlier unwatch. Finish any needed branch update and push first, then watch and end your turn. Otherwise act now or hand back. Delegated children never watch, even if the brief says babysit. After PR work, a child's last line is: PR <full URL>, head <SHA>, checks and reviews <state>. Links and watches persist across pushes. For PR waits, no sleep, loops, gh --watch, Monitor or ScheduleWakeup. Before handback, call unwatch_pull_request on any PR you watch.
 </pull_request_linking>`;
+
+const AUTONOMY_ON_INSTRUCTIONS = `<autonomy>
+Autonomy is on for this thread, an experimental flag the user set. Never ask the user to confirm an option you recommend that can be undone: take it, log it under "Deferred decisions" in your final report and in the body of any PR you open, and keep going. Never ask about a step of your own work cycle: tests, lint, review, commit, push, a draft PR, fixing its checks or conflicts. Stop and ask only for: money or live paid calls, production, destructive or irreversible actions, merging into a base branch the user merges, and a load per core above 9.0 (1-minute load average divided by CPU cores; t3_machine_read shows it). A real product question: keep building the reversible default meanwhile, and ask once, in one line, with that default. On hold: stay quiet instead of asking again. If this thread has a parent thread, your decisions and questions go to the parent, not the user. Give these rules to every subagent or delegated task you start.
+</autonomy>`;
+
+const AUTONOMY_OFF_INSTRUCTIONS = `<autonomy>
+Autonomy is off for this thread: the user set it. Before a product or scope decision, even one that can be undone, ask the user and wait. This overrides any instruction to take defaults on your own.
+</autonomy>`;
+
+/** Per-turn, not per-session: the flag can change between turns and must survive compaction. */
+export function buildAutonomyInstructions(autonomy: ThreadAutonomy): string {
+  if (autonomy === "on") return AUTONOMY_ON_INSTRUCTIONS;
+  if (autonomy === "off") return AUTONOMY_OFF_INSTRUCTIONS;
+  return "";
+}
 
 /** Omit model and effort when the harness manages them dynamically. */
 export function buildRuntimeInstructions(runtime: {

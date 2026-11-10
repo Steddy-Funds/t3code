@@ -13,6 +13,7 @@ import {
   isCompactionCommandMessage,
   parseGoalCommand,
   RunId,
+  threadAutonomy,
   ThreadId,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
@@ -48,6 +49,7 @@ import {
 import { deliverContextHandoffs, withInlineContext } from "./ContextHandoffDelivery.ts";
 import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
+import { buildAutonomyInstructions } from "@t3tools/provider-core/server/runtimeInstructions";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
 import {
@@ -876,6 +878,7 @@ export const layer: Layer.Layer<
         restartCancelledWork.length === 0
           ? ""
           : restartCancelledBackgroundWorkNote(restartCancelledWork);
+      const autonomyInstructions = buildAutonomyInstructions(threadAutonomy(projection.thread));
       const tokenCap = yield* handoffTokenCapConfig.pipe(
         Effect.orElseSucceed(() => DEFAULT_HANDOFF_TOKEN_CAP),
       );
@@ -1606,7 +1609,8 @@ export const layer: Layer.Layer<
             sideChatHandoff === undefined || compact || goalCommand
               ? ""
               : sideChatHandoff.summaryText;
-          const context = [delivery.context, sideChatContext, restartNote]
+          const autonomyContext = compact || goalCommand ? "" : autonomyInstructions;
+          const context = [autonomyContext, delivery.context, sideChatContext, restartNote]
             .filter((part) => part !== "")
             .join("\n\n");
           const { restartContinuationOfRunId: _resumedRunId, ...promptedInput } = turnInput;
@@ -1674,6 +1678,7 @@ export const layer: Layer.Layer<
         retryHandoff.length === 0 &&
         sideChatHandoff === undefined &&
         restartNote === "" &&
+        autonomyInstructions === "" &&
         !noteContinuation
           ? session
           : makeDeliverySession(session, startWithHandoffs);

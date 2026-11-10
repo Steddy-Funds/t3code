@@ -281,7 +281,9 @@ export function ThreadDetailsPrRow({
                       ? "failure"
                       : checksState === "pending"
                         ? "pending"
-                        : "success"
+                        : checksState === "not-run"
+                          ? "skipped"
+                          : "success"
                   }
                 />
                 <div className="min-w-0 truncate text-foreground/75">

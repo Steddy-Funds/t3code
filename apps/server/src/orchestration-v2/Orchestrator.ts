@@ -3957,6 +3957,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                     ...(existing.endedWatch?.owedChecks !== undefined && {
                       owedChecks: existing.endedWatch.owedChecks,
                     }),
+                    ...(existing.endedWatch?.checksNotRun !== undefined && {
+                      checksNotRun: existing.endedWatch.checksNotRun,
+                    }),
                     ...(existing.endedWatch?.checksAwaitedSince !== undefined && {
                       checksAwaitedSince: existing.endedWatch.checksAwaitedSince,
                     }),

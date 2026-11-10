@@ -60,6 +60,13 @@ export class PortDiscovery extends Context.Service<
     readonly stopServer: (
       input: PreviewStopLocalServerInput,
     ) => Effect.Effect<void, PreviewStopLocalServerError>;
+    /**
+     * Stops each pid's process group, with the same guards as `stopServer`, without requiring a
+     * listed server. Callers check the pids' start times first, so a reused pid is never signaled.
+     */
+    readonly stopProcessGroups: (
+      pids: ReadonlyArray<number>,
+    ) => Effect.Effect<void, PreviewStopLocalServerError>;
   }
 >()("t3/preview/PortScanner/PortDiscovery") {}
 
@@ -1037,10 +1044,17 @@ export const make = Effect.gen(function* PortDiscoveryMake() {
       (server) => server.pid === input.pid && server.port === input.port && isOwned(server),
     );
     if (!listed) return yield* new PreviewStopLocalServerError({ reason: "not-found" });
+    yield* stopProcessGroup(input.pid);
+  });
+
+  const stopProcessGroup = Effect.fn("PortDiscovery.stopProcessGroup")(function* (pid: number) {
+    if (hostPlatform === "win32") {
+      return yield* new PreviewStopLocalServerError({ reason: "unsupported" });
+    }
     const table = yield* readProcessTable;
     // It exited after the scan, so there is nothing left to stop.
-    if (!table.has(input.pid)) return;
-    const group = stoppableProcessGroup(table, input.pid, process.pid);
+    if (!table.has(pid)) return;
+    const group = stoppableProcessGroup(table, pid, process.pid);
     if (group === null) return yield* new PreviewStopLocalServerError({ reason: "shared-group" });
     // False when the whole group already exited.
     const signalGroup = (signal: "SIGTERM" | "SIGKILL") =>
@@ -1070,6 +1084,12 @@ export const make = Effect.gen(function* PortDiscoveryMake() {
     yield* signalGroup("SIGKILL");
   });
 
+  const stopProcessGroups: PortDiscovery["Service"]["stopProcessGroups"] = (pids) =>
+    Effect.forEach(new Set(pids), stopProcessGroup, {
+      concurrency: "unbounded",
+      discard: true,
+    }).pipe(Effect.andThen(pollIfRetained));
+
   const stopServer: PortDiscovery["Service"]["stopServer"] = (input) =>
     // Subscribers see the server leave now rather than on the next poll.
     signalUntilStopped(input).pipe(Effect.andThen(pollIfRetained));
@@ -1082,6 +1102,7 @@ export const make = Effect.gen(function* PortDiscoveryMake() {
     unregisterTerminal,
     trackAgent,
     stopServer,
+    stopProcessGroups,
   });
 }).pipe(Effect.withSpan("PortDiscovery.make"));
 

@@ -125,6 +125,10 @@ This API replay measures routing and recovery decisions. Screenshots return prod
 
 `cases/load-guard.ndjson` checks the `t3 guard` line. With `T3CODE_GUARD` in the world's environment, as T3 sets it while load management is on, an agent asked for the full test suite runs it as `"$T3CODE_GUARD" -- <command>`. The controls run the suite bare when the variable is unset, and read code without the guard. Its priority case asks to keep a backgrounded thread from being load-paused, which needs `t3_thread_organize` `set_priority` `normal` rather than bringing the thread back; the control only backgrounds and leaves priority alone. Its resume case asks to resume a load-paused thread, which needs `resume_load_pause`; the control only asks what the pause means and resumes nothing.
 
+## Served sites cases
+
+`cases/served-sites.ndjson` checks sharing a dev server an agent started. Asked for a link to open on a phone, the agent calls `t3_site_publish` on the server's port; asked for a link someone off the tailnet can open, it passes `visibility: "public"`. Neither runs `tailscale serve`, `funnel` or a tunnel CLI by hand. The control only asks for the port and publishes nothing.
+
 ## Threads vs tasks cases
 
 `cases/threads-vs-tasks.ndjson` covers explicit thread requests, delegated and background work, lifecycle operations, child permissions, and ordinary code requests using words like "thread" and "task". The native-subagent case is Claude-only. All scenarios use authored Acme data.

@@ -666,3 +666,36 @@ export const probeTailscaleHttpsEndpoint = Effect.fn("tailscale.probeTailscaleHt
   },
   Effect.orElseSucceed(() => false),
 );
+
+/** Every port a Serve route listens on, the node's own and its Services' and foreground sessions'. */
+export const parseTailscaleServePorts = (
+  rawServeStatusJson: string,
+): ReadonlySet<number> | undefined => {
+  const status = decodeTailscaleServeStatusJson(rawServeStatusJson);
+  if (Option.isNone(status)) return undefined;
+  const portsIn = (config: typeof TailscaleServeConfigJson.Type | undefined) => [
+    ...Object.keys(config?.TCP ?? {}).map(Number),
+    ...Object.keys(config?.Web ?? {}).map((hostPort) =>
+      Number(hostPort.slice(hostPort.lastIndexOf(":") + 1)),
+    ),
+  ];
+  const configs = [
+    status.value ?? undefined,
+    ...Object.values(status.value?.Services ?? {}),
+    ...Object.values(status.value?.Foreground ?? {}),
+  ];
+  return new Set(configs.flatMap(portsIn).filter(Number.isInteger));
+};
+
+export const readTailscaleServePorts = readTailscaleOutput("serve", [
+  "serve",
+  "status",
+  "--json",
+]).pipe(
+  Effect.flatMap((status) => {
+    const ports = parseTailscaleServePorts(status);
+    return ports === undefined
+      ? Effect.fail(new TailscaleStatusParseError({ cause: "unreadable serve status" }))
+      : Effect.succeed(ports);
+  }),
+);

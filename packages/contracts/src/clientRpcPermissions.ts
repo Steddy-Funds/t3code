@@ -19,6 +19,9 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [WS_METHODS.previewClose]: AuthPreviewOperateScope,
   // Stopping a server signals its processes, as closing a terminal does.
   [WS_METHODS.previewStopLocalServer]: AuthTerminalOperateScope,
+  // Stopping a site signals its processes or runs its stop command, as stopping a server does.
+  [WS_METHODS.servedSitesStop]: AuthTerminalOperateScope,
+  [WS_METHODS.servedSitesDismiss]: AuthTerminalOperateScope,
   [WS_METHODS.serverRunStorageCleanup]: AuthSettingsWriteScope,
   [WS_METHODS.serverCheckOtlpEndpoint]: AuthSettingsWriteScope,
   // Signals any process on the host (pid and start time rechecked server-side).

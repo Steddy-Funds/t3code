@@ -8,6 +8,7 @@ import {
   interpretExpose,
   servesPort,
   slugSiteName,
+  stoppableProcessTree,
 } from "./rules.ts";
 
 describe("slugSiteName", () => {
@@ -144,5 +145,38 @@ describe("servesPort", () => {
     ["an unrelated process", 60, false],
   ])("%s", (_name, pid, accepted) => {
     expect(servesPort(table, pid, [40])).toBe(accepted);
+  });
+});
+
+describe("stoppableProcessTree", () => {
+  // 50 → T3 server (100) → agent CLI (110) → its shell (120), which started two servers in one
+  // process group: npm (130) → node (131) → worker (132), and docs (140).
+  const SERVER = 100;
+  const START = 1_000;
+  const table = [
+    { pid: 50, ppid: 1, name: "systemd", startTimeMs: START },
+    { pid: SERVER, ppid: 50, name: "t3", startTimeMs: START },
+    { pid: 110, ppid: SERVER, name: "claude", startTimeMs: START },
+    { pid: 120, ppid: 110, name: "bash", startTimeMs: START },
+    { pid: 130, ppid: 120, name: "npm", startTimeMs: START },
+    { pid: 131, ppid: 130, name: "node", startTimeMs: START },
+    { pid: 132, ppid: 131, name: "worker", startTimeMs: START },
+    { pid: 140, ppid: 120, name: "docs", startTimeMs: START },
+  ];
+  const pinned = (...pids: ReadonlyArray<number>) =>
+    pids.map((pid) => ({ pid, startTimeMs: START }));
+
+  it.each<
+    [string, ReadonlyArray<{ pid: number; startTimeMs: number }>, ReadonlyArray<number> | null]
+  >([
+    ["the listener and its descendants, not a sibling in its group", pinned(131), [131, 132]],
+    ["a pinned wrapper's descendants", pinned(130), [130, 131, 132]],
+    ["the other site alone", pinned(140), [140]],
+    ["nothing for a pid reused by a later process", [{ pid: 131, startTimeMs: START + 5_000 }], []],
+    ["no agent CLI", pinned(110), null],
+    ["no ancestor of the T3 server", pinned(50), null],
+  ])("%s", (_name, roots, expected) => {
+    const tree = stoppableProcessTree(table, roots, SERVER);
+    expect(tree === null ? null : tree.map((entry) => entry.pid).toSorted()).toEqual(expected);
   });
 });

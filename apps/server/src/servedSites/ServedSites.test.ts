@@ -12,8 +12,10 @@ import * as Context from "effect/Context";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 
@@ -66,13 +68,15 @@ interface Options {
   readonly listenerPids?: ReadonlyArray<number>;
   /** How many unserve calls fail before one succeeds. */
   readonly unserveFailures?: number;
-  readonly stopGroupsError?: string;
+  readonly stopTreesError?: string;
   readonly serveError?: (servePort: number) => string | null;
   readonly hook?: (argv: ReadonlyArray<string>) => Host.HookRun;
+  /** The stop command never returns until interrupted. */
+  readonly stopCommandHangs?: boolean;
   /** The expose call never returns until interrupted. */
   readonly exposeHangs?: boolean;
   /** What signaling the process groups does to the table; default: the pids exit. */
-  readonly onStopGroups?: (pids: ReadonlyArray<number>) => void;
+  readonly onStopTrees?: (pids: ReadonlyArray<number>) => void;
 }
 
 const harness = Effect.fn("harness")(function* (options: Options = {}) {
@@ -86,7 +90,7 @@ const harness = Effect.fn("harness")(function* (options: Options = {}) {
     serves: [] as Array<{ servePort: number; localPort: number }>,
     unserves: [] as Array<number>,
     hookArgv: [] as Array<ReadonlyArray<string>>,
-    stoppedGroups: [] as Array<ReadonlyArray<number>>,
+    signaled: [] as Array<ReadonlyArray<number>>,
     stopCommands: [] as Array<{ command: string; cwd: string }>,
   };
   const dropPids = (pids: ReadonlyArray<number>) => {
@@ -95,6 +99,7 @@ const harness = Effect.fn("harness")(function* (options: Options = {}) {
   const reconciled = yield* Deferred.make<void>();
   const exposeStarted = yield* Deferred.make<void>();
   const exposeInterrupted = yield* Deferred.make<void>();
+  const stopCommandStarted = yield* Deferred.make<void>();
   let uuid = 0;
 
   const dependencies = Layer.mergeAll(
@@ -164,21 +169,24 @@ const harness = Effect.fn("harness")(function* (options: Options = {}) {
       isListening: () => Effect.succeed(true),
       portOwner: () => Effect.succeed(null),
       listenerPids: () => Effect.succeed(options.listenerPids ?? [PID]),
-      stopProcessGroups: (pids) =>
+      stopProcessTrees: (pinned) =>
         Effect.suspend(() => {
-          state.stoppedGroups.push(pids);
-          if (options.stopGroupsError !== undefined) {
+          const pids = pinned.map((each) => each.pid);
+          state.signaled.push(pids);
+          if (options.stopTreesError !== undefined) {
             return Effect.fail(
-              new ServedSiteError({ reason: "failed", detail: options.stopGroupsError }),
+              new ServedSiteError({ reason: "failed", detail: options.stopTreesError }),
             );
           }
-          (options.onStopGroups ?? dropPids)(pids);
+          (options.onStopTrees ?? dropPids)(pids);
           return Effect.void;
         }),
       runStopCommand: (input) =>
-        Effect.sync(() => {
+        Effect.suspend(() => {
           state.stopCommands.push({ command: input.command, cwd: input.cwd });
-          return { code: 0, timedOut: false, stderr: "" };
+          return options.stopCommandHangs === true
+            ? Deferred.succeed(stopCommandStarted, undefined).pipe(Effect.andThen(Effect.never))
+            : Effect.succeed({ code: 0, timedOut: false, stderr: "" });
         }),
     }),
     Layer.mock(Settings.ServerSettingsService)({
@@ -234,6 +242,7 @@ const harness = Effect.fn("harness")(function* (options: Options = {}) {
     publish,
     exposeStarted,
     exposeInterrupted,
+    stopCommandStarted,
   };
 });
 
@@ -516,7 +525,7 @@ describe("ServedSites", () => {
             removedReason: "stop-command",
           });
           expect(state.stopCommands).toEqual([{ command: "make down", cwd: "/repo" }]);
-          expect(state.stoppedGroups).toEqual([]);
+          expect(state.signaled).toEqual([]);
           expect(state.unserves).toEqual([3000]);
         }),
       ),
@@ -538,6 +547,20 @@ describe("ServedSites", () => {
       ),
     );
 
+    it.effect("a shutdown during the stop command leaves the site stopping with no error", () =>
+      Effect.gen(function* () {
+        const scope = yield* Scope.make();
+        const { sites, state, publish, stopCommandStarted } = yield* harness({
+          stopCommandHangs: true,
+        }).pipe(Scope.provide(scope));
+        const site = yield* publish({ stopCommand: "make down" });
+        yield* sites.stop({ siteId: site.id });
+        yield* Deferred.await(stopCommandStarted);
+        yield* Scope.close(scope, Exit.void);
+        expect(state.rows.get(site.id)).toMatchObject({ status: "stopping", lastError: null });
+      }),
+    );
+
     it.effect("a force stop replaces a stop command that is still waiting", () =>
       Effect.scoped(
         Effect.gen(function* () {
@@ -549,7 +572,7 @@ describe("ServedSites", () => {
           yield* sites.stop({ siteId: site.id, force: true });
           expect(yield* settled(site.id, "removed")).toMatchObject({ removedReason: "stopped" });
           expect(state.stopCommands).toHaveLength(1);
-          expect(state.stoppedGroups).toEqual([[PID]]);
+          expect(state.signaled).toEqual([[PID]]);
           yield* TestClock.adjust("15 seconds");
           expect(yield* byId(site.id)).toMatchObject({ status: "removed", lastError: null });
         }),
@@ -566,7 +589,7 @@ describe("ServedSites", () => {
             status: "removed",
             removedReason: "stopped",
           });
-          expect(state.stoppedGroups).toEqual([[PID]]);
+          expect(state.signaled).toEqual([[PID]]);
           expect(state.stopCommands).toEqual([]);
         }),
       ),
@@ -575,15 +598,15 @@ describe("ServedSites", () => {
       Effect.scoped(
         Effect.gen(function* () {
           const { sites, state, publish, settled } = yield* harness({
-            stopGroupsError: "Its process group also holds the T3 server or an agent.",
+            stopTreesError: "Its processes include the T3 server or an agent.",
           });
           const site = yield* publish();
           expect(yield* sites.stop({ siteId: site.id })).toMatchObject({ status: "stopping" });
           expect(yield* settled(site.id, "live")).toMatchObject({
             status: "live",
-            lastError: "Its process group also holds the T3 server or an agent.",
+            lastError: "Its processes include the T3 server or an agent.",
           });
-          expect(state.stoppedGroups).toEqual([[PID]]);
+          expect(state.signaled).toEqual([[PID]]);
           expect(state.unserves).toEqual([]);
         }),
       ),
@@ -608,7 +631,7 @@ describe("ServedSites", () => {
         expect(yield* settled(site!.id, "removed")).toMatchObject({ removedReason: "stopped" });
         expect(state.unserves).toEqual([3000]);
         expect(state.hookArgv.at(-1)).toEqual([...HOOK, "unexpose", "web"]);
-        expect(state.stoppedGroups).toEqual([[PID]]);
+        expect(state.signaled).toEqual([[PID]]);
       }),
     ),
   );

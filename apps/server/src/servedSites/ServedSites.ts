@@ -93,7 +93,7 @@ const invalid = (detail: string) => new ServedSiteError({ reason: "invalid", det
 const notFound = (siteId: string) =>
   new ServedSiteError({ reason: "not-found", detail: `No site ${siteId}.` });
 
-export const make = Effect.gen(function* () {
+const make = Effect.gen(function* () {
   const repository = yield* ServedSitesRepository.ServedSitesRepository;
   const tailscale = yield* Host.SiteTailscale;
   const hook = yield* Host.SiteHookRunner;
@@ -330,8 +330,8 @@ export const make = Effect.gen(function* () {
         // An npm-style wrapper is refused too (Stop must not reach its shell), so name the listener.
         return yield* invalid(
           listeners.length === 0
-            ? `pid ${stray.pid} is not serving port ${input.port}`
-            : `pid ${stray.pid} is not serving port ${input.port}; the listener is pid ${listeners[0]}.`,
+            ? `pid ${stray.pid} is not serving port ${input.port}.`
+            : `pid ${stray.pid} is not serving port ${input.port}; ${listeners.length === 1 ? "the listener is pid" : "the listeners are pids"} ${listeners.join(", ")}.`,
         );
       }
     }

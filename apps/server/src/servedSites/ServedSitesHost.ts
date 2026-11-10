@@ -247,19 +247,12 @@ export const layerProcesses = Layer.effect(
           }
         }
       });
-    const stoppableTree = (members: ReadonlyArray<TreeMember>) =>
-      table.pipe(
-        Effect.flatMap((current) => {
-          const tree = stoppableProcessTree(current, members, process.pid);
-          return tree === null
-            ? Effect.fail(
-                failed(
-                  "Its processes include the T3 server or an agent, so they were not signaled.",
-                ),
-              )
-            : Effect.succeed(tree);
-        }),
-      );
+    /** null when the tree holds the T3 server, its ancestors or an agent. */
+    const readTree = (members: ReadonlyArray<TreeMember>) =>
+      table.pipe(Effect.map((current) => stoppableProcessTree(current, members, process.pid)));
+    const guardTripped = failed(
+      "Its processes include the T3 server or an agent, so they were not all signaled.",
+    );
     return SiteProcesses.of({
       table,
       isListening: Effect.fn("SiteProcesses.isListening")((port) =>
@@ -293,22 +286,35 @@ export const layerProcesses = Layer.effect(
         if (platform === "win32") {
           return yield* failed("Stopping processes is not supported on this platform.");
         }
-        const tree = yield* stoppableTree(pinned);
+        const tree = yield* readTree(pinned);
+        if (tree === null) return yield* guardTripped;
         if (tree.length === 0) return;
         const refused = new Set<number>();
         yield* signal(tree, "SIGTERM", refused);
-        // Each re-read finds what of the tree still runs, a reparented descendant included, and
-        // anything it started since.
+        // Each re-read seeds from every member seen so far, so a process started during the grace
+        // period stays tracked after its parent exits and it is reparented.
+        const seen = new Map(tree.map((entry) => [entry.pid, entry]));
         let left = tree;
+        let tripped = false;
         const deadline = (yield* Clock.currentTimeMillis) + STOP_GRACE_MS;
         while (left.length > 0 && (yield* Clock.currentTimeMillis) < deadline) {
           yield* Effect.sleep(STOP_POLL);
-          left = yield* stoppableTree(tree);
+          const next = yield* readTree([...seen.values()]);
+          if (next === null) {
+            // SIGTERM already went out: still kill the last good read, then report the guard.
+            tripped = true;
+            break;
+          }
+          left = next;
+          for (const entry of next) if (!seen.has(entry.pid)) seen.set(entry.pid, entry);
         }
         if (left.length > 0) yield* signal(left, "SIGKILL", refused);
+        if (tripped) return yield* guardTripped;
         if (refused.size === 0) return;
-        const stillRefused = (yield* stoppableTree(tree)).some((entry) => refused.has(entry.pid));
-        if (stillRefused) return yield* failed("Could not signal some of its processes.");
+        const after = (yield* readTree([...seen.values()])) ?? [...seen.values()];
+        if (after.some((entry) => refused.has(entry.pid))) {
+          return yield* failed("Could not signal some of its processes.");
+        }
       }),
       runStopCommand: Effect.fn("SiteProcesses.runStopCommand")((input) =>
         runner

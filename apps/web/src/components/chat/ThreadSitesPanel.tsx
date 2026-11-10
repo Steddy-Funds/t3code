@@ -220,6 +220,7 @@ function SiteRow(props: SiteRowProps) {
             {site.name}
           </TooltipTrigger>
           <TooltipPopup side="top">
+            <span className="block font-medium">{site.name}</span>
             {url === null ? null : <span className="block">{url}</span>}
             <span className="block">{pidLabel(site)}</span>
           </TooltipPopup>

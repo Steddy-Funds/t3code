@@ -5,7 +5,7 @@ import { tableLiveness } from "../resourceTelemetry/ProcessOwnership.ts";
 import type { HookRun } from "./ServedSitesHost.ts";
 
 const MAX_NAME_LENGTH = 40;
-export const FIRST_FALLBACK_SERVE_PORT = 10_000;
+const FIRST_FALLBACK_SERVE_PORT = 10_000;
 const MAX_SERVE_PORT = 65_535;
 const STDERR_LIMIT = 500;
 
@@ -89,7 +89,7 @@ export const stoppableProcessTree = (
     if (entry === undefined) return [];
     const running =
       member.startTimeMs === undefined
-        ? entry.startTimeMs === undefined && entry.name === member.name
+        ? entry.name === member.name
         : isAlive(member.pid, member.startTimeMs);
     return running ? [entry] : [];
   });

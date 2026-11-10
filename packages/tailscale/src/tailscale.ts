@@ -486,8 +486,7 @@ const runTailscaleServeOff = (args: readonly string[]) =>
   runTailscaleCommand(args, TAILSCALE_SERVE_TIMEOUT).pipe(
     Effect.catchIf(
       (error) =>
-        isTailscaleCommandExitError(error) &&
-        error.stderrDiagnostic === "no-existing-handler",
+        isTailscaleCommandExitError(error) && error.stderrDiagnostic === "no-existing-handler",
       () => Effect.void,
     ),
   );

@@ -291,6 +291,27 @@ tailscale serve --https=443 --set-path=/ off
 If that port is already in use, choose another with
 `--tailscale-serve-port`. See `t3 pair --help` for other pairing options.
 
+### Share a server an agent started
+
+Ask an agent to share a server it started and it publishes the server at an
+HTTPS address on your tailnet, such as `https://machine.tailnet.ts.net:5173`.
+The server's machine needs Tailscale signed in with MagicDNS on. The site
+appears under **Sites** in the thread's details, where you can copy its URL or
+stop it. It goes away by itself when the server's processes exit. Stop ends the
+server's processes and their children; a daemon that detached from them keeps
+running.
+
+Public URLs, reachable off the tailnet, need a hook command you provide. Set
+`servedSites.publicExposeCommand` in the server's `settings.json` to the
+command's argv, such as `["/usr/local/bin/expose-site"]`. T3 Code runs
+`<command> expose <name> http://127.0.0.1:<port>`, with `T3_SITE_ID`,
+`T3_ENVIRONMENT_ID`, `T3_SITE_THREAD_ID` and `T3_SITE_PROJECT_CWD` set, and uses the one `https://` line it prints as the
+public URL; exit code 3 refuses the site. It runs
+`<command> unexpose <name>` with the same variables when the site goes away.
+Names are unique per T3 server, not per machine, so a hook shared by several
+servers should key on `T3_ENVIRONMENT_ID` and the name. Exposed routes stay up
+while T3 Code is stopped and are cleaned up when it starts again.
+
 ### Hosted web app
 
 [app.t3.codes](https://app.t3.codes) needs an HTTPS endpoint. It connects directly

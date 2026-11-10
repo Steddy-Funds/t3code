@@ -1209,6 +1209,17 @@ export const StorageCleanupSettings = Schema.Struct({
 });
 export type StorageCleanupSettings = typeof StorageCleanupSettings.Type;
 
+export const ServedSitesSettings = Schema.Struct({
+  /**
+   * Argv prefix for publishing a site publicly, run without a shell as
+   * `<prefix> expose <name> <url>` and `<prefix> unexpose <name>`. Empty turns public sites off.
+   */
+  publicExposeCommand: Schema.Array(Schema.String).pipe(
+    Schema.withDecodingDefault(Effect.succeed([])),
+  ),
+});
+export type ServedSitesSettings = typeof ServedSitesSettings.Type;
+
 export const ServerSettings = Schema.Struct({
   // Null means unmigrated; empty is authoritative and must not resurrect cleared preferences.
   favorites: Schema.NullOr(ModelFavorites).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
@@ -1410,6 +1421,8 @@ export const ServerSettings = Schema.Struct({
   /** Sent by the Usage tab with each summary request to this environment; edit in settings.json. Invalid values are ignored. */
   usageModelFilter: ForwardCompatibleOptional(UsageModelFilter),
   machineResources: MachineResourcesSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+  /** Edit in settings.json: it names a command this server runs. */
+  servedSites: ServedSitesSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
 });
 export type ServerSettings = typeof ServerSettings.Type;
 

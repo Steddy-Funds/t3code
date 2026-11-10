@@ -394,6 +394,12 @@ import {
   ScheduledTaskUpsertInput,
   ScheduledTaskMutationResult,
 } from "./scheduledTask.ts";
+import {
+  ServedSiteDismissInput,
+  ServedSiteError,
+  ServedSiteStopInput,
+  ServedSitesSnapshot,
+} from "./servedSites.ts";
 import { SecretRequestAnswerInput, SecretRequestError } from "./secretRequest.ts";
 import {
   ProjectCloneActionInput,
@@ -501,6 +507,10 @@ export const WS_METHODS = {
   previewReportProfiles: "preview.reportProfiles",
   previewReportStatus: "preview.reportStatus",
   previewStopLocalServer: "preview.stopLocalServer",
+
+  servedSitesSubscribe: "servedSites.subscribe",
+  servedSitesStop: "servedSites.stop",
+  servedSitesDismiss: "servedSites.dismiss",
 
   deviceConfigure: "device.configure",
   deviceList: "device.list",
@@ -1686,6 +1696,23 @@ const WsPreviewStopLocalServerRpc = Rpc.make(WS_METHODS.previewStopLocalServer, 
   error: Schema.Union([PreviewStopLocalServerError, EnvironmentAuthorizationError]),
 });
 
+const WsServedSitesSubscribeRpc = Rpc.make(WS_METHODS.servedSitesSubscribe, {
+  payload: Schema.Struct({}),
+  success: ServedSitesSnapshot,
+  error: EnvironmentAuthorizationError,
+  stream: true,
+});
+
+const WsServedSitesStopRpc = Rpc.make(WS_METHODS.servedSitesStop, {
+  payload: ServedSiteStopInput,
+  error: Schema.Union([ServedSiteError, EnvironmentAuthorizationError]),
+});
+
+const WsServedSitesDismissRpc = Rpc.make(WS_METHODS.servedSitesDismiss, {
+  payload: ServedSiteDismissInput,
+  error: Schema.Union([ServedSiteError, EnvironmentAuthorizationError]),
+});
+
 const WsSubscribeDiscoveredLocalServersRpc = Rpc.make(WS_METHODS.subscribeDiscoveredLocalServers, {
   payload: Schema.Struct({
     configuredUrls: Schema.optional(ConfiguredLocalServerUrls),
@@ -2231,6 +2258,9 @@ export const WsRpcGroup = RpcGroup.make(
   WsPreviewReportStatusRpc,
   WsSubscribePreviewEventsRpc,
   WsPreviewStopLocalServerRpc,
+  WsServedSitesSubscribeRpc,
+  WsServedSitesStopRpc,
+  WsServedSitesDismissRpc,
   WsSubscribeDiscoveredLocalServersRpc,
   WsDeviceConfigureRpc,
   WsDeviceListRpc,

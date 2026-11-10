@@ -58,6 +58,9 @@ export type T3McpToolSummaryAction =
   | "machine-read"
   | "machine-buckets"
   | "resource-claims"
+  | "site-publish"
+  | "site-list"
+  | "site-stop"
   | "attachment-prepare"
   | "attachment-discard"
   | "attachment-send"
@@ -360,6 +363,9 @@ const T3_MCP_TOOLS: Readonly<Record<string, T3McpToolDefinition>> = {
   t3_machine_read: tool(["Read", "Reading", "Read", "machine load"], "machine-read"),
   t3_machine_buckets: tool(["Use", "Using", "Used", "machine buckets"], "machine-buckets"),
   t3_resource_claim: tool(["Use", "Using", "Used", "resource claims"], "resource-claims"),
+  t3_site_publish: tool(["Publish", "Publishing", "Published", "a site"], "site-publish"),
+  t3_site_list: tool(["List", "Listing", "Listed", "published sites"], "site-list"),
+  t3_site_stop: tool(["Stop", "Stopping", "Stopped", "a published site"], "site-stop"),
   t3_thread_launch: tool(["Launch", "Launching", "Launched", "a project thread"], "thread-create"),
   t3_project_list: tool(["List", "Listing", "Listed", "projects"], "project-list"),
   t3_project_read: tool(["Read", "Reading", "Read", "a project"], "project-read"),

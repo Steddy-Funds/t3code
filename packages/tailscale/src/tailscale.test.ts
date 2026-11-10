@@ -8,8 +8,10 @@ import { ChildProcessSpawner } from "effect/process";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 
 import {
+  disableTailscaleServe,
   ensureTailscaleServe,
   parseTailscaleExitNode,
+  parseTailscaleServePorts,
   parseTailscaleServeRoutesTo,
   parseTailscaleSshEnabled,
   parseTailscaleStatus,
@@ -190,6 +192,27 @@ describe("tailscale", () => {
     assert.isUndefined(parseTailscaleServeRoutesTo("not json", { host: "127.0.0.1", port: 3773 }));
   });
 
+  it("collects every port a Serve route listens on", () => {
+    const status = JSON.stringify({
+      TCP: { "443": { HTTPS: true }, "7000": { TCPForward: "127.0.0.1:3000" } },
+      Web: { "box.tailnet.ts.net:8443": { Handlers: { "/": { Proxy: "http://127.0.0.1:5173" } } } },
+      Services: {
+        "svc:docs": {
+          TCP: { "9443": { HTTPS: true } },
+          Web: { "docs.tailnet.ts.net:9443": { Handlers: { "/": { Proxy: "3001" } } } },
+        },
+      },
+      Foreground: { session1: { TCP: { "9000": { TCPForward: "localhost:4000" } } } },
+    });
+    assert.deepEqual(
+      [...(parseTailscaleServePorts(status) ?? [])].toSorted((a, b) => a - b),
+      [443, 7000, 8443, 9000, 9443],
+    );
+    assert.deepEqual([...(parseTailscaleServePorts("{}") ?? [])], []);
+    assert.deepEqual([...(parseTailscaleServePorts("null") ?? [])], []);
+    assert.isUndefined(parseTailscaleServePorts("not json"));
+  });
+
   it.effect("parses status facts", () =>
     Effect.gen(function* () {
       const status = yield* parseTailscaleStatus(tailscaleStatusJson);
@@ -316,6 +339,21 @@ describe("tailscale", () => {
       assertCarriesNoSecret(error, "tskey-auth-secret-token-value");
     });
   });
+
+  it.effect("counts turning off a handler that is already gone as done", () =>
+    Effect.gen(function* () {
+      yield* disableTailscaleServe({ servePort: 3000 }).pipe(
+        Effect.provide(
+          layerMockSpawner(() => ({ code: 1, stderr: "error: handler does not exist" })),
+        ),
+      );
+      const error = yield* disableTailscaleServe({ servePort: 3000 }).pipe(
+        Effect.flip,
+        Effect.provide(layerMockSpawner(() => ({ code: 1, stderr: "permission denied" }))),
+      );
+      assert.instanceOf(error, TailscaleCommandExitError);
+    }),
+  );
 
   // regression: #21609 - without forceKillAfter a timed-out probe only gets
   // SIGTERM, so a group member that ignores it outlives the call.

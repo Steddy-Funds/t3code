@@ -532,7 +532,7 @@ export function claimedProcessRoots(
   });
 }
 
-const tableLiveness = (table: ReadonlyArray<ResourceMonitorProcessTableEntry>) => {
+export const tableLiveness = (table: ReadonlyArray<ResourceMonitorProcessTableEntry>) => {
   const byPid = new Map(table.map((entry) => [entry.pid, entry]));
   return (pid: number, startTimeMs: number) => {
     const entry = byPid.get(pid);

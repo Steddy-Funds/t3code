@@ -16,7 +16,7 @@ import {
   type ThreadPullRequestLink,
   type VcsStatusResult,
 } from "@t3tools/contracts";
-import { FolderGit2Icon, TerminalIcon } from "lucide-react";
+import { FolderGit2Icon, GlobeIcon, TerminalIcon } from "lucide-react";
 import { useEnvironment, usePrimaryEnvironmentId } from "../state/environments";
 import { EnvironmentMachineIcon } from "./EnvironmentMachineIcon";
 import { useProject } from "../state/entities";
@@ -599,6 +599,30 @@ export function ThreadWorktreeIndicator({
         <FolderGit2Icon className="size-3.5 shrink-0 text-icon-muted" />
       </TooltipTrigger>
       <TooltipPopup side="top">{tooltip}</TooltipPopup>
+    </Tooltip>
+  );
+}
+
+/** A globe while the thread has live sites; `lines` are `name: url`. */
+export function ThreadSitesIndicator({ lines }: { lines: ReadonlyArray<string> }) {
+  if (lines.length === 0) return null;
+  const label = lines.length === 1 ? "1 site live" : `${lines.length} sites live`;
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <span role="img" aria-label={label} className="inline-flex items-center justify-center" />
+        }
+      >
+        <GlobeIcon className="size-3.5 shrink-0 text-icon-muted" />
+      </TooltipTrigger>
+      <TooltipPopup side="top" variant="code">
+        <div className="flex flex-col">
+          {lines.map((line) => (
+            <span key={line}>{line}</span>
+          ))}
+        </div>
+      </TooltipPopup>
     </Tooltip>
   );
 }

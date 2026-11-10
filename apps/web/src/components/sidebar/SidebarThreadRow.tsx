@@ -71,6 +71,7 @@ import { useUiStateStore } from "../../uiStateStore";
 import { useThreadSelectionStore } from "../../threadSelectionStore";
 import { useNowMinute } from "../../hooks/useNowMinute";
 import { useNowSecond } from "../../hooks/useNowSecond";
+import { useThreadLiveSiteLines } from "../../state/servedSites";
 import { vcsEnvironment } from "../../state/vcs";
 import { useEnvironmentQuery } from "../../state/query";
 import { readEnvironmentScope, useEnvironmentScope } from "../../state/session";
@@ -99,6 +100,7 @@ import { resolveLocalCheckoutBranchMismatch } from "../BranchToolbar.logic";
 import {
   ThreadPullRequestBadgeControl,
   ThreadPullRequestsMiniList,
+  ThreadSitesIndicator,
   ThreadWorktreeIndicator,
   prStatusIndicator,
   resolveThreadPullRequestBadge,
@@ -705,6 +707,10 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
   });
   const terminalStatus = terminalStatusFromRunningIds(runningTerminalIds);
   const terminalProcessCount = runningTerminalIds.length;
+  const liveSiteLines = useThreadLiveSiteLines({
+    environmentId: thread.environmentId,
+    threadId: thread.id,
+  });
   const hasUnsentDraft = useThreadHasUnsentDraft(threadRef) && !props.isRouteThread;
   const handleDiscardDraftClick = (event: ReactMouseEvent) => {
     event.preventDefault();
@@ -1121,11 +1127,14 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     />
   ) : null;
   const terminalStatusIcon = (
-    <ThreadTerminalStatusButton
-      threadRef={threadRef}
-      terminalIds={runningTerminalIds}
-      onThreadActivate={onThreadActivate}
-    />
+    <>
+      <ThreadSitesIndicator lines={liveSiteLines} />
+      <ThreadTerminalStatusButton
+        threadRef={threadRef}
+        terminalIds={runningTerminalIds}
+        onThreadActivate={onThreadActivate}
+      />
+    </>
   );
   const draftIndicator = hasUnsentDraft ? (
     <Tooltip>
@@ -1271,6 +1280,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
   );
   const hasRowIcons =
     runningTerminalIds.length > 0 ||
+    liveSiteLines.length > 0 ||
     agentBadge !== null ||
     prBadge !== null ||
     diff !== null ||
@@ -1309,7 +1319,14 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
       <TooltipPopup side="top">Paused for load</TooltipPopup>
     </Tooltip>
   ) : null;
-  const titleLineIcons = metaLineEmpty && !twoRow ? trailingIcons(remoteMachineIcon) : null;
+  // A live site never adds the meta line; without one, its globe joins the title line.
+  const titleLineIcons =
+    metaLineEmpty && !twoRow ? (
+      <>
+        <ThreadSitesIndicator lines={liveSiteLines} />
+        {trailingIcons(remoteMachineIcon)}
+      </>
+    ) : null;
 
   if (variant !== "card") {
     const multiline = variant === "folder-multiline";

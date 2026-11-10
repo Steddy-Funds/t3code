@@ -423,6 +423,30 @@ describe("ServedSites", () => {
     ),
   );
 
+  it.effect("dismissing a site whose teardown keeps failing stops the retries", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { sites, state, publish, dropPids, byId } = yield* harness({
+          unserveFailures: 100,
+        });
+        const site = yield* publish();
+        dropPids([PID]);
+        yield* tick;
+        expect(yield* byId(site.id)).toMatchObject({
+          status: "live",
+          removedReason: "pids-exited",
+        });
+        yield* sites.dismiss({ siteId: site.id });
+        expect(yield* sites.list).toEqual([]);
+        expect(state.rows.has(site.id)).toBe(false);
+        const failuresLeft = state.unserveFailures;
+        yield* tick;
+        expect(state.unserveFailures).toBe(failuresLeft);
+        expect(state.routes.has(3000)).toBe(true);
+      }),
+    ),
+  );
+
   it.effect.each<{
     readonly name: string;
     readonly pids: ReadonlyArray<number>;
@@ -514,6 +538,24 @@ describe("ServedSites", () => {
       ),
     );
 
+    it.effect("a force stop replaces a stop command that is still waiting", () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { sites, state, publish, settled, byId } = yield* harness();
+          const site = yield* publish({ stopCommand: "make down" });
+          yield* sites.stop({ siteId: site.id });
+          yield* TestClock.adjust("1 second");
+          expect(yield* byId(site.id)).toMatchObject({ status: "stopping", awaitingExit: true });
+          yield* sites.stop({ siteId: site.id, force: true });
+          expect(yield* settled(site.id, "removed")).toMatchObject({ removedReason: "stopped" });
+          expect(state.stopCommands).toHaveLength(1);
+          expect(state.stoppedGroups).toEqual([[PID]]);
+          yield* TestClock.adjust("15 seconds");
+          expect(yield* byId(site.id)).toMatchObject({ status: "removed", lastError: null });
+        }),
+      ),
+    );
+
     it.effect("force signals the process groups even with a stop command", () =>
       Effect.scoped(
         Effect.gen(function* () {
@@ -566,7 +608,7 @@ describe("ServedSites", () => {
         expect(yield* settled(site!.id, "removed")).toMatchObject({ removedReason: "stopped" });
         expect(state.unserves).toEqual([3000]);
         expect(state.hookArgv.at(-1)).toEqual([...HOOK, "unexpose", "web"]);
-        expect(state.stoppedGroups).toEqual([]);
+        expect(state.stoppedGroups).toEqual([[PID]]);
       }),
     ),
   );
@@ -627,6 +669,7 @@ describe("ServedSites", () => {
         expect(byName(list, "pending")).toMatchObject({
           status: "failed",
           removedReason: "publish-failed",
+          lastError: ServedSites.RESTARTED_DURING_TEARDOWN,
         });
         expect(byName(list, "live")).toMatchObject({ status: "live", lastError: null });
         expect(byName(list, "removed")).toMatchObject({ status: "removed" });

@@ -12,6 +12,7 @@ import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
+import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import { McpSchema, McpServer, Tool, Toolkit } from "effect/ai";
 
@@ -404,7 +405,7 @@ const linkedProbeServer = McpHttpServer.toolkitRegistration(
     Layer.mock(PeerForwarding.PeerForwarding)({
       call: (_scope, tool, environmentId, params) =>
         Effect.succeed({
-          ran: `${tool.name} in ${environmentId}${"delegatedFrom" in params ? " with delegatedFrom" : ""}`,
+          ran: `${tool.name} in ${environmentId}${Predicate.hasProperty(params, "delegatedFrom") ? " with delegatedFrom" : ""}`,
         } as never),
     }),
   ),

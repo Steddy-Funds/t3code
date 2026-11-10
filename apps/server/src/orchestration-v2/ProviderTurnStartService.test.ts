@@ -276,6 +276,15 @@ function makeLocalCommandHarness(input: {
   readonly fileSystem?: FileSystem.FileSystem;
   readonly previousNativeSession?: boolean;
   readonly previousMessages?: ReadonlyArray<string>;
+  readonly tags?: ReadonlyArray<string>;
+  readonly lineage?: {
+    readonly relationshipToParent: "subagent" | "fork";
+    readonly sideChat?: true;
+  };
+  /** A remote delegate_task child: no local parent, a stamped parent there. */
+  readonly delegatedFrom?: true;
+  /** Slash commands reach the provider and the session can compact. */
+  readonly promptedTurn?: boolean;
   readonly logoutFailure?: string;
   readonly openFailure?: unknown;
   readonly ensureThreadFailure?: unknown;
@@ -372,7 +381,24 @@ function makeLocalCommandHarness(input: {
       projectId: ProjectId.make("project-native-account-command"),
       branch: input.worktreePath === undefined ? null : "feature/restore",
       worktreePath: input.worktreePath ?? null,
-      lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: threadId },
+      lineage:
+        input.lineage === undefined
+          ? { parentThreadId: null, relationshipToParent: null, rootThreadId: threadId }
+          : {
+              parentThreadId: ThreadId.make("autonomy-parent"),
+              rootThreadId: ThreadId.make("autonomy-parent"),
+              ...input.lineage,
+            },
+      tags: input.tags ?? [],
+      ...(input.delegatedFrom
+        ? {
+            delegatedFrom: {
+              environmentId: "environment-laptop",
+              threadId: ThreadId.make("thread-laptop-parent"),
+              title: "Laptop parent",
+            },
+          }
+        : {}),
     } as OrchestrationV2ThreadProjection["thread"],
     runs: [
       ...(input.previousNativeSession
@@ -783,6 +809,7 @@ function makeLocalCommandHarness(input: {
     lastError: null,
   };
   const startTurn = vi.fn((_turn: ProviderAdapter.ProviderAdapterV2TurnInput) => Effect.void);
+  const compactThread = vi.fn((_turn: ProviderAdapter.ProviderAdapterV2TurnInput) => Effect.void);
   const sideChatThread = {
     ...providerThread,
     nativeThreadRef: {
@@ -801,9 +828,10 @@ function makeLocalCommandHarness(input: {
     resumeThread: () => Effect.succeed(sideChatThread),
     forkThread,
     startTurn,
+    compactThread,
   };
   const open = vi.fn(() =>
-    input.sideChat !== undefined
+    input.sideChat !== undefined || input.promptedTurn === true
       ? Effect.succeed(sideChatSession as never)
       : input.interruptOpen === true
         ? Effect.interrupt
@@ -837,8 +865,11 @@ function makeLocalCommandHarness(input: {
   const startRootRun = vi.fn<
     (input: RunExecutionService.RunExecutionServiceV2StartRootRunInput) => Effect.Effect<void>
   >((runInput) =>
-    input.sideChat !== undefined
-      ? runInput.session.startTurn(runInput as never).pipe(Effect.orDie)
+    input.sideChat !== undefined || input.promptedTurn === true
+      ? (runInput.message.text.trim().toLowerCase() === "/compact"
+          ? runInput.session.compactThread!(runInput as never)
+          : runInput.session.startTurn(runInput as never)
+        ).pipe(Effect.orDie)
       : input.failReadsAfterRunning === true || input.previousTurn !== undefined
         ? Effect.suspend(() =>
             providerBusy ? Effect.die("The previous provider turn is still running.") : Effect.void,
@@ -855,7 +886,7 @@ function makeLocalCommandHarness(input: {
   );
   const tryHandlePromptCommand = vi.fn(() =>
     input.logoutFailure === undefined
-      ? Effect.succeed(true)
+      ? Effect.succeed(input.promptedTurn !== true)
       : Effect.fail(
           new ProviderSetupError({
             instanceId: oldInstanceId,
@@ -970,7 +1001,7 @@ function makeLocalCommandHarness(input: {
               ),
             }),
           getTurnStartHistory: () =>
-            input.sideChat !== undefined
+            input.sideChat !== undefined || input.promptedTurn === true
               ? Effect.succeed([])
               : Effect.fail(
                   new ProjectionStore.ProjectionStoreReadError({
@@ -1019,6 +1050,7 @@ function makeLocalCommandHarness(input: {
     writeIfRunCurrent,
     startRootRun,
     startTurn,
+    compactThread,
     forkThread,
     interruptTurn,
     tryHandlePromptCommand,
@@ -1295,6 +1327,96 @@ effectIt.effect.each([
           delivery: { nativeThreadId: "side-chat-native", status: "inline" },
         },
       ]);
+    }),
+);
+
+effectIt.effect.each([
+  { tags: ["autonomy:on"], text: "Ship it", autonomy: "Autonomy is on" },
+  { tags: ["autonomy:off"], text: "Ship it", autonomy: "Autonomy is off" },
+  { tags: [], text: "Ship it", autonomy: null },
+  { tags: ["autonomy:on"], text: "/compact", previousMessages: ["Earlier"], autonomy: null },
+  // Compaction drops earlier inline context, so the next prompted turn must carry it again.
+  {
+    tags: ["autonomy:on"],
+    text: "Continue",
+    previousMessages: ["Earlier", "/compact"],
+    autonomy: "Autonomy is on",
+  },
+  { tags: ["autonomy:on"], text: "/goal ship the release", autonomy: null },
+  { tags: ["autonomy:on"], text: "/review", autonomy: null },
+  { tags: ["autonomy:on"], text: "/tmp/out.log shows the crash", autonomy: "Autonomy is on" },
+  {
+    tags: ["autonomy:on"],
+    text: "Ship it",
+    lineage: { relationshipToParent: "subagent" },
+    autonomy: "Autonomy is on",
+    delegated: true,
+  },
+  {
+    tags: ["autonomy:off"],
+    text: "Ship it",
+    lineage: { relationshipToParent: "subagent" },
+    autonomy: "ask your parent thread and wait",
+  },
+  {
+    tags: ["autonomy:on"],
+    text: "Ship it",
+    delegatedFrom: true,
+    autonomy: "Autonomy is on",
+    delegated: true,
+  },
+  // Forks and side chats copy the tags but still answer to the user.
+  {
+    tags: ["autonomy:on"],
+    text: "Ship it",
+    lineage: { relationshipToParent: "fork" },
+    autonomy: "Autonomy is on",
+    delegated: false,
+  },
+  {
+    tags: ["autonomy:on"],
+    text: "Ship it",
+    lineage: { relationshipToParent: "fork", sideChat: true },
+    autonomy: "Autonomy is on",
+    delegated: false,
+  },
+  {
+    tags: ["autonomy:off"],
+    text: "Ship it",
+    lineage: { relationshipToParent: "fork", sideChat: true },
+    autonomy: "ask the user and wait",
+  },
+] as const)(
+  "sends the thread autonomy block ahead of the prompt: $tags $text $lineage",
+  ({ tags, text, autonomy, ...row }) =>
+    Effect.gen(function* () {
+      const harness = makeLocalCommandHarness({
+        text,
+        tags,
+        promptedTurn: true,
+        ...("previousMessages" in row ? { previousMessages: row.previousMessages } : {}),
+        ...("lineage" in row ? { lineage: row.lineage } : {}),
+        ...("delegatedFrom" in row ? { delegatedFrom: row.delegatedFrom } : {}),
+      });
+
+      yield* harness.start;
+
+      const sent = [...harness.startTurn.mock.calls, ...harness.compactThread.mock.calls].map(
+        ([turn]) => turn.message.text,
+      );
+      expect(sent).toHaveLength(1);
+      const [prompt] = sent;
+      if (autonomy === null) {
+        expect(prompt).toBe(text);
+      } else {
+        expect(prompt?.startsWith("<autonomy>")).toBe(true);
+        expect(prompt).toContain(autonomy);
+        expect(prompt?.endsWith(`\n\nUser message:\n${text}`)).toBe(true);
+        if ("delegated" in row) {
+          expect(prompt?.includes("This is a delegated thread")).toBe(row.delegated);
+        }
+      }
+      expect(harness.projection().messages.at(-1)?.text).toBe(text);
     }),
 );
 

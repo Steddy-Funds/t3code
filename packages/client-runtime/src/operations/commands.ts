@@ -1,7 +1,10 @@
 import { remapComposerContextAttachments } from "@t3tools/shared/composerContextReferences";
 import {
+  type ThreadAutonomy,
   type ThreadLinkedPullRequest,
   CommandId,
+  AUTONOMY_OFF_THREAD_TAG,
+  AUTONOMY_ON_THREAD_TAG,
   LOW_PRIORITY_THREAD_TAG,
   NORMAL_PRIORITY_THREAD_TAG,
   CheckpointId,
@@ -525,6 +528,29 @@ export const setThreadTag = Effect.fn("EnvironmentCommands.setThreadTag")(functi
   });
 });
 
+interface ExclusiveThreadTag {
+  readonly tag: string;
+  /** Appended to the command id; stable so a retried command dedupes. */
+  readonly suffix: string;
+  readonly tagged: boolean;
+}
+const setExclusiveThreadTags = Effect.fn("EnvironmentCommands.setExclusiveThreadTags")(function* (
+  input: ThreadCommandInput,
+  tags: readonly [ExclusiveThreadTag, ExclusiveThreadTag],
+) {
+  const commandId = yield* allocateCommandId(input);
+  const setTag = ({ tag, suffix, tagged }: ExclusiveThreadTag) =>
+    dispatch({
+      type: "thread.tag.set",
+      commandId: CommandId.make(`${commandId}:${suffix}`),
+      threadId: input.threadId,
+      tag,
+      tagged,
+    });
+  yield* setTag(tags[0]);
+  return yield* setTag(tags[1]);
+});
+
 export interface SetThreadPriorityInput extends ThreadCommandInput {
   /** `default` removes both tags, so a backgrounded thread reads as low again. */
   readonly priority: "low" | "normal" | "default";
@@ -532,21 +558,22 @@ export interface SetThreadPriorityInput extends ThreadCommandInput {
 export const setThreadPriority = Effect.fn("EnvironmentCommands.setThreadPriority")(function* (
   input: SetThreadPriorityInput,
 ) {
-  const commandId = yield* allocateCommandId(input);
-  yield* dispatch({
-    type: "thread.tag.set",
-    commandId: CommandId.make(`${commandId}:low`),
-    threadId: input.threadId,
-    tag: LOW_PRIORITY_THREAD_TAG,
-    tagged: input.priority === "low",
-  });
-  return yield* dispatch({
-    type: "thread.tag.set",
-    commandId: CommandId.make(`${commandId}:normal`),
-    threadId: input.threadId,
-    tag: NORMAL_PRIORITY_THREAD_TAG,
-    tagged: input.priority === "normal",
-  });
+  return yield* setExclusiveThreadTags(input, [
+    { tag: LOW_PRIORITY_THREAD_TAG, suffix: "low", tagged: input.priority === "low" },
+    { tag: NORMAL_PRIORITY_THREAD_TAG, suffix: "normal", tagged: input.priority === "normal" },
+  ]);
+});
+
+export interface SetThreadAutonomyInput extends ThreadCommandInput {
+  readonly autonomy: ThreadAutonomy;
+}
+export const setThreadAutonomy = Effect.fn("EnvironmentCommands.setThreadAutonomy")(function* (
+  input: SetThreadAutonomyInput,
+) {
+  return yield* setExclusiveThreadTags(input, [
+    { tag: AUTONOMY_ON_THREAD_TAG, suffix: "on", tagged: input.autonomy === "on" },
+    { tag: AUTONOMY_OFF_THREAD_TAG, suffix: "off", tagged: input.autonomy === "off" },
+  ]);
 });
 
 export const resumeThreadLoadPause = Effect.fn("EnvironmentCommands.resumeThreadLoadPause")(

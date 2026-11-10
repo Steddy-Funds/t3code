@@ -407,7 +407,11 @@ const routed = Effect.fn("McpToolAccess.routed")(function* <Tools extends Record
         if (scope.linkedEnvironments === false) return yield* PeerForwarding.linkedEnvironmentsOff;
         yield* (remote as RemoteCheck<typeof params>)(params);
         if (Option.isNone(forwarding)) return yield* linksUnavailable;
-        return yield* forwarding.value.call(scope, tool, target, { ...params, environmentId });
+        // RemoteDelegation stamps delegatedFrom on its own forward; an agent's never carries one.
+        const { delegatedFrom: _delegatedFrom, ...forwarded } = params as {
+          readonly delegatedFrom?: unknown;
+        };
+        return yield* forwarding.value.call(scope, tool, target, { ...forwarded, environmentId });
       });
   }
   return handlers as Toolkit.HandlersFrom<Tools>;

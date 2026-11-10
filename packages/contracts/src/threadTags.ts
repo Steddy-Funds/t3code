@@ -42,5 +42,19 @@ export function effectiveThreadPriority(thread: {
   return isBackgroundedThread(thread) ? "low" : "normal";
 }
 
+/** Experimental per-thread autonomy override; child threads inherit it with the rest of the tags. */
+export const AUTONOMY_ON_THREAD_TAG = "autonomy:on";
+export const AUTONOMY_OFF_THREAD_TAG = "autonomy:off";
+
+export type ThreadAutonomy = "on" | "off" | "default";
+
+export function threadAutonomy(thread: {
+  readonly tags?: ReadonlyArray<string> | undefined;
+}): ThreadAutonomy {
+  if (thread.tags?.includes(AUTONOMY_OFF_THREAD_TAG)) return "off";
+  if (thread.tags?.includes(AUTONOMY_ON_THREAD_TAG)) return "on";
+  return "default";
+}
+
 /** Bucket writes from a thread with this tag are `auto`: they never change a bucket someone else edited. */
 export const MACHINE_BUCKETS_THREAD_TAG = "machine-buckets";

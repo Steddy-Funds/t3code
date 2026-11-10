@@ -43,7 +43,7 @@ import {
 } from "./threadDetailsPanelStyles";
 import { Menu, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "../ui/menu";
 import { useAtomValue } from "@effect/atom-react";
-import { effectiveThreadPriority } from "@t3tools/contracts";
+import { effectiveThreadPriority, threadAutonomy, type ThreadAutonomy } from "@t3tools/contracts";
 import {
   loadPriorityControlsShown,
   threadPriorityChoice,
@@ -53,12 +53,14 @@ import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
-import { useQuietThreadShell } from "../../state/entities";
+import { useQuietThreadProjection, useQuietThreadShell } from "../../state/entities";
 import { serverEnvironment } from "../../state/server";
 import { threadEnvironment } from "../../state/threads";
 import { useOrchestrationCommand } from "../../state/use-orchestration-command";
+import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { toastManager } from "../ui/toast";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
 const GitActionsControl = memo(BaseGitActionsControl);
 
@@ -295,6 +297,10 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
                 />
               ) : null}
 
+              {density === "full" && !props.draftId ? (
+                <ThreadDetailsFlags environmentId={props.environmentId} threadId={props.threadId} />
+              ) : null}
+
               {visible.usage ? <ThreadDetailsUsage {...props.usage} /> : null}
 
               {visible.context && props.usage.contextWindow ? (
@@ -397,6 +403,88 @@ function ThreadDetailsPriority(props: { environmentId: EnvironmentId; threadId: 
               <MenuRadioItem value="low">Low</MenuRadioItem>
               <MenuRadioItem value="normal">Normal</MenuRadioItem>
               <MenuRadioItem value="default">Default (low when backgrounded)</MenuRadioItem>
+            </MenuRadioGroup>
+          </MenuPopup>
+        </Menu>
+      </div>
+    </ThreadDetailsSection>
+  );
+}
+
+const AUTONOMY_LABELS: Record<ThreadAutonomy, string> = {
+  on: "On",
+  off: "Off",
+  default: "Default",
+};
+
+function ThreadDetailsFlags(props: { environmentId: EnvironmentId; threadId: ThreadId }) {
+  const shell = useQuietThreadShell(props);
+  return shell ? (
+    <ThreadDetailsAutonomy {...props} autonomy={threadAutonomy(shell.source)} />
+  ) : (
+    <ThreadDetailsFlagsFromProjection {...props} />
+  );
+}
+
+/** Provider subagent children have no thread shell; their projection carries the tags. */
+function ThreadDetailsFlagsFromProjection(props: {
+  environmentId: EnvironmentId;
+  threadId: ThreadId;
+}) {
+  const thread = useQuietThreadProjection(props)?.projection.thread;
+  return thread ? <ThreadDetailsAutonomy {...props} autonomy={threadAutonomy(thread)} /> : null;
+}
+
+function ThreadDetailsAutonomy(props: {
+  environmentId: EnvironmentId;
+  threadId: ThreadId;
+  autonomy: ThreadAutonomy;
+}) {
+  const { autonomy } = props;
+  const setAutonomy = useOrchestrationCommand(threadEnvironment.setAutonomy, {
+    reportFailure: false,
+  });
+  const change = async (next: ThreadAutonomy) => {
+    const result = await setAutonomy({
+      environmentId: props.environmentId,
+      input: { threadId: props.threadId, autonomy: next },
+    });
+    if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+      const error = squashAtomCommandFailure(result);
+      toastManager.add({
+        type: "error",
+        title: "Could not set autonomy",
+        description: error instanceof Error ? error.message : "An error occurred.",
+      });
+    }
+  };
+  return (
+    <ThreadDetailsSection headingId="thread-details-flags-heading" title="Flags">
+      <div className="flex min-h-6 items-center gap-2 px-1 text-xs font-medium text-muted-foreground">
+        <Tooltip>
+          <TooltipTrigger render={<span />}>Autonomy</TooltipTrigger>
+          <TooltipPopup side="top">
+            On: the agent takes its own reversible defaults and logs them. Off: it asks first.
+            Children inherit it.
+          </TooltipPopup>
+        </Tooltip>
+        <Badge size="sm" variant="warning">
+          Experimental
+        </Badge>
+        <Menu>
+          <MenuTrigger render={<Button size="xs" variant="ghost" />}>
+            {AUTONOMY_LABELS[autonomy]}
+          </MenuTrigger>
+          <MenuPopup align="start">
+            <MenuRadioGroup
+              value={autonomy}
+              onValueChange={(value: ThreadAutonomy) => {
+                if (value !== autonomy) void change(value);
+              }}
+            >
+              <MenuRadioItem value="on">On</MenuRadioItem>
+              <MenuRadioItem value="off">Off</MenuRadioItem>
+              <MenuRadioItem value="default">Default</MenuRadioItem>
             </MenuRadioGroup>
           </MenuPopup>
         </Menu>

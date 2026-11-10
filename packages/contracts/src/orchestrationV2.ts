@@ -136,6 +136,8 @@ export const OrchestrationV2DelegatedFrom = Schema.Struct({
   environmentId: EnvironmentId,
   threadId: ThreadId,
   title: Schema.String,
+  /** The parent's autonomy at launch; thread.create turns it into the child's tag. */
+  autonomy: Schema.optional(Schema.Literals(["on", "off"])),
 });
 export type OrchestrationV2DelegatedFrom = typeof OrchestrationV2DelegatedFrom.Type;
 

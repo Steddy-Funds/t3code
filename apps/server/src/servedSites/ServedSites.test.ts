@@ -399,7 +399,10 @@ describe("ServedSites", () => {
         } else {
           expect(result).toMatchObject({
             _tag: "Failure",
-            failure: { reason: "invalid", detail: `pid ${refused} is not serving port 3000` },
+            failure: {
+              reason: "invalid",
+              detail: `pid ${refused} is not serving port 3000; the listener is pid ${PID}.`,
+            },
           });
           expect(state.serves).toEqual([]);
         }

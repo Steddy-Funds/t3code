@@ -479,6 +479,19 @@ export const tailscaleServeOffArgs = (
         "off",
       ];
 
+const isTailscaleCommandExitError = Schema.is(TailscaleCommandExitError);
+
+// Turning off a route that is already gone has done what was asked.
+const runTailscaleServeOff = (args: readonly string[]) =>
+  runTailscaleCommand(args, TAILSCALE_SERVE_TIMEOUT).pipe(
+    Effect.catchIf(
+      (error) =>
+        isTailscaleCommandExitError(error) &&
+        error.stderrDiagnostic === "no-existing-handler",
+      () => Effect.void,
+    ),
+  );
+
 /** Removes the web handler at `mount` on `servePort`, the root one `ensureTailscaleServe` adds by default. */
 export const disableTailscaleServe = Effect.fn("tailscale.disableTailscaleServe")(function* (
   input: {
@@ -486,18 +499,17 @@ export const disableTailscaleServe = Effect.fn("tailscale.disableTailscaleServe"
     readonly mount?: string;
   } = {},
 ): Effect.fn.Return<void, TailscaleCommandError, ChildProcessSpawner.ChildProcessSpawner> {
-  return yield* runTailscaleCommand(
+  return yield* runTailscaleServeOff(
     tailscaleServeOffArgs({
       servePort: input.servePort ?? DEFAULT_TAILSCALE_SERVE_PORT,
       mount: input.mount ?? "/",
     })!,
-    TAILSCALE_SERVE_TIMEOUT,
   );
 });
 
 /** Removes a TCP forward on `servePort`; one port holds one forward, so nothing else goes. */
 export const disableTailscaleServeTcp = (servePort: number) =>
-  runTailscaleCommand(tailscaleServeOffArgs({ servePort })!, TAILSCALE_SERVE_TIMEOUT);
+  runTailscaleServeOff(tailscaleServeOffArgs({ servePort })!);
 
 const TailscaleServeConfigJson = Schema.Struct({
   TCP: Schema.optional(

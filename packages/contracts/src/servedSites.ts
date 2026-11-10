@@ -55,22 +55,19 @@ export const ServedSite = Schema.Struct({
   servePort: Schema.NullOr(PortSchema),
   stopCommand: Schema.NullOr(Schema.String),
   status: ServedSiteStatus,
+  /** Also set while an active site's routes come down and the watcher retries that. */
   removedReason: Schema.NullOr(ServedSiteRemovedReason),
   lastError: Schema.NullOr(Schema.String),
   createdAt: IsoDateTime,
   removedAt: Schema.NullOr(IsoDateTime),
   /** Stopping, and the custom stop command has returned: waiting for the pids to exit. Not stored. */
   awaitingExit: Schema.optionalKey(Schema.Boolean),
-  /** Taking the routes down failed; the watcher retries, then removes the site. Not stored. */
-  teardownPending: Schema.optionalKey(
-    Schema.Struct({
-      reason: ServedSiteRemovedReason,
-      /** What `lastError` becomes once the site is removed. */
-      lastError: Schema.NullOr(Schema.String),
-    }),
-  ),
 });
 export type ServedSite = typeof ServedSite.Type;
+
+/** Taking the site's routes down failed; the server retries until it can remove the site. */
+export const isServedSiteTearingDown = (site: Pick<ServedSite, "status" | "removedReason">) =>
+  site.removedReason !== null && site.status !== "removed" && site.status !== "failed";
 
 export const ServedSitesSnapshot = Schema.Struct({ sites: Schema.Array(ServedSite) });
 export type ServedSitesSnapshot = typeof ServedSitesSnapshot.Type;

@@ -1,4 +1,5 @@
 import {
+  isServedSiteTearingDown,
   type ServedSite,
   ServedSiteError,
   ServedSiteId,
@@ -19,7 +20,9 @@ import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
+import * as FiberMap from "effect/FiberMap";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schedule from "effect/Schedule";
@@ -53,14 +56,12 @@ const STOP_EXIT_POLL = Duration.millis(500);
 export const PUBLIC_NOT_CONFIGURED =
   "public URLs are not configured on this server (servedSites.publicExposeCommand)";
 const withoutAwaitingExit = ({ awaitingExit: _awaitingExit, ...site }: ServedSite) => site;
-const withoutTransient = ({
-  awaitingExit: _awaitingExit,
-  teardownPending: _teardownPending,
-  ...site
-}: ServedSite) => site;
 
 export const ROUTE_TAKEN = (servePort: number) =>
   `Tailscale port ${servePort} now serves something else, so this site was taken down.`;
+
+export const STOP_INTERRUPTED = "Stop was interrupted by a server restart.";
+export const STOPPED_WHILE_PUBLISHING = "The site was stopped while publishing.";
 
 export const STOP_COMMAND_LEFT_PIDS =
   "Stop command ran, but the server is still running. Force stop kills it.";
@@ -110,6 +111,11 @@ export const make = Effect.gen(function* () {
   /** How a site in `stopping` is removed once its processes exit. */
   const stopKinds = new Map<ServedSiteId, ServedSiteRemovedReason>();
   const tearingDown = new Set<ServedSiteId>();
+  /** What `lastError` becomes once a retried teardown removes the site. Lost on restart. */
+  const pendingErrors = new Map<ServedSiteId, string | null>();
+  // A newer stop for a site (Force stop) interrupts the one still running.
+  const stopRuns = yield* FiberMap.make<ServedSiteId>();
+  const exposing = yield* FiberMap.make<ServedSiteId, Host.HookRun>();
 
   const nowIso = DateTime.now.pipe(Effect.map(DateTime.formatIso));
   const find = (siteId: ServedSiteId) =>
@@ -183,8 +189,8 @@ export const make = Effect.gen(function* () {
 
   /**
    * Takes the routes down and marks the record; each site tears down once at a time. Only a route
-   * that still proxies to the site is removed. When a step fails the record stays, marked
-   * `teardownPending`, and the watcher retries.
+   * that still proxies to the site is removed. When a step fails the record stays active with its
+   * `removedReason` set, and the watcher retries.
    */
   const teardown = Effect.fn("ServedSites.teardown")(function* (
     site: ServedSite,
@@ -197,9 +203,9 @@ export const make = Effect.gen(function* () {
       const current = (yield* find(site.id)) ?? site;
       const finalError =
         options.lastError ??
-        (current.teardownPending === undefined
-          ? current.lastError
-          : current.teardownPending.lastError);
+        (isServedSiteTearingDown(current)
+          ? (pendingErrors.get(site.id) ?? null)
+          : current.lastError);
       const cleaned = yield* Effect.gen(function* () {
         if (current.servePort !== null) {
           const routes = yield* tailscale.routes;
@@ -210,16 +216,18 @@ export const make = Effect.gen(function* () {
         if (options.exposed ?? current.visibility === "public") yield* unexpose(current);
       }).pipe(Effect.result);
       if (cleaned._tag === "Failure") {
+        pendingErrors.set(site.id, finalError);
         yield* update(site.id, (latest) => ({
           ...latest,
-          teardownPending: { reason, lastError: finalError },
-          lastError: `Could not take the site down, retrying: ${cleaned.failure.detail}`,
+          removedReason: reason,
+          lastError: `Could not take the site down, retrying.\n${cleaned.failure.detail}`,
         }));
         return;
       }
+      pendingErrors.delete(site.id);
       const removedAt = yield* nowIso;
       yield* update(site.id, (latest) => ({
-        ...withoutTransient(latest),
+        ...withoutAwaitingExit(latest),
         status: reason === "publish-failed" ? "failed" : "removed",
         removedReason: reason,
         removedAt,
@@ -237,7 +245,9 @@ export const make = Effect.gen(function* () {
 
   const retryTeardowns = Effect.fn("ServedSites.retryTeardowns")(function* () {
     const pending = (yield* SubscriptionRef.get(sites)).flatMap((site) =>
-      site.teardownPending === undefined ? [] : [{ site, reason: site.teardownPending.reason }],
+      isServedSiteTearingDown(site) && site.removedReason !== null
+        ? [{ site, reason: site.removedReason }]
+        : [],
     );
     yield* Effect.forEach(pending, ({ site, reason }) => teardown(site, reason), {
       discard: true,
@@ -251,8 +261,7 @@ export const make = Effect.gen(function* () {
   const removeExited = Effect.fn("ServedSites.removeExited")(function* () {
     const watched = (yield* SubscriptionRef.get(sites)).filter(
       (site) =>
-        (site.status === "live" || site.status === "stopping") &&
-        site.teardownPending === undefined,
+        (site.status === "live" || site.status === "stopping") && !isServedSiteTearingDown(site),
     );
     if (watched.length === 0) return;
     // An unreadable table never reads as every process having exited.
@@ -395,16 +404,28 @@ export const make = Effect.gen(function* () {
       return yield* served.failure;
     }
 
+    const stopped = Effect.fnUntraced(function* () {
+      yield* teardown(site, "stopped", { exposed: site.visibility === "public" });
+      return yield* new ServedSiteError({ reason: "failed", detail: STOPPED_WHILE_PUBLISHING });
+    });
+
     let publicUrl: string | null = null;
     if (site.visibility === "public") {
-      const outcome = interpretExpose(
-        yield* hook.run({
+      const exposeRun = yield* FiberMap.run(
+        exposing,
+        site.id,
+        hook.run({
           argv: [...prefix, "expose", site.name, `http://127.0.0.1:${site.localPort}`],
           env: hookEnv(site),
           cwd: config.baseDir,
           timeout: EXPOSE_TIMEOUT,
         }),
       );
+      // Stop interrupts the run in `exposing`; one that came before the run was there shows here.
+      if ((yield* find(site.id))?.status === "stopping") yield* Fiber.interrupt(exposeRun);
+      const exposed = yield* Fiber.await(exposeRun);
+      if (Exit.isFailure(exposed)) return yield* stopped();
+      const outcome = interpretExpose(exposed.value);
       if (outcome._tag !== "exposed") {
         yield* teardown(site, "publish-failed", { lastError: outcome.error, exposed: true });
         return yield* new ServedSiteError({ reason: "failed", detail: outcome.error });
@@ -412,7 +433,10 @@ export const make = Effect.gen(function* () {
       publicUrl = outcome.url;
     }
 
-    const live = yield* update(site.id, (current) => ({ ...current, status: "live", publicUrl }));
+    const live = yield* update(site.id, (current) =>
+      current.status === "publishing" ? { ...current, status: "live", publicUrl } : current,
+    );
+    if (live?.status === "stopping") return yield* stopped();
     return live ?? site;
   });
 
@@ -471,26 +495,45 @@ export const make = Effect.gen(function* () {
     yield* removeExited();
   });
 
+  /** Marks the site stopping and returns; the subscription carries how the stop ends. */
   const stopNow = Effect.fn("ServedSites.stop")(function* (input: ServedSiteStopInput) {
-    const site = yield* lock.withPermits(1)(
+    const { site, wasPublishing } = yield* lock.withPermits(1)(
       Effect.gen(function* () {
         const current = yield* find(input.siteId);
         if (current === undefined) return yield* notFound(input.siteId);
-        if (current.status !== "live" && !(current.status === "stopping" && input.force === true)) {
-          return yield* invalid(`Site ${current.name} is ${current.status}.`);
+        if (isServedSiteTearingDown(current)) {
+          return yield* invalid(`Site ${current.name} is already being taken down.`);
         }
+        const stoppable =
+          current.status === "live" ||
+          current.status === "publishing" ||
+          (current.status === "stopping" && input.force === true);
+        if (!stoppable) return yield* invalid(`Site ${current.name} is ${current.status}.`);
         const kind =
-          input.force === true || current.stopCommand === null ? "stopped" : "stop-command";
+          input.force === true || current.stopCommand === null || current.status === "publishing"
+            ? "stopped"
+            : "stop-command";
         stopKinds.set(current.id, kind);
-        return yield* saveUnlocked({ ...current, status: "stopping", lastError: null });
+        return {
+          site: yield* saveUnlocked({ ...current, status: "stopping", lastError: null }),
+          wasPublishing: current.status === "publishing",
+        };
       }),
     );
+    // The publish run tears the site down once its hook is interrupted (SIGTERM, then SIGKILL).
+    if (wasPublishing) {
+      yield* Effect.forkIn(FiberMap.remove(exposing, site.id), scope);
+      return site;
+    }
     const command = input.force === true ? null : site.stopCommand;
-    const stopped = yield* (command === null ? signalStop(site) : commandStop(site, command)).pipe(
-      Effect.result,
+    yield* FiberMap.run(
+      stopRuns,
+      site.id,
+      (command === null ? signalStop(site) : commandStop(site, command)).pipe(
+        Effect.catch((error) => backToLive(site.id, error.detail)),
+      ),
     );
-    if (stopped._tag === "Failure") yield* backToLive(site.id, stopped.failure.detail);
-    return (yield* find(site.id)) ?? site;
+    return site;
   });
 
   const dismiss: ServedSites["Service"]["dismiss"] = Effect.fn("ServedSites.dismiss")(
@@ -526,6 +569,7 @@ export const make = Effect.gen(function* () {
     yield* Effect.forEach(
       stored.filter(isActive),
       Effect.fnUntraced(function* (site) {
+        if (site.removedReason !== null) return yield* teardown(site, site.removedReason);
         if (site.status === "publishing") {
           return yield* teardown(site, "publish-failed", {
             lastError: "The T3 server restarted while publishing.",
@@ -544,7 +588,11 @@ export const make = Effect.gen(function* () {
         }
         // A stop the restart interrupted ends with the site still up.
         if (site.status === "stopping") {
-          yield* update(site.id, (current) => ({ ...current, status: "live" }));
+          yield* update(site.id, (current) => ({
+            ...current,
+            status: "live",
+            lastError: STOP_INTERRUPTED,
+          }));
         }
         if (site.servePort === null) return;
         yield* tailscale

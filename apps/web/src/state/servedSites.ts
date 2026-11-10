@@ -1,5 +1,10 @@
 import { createServedSitesEnvironmentAtoms } from "@t3tools/client-runtime/state/servedSites";
-import type { EnvironmentId, ServedSite, ThreadId } from "@t3tools/contracts";
+import {
+  type EnvironmentId,
+  isServedSiteTearingDown,
+  type ServedSite,
+  type ThreadId,
+} from "@t3tools/contracts";
 import { useAtomValue } from "@effect/atom-react";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/reactivity";
@@ -46,7 +51,10 @@ const liveSiteUrlsAtom = Atom.family((key: string) => {
     const result = get(servedSitesEnvironment.list({ environmentId, input: {} }));
     const sites = AsyncResult.getOrElse(result, () => null)?.sites ?? [];
     const next = sites.flatMap((site) => {
-      const url = site.threadId === threadId && site.status === "live" ? siteUrl(site) : null;
+      const url =
+        site.threadId === threadId && site.status === "live" && !isServedSiteTearingDown(site)
+          ? siteUrl(site)
+          : null;
       return url === null ? [] : [url];
     });
     if (next.length === 0) return NO_URLS;

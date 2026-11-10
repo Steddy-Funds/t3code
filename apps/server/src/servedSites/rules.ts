@@ -40,27 +40,21 @@ export const chooseServePort = (localPort: number, used: ReadonlySet<number>): n
   return null;
 };
 
-/** The pid and its ancestors, nearest first, stopping before init. */
-const lineage = (parents: ReadonlyMap<number, number>, pid: number): ReadonlyArray<number> => {
-  const chain: Array<number> = [];
-  for (let at: number | undefined = pid; at !== undefined && at > 1; at = parents.get(at)) {
-    if (chain.includes(at)) break;
-    chain.push(at);
-  }
-  return chain;
-};
-
-/** Whether `pid` is a listener on the port, or an ancestor or descendant of one. */
+/** Whether `pid` is a listener on the port or one of its descendants. Never an ancestor: Stop
+ * signals the pid's group, and an ancestor may be a shell, tmux or systemd. */
 export const servesPort = (
   table: ReadonlyArray<ResourceMonitorProcessTableEntry>,
   pid: number,
   listeners: ReadonlyArray<number>,
 ): boolean => {
   const parents = new Map(table.map((entry) => [entry.pid, entry.ppid]));
-  const ancestors = lineage(parents, pid);
-  return listeners.some(
-    (listener) => ancestors.includes(listener) || lineage(parents, listener).includes(pid),
-  );
+  const seen = new Set<number>();
+  for (let at: number | undefined = pid; at !== undefined && at > 1; at = parents.get(at)) {
+    if (listeners.includes(at)) return true;
+    if (seen.has(at)) return false;
+    seen.add(at);
+  }
+  return false;
 };
 
 export type ExposeOutcome =
@@ -70,26 +64,34 @@ export type ExposeOutcome =
 
 const stderrTail = (stderr: string) => stderr.trim().slice(0, STDERR_LIMIT);
 
-const withStderr = (message: string, stderr: string) => {
+const EXPOSE_FAILED = "Expose hook failed.";
+
+/** `detail: stderr`, or just `detail` when stderr is empty. */
+const withStderr = (detail: string, stderr: string) => {
   const tail = stderrTail(stderr);
-  return tail === "" ? message : `${message}: ${tail}`;
+  return tail === "" ? detail : `${detail}: ${tail}`;
 };
 
-/** The public hook contract: exit 0 with exactly one https:// line, 3 refuses, anything else fails. */
+/**
+ * The public hook contract: exit 0 with exactly one https:// line, 3 refuses, anything else fails.
+ * Errors are a one-line headline, then the detail on the lines after it.
+ */
 export const interpretExpose = (run: HookRun): ExposeOutcome => {
   switch (run._tag) {
     case "timed-out":
-      return { _tag: "failed", error: "The public URL hook timed out." };
+      return { _tag: "failed", error: "Expose hook timed out." };
     case "spawn-failed":
-      return { _tag: "failed", error: `Could not run the public URL hook: ${run.detail}` };
+      return { _tag: "failed", error: `${EXPOSE_FAILED}\nCould not run it: ${run.detail}` };
     case "exited": {
       if (run.code === 3) {
-        return { _tag: "refused", error: `Public URL refused: ${stderrTail(run.stderr)}` };
+        const tail = stderrTail(run.stderr);
+        const headline = "Public URL refused by the expose hook.";
+        return { _tag: "refused", error: tail === "" ? headline : `${headline}\n${tail}` };
       }
       if (run.code !== 0) {
         return {
           _tag: "failed",
-          error: withStderr(`The public URL hook exited ${run.code}`, run.stderr),
+          error: `${EXPOSE_FAILED}\n${withStderr(`It exited ${run.code}`, run.stderr)}`,
         };
       }
       const lines = run.stdout.split("\n").filter((line) => line.trim() !== "");
@@ -98,10 +100,7 @@ export const interpretExpose = (run: HookRun): ExposeOutcome => {
         ? { _tag: "exposed", url }
         : {
             _tag: "failed",
-            error: withStderr(
-              "The public URL hook did not print exactly one https:// URL",
-              run.stderr,
-            ),
+            error: `${EXPOSE_FAILED}\n${withStderr("It did not print exactly one https:// URL", run.stderr)}`,
           };
     }
   }

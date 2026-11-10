@@ -4,7 +4,13 @@ import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
-import type { EnvironmentId, ServedSite, ServedSiteId, ThreadId } from "@t3tools/contracts";
+import {
+  type EnvironmentId,
+  isServedSiteTearingDown,
+  type ServedSite,
+  type ServedSiteId,
+  type ThreadId,
+} from "@t3tools/contracts";
 import { CheckIcon, CopyIcon, GlobeIcon } from "lucide-react";
 import { useState } from "react";
 
@@ -54,11 +60,12 @@ function shortUrl(site: ServedSite, url: string): string {
 }
 
 function statusLabel(site: ServedSite): string {
+  if (isServedSiteTearingDown(site)) return "Taking down…";
   switch (site.status) {
     case "publishing":
       return "Publishing…";
     case "stopping":
-      return site.awaitingExit === true ? "Waiting for the server to exit…" : "Stopping…";
+      return site.awaitingExit === true ? "Waiting for exit" : "Stopping…";
     case "live":
       return "Live";
     case "failed":
@@ -175,7 +182,7 @@ function SiteRow(props: SiteRowProps) {
   // A live site's error is a stop that left the server running; a failed one's is why. A
   // pending teardown is still retrying.
   const error =
-    site.status === "live" || site.status === "failed" || site.teardownPending !== undefined
+    site.status === "live" || site.status === "failed" || isServedSiteTearingDown(site)
       ? site.lastError
       : null;
   // Removed rows already name their pids, and a failed site never served its process.
@@ -188,7 +195,8 @@ function SiteRow(props: SiteRowProps) {
     >
       <div className="flex h-6 min-w-0 items-center gap-1.5">
         <GlobeIcon aria-hidden className={THREAD_DETAILS_PANEL_ICON_CLASS} />
-        <span className="min-w-0 shrink truncate text-sm font-medium leading-4 text-foreground/85">
+        {/* The name gives up its width before the URL does. */}
+        <span className="min-w-8 shrink-[100] truncate text-sm font-medium leading-4 text-foreground/85">
           {site.name}
         </span>
         <Badge size="sm" variant={site.visibility === "public" ? "info" : "outline"}>
@@ -200,22 +208,44 @@ function SiteRow(props: SiteRowProps) {
             <TooltipTrigger render={<span className="shrink-0 text-2xs text-muted-foreground" />}>
               {statusLabel(site)}
             </TooltipTrigger>
-            <TooltipPopup side="left">{pidLabel(site)}</TooltipPopup>
+            <TooltipPopup side="left">
+              {site.status === "stopping" && site.awaitingExit === true
+                ? `Waiting for the server to exit. ${pidLabel(site)}`
+                : pidLabel(site)}
+            </TooltipPopup>
           </Tooltip>
         ) : (
           <span className="shrink-0 text-2xs text-muted-foreground">{statusLabel(site)}</span>
         )}
         <SiteActions {...props} ended={ended} hasError={error !== null} />
       </div>
-      {error !== null ? <span className="ps-5.5 text-2xs text-destructive">{error}</span> : null}
+      {error !== null ? <SiteError error={error} /> : null}
     </li>
+  );
+}
+
+/** The headline on one line; the hook's stderr and other detail on hover. */
+function SiteError(props: { readonly error: string }) {
+  const [headline = ""] = props.error.split("\n");
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={<span className="min-w-0 truncate ps-5.5 text-2xs text-destructive" />}
+      >
+        {headline}
+      </TooltipTrigger>
+      <TooltipPopup side="bottom">
+        <span className="block max-w-96 whitespace-pre-wrap break-words">{props.error}</span>
+      </TooltipPopup>
+    </Tooltip>
   );
 }
 
 function SiteUrl(props: { readonly site: ServedSite; readonly url: string }) {
   const { copyToClipboard, isCopied } = useCopyToClipboard();
   return (
-    <span className="flex min-w-0 flex-1 items-center">
+    // Wide enough for a short MagicDNS `host:port` and the copy button.
+    <span className="flex min-w-28 flex-auto items-center">
       <Tooltip>
         <TooltipTrigger
           render={
@@ -273,7 +303,20 @@ function SiteActions(
       </ThreadDetailsControl>
     ) : null;
   }
-  if (site.status !== "live" || site.teardownPending !== undefined || !props.canStop) return null;
+  if (!props.canStop || isServedSiteTearingDown(site)) return null;
+  const stopProps = {
+    size: "xs",
+    variant: "ghost",
+    part: "meta",
+    tone: "destructive",
+    disabled: props.busy,
+    onClick: () => props.onStop(false),
+  } as const;
+  // Stopping a publishing site interrupts its hook; no stop command runs.
+  if (site.status === "publishing") {
+    return <ThreadDetailsControl {...stopProps}>Stop</ThreadDetailsControl>;
+  }
+  if (site.status !== "live") return null;
   if (props.hasError && site.stopCommand !== null) {
     return (
       <ThreadDetailsControl
@@ -288,14 +331,6 @@ function SiteActions(
       </ThreadDetailsControl>
     );
   }
-  const stopProps = {
-    size: "xs",
-    variant: "ghost",
-    part: "meta",
-    tone: "destructive",
-    disabled: props.busy,
-    onClick: () => props.onStop(false),
-  } as const;
   if (site.stopCommand === null) {
     return <ThreadDetailsControl {...stopProps}>Stop</ThreadDetailsControl>;
   }
@@ -317,16 +352,25 @@ function CustomStop(props: {
   const [confirming, setConfirming] = useState(false);
   return (
     <>
-      <ThreadDetailsControl
-        size="xs"
-        variant="ghost"
-        part="meta"
-        tone="destructive"
-        disabled={props.busy}
-        onClick={() => setConfirming(true)}
-      >
-        Stop (custom)
-      </ThreadDetailsControl>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <ThreadDetailsControl
+              size="xs"
+              variant="ghost"
+              part="meta"
+              tone="destructive"
+              disabled={props.busy}
+              onClick={() => setConfirming(true)}
+            />
+          }
+        >
+          Stop
+        </TooltipTrigger>
+        <TooltipPopup side="left">
+          Runs <code className="font-mono">{props.command}</code>
+        </TooltipPopup>
+      </Tooltip>
       <AlertDialog open={confirming} onOpenChange={setConfirming}>
         <AlertDialogPopup>
           <AlertDialogHeader>

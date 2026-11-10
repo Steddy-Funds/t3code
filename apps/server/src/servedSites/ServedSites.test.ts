@@ -239,7 +239,7 @@ describe("ServedSites", () => {
     {
       name: "a refusal",
       run: { _tag: "exited", code: 3, stdout: "", stderr: "no quota" },
-      error: "refused: no quota",
+      error: "Public URL refused: no quota",
     },
     { name: "a timeout", run: { _tag: "timed-out" }, error: "The public URL hook timed out." },
   ])("after $name the route comes down, the hook unexposes, the record fails", ({ run, error }) =>

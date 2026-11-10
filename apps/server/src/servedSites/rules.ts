@@ -60,7 +60,9 @@ export const interpretExpose = (run: HookRun): ExposeOutcome => {
     case "spawn-failed":
       return { _tag: "failed", error: `Could not run the public URL hook: ${run.detail}` };
     case "exited": {
-      if (run.code === 3) return { _tag: "refused", error: `refused: ${stderrTail(run.stderr)}` };
+      if (run.code === 3) {
+        return { _tag: "refused", error: `Public URL refused: ${stderrTail(run.stderr)}` };
+      }
       if (run.code !== 0) {
         return {
           _tag: "failed",

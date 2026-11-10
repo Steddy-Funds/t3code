@@ -59,6 +59,8 @@ export const ServedSite = Schema.Struct({
   lastError: Schema.NullOr(Schema.String),
   createdAt: IsoDateTime,
   removedAt: Schema.NullOr(IsoDateTime),
+  /** Stopping, and the custom stop command has returned: waiting for the pids to exit. Not stored. */
+  awaitingExit: Schema.optionalKey(Schema.Boolean),
 });
 export type ServedSite = typeof ServedSite.Type;
 

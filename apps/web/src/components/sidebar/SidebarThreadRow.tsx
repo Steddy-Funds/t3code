@@ -1232,8 +1232,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
       prBadge === null &&
       agentBadge === null &&
       diff === null &&
-      runningTerminalIds.length === 0 &&
-      liveSiteUrls.length === 0);
+      runningTerminalIds.length === 0);
   const metaLine = metaLineEmpty ? null : (
     <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-secondary-label text-xs">
       {branch ? (
@@ -1320,7 +1319,14 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
       <TooltipPopup side="top">Paused for load</TooltipPopup>
     </Tooltip>
   ) : null;
-  const titleLineIcons = metaLineEmpty && !twoRow ? trailingIcons(remoteMachineIcon) : null;
+  // A live site never adds the meta line; without one, its globe joins the title line.
+  const titleLineIcons =
+    metaLineEmpty && !twoRow ? (
+      <>
+        <ThreadSitesIndicator urls={liveSiteUrls} />
+        {trailingIcons(remoteMachineIcon)}
+      </>
+    ) : null;
 
   if (variant !== "card") {
     const multiline = variant === "folder-multiline";

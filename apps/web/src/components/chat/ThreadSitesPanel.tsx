@@ -4,7 +4,7 @@ import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
-import type { EnvironmentId, ServedSite, ThreadId } from "@t3tools/contracts";
+import type { EnvironmentId, ServedSite, ServedSiteId, ThreadId } from "@t3tools/contracts";
 import { CheckIcon, CopyIcon, GlobeIcon } from "lucide-react";
 import { useState } from "react";
 
@@ -20,38 +20,48 @@ import { ThreadDetailsControl } from "./ThreadDetailsControl";
 import { ThreadDetailsSection } from "./ThreadDetailsSection";
 import { THREAD_DETAILS_PANEL_ICON_CLASS } from "./threadDetailsPanelStyles";
 
+/** Rows past this many scroll with the card instead of counting toward its density. */
+const SITE_FITTING_ROWS = 2;
+
 interface ThreadSitesPanelProps {
   readonly environmentId: EnvironmentId;
   readonly threadId: ThreadId;
 }
 
-const pidList = (site: ServedSite) => site.pids.map((each) => each.pid).join(", ");
+const isEnded = (site: ServedSite) => site.status === "removed" || site.status === "failed";
 
-function removedLabel(site: ServedSite): string {
-  switch (site.removedReason) {
-    case "pids-exited":
-      return site.pids.length === 1
-        ? `PID ${pidList(site)} exited`
-        : `PIDs ${pidList(site)} exited`;
-    case "stopped":
-      return "Stopped";
-    case "stop-command":
-      return "Stopped by custom command";
-    default:
-      return site.lastError ?? "Could not publish";
-  }
+const pidLabel = (site: ServedSite) =>
+  `${site.pids.length === 1 ? "PID" : "PIDs"} ${site.pids.map((each) => each.pid).join(", ")}`;
+
+/** `host:port` with the MagicDNS suffix dropped, so the port survives truncation. */
+function shortUrl(site: ServedSite, url: string): string {
+  if (!URL.canParse(url)) return url;
+  const parsed = new URL(url);
+  const host = site.visibility === "public" ? parsed.hostname : parsed.hostname.split(".")[0];
+  return parsed.port === ""
+    ? `${host}${parsed.pathname.replace(/\/$/, "")}`
+    : `${host}:${parsed.port}`;
 }
 
-function statusLabel(site: ServedSite): string | null {
+function statusLabel(site: ServedSite): string {
   switch (site.status) {
     case "publishing":
       return "Publishing…";
     case "stopping":
-      return "Stopping…";
+      return site.awaitingExit === true ? "Waiting for the server to exit…" : "Stopping…";
     case "live":
-      return null;
-    default:
-      return removedLabel(site);
+      return "Live";
+    case "failed":
+      return "Failed";
+    case "removed":
+      switch (site.removedReason) {
+        case "pids-exited":
+          return site.pids.length === 1 ? `${pidLabel(site)} exited` : "PIDs exited";
+        case "stop-command":
+          return "Stopped by custom command";
+        default:
+          return "Stopped";
+      }
   }
 }
 
@@ -69,7 +79,7 @@ export function ThreadSitesPanel(props: ThreadSitesPanelProps) {
   const dismissSite = useAtomCommand(servedSitesEnvironment.dismiss, {
     label: "served site dismiss",
   });
-  const [busyId, setBusyId] = useState<string | null>(null);
+  const [busyIds, setBusyIds] = useState<ReadonlySet<ServedSiteId>>(new Set());
 
   if (sites.length === 0) return null;
   const showPublicHint =
@@ -81,10 +91,14 @@ export function ThreadSitesPanel(props: ThreadSitesPanelProps) {
     title: string,
     action: () => Promise<AtomCommandResult<unknown, unknown>>,
   ) => {
-    if (busyId !== null) return;
-    setBusyId(site.id);
+    if (busyIds.has(site.id)) return;
+    setBusyIds((current) => new Set(current).add(site.id));
     const result = await action();
-    setBusyId(null);
+    setBusyIds((current) => {
+      const next = new Set(current);
+      next.delete(site.id);
+      return next;
+    });
     if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
       const error = squashAtomCommandFailure(result);
       toastManager.add(
@@ -111,12 +125,13 @@ export function ThreadSitesPanel(props: ThreadSitesPanelProps) {
 
   return (
     <ThreadDetailsSection headingId="thread-details-sites-heading" title="Sites">
-      <ul className="m-0 flex list-none flex-col gap-1 p-0">
-        {sites.map((site) => (
+      <ul className="m-0 list-none p-0">
+        {sites.map((site, index) => (
           <SiteRow
             key={site.id}
             site={site}
-            busy={busyId !== null}
+            overflow={index >= SITE_FITTING_ROWS}
+            busy={busyIds.has(site.id)}
             canStop={canStop}
             canDismiss={canDismiss}
             onStop={(force) => void stop(site, force)}
@@ -133,137 +148,151 @@ export function ThreadSitesPanel(props: ThreadSitesPanelProps) {
   );
 }
 
-function SiteRow(props: {
+interface SiteRowProps {
   readonly site: ServedSite;
+  readonly overflow: boolean;
   readonly busy: boolean;
   readonly canStop: boolean;
   readonly canDismiss: boolean;
   readonly onStop: (force: boolean) => void;
   readonly onDismiss: () => void;
-}) {
+}
+
+function SiteRow(props: SiteRowProps) {
   const { site } = props;
-  const { copyToClipboard, isCopied } = useCopyToClipboard();
-  const url = siteUrl(site);
-  const ended = site.status === "removed" || site.status === "failed";
-  const status = statusLabel(site);
-  const liveError = site.status === "live" ? site.lastError : null;
+  const ended = isEnded(site);
+  const url = ended ? null : siteUrl(site);
+  // A live site's error is a stop that left the server running; a failed one's is why.
+  const error = site.status === "live" || site.status === "failed" ? site.lastError : null;
+  // Removed rows already name their pids, and a failed site never served its process.
+  const showPids = !ended;
 
   return (
-    <li className={cn("flex flex-col gap-0.5 rounded-lg px-2 py-1", ended && "opacity-64")}>
-      <div className="flex min-w-0 items-center gap-2">
+    <li
+      data-thread-details-site-overflow={props.overflow || undefined}
+      className={cn("flex min-w-0 flex-col rounded-lg px-2 py-1", ended && "opacity-64")}
+    >
+      <div className="flex h-6 min-w-0 items-center gap-1.5">
         <GlobeIcon aria-hidden className={THREAD_DETAILS_PANEL_ICON_CLASS} />
-        <span className="min-w-0 flex-1 truncate text-sm font-medium leading-4 text-foreground/85">
+        <span className="min-w-0 shrink truncate text-sm font-medium leading-4 text-foreground/85">
           {site.name}
         </span>
         <Badge size="sm" variant={site.visibility === "public" ? "info" : "outline"}>
           {site.visibility === "public" ? "Public" : "Tailnet"}
         </Badge>
-      </div>
-      {url !== null && !ended ? (
-        <div className="flex min-w-0 items-center gap-1 ps-6">
-          <a
-            href={url}
-            target="_blank"
-            rel="noreferrer"
-            className="min-w-0 flex-1 truncate text-2xs text-muted-foreground underline-offset-2 hover:underline"
-          >
-            {url}
-          </a>
+        {url === null ? <span className="flex-1" /> : <SiteUrl site={site} url={url} />}
+        {showPids ? (
           <Tooltip>
-            <TooltipTrigger
-              render={
-                <ThreadDetailsControl
-                  size="icon-xs"
-                  variant="ghost"
-                  part="icon"
-                  aria-label={`Copy ${url}`}
-                  onClick={() => copyToClipboard(url, undefined)}
-                />
-              }
-            >
-              {isCopied ? (
-                <CheckIcon aria-hidden className="size-3" />
-              ) : (
-                <CopyIcon aria-hidden className="size-3" />
-              )}
+            <TooltipTrigger render={<span className="shrink-0 text-2xs text-muted-foreground" />}>
+              {statusLabel(site)}
             </TooltipTrigger>
-            <TooltipPopup side="left">{isCopied ? "Copied" : "Copy URL"}</TooltipPopup>
+            <TooltipPopup side="left">{pidLabel(site)}</TooltipPopup>
           </Tooltip>
-        </div>
-      ) : null}
-      <div className="flex min-w-0 flex-col gap-0.5 ps-6 text-2xs text-muted-foreground">
-        <span className="truncate">
-          {[site.pids.length === 1 ? `PID ${pidList(site)}` : `PIDs ${pidList(site)}`, status]
-            .filter(Boolean)
-            .join(" · ")}
-        </span>
-        {site.stopCommand !== null && !ended ? (
-          <code className="truncate font-mono">{site.stopCommand}</code>
-        ) : null}
-        {liveError !== null ? <span className="text-destructive">{liveError}</span> : null}
+        ) : (
+          <span className="shrink-0 text-2xs text-muted-foreground">{statusLabel(site)}</span>
+        )}
+        <SiteActions {...props} ended={ended} hasError={error !== null} />
       </div>
-      <SiteActions
-        {...props}
-        ended={ended}
-        offerForce={liveError !== null && site.stopCommand !== null}
-      />
+      {error !== null ? <span className="ps-5.5 text-2xs text-destructive">{error}</span> : null}
     </li>
   );
 }
 
-function SiteActions(props: {
-  readonly site: ServedSite;
-  readonly ended: boolean;
-  readonly offerForce: boolean;
-  readonly busy: boolean;
-  readonly canStop: boolean;
-  readonly canDismiss: boolean;
-  readonly onStop: (force: boolean) => void;
-  readonly onDismiss: () => void;
-}) {
+function SiteUrl(props: { readonly site: ServedSite; readonly url: string }) {
+  const { copyToClipboard, isCopied } = useCopyToClipboard();
+  return (
+    <span className="flex min-w-0 flex-1 items-center">
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <a
+              href={props.url}
+              target="_blank"
+              rel="noreferrer"
+              className="min-w-0 truncate text-2xs text-muted-foreground underline-offset-2 hover:underline"
+            />
+          }
+        >
+          {shortUrl(props.site, props.url)}
+        </TooltipTrigger>
+        <TooltipPopup side="top">{props.url}</TooltipPopup>
+      </Tooltip>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <ThreadDetailsControl
+              size="icon-xs"
+              variant="ghost"
+              part="icon"
+              aria-label={`Copy ${props.url}`}
+              onClick={() => copyToClipboard(props.url, undefined)}
+            />
+          }
+        >
+          {isCopied ? (
+            <CheckIcon aria-hidden className="size-3" />
+          ) : (
+            <CopyIcon aria-hidden className="size-3" />
+          )}
+        </TooltipTrigger>
+        <TooltipPopup side="top">{isCopied ? "Copied" : "Copy URL"}</TooltipPopup>
+      </Tooltip>
+    </span>
+  );
+}
+
+function SiteActions(
+  props: SiteRowProps & { readonly ended: boolean; readonly hasError: boolean },
+) {
   const { site } = props;
   if (props.ended) {
-    if (!props.canDismiss) return null;
-    return (
-      <div className="flex gap-1 ps-6">
-        <ThreadDetailsControl
-          size="xs"
-          variant="ghost"
-          part="meta"
-          tone="muted"
-          disabled={props.busy}
-          onClick={props.onDismiss}
-        >
-          Dismiss
-        </ThreadDetailsControl>
-      </div>
-    );
+    return props.canDismiss ? (
+      <ThreadDetailsControl
+        size="xs"
+        variant="ghost"
+        part="meta"
+        tone="muted"
+        disabled={props.busy}
+        onClick={props.onDismiss}
+      >
+        Dismiss
+      </ThreadDetailsControl>
+    ) : null;
   }
   if (site.status !== "live" || !props.canStop) return null;
-  return (
-    <div className="flex gap-1 ps-6">
+  if (props.hasError && site.stopCommand !== null) {
+    return (
       <ThreadDetailsControl
         size="xs"
         variant="ghost"
         part="meta"
         tone="destructive"
         disabled={props.busy}
-        onClick={() => props.onStop(false)}
+        onClick={() => props.onStop(true)}
       >
-        {site.stopCommand === null ? "Stop" : "Stop (custom)"}
+        Force stop
       </ThreadDetailsControl>
-      {props.offerForce ? (
-        <ThreadDetailsControl
-          size="xs"
-          variant="ghost"
-          part="meta"
-          tone="destructive"
-          disabled={props.busy}
-          onClick={() => props.onStop(true)}
-        >
-          Force stop
-        </ThreadDetailsControl>
-      ) : null}
-    </div>
+    );
+  }
+  const stopProps = {
+    size: "xs",
+    variant: "ghost",
+    part: "meta",
+    tone: "destructive",
+    disabled: props.busy,
+    onClick: () => props.onStop(false),
+  } as const;
+  if (site.stopCommand === null) {
+    return <ThreadDetailsControl {...stopProps}>Stop</ThreadDetailsControl>;
+  }
+  return (
+    <Tooltip>
+      <TooltipTrigger render={<ThreadDetailsControl {...stopProps} />}>
+        Stop (custom)
+      </TooltipTrigger>
+      <TooltipPopup side="left">
+        <code className="font-mono">{site.stopCommand}</code>
+      </TooltipPopup>
+    </Tooltip>
   );
 }

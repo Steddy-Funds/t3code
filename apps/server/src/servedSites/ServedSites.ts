@@ -50,7 +50,10 @@ const STOP_EXIT_POLL = Duration.millis(500);
 
 export const PUBLIC_NOT_CONFIGURED =
   "public URLs are not configured on this server (servedSites.publicExposeCommand)";
-export const STOP_COMMAND_LEFT_PIDS = "stop command finished but PIDs are still running";
+const withoutAwaitingExit = ({ awaitingExit: _awaitingExit, ...site }: ServedSite) => site;
+
+export const STOP_COMMAND_LEFT_PIDS =
+  "Stop command ran, but the server is still running. Force stop kills it.";
 
 export interface PublishInput {
   readonly threadId: ThreadId;
@@ -177,7 +180,7 @@ export const make = Effect.gen(function* () {
       if (options.exposed ?? site.visibility === "public") yield* unexpose(site);
       const removedAt = yield* nowIso;
       yield* update(site.id, (current) => ({
-        ...current,
+        ...withoutAwaitingExit(current),
         status: reason === "publish-failed" ? "failed" : "removed",
         removedReason: reason,
         removedAt,
@@ -355,7 +358,9 @@ export const make = Effect.gen(function* () {
     Effect.sync(() => stopKinds.delete(siteId)).pipe(
       Effect.andThen(
         update(siteId, (current) =>
-          current.status === "stopping" ? { ...current, status: "live", lastError } : current,
+          current.status === "stopping"
+            ? { ...withoutAwaitingExit(current), status: "live", lastError }
+            : current,
         ),
       ),
     );
@@ -373,7 +378,7 @@ export const make = Effect.gen(function* () {
     yield* processes.stopProcessGroups(alive.map((pinned) => pinned.pid));
     yield* removeExited();
     if ((yield* alivePids(site)).length > 0) {
-      yield* backToLive(site.id, "PIDs are still running after the stop signal.");
+      yield* backToLive(site.id, "The server is still running after the stop signal.");
     }
   });
 
@@ -386,13 +391,16 @@ export const make = Effect.gen(function* () {
       cwd: site.projectCwd,
       timeout: STOP_COMMAND_TIMEOUT,
     });
+    yield* update(site.id, (current) =>
+      current.status === "stopping" ? { ...current, awaitingExit: true } : current,
+    );
     const deadline = (yield* Clock.currentTimeMillis) + STOP_EXIT_WAIT_MS;
     while ((yield* alivePids(site)).length > 0) {
       if ((yield* Clock.currentTimeMillis) >= deadline) {
         return yield* backToLive(
           site.id,
           result.timedOut
-            ? "stop command timed out and PIDs are still running"
+            ? "Stop command timed out, and the server is still running. Force stop kills it."
             : STOP_COMMAND_LEFT_PIDS,
         );
       }

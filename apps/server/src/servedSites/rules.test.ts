@@ -76,7 +76,7 @@ describe("interpretExpose", () => {
     [
       "exit 3",
       exited(3, "", ` quota exceeded\n`),
-      { _tag: "refused", error: "refused: quota exceeded" },
+      { _tag: "refused", error: "Public URL refused: quota exceeded" },
     ],
     [
       "another exit",
@@ -106,7 +106,7 @@ describe("interpretExpose", () => {
     const stderr = "x".repeat(600);
     expect(interpretExpose(exited(3, "", stderr))).toEqual({
       _tag: "refused",
-      error: `refused: ${"x".repeat(500)}`,
+      error: `Public URL refused: ${"x".repeat(500)}`,
     });
     expect(interpretExpose(exited(1, "", stderr))).toEqual({
       _tag: "failed",

@@ -407,7 +407,7 @@ export const make = Effect.gen(function* () {
     // Stop means the server too, as for a live site; a refused signal stays on the record.
     const stopped = Effect.fnUntraced(function* () {
       const signalError = yield* alivePids(site).pipe(
-        Effect.flatMap((alive) => processes.stopProcessGroups(alive.map((pinned) => pinned.pid))),
+        Effect.flatMap((alive) => processes.stopProcessTrees(alive)),
         Effect.match({ onFailure: (error) => error.detail, onSuccess: () => undefined }),
       );
       yield* teardown(site, "stopped", {
@@ -469,7 +469,7 @@ export const make = Effect.gen(function* () {
 
   const signalStop = Effect.fn("ServedSites.signalStop")(function* (site: ServedSite) {
     const alive = yield* alivePids(site);
-    yield* processes.stopProcessGroups(alive.map((pinned) => pinned.pid));
+    yield* processes.stopProcessTrees(alive);
     yield* removeExited();
     if ((yield* alivePids(site)).length > 0) {
       yield* backToLive(site.id, "The server is still running after the stop signal.");

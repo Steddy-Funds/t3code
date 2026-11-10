@@ -2,7 +2,11 @@
  * The machine a served site touches: tailscale, the public hook, and processes. Each is a service
  * so ServedSites can be tested without a tailnet, a hook script, or real processes.
  */
-import { ServedSiteError, type ResourceMonitorProcessTableEntry } from "@t3tools/contracts";
+import {
+  ServedSiteError,
+  type ResourceMonitorProcessTableEntry,
+  type ServedSiteProcess,
+} from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Net from "@t3tools/shared/Net";
 import {
@@ -11,6 +15,7 @@ import {
   readTailscaleServeRoutes,
   readTailscaleStatus,
 } from "@t3tools/tailscale";
+import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -22,6 +27,8 @@ import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import * as PortScanner from "../preview/PortScanner.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import * as NativeTelemetryClient from "../resourceTelemetry/NativeTelemetryClient.ts";
+import { tableLiveness } from "../resourceTelemetry/ProcessOwnership.ts";
+import { stoppableProcessTree } from "./rules.ts";
 
 const failed = (detail: string) => new ServedSiteError({ reason: "failed", detail });
 const unavailable = (detail: string) => new ServedSiteError({ reason: "unavailable", detail });
@@ -114,6 +121,8 @@ export class SiteHookRunner extends Context.Service<
 const HOOK_KILL_GRACE = Duration.seconds(5);
 const HOOK_MAX_OUTPUT_CHARS = 64 * 1024;
 const LISTENER_TIMEOUT = Duration.seconds(5);
+const STOP_GRACE_MS = 3_000;
+const STOP_POLL = Duration.millis(250);
 
 const collectText = <E>(stream: Stream.Stream<Uint8Array, E>) =>
   stream.pipe(
@@ -180,8 +189,9 @@ export class SiteProcesses extends Context.Service<
     ) => Effect.Effect<{ readonly pid: number; readonly processName: string | null } | null>;
     /** Pids holding a listening socket on `port`; null when no tool could tell. */
     readonly listenerPids: (port: number) => Effect.Effect<ReadonlyArray<number> | null>;
-    readonly stopProcessGroups: (
-      pids: ReadonlyArray<number>,
+    /** SIGTERM to the pinned pids still running and their descendants, then SIGKILL after 3 s. */
+    readonly stopProcessTrees: (
+      pinned: ReadonlyArray<ServedSiteProcess>,
     ) => Effect.Effect<void, ServedSiteError>;
     readonly runStopCommand: (input: {
       readonly command: string;
@@ -191,14 +201,22 @@ export class SiteProcesses extends Context.Service<
   }
 >()("t3/servedSites/ServedSitesHost/SiteProcesses") {}
 
-const stopFailure = (reason: string) => {
-  switch (reason) {
-    case "shared-group":
-      return "Its process group also holds the T3 server or an agent, so it was not signaled.";
-    case "unsupported":
-      return "Stopping processes is not supported on this platform.";
-    default:
-      return "Could not signal its processes.";
+const isNoSuchProcess = (cause: unknown) =>
+  typeof cause === "object" && cause !== null && "code" in cause && cause.code === "ESRCH";
+
+/** What went wrong running the stop command, without its command line or path. */
+const stopCommandDetail = (error: ProcessRunner.ProcessRunError) => {
+  switch (error._tag) {
+    case "ProcessSpawnError":
+      return "The shell could not start.";
+    case "ProcessStdinError":
+      return "Its input could not be written.";
+    case "ProcessOutputLimitError":
+      return "It printed too much output.";
+    case "ProcessReadError":
+      return "Its output could not be read.";
+    case "ProcessTimeoutError":
+      return "It timed out.";
   }
 };
 
@@ -210,12 +228,46 @@ export const layerProcesses = Layer.effect(
     const net = yield* Net.NetService;
     const runner = yield* ProcessRunner.ProcessRunner;
     const platform = yield* HostProcess.Platform;
-    return SiteProcesses.of({
-      table: native.processTable.pipe(
-        Effect.mapError(() =>
-          unavailable("Served sites need the resource monitor to track processes."),
-        ),
+    const table = native.processTable.pipe(
+      Effect.mapError(() =>
+        unavailable("Served sites need the resource monitor to track processes."),
       ),
+    );
+    const signal = (pids: ReadonlyArray<number>, name: "SIGTERM" | "SIGKILL") =>
+      Effect.forEach(
+        pids,
+        (pid) =>
+          Effect.suspend(() => {
+            try {
+              process.kill(pid, name);
+              return Effect.void;
+            } catch (cause) {
+              return isNoSuchProcess(cause)
+                ? Effect.void
+                : Effect.fail(failed("Could not signal its processes."));
+            }
+          }),
+        { discard: true },
+      );
+    const pinnedOf = (tree: ReadonlyArray<ResourceMonitorProcessTableEntry>) =>
+      tree.flatMap((entry) =>
+        entry.startTimeMs === undefined ? [] : [{ pid: entry.pid, startTimeMs: entry.startTimeMs }],
+      );
+    const stoppableTree = (pinned: ReadonlyArray<ServedSiteProcess>) =>
+      table.pipe(
+        Effect.flatMap((current) => {
+          const tree = stoppableProcessTree(current, pinned, process.pid);
+          return tree === null
+            ? Effect.fail(
+                failed(
+                  "Its processes include the T3 server or an agent, so they were not signaled.",
+                ),
+              )
+            : Effect.succeed(tree);
+        }),
+      );
+    return SiteProcesses.of({
+      table,
       isListening: Effect.fn("SiteProcesses.isListening")((port) =>
         net.hasListenerOnHost(port, "127.0.0.1"),
       ),
@@ -243,11 +295,31 @@ export const layerProcesses = Layer.effect(
         const fromSs = yield* read("ss", ["-Hltnp", `sport = :${port}`], /pid=(\d+)/g);
         return Option.getOrNull(fromSs);
       }),
-      stopProcessGroups: Effect.fn("SiteProcesses.stopProcessGroups")((pids) =>
-        ports
-          .stopProcessGroups(pids)
-          .pipe(Effect.mapError((error) => failed(stopFailure(error.reason)))),
-      ),
+      stopProcessTrees: Effect.fn("SiteProcesses.stopProcessTrees")(function* (pinned) {
+        if (platform === "win32") {
+          return yield* failed("Stopping processes is not supported on this platform.");
+        }
+        const tree = yield* stoppableTree(pinned);
+        if (tree.length === 0) return;
+        yield* signal(
+          tree.map((entry) => entry.pid),
+          "SIGTERM",
+        );
+        // Start times keep a pid reused after an exit from being signaled.
+        const members = pinnedOf(tree);
+        const deadline = (yield* Clock.currentTimeMillis) + STOP_GRACE_MS;
+        while ((yield* Clock.currentTimeMillis) < deadline) {
+          yield* Effect.sleep(STOP_POLL);
+          const isAlive = tableLiveness(yield* table);
+          if (!members.some((each) => isAlive(each.pid, each.startTimeMs))) return;
+        }
+        // Again from the table: what ignored SIGTERM, and anything it started since.
+        const left = yield* stoppableTree(members);
+        yield* signal(
+          left.map((entry) => entry.pid),
+          "SIGKILL",
+        );
+      }),
       runStopCommand: Effect.fn("SiteProcesses.runStopCommand")((input) =>
         runner
           .run({
@@ -260,12 +332,19 @@ export const layerProcesses = Layer.effect(
             maxOutputBytes: HOOK_MAX_OUTPUT_CHARS,
           })
           .pipe(
-            Effect.map((result) => ({
+            Effect.map((result): StopCommandResult => ({
               code: result.code === null ? null : Number(result.code),
               timedOut: result.timedOut,
               stderr: result.stderr,
             })),
-            Effect.mapError((error) => failed(`Could not run the stop command: ${error.message}`)),
+            // Killed by a signal, as on a server shutdown: it ended; the exit wait decides the rest.
+            Effect.catchIf(
+              (error) => error._tag === "ProcessReadError" && error.stream === "exitCode",
+              () => Effect.succeed<StopCommandResult>({ code: null, timedOut: false, stderr: "" }),
+            ),
+            Effect.mapError((error) =>
+              failed(`Could not run the stop command.\n${stopCommandDetail(error)}`),
+            ),
           ),
       ),
     });

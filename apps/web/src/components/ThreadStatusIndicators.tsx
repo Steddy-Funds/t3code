@@ -603,9 +603,10 @@ export function ThreadWorktreeIndicator({
   );
 }
 
-export function ThreadSitesIndicator({ urls }: { urls: ReadonlyArray<string> }) {
-  if (urls.length === 0) return null;
-  const label = urls.length === 1 ? "1 site live" : `${urls.length} sites live`;
+/** A globe while the thread has live sites; `lines` are `name: url`. */
+export function ThreadSitesIndicator({ lines }: { lines: ReadonlyArray<string> }) {
+  if (lines.length === 0) return null;
+  const label = lines.length === 1 ? "1 site live" : `${lines.length} sites live`;
   return (
     <Tooltip>
       <TooltipTrigger
@@ -617,8 +618,8 @@ export function ThreadSitesIndicator({ urls }: { urls: ReadonlyArray<string> }) 
       </TooltipTrigger>
       <TooltipPopup side="top">
         <div className="flex flex-col">
-          {urls.map((url) => (
-            <span key={url}>{url}</span>
+          {lines.map((line) => (
+            <span key={line}>{line}</span>
           ))}
         </div>
       </TooltipPopup>

@@ -38,14 +38,14 @@ export function useThreadServedSites(input: {
   return sites.length === 0 ? NO_SITES : sites;
 }
 
-const NO_URLS: ReadonlyArray<string> = [];
-const NO_URLS_ATOM = Atom.make(NO_URLS).pipe(Atom.withLabel("served-sites-live-urls:none"));
+const NO_LINES: ReadonlyArray<string> = [];
+const NO_LINES_ATOM = Atom.make(NO_LINES).pipe(Atom.withLabel("served-sites-live-lines:none"));
 
-const sameUrls = (a: ReadonlyArray<string>, b: ReadonlyArray<string>) =>
-  a.length === b.length && a.every((url, index) => url === b[index]);
+const sameLines = (a: ReadonlyArray<string>, b: ReadonlyArray<string>) =>
+  a.length === b.length && a.every((line, index) => line === b[index]);
 
 // Keyed by `environmentId\0threadId`; reuses the previous array so sidebar rows skip re-rendering.
-const liveSiteUrlsAtom = Atom.family((key: string) => {
+const liveSiteLinesAtom = Atom.family((key: string) => {
   const [environmentId, threadId] = key.split("\u0000") as [EnvironmentId, ThreadId];
   return Atom.make((get) => {
     const result = get(servedSitesEnvironment.list({ environmentId, input: {} }));
@@ -55,15 +55,16 @@ const liveSiteUrlsAtom = Atom.family((key: string) => {
         site.threadId === threadId && site.status === "live" && !isServedSiteTearingDown(site)
           ? siteUrl(site)
           : null;
-      return url === null ? [] : [url];
+      return url === null ? [] : [`${site.name}: ${url}`];
     });
-    if (next.length === 0) return NO_URLS;
+    if (next.length === 0) return NO_LINES;
     const previous = Option.getOrNull(get.self<ReadonlyArray<string>>());
-    return previous !== null && sameUrls(previous, next) ? previous : next;
-  }).pipe(Atom.withLabel("served-sites-live-urls"));
+    return previous !== null && sameLines(previous, next) ? previous : next;
+  }).pipe(Atom.withLabel("served-sites-live-lines"));
 });
 
-export function useThreadLiveSiteUrls(input: {
+/** `name: url` for each of the thread's live sites. */
+export function useThreadLiveSiteLines(input: {
   readonly environmentId: EnvironmentId;
   readonly threadId: ThreadId;
 }): ReadonlyArray<string> {
@@ -71,6 +72,6 @@ export function useThreadLiveSiteUrls(input: {
     useEnvironment(input.environmentId)?.serverConfig?.environment.capabilities.servedSites !==
     undefined;
   return useAtomValue(
-    supported ? liveSiteUrlsAtom(`${input.environmentId}\u0000${input.threadId}`) : NO_URLS_ATOM,
+    supported ? liveSiteLinesAtom(`${input.environmentId}\u0000${input.threadId}`) : NO_LINES_ATOM,
   );
 }

@@ -1,4 +1,10 @@
-import type { ResourceMonitorProcessTableEntry, ServedSite } from "@t3tools/contracts";
+import type {
+  ResourceMonitorProcessTableEntry,
+  ServedSite,
+  ServedSiteProcess,
+} from "@t3tools/contracts";
+
+import { tableLiveness } from "../resourceTelemetry/ProcessOwnership.ts";
 
 import type { HookRun } from "./ServedSitesHost.ts";
 
@@ -55,6 +61,48 @@ export const servesPort = (
     seen.add(at);
   }
   return false;
+};
+
+/**
+ * What stopping a site signals: its pinned pids still running, and their descendants. Never their
+ * process group, which an agent's shell shares with every other server it started. Null when the
+ * tree holds the T3 server, one of its ancestors, or an agent CLI (a direct child of the server).
+ */
+export const stoppableProcessTree = (
+  table: ReadonlyArray<ResourceMonitorProcessTableEntry>,
+  pinned: ReadonlyArray<ServedSiteProcess>,
+  serverPid: number,
+): ReadonlyArray<ResourceMonitorProcessTableEntry> | null => {
+  const isAlive = tableLiveness(table);
+  const byPid = new Map(table.map((entry) => [entry.pid, entry]));
+  const children = new Map<number, Array<ResourceMonitorProcessTableEntry>>();
+  for (const entry of table) {
+    const siblings = children.get(entry.ppid) ?? [];
+    siblings.push(entry);
+    children.set(entry.ppid, siblings);
+  }
+  const tree = new Map<number, ResourceMonitorProcessTableEntry>();
+  const queue = pinned.flatMap((each) =>
+    isAlive(each.pid, each.startTimeMs) ? [byPid.get(each.pid)!] : [],
+  );
+  for (let entry = queue.shift(); entry !== undefined; entry = queue.shift()) {
+    if (tree.has(entry.pid)) continue;
+    tree.set(entry.pid, entry);
+    queue.push(...(children.get(entry.pid) ?? []));
+  }
+  const guarded = new Set<number>();
+  for (
+    let at: number | undefined = serverPid;
+    at !== undefined && at > 1;
+    at = byPid.get(at)?.ppid
+  ) {
+    if (guarded.has(at)) break;
+    guarded.add(at);
+  }
+  for (const entry of tree.values()) {
+    if (guarded.has(entry.pid) || entry.ppid === serverPid) return null;
+  }
+  return [...tree.values()];
 };
 
 export type ExposeOutcome =

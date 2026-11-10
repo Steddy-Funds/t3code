@@ -71,7 +71,7 @@ import { useUiStateStore } from "../../uiStateStore";
 import { useThreadSelectionStore } from "../../threadSelectionStore";
 import { useNowMinute } from "../../hooks/useNowMinute";
 import { useNowSecond } from "../../hooks/useNowSecond";
-import { useThreadLiveSiteUrls } from "../../state/servedSites";
+import { useThreadLiveSiteLines } from "../../state/servedSites";
 import { vcsEnvironment } from "../../state/vcs";
 import { useEnvironmentQuery } from "../../state/query";
 import { readEnvironmentScope, useEnvironmentScope } from "../../state/session";
@@ -707,7 +707,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
   });
   const terminalStatus = terminalStatusFromRunningIds(runningTerminalIds);
   const terminalProcessCount = runningTerminalIds.length;
-  const liveSiteUrls = useThreadLiveSiteUrls({
+  const liveSiteLines = useThreadLiveSiteLines({
     environmentId: thread.environmentId,
     threadId: thread.id,
   });
@@ -1128,7 +1128,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
   ) : null;
   const terminalStatusIcon = (
     <>
-      <ThreadSitesIndicator urls={liveSiteUrls} />
+      <ThreadSitesIndicator lines={liveSiteLines} />
       <ThreadTerminalStatusButton
         threadRef={threadRef}
         terminalIds={runningTerminalIds}
@@ -1280,7 +1280,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
   );
   const hasRowIcons =
     runningTerminalIds.length > 0 ||
-    liveSiteUrls.length > 0 ||
+    liveSiteLines.length > 0 ||
     agentBadge !== null ||
     prBadge !== null ||
     diff !== null ||
@@ -1323,7 +1323,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
   const titleLineIcons =
     metaLineEmpty && !twoRow ? (
       <>
-        <ThreadSitesIndicator urls={liveSiteUrls} />
+        <ThreadSitesIndicator lines={liveSiteLines} />
         {trailingIcons(remoteMachineIcon)}
       </>
     ) : null;

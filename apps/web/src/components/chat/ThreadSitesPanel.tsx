@@ -185,17 +185,15 @@ interface SiteRowProps {
   readonly onDismiss: () => void;
 }
 
-/*
- * One line: globe, name, Public badge, URL, copy, status, action. Everything after the name is
- * shrink-0 except the URL, which gives up its width first (shrink weight 1000); the name truncates
- * only once the URL is gone. The widest fixed set (a public site publishing: padding, globe,
- * badge, copy, "Publishing", Stop and gaps) is about 14.5rem, so the name keeps 5rem in a 20rem row.
- */
+// After the name everything is shrink-0 but the URL, which gives way first and hides whole. The
+// widest fixed set (public, tearing down: badge, "Taking down", Dismiss) is ~14rem, so the name
+// keeps 5rem in a 19rem row.
 function SiteRow(props: SiteRowProps) {
   const { site } = props;
   const ended = isEnded(site);
   const tearingDown = isServedSiteTearingDown(site);
-  const url = ended || tearingDown ? null : siteUrl(site);
+  // A publishing site is not reachable yet, and an ended or tearing-down one no longer is.
+  const url = site.status === "live" && !tearingDown ? siteUrl(site) : null;
   // A live site's error is a stop that left the server running; a failed one's is why. A
   // pending teardown is still retrying.
   const error =
@@ -227,7 +225,7 @@ function SiteRow(props: SiteRowProps) {
             {site.name} · {pidLabel(site)}
           </TooltipPopup>
         </Tooltip>
-        {site.visibility === "public" ? (
+        {site.visibility === "public" && !ended ? (
           <Badge size="sm" variant="info">
             Public
           </Badge>
@@ -295,21 +293,25 @@ function SiteUrl(props: { readonly site: ServedSite; readonly url: string }) {
   const { copyToClipboard, isCopied } = useCopyToClipboard();
   return (
     <>
-      <Tooltip>
-        <TooltipTrigger
-          render={
-            <a
-              href={props.url}
-              target="_blank"
-              rel="noreferrer"
-              className="min-w-0 shrink-[1000] truncate text-2xs text-muted-foreground underline-offset-2 hover:underline"
-            />
-          }
-        >
-          {shortUrl(props.site, props.url)}
-        </TooltipTrigger>
-        <TooltipPopup side="top">{props.url}</TooltipPopup>
-      </Tooltip>
+      {/* Whole or hidden: past its width the URL wraps onto a clipped second line. */}
+      <span className="flex h-4 min-w-0 shrink-[1000] flex-wrap items-center overflow-hidden">
+        <span aria-hidden className="h-4 w-0" />
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <a
+                href={props.url}
+                target="_blank"
+                rel="noreferrer"
+                className="shrink-0 whitespace-nowrap text-2xs text-muted-foreground underline-offset-2 hover:underline"
+              />
+            }
+          >
+            {shortUrl(props.site, props.url)}
+          </TooltipTrigger>
+          <TooltipPopup side="top">{props.url}</TooltipPopup>
+        </Tooltip>
+      </span>
       <Tooltip>
         <TooltipTrigger
           render={

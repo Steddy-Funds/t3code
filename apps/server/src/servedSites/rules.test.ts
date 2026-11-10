@@ -174,11 +174,26 @@ describe("stoppableProcessTree", () => {
     ["nothing for a pid reused by a later process", [{ pid: 131, startTimeMs: START + 5_000 }], []],
     ["no agent CLI", pinned(110), null],
     ["no ancestor of the T3 server", pinned(50), null],
+    [
+      "nothing for a no-start-time member once its pid has a start time",
+      [{ pid: 131, name: "node" }],
+      [],
+    ],
+  ])("%s", (_name, roots, expected) => {
+    const tree = stoppableProcessTree(table, roots, SERVER);
+    expect(tree === null ? null : tree.map((entry) => entry.pid).toSorted()).toEqual(expected);
+  });
+
+  // The resource monitor could not read a start time for 110 or 131.
+  const unreadable = table.map(({ startTimeMs, ...entry }) =>
+    entry.pid === 110 || entry.pid === 131 ? entry : { ...entry, startTimeMs },
+  );
+  it.each<[string, ReadonlyArray<TreeMember>, ReadonlyArray<number> | null]>([
     ["a member with no start time, by name", [{ pid: 131, name: "node" }], [131, 132]],
     ["nothing for a no-start-time pid now running another name", [{ pid: 131, name: "vim" }], []],
     ["no agent CLI reached through a no-start-time member", [{ pid: 110, name: "claude" }], null],
   ])("%s", (_name, roots, expected) => {
-    const tree = stoppableProcessTree(table, roots, SERVER);
+    const tree = stoppableProcessTree(unreadable, roots, SERVER);
     expect(tree === null ? null : tree.map((entry) => entry.pid).toSorted()).toEqual(expected);
   });
 });

@@ -16,13 +16,13 @@ export function buildAutonomyInstructions(input: {
       ? " This is a delegated thread: your decisions and questions go to your parent thread, not the user."
       : "";
     return `<autonomy>
-Autonomy is on for this thread, an experimental flag the user set. Never ask the user to confirm an option you recommend that can be undone: take it, log it under "Deferred decisions" in your final report and in the body of any PR you open, and keep going. Never ask about a step of your own work cycle: tests, lint, review, commit, push, a draft PR, fixing its checks or conflicts. Stop and ask only for: money or live paid calls, production, destructive or irreversible actions, merging into a base branch the user merges, and a hold the user set. A load per core above 9.0 (1-minute load average divided by CPU cores; t3_machine_read shows it): wait and re-check before heavy work, don't ask. A real product question: keep building the reversible default meanwhile, and ask once, in one line, with that default. On hold: stay quiet, don't ask again. An answer or grant the user gave once holds for this thread and its children, also after compaction.${routing} Give these rules to native subagents you start; delegated tasks inherit them.
+Autonomy is on for this thread, an experimental flag the user set. Never ask the user to confirm an option you recommend that can be undone: take it, log it under "Deferred decisions" in your final report and in the body of any PR you open, and keep going. Never ask about a step of your own work cycle: tests, lint, review, commit, push, a draft PR, fixing its checks or conflicts. Stop and ask only for: money or live paid calls, production, destructive or irreversible actions, and merging into a base branch the user merges. Stop where the user set a hold. A load per core above 9.0 (1-minute load average divided by CPU cores; t3_machine_read shows it): wait and re-check before heavy work, don't ask. A real product question: keep building the reversible default meanwhile, and ask once, in one line, with that default. On hold: stay quiet, don't ask again. An answer or grant the user gave once stays valid for this thread and its children, also after compaction.${routing} Give these rules to native subagents you start; delegated tasks inherit them.
 </autonomy>`;
   }
   if (input.autonomy === "off") {
     const askee = input.delegated ? "your parent thread" : "the user";
     return `<autonomy>
-Autonomy is off for this thread: the user set it. Before a product or scope decision, even one that can be undone, ask ${askee} and wait. This overrides any instruction to take defaults on your own.
+Autonomy is off for this thread. Before a product or scope decision, even one that can be undone, ask ${askee} and wait. This overrides any instruction to take defaults on your own.
 </autonomy>`;
   }
   return "";

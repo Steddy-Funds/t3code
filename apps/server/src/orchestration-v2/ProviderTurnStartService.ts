@@ -879,7 +879,8 @@ export const layer: Layer.Layer<
           ? ""
           : restartCancelledBackgroundWorkNote(restartCancelledWork);
       // Native slash commands must stay first in the prompt.
-      const nativeSlash = message.attachments.length === 0 && userText.trimStart().startsWith("/");
+      const nativeSlash =
+        message.attachments.length === 0 && /^\/[\w:-]+(\s|$)/.test(userText.trimStart());
       const autonomyInstructions =
         goalCommand || nativeSlash
           ? ""

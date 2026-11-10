@@ -687,7 +687,8 @@ export const parseTailscaleServePorts = (
   return new Set(configs.flatMap(portsIn).filter(Number.isInteger));
 };
 
-export const readTailscaleServePorts = readTailscaleOutput("serve", [
+/** Every Serve port in use, and whether a port's route proxies to a given 127.0.0.1 port. */
+export const readTailscaleServeRoutes = readTailscaleOutput("serve", [
   "serve",
   "status",
   "--json",
@@ -696,6 +697,12 @@ export const readTailscaleServePorts = readTailscaleOutput("serve", [
     const ports = parseTailscaleServePorts(status);
     return ports === undefined
       ? Effect.fail(new TailscaleStatusParseError({ cause: "unreadable serve status" }))
-      : Effect.succeed(ports);
+      : Effect.succeed({
+          ports,
+          proxies: (servePort: number, localPort: number) =>
+            (
+              parseTailscaleServeRoutesTo(status, { host: "127.0.0.1", port: localPort }) ?? []
+            ).some((route) => route.servePort === servePort),
+        });
   }),
 );

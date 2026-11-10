@@ -13,7 +13,17 @@ import { cn } from "../../lib/utils";
 import { useEnvironment } from "../../state/environments";
 import { servedSitesEnvironment, siteUrl, useThreadServedSites } from "../../state/servedSites";
 import { useAtomCommand } from "../../state/use-atom-command";
+import {
+  AlertDialog,
+  AlertDialogClose,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogPopup,
+  AlertDialogTitle,
+} from "../ui/alert-dialog";
 import { Badge } from "../ui/badge";
+import { Button } from "../ui/button";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { ThreadDetailsControl } from "./ThreadDetailsControl";
@@ -162,8 +172,12 @@ function SiteRow(props: SiteRowProps) {
   const { site } = props;
   const ended = isEnded(site);
   const url = ended ? null : siteUrl(site);
-  // A live site's error is a stop that left the server running; a failed one's is why.
-  const error = site.status === "live" || site.status === "failed" ? site.lastError : null;
+  // A live site's error is a stop that left the server running; a failed one's is why. A
+  // pending teardown is still retrying.
+  const error =
+    site.status === "live" || site.status === "failed" || site.teardownPending !== undefined
+      ? site.lastError
+      : null;
   // Removed rows already name their pids, and a failed site never served its process.
   const showPids = !ended;
 
@@ -259,7 +273,7 @@ function SiteActions(
       </ThreadDetailsControl>
     ) : null;
   }
-  if (site.status !== "live" || !props.canStop) return null;
+  if (site.status !== "live" || site.teardownPending !== undefined || !props.canStop) return null;
   if (props.hasError && site.stopCommand !== null) {
     return (
       <ThreadDetailsControl
@@ -286,13 +300,61 @@ function SiteActions(
     return <ThreadDetailsControl {...stopProps}>Stop</ThreadDetailsControl>;
   }
   return (
-    <Tooltip>
-      <TooltipTrigger render={<ThreadDetailsControl {...stopProps} />}>
+    <CustomStop
+      command={site.stopCommand}
+      busy={props.busy}
+      onConfirm={() => props.onStop(false)}
+    />
+  );
+}
+
+/** The agent wrote this command and it runs unsandboxed, so the user reads it before it runs. */
+function CustomStop(props: {
+  readonly command: string;
+  readonly busy: boolean;
+  readonly onConfirm: () => void;
+}) {
+  const [confirming, setConfirming] = useState(false);
+  return (
+    <>
+      <ThreadDetailsControl
+        size="xs"
+        variant="ghost"
+        part="meta"
+        tone="destructive"
+        disabled={props.busy}
+        onClick={() => setConfirming(true)}
+      >
         Stop (custom)
-      </TooltipTrigger>
-      <TooltipPopup side="left">
-        <code className="font-mono">{site.stopCommand}</code>
-      </TooltipPopup>
-    </Tooltip>
+      </ThreadDetailsControl>
+      <AlertDialog open={confirming} onOpenChange={setConfirming}>
+        <AlertDialogPopup>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Run the agent's stop command?</AlertDialogTitle>
+            <AlertDialogDescription>
+              It runs on this machine outside the agent's sandbox.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <pre className="mx-6 max-h-40 overflow-auto whitespace-pre-wrap break-all rounded-md bg-muted px-3 py-2 font-mono text-xs">
+            {props.command}
+          </pre>
+          <AlertDialogFooter>
+            <AlertDialogClose render={<Button variant="outline" size="sm" />}>
+              Cancel
+            </AlertDialogClose>
+            <Button
+              variant="destructive"
+              size="sm"
+              onClick={() => {
+                setConfirming(false);
+                props.onConfirm();
+              }}
+            >
+              Run and stop
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogPopup>
+      </AlertDialog>
+    </>
   );
 }

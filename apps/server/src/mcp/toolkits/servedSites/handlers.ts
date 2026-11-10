@@ -42,6 +42,14 @@ export const layer = McpToolAccess.toLayer(
           yield* McpInvocationContext.requireThreadScope(caller.scope, "This tool");
           yield* assertNotLinked(caller, "publish this machine's servers");
           if (caller.caller === undefined) return yield* unavailable();
+          // The user's click runs it with no sandbox, so only a thread already unsandboxed sets one.
+          if (input.stopCommand !== undefined && caller.caller.runtimeMode !== "full-access") {
+            return yield* new OrchestratorMcpFailure({
+              code: "invalid_request",
+              message:
+                "`stopCommand` needs a full-access thread. Omit it and Stop signals the site's pids.",
+            });
+          }
           return yield* sites
             .publish({
               threadId: caller.caller.id,
@@ -68,7 +76,15 @@ export const layer = McpToolAccess.toLayer(
       t3_site_stop: McpToolAccess.actsAsCaller((input) =>
         Effect.gen(function* () {
           const caller = yield* loadCaller();
+          yield* McpInvocationContext.requireThreadScope(caller.scope, "This tool");
           yield* assertNotLinked(caller, "stop this machine's servers");
+          const site = (yield* sites.list).find((each) => each.id === input.siteId);
+          if (site === undefined || site.threadId !== caller.caller?.id) {
+            return yield* new OrchestratorMcpFailure({
+              code: "invalid_request",
+              message: `No site ${input.siteId} in this thread.`,
+            });
+          }
           return yield* sites.stop(input).pipe(Effect.mapError(siteFailure));
         }),
       ),

@@ -8,7 +8,7 @@ import * as Net from "@t3tools/shared/Net";
 import {
   disableTailscaleServe,
   ensureTailscaleServe,
-  readTailscaleServePorts,
+  readTailscaleServeRoutes,
   readTailscaleStatus,
 } from "@t3tools/tailscale";
 import * as Context from "effect/Context";
@@ -34,12 +34,18 @@ const tailscaleDetail = (error: {
     ? error.message
     : `${error.message} (${error.stderrDiagnostic})`;
 
+export interface ServeRoutes {
+  readonly ports: ReadonlySet<number>;
+  /** Whether the route on `servePort` proxies to 127.0.0.1:`localPort`. */
+  readonly proxies: (servePort: number, localPort: number) => boolean;
+}
+
 export class SiteTailscale extends Context.Service<
   SiteTailscale,
   {
     /** Fails when tailscale is missing, signed out, or has MagicDNS off. */
     readonly magicDnsName: Effect.Effect<string, ServedSiteError>;
-    readonly servePorts: Effect.Effect<ReadonlySet<number>, ServedSiteError>;
+    readonly routes: Effect.Effect<ServeRoutes, ServedSiteError>;
     readonly serve: (input: {
       readonly servePort: number;
       readonly localPort: number;
@@ -68,7 +74,7 @@ export const layerTailscale = Layer.effect(
             : Effect.succeed(status.magicDnsName),
         ),
       ),
-      servePorts: run(readTailscaleServePorts, unavailable),
+      routes: run(readTailscaleServeRoutes, unavailable),
       serve: Effect.fn("SiteTailscale.serve")((input) =>
         run(
           ensureTailscaleServe({ localPort: input.localPort, servePort: input.servePort }),
@@ -107,6 +113,7 @@ export class SiteHookRunner extends Context.Service<
 
 const HOOK_KILL_GRACE = Duration.seconds(5);
 const HOOK_MAX_OUTPUT_CHARS = 64 * 1024;
+const LISTENER_TIMEOUT = Duration.seconds(5);
 
 const collectText = <E>(stream: Stream.Stream<Uint8Array, E>) =>
   stream.pipe(
@@ -171,6 +178,8 @@ export class SiteProcesses extends Context.Service<
     readonly portOwner: (
       port: number,
     ) => Effect.Effect<{ readonly pid: number; readonly processName: string | null } | null>;
+    /** Pids holding a listening socket on `port`; null when no tool could tell. */
+    readonly listenerPids: (port: number) => Effect.Effect<ReadonlyArray<number> | null>;
     readonly stopProcessGroups: (
       pids: ReadonlyArray<number>,
     ) => Effect.Effect<void, ServedSiteError>;
@@ -215,6 +224,24 @@ export const layerProcesses = Layer.effect(
           (each) => each.port === port && each.pid !== null,
         );
         return server?.pid == null ? null : { pid: server.pid, processName: server.processName };
+      }),
+      listenerPids: Effect.fn("SiteProcesses.listenerPids")(function* (port) {
+        if (platform === "win32") return null;
+        const read = (command: string, args: ReadonlyArray<string>, pattern: RegExp) =>
+          runner.run({ command, args, timeout: LISTENER_TIMEOUT, maxOutputBytes: 64 * 1024 }).pipe(
+            // lsof exits 1 when nothing matches, so the exit code is not checked.
+            Effect.map((result) => [...result.stdout.matchAll(pattern)].map((m) => Number(m[1]))),
+            Effect.option,
+          );
+        const fromLsof = yield* read(
+          "lsof",
+          ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-t"],
+          /^(\d+)$/gm,
+        );
+        if (Option.isSome(fromLsof) && fromLsof.value.length > 0) return fromLsof.value;
+        if (platform !== "linux") return Option.getOrNull(fromLsof);
+        const fromSs = yield* read("ss", ["-Hltnp", `sport = :${port}`], /pid=(\d+)/g);
+        return Option.getOrNull(fromSs);
       }),
       stopProcessGroups: Effect.fn("SiteProcesses.stopProcessGroups")((pids) =>
         ports

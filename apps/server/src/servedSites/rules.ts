@@ -1,4 +1,4 @@
-import type { ServedSite } from "@t3tools/contracts";
+import type { ResourceMonitorProcessTableEntry, ServedSite } from "@t3tools/contracts";
 
 import type { HookRun } from "./ServedSitesHost.ts";
 
@@ -38,6 +38,29 @@ export const chooseServePort = (localPort: number, used: ReadonlySet<number>): n
     if (!used.has(port)) return port;
   }
   return null;
+};
+
+/** The pid and its ancestors, nearest first, stopping before init. */
+const lineage = (parents: ReadonlyMap<number, number>, pid: number): ReadonlyArray<number> => {
+  const chain: Array<number> = [];
+  for (let at: number | undefined = pid; at !== undefined && at > 1; at = parents.get(at)) {
+    if (chain.includes(at)) break;
+    chain.push(at);
+  }
+  return chain;
+};
+
+/** Whether `pid` is a listener on the port, or an ancestor or descendant of one. */
+export const servesPort = (
+  table: ReadonlyArray<ResourceMonitorProcessTableEntry>,
+  pid: number,
+  listeners: ReadonlyArray<number>,
+): boolean => {
+  const parents = new Map(table.map((entry) => [entry.pid, entry.ppid]));
+  const ancestors = lineage(parents, pid);
+  return listeners.some(
+    (listener) => ancestors.includes(listener) || lineage(parents, listener).includes(pid),
+  );
 };
 
 export type ExposeOutcome =

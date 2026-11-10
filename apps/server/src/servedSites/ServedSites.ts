@@ -28,6 +28,7 @@ import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 
 import * as ServerConfig from "../config.ts";
+import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as ServedSitesRepository from "../persistence/ServedSites.ts";
 import { tableLiveness } from "../resourceTelemetry/ProcessOwnership.ts";
 import * as Settings from "../serverSettings.ts";
@@ -36,6 +37,7 @@ import {
   dedupeSiteName,
   interpretExpose,
   isActive,
+  servesPort,
   slugSiteName,
 } from "./rules.ts";
 import * as Host from "./ServedSitesHost.ts";
@@ -51,6 +53,14 @@ const STOP_EXIT_POLL = Duration.millis(500);
 export const PUBLIC_NOT_CONFIGURED =
   "public URLs are not configured on this server (servedSites.publicExposeCommand)";
 const withoutAwaitingExit = ({ awaitingExit: _awaitingExit, ...site }: ServedSite) => site;
+const withoutTransient = ({
+  awaitingExit: _awaitingExit,
+  teardownPending: _teardownPending,
+  ...site
+}: ServedSite) => site;
+
+export const ROUTE_TAKEN = (servePort: number) =>
+  `Tailscale port ${servePort} now serves something else, so this site was taken down.`;
 
 export const STOP_COMMAND_LEFT_PIDS =
   "Stop command ran, but the server is still running. Force stop kills it.";
@@ -90,6 +100,7 @@ export const make = Effect.gen(function* () {
   const settings = yield* Settings.ServerSettingsService;
   const config = yield* ServerConfig.ServerConfig;
   const random = yield* SecureRandom.SecureRandom;
+  const environmentId = yield* (yield* ServerEnvironment.ServerEnvironment).getEnvironmentId;
   const scope = yield* Effect.scope;
 
   const sites = yield* SubscriptionRef.make<ReadonlyArray<ServedSite>>([]);
@@ -140,9 +151,12 @@ export const make = Effect.gen(function* () {
     Effect.orElseSucceed((): ReadonlyArray<string> => []),
   );
 
+  // Site and environment ids keep two T3 servers sharing one hook apart.
   const hookEnv = (site: ServedSite) => ({
+    T3_SITE_ID: site.id,
     T3_SITE_THREAD_ID: site.threadId,
     T3_SITE_PROJECT_CWD: site.projectCwd,
+    T3_ENVIRONMENT_ID: environmentId,
   });
 
   const unexpose = Effect.fn("ServedSites.unexpose")(function* (site: ServedSite) {
@@ -154,12 +168,24 @@ export const make = Effect.gen(function* () {
       cwd: config.baseDir,
       timeout: UNEXPOSE_TIMEOUT,
     });
-    if (run._tag !== "exited" || run.code !== 0) {
-      yield* Effect.logWarning("served site unexpose failed", { site: site.name, run });
-    }
+    if (run._tag === "exited" && run.code === 0) return;
+    yield* Effect.logWarning("served site unexpose failed", { site: site.name, run });
+    return yield* new ServedSiteError({
+      reason: "failed",
+      detail:
+        run._tag === "exited"
+          ? `The public URL hook's unexpose exited ${run.code}${run.stderr.trim() === "" ? "" : `: ${run.stderr.trim().slice(0, 500)}`}`
+          : run._tag === "timed-out"
+            ? "The public URL hook's unexpose timed out."
+            : `Could not run the public URL hook: ${run.detail}`,
+    });
   });
 
-  /** Takes the routes down and marks the record; each site tears down once. */
+  /**
+   * Takes the routes down and marks the record; each site tears down once at a time. Only a route
+   * that still proxies to the site is removed. When a step fails the record stays, marked
+   * `teardownPending`, and the watcher retries.
+   */
   const teardown = Effect.fn("ServedSites.teardown")(function* (
     site: ServedSite,
     reason: ServedSiteRemovedReason,
@@ -168,23 +194,36 @@ export const make = Effect.gen(function* () {
     if (tearingDown.has(site.id)) return;
     tearingDown.add(site.id);
     yield* Effect.gen(function* () {
-      if (site.servePort !== null) {
-        yield* tailscale
-          .unserve(site.servePort)
-          .pipe(
-            Effect.catch((error) =>
-              Effect.logWarning("served site tailscale serve off failed", error),
-            ),
-          );
+      const current = (yield* find(site.id)) ?? site;
+      const finalError =
+        options.lastError ??
+        (current.teardownPending === undefined
+          ? current.lastError
+          : current.teardownPending.lastError);
+      const cleaned = yield* Effect.gen(function* () {
+        if (current.servePort !== null) {
+          const routes = yield* tailscale.routes;
+          if (routes.proxies(current.servePort, current.localPort)) {
+            yield* tailscale.unserve(current.servePort);
+          }
+        }
+        if (options.exposed ?? current.visibility === "public") yield* unexpose(current);
+      }).pipe(Effect.result);
+      if (cleaned._tag === "Failure") {
+        yield* update(site.id, (latest) => ({
+          ...latest,
+          teardownPending: { reason, lastError: finalError },
+          lastError: `Could not take the site down, retrying: ${cleaned.failure.detail}`,
+        }));
+        return;
       }
-      if (options.exposed ?? site.visibility === "public") yield* unexpose(site);
       const removedAt = yield* nowIso;
-      yield* update(site.id, (current) => ({
-        ...withoutAwaitingExit(current),
+      yield* update(site.id, (latest) => ({
+        ...withoutTransient(latest),
         status: reason === "publish-failed" ? "failed" : "removed",
         removedReason: reason,
         removedAt,
-        lastError: options.lastError ?? current.lastError,
+        lastError: finalError,
       }));
     }).pipe(
       Effect.ensuring(
@@ -196,13 +235,24 @@ export const make = Effect.gen(function* () {
     );
   });
 
+  const retryTeardowns = Effect.fn("ServedSites.retryTeardowns")(function* () {
+    const pending = (yield* SubscriptionRef.get(sites)).flatMap((site) =>
+      site.teardownPending === undefined ? [] : [{ site, reason: site.teardownPending.reason }],
+    );
+    yield* Effect.forEach(pending, ({ site, reason }) => teardown(site, reason), {
+      discard: true,
+    });
+  });
+
   const removedReasonFor = (site: ServedSite): ServedSiteRemovedReason =>
     site.status === "stopping" ? (stopKinds.get(site.id) ?? "stopped") : "pids-exited";
 
   /** The watcher path: removes every live or stopping site whose pinned processes all exited. */
   const removeExited = Effect.fn("ServedSites.removeExited")(function* () {
     const watched = (yield* SubscriptionRef.get(sites)).filter(
-      (site) => site.status === "live" || site.status === "stopping",
+      (site) =>
+        (site.status === "live" || site.status === "stopping") &&
+        site.teardownPending === undefined,
     );
     if (watched.length === 0) return;
     // An unreadable table never reads as every process having exited.
@@ -250,14 +300,26 @@ export const make = Effect.gen(function* () {
         `Could not tell which process listens on port ${input.port}. Pass its \`pids\`.`,
       );
     }
-    const startTimes = new Map(
-      (yield* processes.table).map((entry) => [entry.pid, entry.startTimeMs]),
-    );
+    const table = yield* processes.table;
+    const startTimes = new Map(table.map((entry) => [entry.pid, entry.startTimeMs]));
     const pinned: Array<ServedSiteProcess> = [];
     for (const pid of new Set(pids)) {
       const startTimeMs = startTimes.get(pid);
       if (startTimeMs === undefined) return yield* invalid(`Process ${pid} is not running.`);
       pinned.push({ pid, startTimeMs });
+    }
+    // Stop signals these pids, so a pid the agent passed must belong to the port's server.
+    if (owner === null) {
+      const listeners = yield* processes.listenerPids(input.port);
+      if (listeners === null) {
+        return yield* invalid(
+          `Could not tell which process listens on port ${input.port}, so its pids cannot be checked.`,
+        );
+      }
+      const stray = pinned.find((each) => !servesPort(table, each.pid, listeners));
+      if (stray !== undefined) {
+        return yield* invalid(`pid ${stray.pid} is not serving port ${input.port}`);
+      }
     }
     const id = ServedSiteId.make(`site_${yield* random.uuidV4()}`);
     const createdAt = yield* nowIso;
@@ -298,7 +360,7 @@ export const make = Effect.gen(function* () {
     }
 
     const magicDnsName = yield* tailscale.magicDnsName;
-    const routePorts = yield* tailscale.servePorts;
+    const routePorts = (yield* tailscale.routes).ports;
 
     const site = yield* lock.withPermits(1)(
       Effect.gen(function* () {
@@ -417,11 +479,13 @@ export const make = Effect.gen(function* () {
         if (current.status !== "live" && !(current.status === "stopping" && input.force === true)) {
           return yield* invalid(`Site ${current.name} is ${current.status}.`);
         }
+        const kind =
+          input.force === true || current.stopCommand === null ? "stopped" : "stop-command";
+        stopKinds.set(current.id, kind);
         return yield* saveUnlocked({ ...current, status: "stopping", lastError: null });
       }),
     );
     const command = input.force === true ? null : site.stopCommand;
-    stopKinds.set(site.id, command === null ? "stopped" : "stop-command");
     const stopped = yield* (command === null ? signalStop(site) : commandStop(site, command)).pipe(
       Effect.result,
     );
@@ -453,6 +517,12 @@ export const make = Effect.gen(function* () {
     yield* SubscriptionRef.set(sites, stored);
     const table = yield* processes.table.pipe(Effect.option);
     const isAlive = Option.map(table, tableLiveness);
+    const routes = yield* tailscale.routes.pipe(Effect.option);
+    const routeTaken = (site: ServedSite) =>
+      site.servePort !== null &&
+      Option.isSome(routes) &&
+      routes.value.ports.has(site.servePort) &&
+      !routes.value.proxies(site.servePort, site.localPort);
     yield* Effect.forEach(
       stored.filter(isActive),
       Effect.fnUntraced(function* (site) {
@@ -466,6 +536,12 @@ export const make = Effect.gen(function* () {
           onSome: (alive) => !site.pids.some((pinned) => alive(pinned.pid, pinned.startTimeMs)),
         });
         if (exited) return yield* teardown(site, removedReasonFor(site));
+        // Re-serving would take over a route someone added while this server was down.
+        if (routeTaken(site)) {
+          return yield* teardown(site, "publish-failed", {
+            lastError: ROUTE_TAKEN(site.servePort!),
+          });
+        }
         // A stop the restart interrupted ends with the site still up.
         if (site.status === "stopping") {
           yield* update(site.id, (current) => ({ ...current, status: "live" }));
@@ -486,7 +562,7 @@ export const make = Effect.gen(function* () {
   yield* reconcile().pipe(
     Effect.ensuring(Deferred.succeed(reconciled, undefined)),
     Effect.andThen(
-      Effect.all([removeExited(), expireRemoved()]).pipe(
+      Effect.all([retryTeardowns(), removeExited(), expireRemoved()]).pipe(
         Effect.catchCause((cause) =>
           Effect.logWarning("served sites check failed", Cause.pretty(cause)),
         ),

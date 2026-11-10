@@ -1,5 +1,8 @@
 import { createServedSitesEnvironmentAtoms } from "@t3tools/client-runtime/state/servedSites";
 import type { EnvironmentId, ServedSite, ThreadId } from "@t3tools/contracts";
+import { useAtomValue } from "@effect/atom-react";
+import * as Option from "effect/Option";
+import { AsyncResult, Atom } from "effect/reactivity";
 
 import { connectionAtomRuntime } from "../connection/runtime";
 import { useEnvironment } from "./environments";
@@ -30,12 +33,36 @@ export function useThreadServedSites(input: {
   return sites.length === 0 ? NO_SITES : sites;
 }
 
+const NO_URLS: ReadonlyArray<string> = [];
+const NO_URLS_ATOM = Atom.make(NO_URLS).pipe(Atom.withLabel("served-sites-live-urls:none"));
+
+const sameUrls = (a: ReadonlyArray<string>, b: ReadonlyArray<string>) =>
+  a.length === b.length && a.every((url, index) => url === b[index]);
+
+// Keyed by `environmentId\0threadId`; reuses the previous array so sidebar rows skip re-rendering.
+const liveSiteUrlsAtom = Atom.family((key: string) => {
+  const [environmentId, threadId] = key.split("\u0000") as [EnvironmentId, ThreadId];
+  return Atom.make((get) => {
+    const result = get(servedSitesEnvironment.list({ environmentId, input: {} }));
+    const sites = AsyncResult.getOrElse(result, () => null)?.sites ?? [];
+    const next = sites.flatMap((site) => {
+      const url = site.threadId === threadId && site.status === "live" ? siteUrl(site) : null;
+      return url === null ? [] : [url];
+    });
+    if (next.length === 0) return NO_URLS;
+    const previous = Option.getOrNull(get.self<ReadonlyArray<string>>());
+    return previous !== null && sameUrls(previous, next) ? previous : next;
+  }).pipe(Atom.withLabel("served-sites-live-urls"));
+});
+
 export function useThreadLiveSiteUrls(input: {
   readonly environmentId: EnvironmentId;
   readonly threadId: ThreadId;
 }): ReadonlyArray<string> {
-  return useThreadServedSites(input).flatMap((site) => {
-    const url = site.status === "live" ? siteUrl(site) : null;
-    return url === null ? [] : [url];
-  });
+  const supported =
+    useEnvironment(input.environmentId)?.serverConfig?.environment.capabilities.servedSites !==
+    undefined;
+  return useAtomValue(
+    supported ? liveSiteUrlsAtom(`${input.environmentId}\u0000${input.threadId}`) : NO_URLS_ATOM,
+  );
 }

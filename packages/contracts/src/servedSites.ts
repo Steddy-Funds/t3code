@@ -61,6 +61,14 @@ export const ServedSite = Schema.Struct({
   removedAt: Schema.NullOr(IsoDateTime),
   /** Stopping, and the custom stop command has returned: waiting for the pids to exit. Not stored. */
   awaitingExit: Schema.optionalKey(Schema.Boolean),
+  /** Taking the routes down failed; the watcher retries, then removes the site. Not stored. */
+  teardownPending: Schema.optionalKey(
+    Schema.Struct({
+      reason: ServedSiteRemovedReason,
+      /** What `lastError` becomes once the site is removed. */
+      lastError: Schema.NullOr(Schema.String),
+    }),
+  ),
 });
 export type ServedSite = typeof ServedSite.Type;
 

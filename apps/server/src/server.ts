@@ -702,7 +702,11 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   layerProviderInstallationRefresh,
   ReplayMarkers.layer,
   Layer.effectDiscard(ProjectSettingsOverrideSweep.sweep),
-  ServedSites.layer.pipe(Layer.provide(layerNativeTelemetry), Layer.provide(ProcessRunner.layer)),
+  ServedSites.layer.pipe(
+    Layer.provide(layerNativeTelemetry),
+    Layer.provide(ProcessRunner.layer),
+    Layer.provide(layerServerEnvironment),
+  ),
 ).pipe(
   Layer.provideMerge(layerOrchestrationApplication),
   Layer.provideMerge(RuntimeLayer.layerEventInfrastructure),

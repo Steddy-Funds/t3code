@@ -1344,6 +1344,7 @@ effectIt.effect.each([
   },
   { tags: ["autonomy:on"], text: "/goal ship the release", autonomy: null },
   { tags: ["autonomy:on"], text: "/review", autonomy: null },
+  { tags: ["autonomy:on"], text: "/tmp/out.log shows the crash", autonomy: "Autonomy is on" },
   {
     tags: ["autonomy:on"],
     text: "Ship it",

@@ -60,11 +60,11 @@ const withoutAwaitingExit = ({ awaitingExit: _awaitingExit, ...site }: ServedSit
 export const ROUTE_TAKEN = (servePort: number) =>
   `Tailscale port ${servePort} now serves something else, so this site was taken down.`;
 
+export const RESTARTED_DURING_TEARDOWN = "The T3 server restarted while taking the site down.";
 export const STOP_INTERRUPTED = "Stop was interrupted by a server restart.";
 export const STOPPED_WHILE_PUBLISHING = "The site was stopped while publishing.";
 
-export const STOP_COMMAND_LEFT_PIDS =
-  "Stop command ran, but the server is still running. Force stop kills it.";
+export const STOP_COMMAND_LEFT_PIDS = "Stop command ran, but the server is still running.";
 
 export interface PublishInput {
   readonly threadId: ThreadId;
@@ -404,8 +404,16 @@ export const make = Effect.gen(function* () {
       return yield* served.failure;
     }
 
+    // Stop means the server too, as for a live site; a refused signal stays on the record.
     const stopped = Effect.fnUntraced(function* () {
-      yield* teardown(site, "stopped", { exposed: site.visibility === "public" });
+      const signalError = yield* alivePids(site).pipe(
+        Effect.flatMap((alive) => processes.stopProcessGroups(alive.map((pinned) => pinned.pid))),
+        Effect.match({ onFailure: (error) => error.detail, onSuccess: () => undefined }),
+      );
+      yield* teardown(site, "stopped", {
+        exposed: site.visibility === "public",
+        ...(signalError === undefined ? {} : { lastError: signalError }),
+      });
       return yield* new ServedSiteError({ reason: "failed", detail: STOPPED_WHILE_PUBLISHING });
     });
 
@@ -486,7 +494,7 @@ export const make = Effect.gen(function* () {
         return yield* backToLive(
           site.id,
           result.timedOut
-            ? "Stop command timed out, and the server is still running. Force stop kills it."
+            ? "Stop command timed out, and the server is still running."
             : STOP_COMMAND_LEFT_PIDS,
         );
       }
@@ -543,7 +551,11 @@ export const make = Effect.gen(function* () {
         Effect.gen(function* () {
           const site = yield* find(input.siteId);
           if (site === undefined) return yield* notFound(input.siteId);
-          if (isActive(site)) return yield* invalid("Stop the site before dismissing it.");
+          // A teardown that keeps failing can be given up on; its routes may stay up.
+          if (isActive(site) && !isServedSiteTearingDown(site)) {
+            return yield* invalid("Stop the site before dismissing it.");
+          }
+          pendingErrors.delete(site.id);
           yield* removeRecord(site.id);
         }),
       );
@@ -569,7 +581,14 @@ export const make = Effect.gen(function* () {
     yield* Effect.forEach(
       stored.filter(isActive),
       Effect.fnUntraced(function* (site) {
-        if (site.removedReason !== null) return yield* teardown(site, site.removedReason);
+        if (site.removedReason !== null) {
+          // The error it was to end with was in memory; a failed site still says why.
+          return yield* teardown(
+            site,
+            site.removedReason,
+            site.removedReason === "publish-failed" ? { lastError: RESTARTED_DURING_TEARDOWN } : {},
+          );
+        }
         if (site.status === "publishing") {
           return yield* teardown(site, "publish-failed", {
             lastError: "The T3 server restarted while publishing.",

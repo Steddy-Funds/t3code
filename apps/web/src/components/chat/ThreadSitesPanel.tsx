@@ -59,25 +59,35 @@ function shortUrl(site: ServedSite, url: string): string {
     : `${host}:${parsed.port}`;
 }
 
-function statusLabel(site: ServedSite): string {
-  if (isServedSiteTearingDown(site)) return "Taking down…";
+interface SiteStatus {
+  readonly label: string;
+  readonly detail: string | null;
+}
+
+/** Null for a healthy live site; otherwise one short word, with the sentence for the tooltip. */
+function siteStatus(site: ServedSite): SiteStatus | null {
+  if (isServedSiteTearingDown(site)) {
+    return { label: "Taking down", detail: "Retrying until its routes come down." };
+  }
   switch (site.status) {
     case "publishing":
-      return "Publishing…";
+      return { label: "Publishing", detail: null };
     case "stopping":
-      return site.awaitingExit === true ? "Waiting for exit" : "Stopping…";
+      return site.awaitingExit === true
+        ? { label: "Waiting", detail: "The stop command ran; waiting for the server to exit." }
+        : { label: "Stopping", detail: null };
     case "live":
-      return "Live";
+      return null;
     case "failed":
-      return "Failed";
+      return { label: "Failed", detail: null };
     case "removed":
       switch (site.removedReason) {
         case "pids-exited":
-          return site.pids.length === 1 ? `${pidLabel(site)} exited` : "PIDs exited";
+          return { label: "Exited", detail: `${pidLabel(site)} exited.` };
         case "stop-command":
-          return "Stopped by custom command";
+          return { label: "Stopped", detail: "Stopped by its stop command." };
         default:
-          return "Stopped";
+          return { label: "Stopped", detail: null };
       }
   }
 }
@@ -175,18 +185,28 @@ interface SiteRowProps {
   readonly onDismiss: () => void;
 }
 
+/*
+ * One line: globe, name, Public badge, URL, copy, status, action. Everything after the name is
+ * shrink-0 except the URL, which gives up its width first (shrink weight 1000); the name truncates
+ * only once the URL is gone. The widest fixed set (a public site publishing: padding, globe,
+ * badge, copy, "Publishing", Stop and gaps) is about 14.5rem, so the name keeps 5rem in a 20rem row.
+ */
 function SiteRow(props: SiteRowProps) {
   const { site } = props;
   const ended = isEnded(site);
-  const url = ended ? null : siteUrl(site);
+  const tearingDown = isServedSiteTearingDown(site);
+  const url = ended || tearingDown ? null : siteUrl(site);
   // A live site's error is a stop that left the server running; a failed one's is why. A
   // pending teardown is still retrying.
   const error =
-    site.status === "live" || site.status === "failed" || isServedSiteTearingDown(site)
-      ? site.lastError
-      : null;
-  // Removed rows already name their pids, and a failed site never served its process.
-  const showPids = !ended;
+    site.status === "live" || site.status === "failed" || tearingDown ? site.lastError : null;
+  const status = siteStatus(site);
+  const showForceStop =
+    props.canStop &&
+    site.status === "live" &&
+    !tearingDown &&
+    error !== null &&
+    site.stopCommand !== null;
 
   return (
     <li
@@ -195,47 +215,77 @@ function SiteRow(props: SiteRowProps) {
     >
       <div className="flex h-6 min-w-0 items-center gap-1.5">
         <GlobeIcon aria-hidden className={THREAD_DETAILS_PANEL_ICON_CLASS} />
-        {/* The name gives up its width before the URL does. */}
-        <span className="min-w-8 shrink-[100] truncate text-sm font-medium leading-4 text-foreground/85">
-          {site.name}
-        </span>
-        <Badge size="sm" variant={site.visibility === "public" ? "info" : "outline"}>
-          {site.visibility === "public" ? "Public" : "Tailnet"}
-        </Badge>
-        {url === null ? <span className="flex-1" /> : <SiteUrl site={site} url={url} />}
-        {showPids ? (
-          <Tooltip>
-            <TooltipTrigger render={<span className="shrink-0 text-2xs text-muted-foreground" />}>
-              {statusLabel(site)}
-            </TooltipTrigger>
-            <TooltipPopup side="left">
-              {site.status === "stopping" && site.awaitingExit === true
-                ? `Waiting for the server to exit. ${pidLabel(site)}`
-                : pidLabel(site)}
-            </TooltipPopup>
-          </Tooltip>
-        ) : (
-          <span className="shrink-0 text-2xs text-muted-foreground">{statusLabel(site)}</span>
-        )}
-        <SiteActions {...props} ended={ended} hasError={error !== null} />
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <span className="min-w-0 truncate text-sm font-medium leading-4 text-foreground/85" />
+            }
+          >
+            {site.name}
+          </TooltipTrigger>
+          <TooltipPopup side="top">
+            {site.name} · {pidLabel(site)}
+          </TooltipPopup>
+        </Tooltip>
+        {site.visibility === "public" ? (
+          <Badge size="sm" variant="info">
+            Public
+          </Badge>
+        ) : null}
+        {url === null ? null : <SiteUrl site={site} url={url} />}
+        <span className="flex-1" />
+        {status === null ? null : <StatusLabel status={status} />}
+        <SiteActions {...props} ended={ended} tearingDown={tearingDown} hasError={error !== null} />
       </div>
-      {error !== null ? <SiteError error={error} /> : null}
+      {error !== null ? (
+        <div className="flex min-w-0 items-center gap-1.5 ps-5.5">
+          <SiteError error={error} />
+          {showForceStop ? (
+            <ThreadDetailsControl
+              size="xs"
+              variant="ghost"
+              part="meta"
+              tone="destructive"
+              disabled={props.busy}
+              onClick={() => props.onStop(true)}
+            >
+              Force stop
+            </ThreadDetailsControl>
+          ) : null}
+        </div>
+      ) : null}
     </li>
   );
 }
 
-/** The headline on one line; the hook's stderr and other detail on hover. */
-function SiteError(props: { readonly error: string }) {
-  const [headline = ""] = props.error.split("\n");
+function StatusLabel(props: { readonly status: SiteStatus }) {
+  const label = (
+    <span className="shrink-0 whitespace-nowrap text-2xs text-muted-foreground">
+      {props.status.label}
+    </span>
+  );
+  if (props.status.detail === null) return label;
   return (
     <Tooltip>
-      <TooltipTrigger
-        render={<span className="min-w-0 truncate ps-5.5 text-2xs text-destructive" />}
-      >
+      <TooltipTrigger render={label} />
+      <TooltipPopup side="left">{props.status.detail}</TooltipPopup>
+    </Tooltip>
+  );
+}
+
+/** The headline on one line; the detail after it (the hook's stderr) on hover. */
+function SiteError(props: { readonly error: string }) {
+  const [headline = "", ...rest] = props.error.split("\n");
+  const detail = rest.join("\n").trim();
+  return (
+    <Tooltip>
+      <TooltipTrigger render={<span className="min-w-0 truncate text-2xs text-destructive" />}>
         {headline}
       </TooltipTrigger>
       <TooltipPopup side="bottom">
-        <span className="block max-w-96 whitespace-pre-wrap break-words">{props.error}</span>
+        <span className="block max-w-96 whitespace-pre-wrap break-words">
+          {detail === "" ? headline : detail}
+        </span>
       </TooltipPopup>
     </Tooltip>
   );
@@ -244,8 +294,7 @@ function SiteError(props: { readonly error: string }) {
 function SiteUrl(props: { readonly site: ServedSite; readonly url: string }) {
   const { copyToClipboard, isCopied } = useCopyToClipboard();
   return (
-    // Wide enough for a short MagicDNS `host:port` and the copy button.
-    <span className="flex min-w-28 flex-auto items-center">
+    <>
       <Tooltip>
         <TooltipTrigger
           render={
@@ -253,7 +302,7 @@ function SiteUrl(props: { readonly site: ServedSite; readonly url: string }) {
               href={props.url}
               target="_blank"
               rel="noreferrer"
-              className="min-w-0 truncate text-2xs text-muted-foreground underline-offset-2 hover:underline"
+              className="min-w-0 shrink-[1000] truncate text-2xs text-muted-foreground underline-offset-2 hover:underline"
             />
           }
         >
@@ -281,16 +330,21 @@ function SiteUrl(props: { readonly site: ServedSite; readonly url: string }) {
         </TooltipTrigger>
         <TooltipPopup side="top">{isCopied ? "Copied" : "Copy URL"}</TooltipPopup>
       </Tooltip>
-    </span>
+    </>
   );
 }
 
 function SiteActions(
-  props: SiteRowProps & { readonly ended: boolean; readonly hasError: boolean },
+  props: SiteRowProps & {
+    readonly ended: boolean;
+    readonly tearingDown: boolean;
+    readonly hasError: boolean;
+  },
 ) {
   const { site } = props;
-  if (props.ended) {
-    return props.canDismiss ? (
+  if (props.ended || props.tearingDown) {
+    if (!props.canDismiss) return null;
+    const dismiss = (
       <ThreadDetailsControl
         size="xs"
         variant="ghost"
@@ -301,9 +355,18 @@ function SiteActions(
       >
         Dismiss
       </ThreadDetailsControl>
-    ) : null;
+    );
+    if (props.ended) return dismiss;
+    return (
+      <Tooltip>
+        <TooltipTrigger render={dismiss} />
+        <TooltipPopup side="left">
+          Stop retrying; the public or tailnet route may stay up.
+        </TooltipPopup>
+      </Tooltip>
+    );
   }
-  if (!props.canStop || isServedSiteTearingDown(site)) return null;
+  if (!props.canStop) return null;
   const stopProps = {
     size: "xs",
     variant: "ghost",
@@ -316,21 +379,8 @@ function SiteActions(
   if (site.status === "publishing") {
     return <ThreadDetailsControl {...stopProps}>Stop</ThreadDetailsControl>;
   }
-  if (site.status !== "live") return null;
-  if (props.hasError && site.stopCommand !== null) {
-    return (
-      <ThreadDetailsControl
-        size="xs"
-        variant="ghost"
-        part="meta"
-        tone="destructive"
-        disabled={props.busy}
-        onClick={() => props.onStop(true)}
-      >
-        Force stop
-      </ThreadDetailsControl>
-    );
-  }
+  // A live site with an error and a stop command offers Force stop beside the error instead.
+  if (site.status !== "live" || (props.hasError && site.stopCommand !== null)) return null;
   if (site.stopCommand === null) {
     return <ThreadDetailsControl {...stopProps}>Stop</ThreadDetailsControl>;
   }

@@ -112,8 +112,7 @@ function clearHolds(schedule: ScheduledTaskLoadSchedule, reading: LoadReading): 
  * Monitors waiting for load to drop. Starting them all the moment it drops
  * would bring the load straight back, so they are released one at a time.
  */
-const isClearDirection = (schedule: ScheduledTaskLoadSchedule) =>
-  schedule.condition.op === "<=";
+const isClearDirection = (schedule: ScheduledTaskLoadSchedule) => schedule.condition.op === "<=";
 
 /**
  * One monitor's episode: armed → holding → fired → cleared → armed. A

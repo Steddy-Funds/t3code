@@ -277,6 +277,12 @@ function makeLocalCommandHarness(input: {
   readonly previousNativeSession?: boolean;
   readonly previousMessages?: ReadonlyArray<string>;
   readonly tags?: ReadonlyArray<string>;
+  readonly lineage?: {
+    readonly relationshipToParent: "subagent" | "fork";
+    readonly sideChat?: true;
+  };
+  /** A remote delegate_task child: no local parent, a stamped parent there. */
+  readonly delegatedFrom?: true;
   /** Slash commands reach the provider and the session can compact. */
   readonly promptedTurn?: boolean;
   readonly logoutFailure?: string;
@@ -375,8 +381,24 @@ function makeLocalCommandHarness(input: {
       projectId: ProjectId.make("project-native-account-command"),
       branch: input.worktreePath === undefined ? null : "feature/restore",
       worktreePath: input.worktreePath ?? null,
-      lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: threadId },
+      lineage:
+        input.lineage === undefined
+          ? { parentThreadId: null, relationshipToParent: null, rootThreadId: threadId }
+          : {
+              parentThreadId: ThreadId.make("autonomy-parent"),
+              rootThreadId: ThreadId.make("autonomy-parent"),
+              ...input.lineage,
+            },
       tags: input.tags ?? [],
+      ...(input.delegatedFrom
+        ? {
+            delegatedFrom: {
+              environmentId: "environment-laptop",
+              threadId: ThreadId.make("thread-laptop-parent"),
+              title: "Laptop parent",
+            },
+          }
+        : {}),
     } as OrchestrationV2ThreadProjection["thread"],
     runs: [
       ...(input.previousNativeSession
@@ -1321,15 +1343,59 @@ effectIt.effect.each([
     autonomy: "Autonomy is on",
   },
   { tags: ["autonomy:on"], text: "/goal ship the release", autonomy: null },
+  { tags: ["autonomy:on"], text: "/review", autonomy: null },
+  {
+    tags: ["autonomy:on"],
+    text: "Ship it",
+    lineage: { relationshipToParent: "subagent" },
+    autonomy: "Autonomy is on",
+    delegated: true,
+  },
+  {
+    tags: ["autonomy:off"],
+    text: "Ship it",
+    lineage: { relationshipToParent: "subagent" },
+    autonomy: "ask your parent thread and wait",
+  },
+  {
+    tags: ["autonomy:on"],
+    text: "Ship it",
+    delegatedFrom: true,
+    autonomy: "Autonomy is on",
+    delegated: true,
+  },
+  // Forks and side chats copy the tags but still answer to the user.
+  {
+    tags: ["autonomy:on"],
+    text: "Ship it",
+    lineage: { relationshipToParent: "fork" },
+    autonomy: "Autonomy is on",
+    delegated: false,
+  },
+  {
+    tags: ["autonomy:on"],
+    text: "Ship it",
+    lineage: { relationshipToParent: "fork", sideChat: true },
+    autonomy: "Autonomy is on",
+    delegated: false,
+  },
+  {
+    tags: ["autonomy:off"],
+    text: "Ship it",
+    lineage: { relationshipToParent: "fork", sideChat: true },
+    autonomy: "ask the user and wait",
+  },
 ] as const)(
-  "sends the thread autonomy block ahead of the prompt: $tags $text",
-  ({ tags, text, previousMessages, autonomy }) =>
+  "sends the thread autonomy block ahead of the prompt: $tags $text $lineage",
+  ({ tags, text, autonomy, ...row }) =>
     Effect.gen(function* () {
       const harness = makeLocalCommandHarness({
         text,
         tags,
         promptedTurn: true,
-        ...(previousMessages === undefined ? {} : { previousMessages }),
+        ...("previousMessages" in row ? { previousMessages: row.previousMessages } : {}),
+        ...("lineage" in row ? { lineage: row.lineage } : {}),
+        ...("delegatedFrom" in row ? { delegatedFrom: row.delegatedFrom } : {}),
       });
 
       yield* harness.start;
@@ -1345,6 +1411,9 @@ effectIt.effect.each([
         expect(prompt?.startsWith("<autonomy>")).toBe(true);
         expect(prompt).toContain(autonomy);
         expect(prompt?.endsWith(`\n\nUser message:\n${text}`)).toBe(true);
+        if ("delegated" in row) {
+          expect(prompt?.includes("This is a delegated thread")).toBe(row.delegated);
+        }
       }
       expect(harness.projection().messages.at(-1)?.text).toBe(text);
     }),

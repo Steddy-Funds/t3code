@@ -367,6 +367,7 @@ const linkedProbe = {
     threadId: Schema.optional(ThreadId),
     runtimeMode: Schema.optional(RuntimeMode),
     interactionMode: Schema.optional(ProviderInteractionMode),
+    delegatedFrom: Schema.optional(Schema.Unknown),
   }),
 };
 const LinkedProbeToolkit = Toolkit.make(
@@ -401,8 +402,10 @@ const linkedProbeServer = McpHttpServer.toolkitRegistration(
   // Stands in for the linked environment, answering with where the call went.
   Layer.provide(
     Layer.mock(PeerForwarding.PeerForwarding)({
-      call: (_scope, tool, environmentId) =>
-        Effect.succeed({ ran: `${tool.name} in ${environmentId}` } as never),
+      call: (_scope, tool, environmentId, params) =>
+        Effect.succeed({
+          ran: `${tool.name} in ${environmentId}${"delegatedFrom" in params ? " with delegatedFrom" : ""}`,
+        } as never),
     }),
   ),
 );
@@ -424,6 +427,13 @@ it.effect.each([
     "interaction_mode_escalation_denied",
   ],
   ["starts_threads", plan, { environmentId: box }, "starts_threads in environment-box"],
+  // Only RemoteDelegation's own forward names a parent; an agent's claim is dropped.
+  [
+    "starts_threads",
+    plan,
+    { environmentId: box, delegatedFrom: { threadId: "thread-claimed", autonomy: "on" } },
+    "starts_threads in environment-box",
+  ],
   ["writes_environment", supervised, { environmentId: box }, "capability_denied"],
   [
     "writes_environment",

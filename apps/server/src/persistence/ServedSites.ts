@@ -32,6 +32,28 @@ const toSqlOrDecodeError = (operation: string) => (cause: unknown) =>
 const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
 
+  // Fork-only table: a numbered migration would collide with main's next migration id.
+  yield* sql`
+    CREATE TABLE IF NOT EXISTS served_sites (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      thread_id TEXT NOT NULL,
+      project_cwd TEXT NOT NULL,
+      local_port INTEGER NOT NULL,
+      pids_json TEXT NOT NULL,
+      visibility TEXT NOT NULL,
+      tailnet_url TEXT,
+      public_url TEXT,
+      serve_port INTEGER,
+      stop_command TEXT,
+      status TEXT NOT NULL,
+      removed_reason TEXT,
+      last_error TEXT,
+      created_at TEXT NOT NULL,
+      removed_at TEXT
+    )
+  `;
+
   const listRows = SqlSchema.findAll({
     Request: Schema.Void,
     Result: ServedSiteRow,

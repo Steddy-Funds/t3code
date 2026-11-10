@@ -101,6 +101,7 @@ describe("load schedules over MCP", () => {
       enabled: true,
       projectId: "project:1",
       boundThreadId: null,
+      freshSession: false,
       schedule: load,
       nextRunAt: null,
       lastRunStatus: "never",

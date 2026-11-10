@@ -49,16 +49,6 @@ const isEnded = (site: ServedSite) => site.status === "removed" || site.status =
 const pidLabel = (site: ServedSite) =>
   `${site.pids.length === 1 ? "PID" : "PIDs"} ${site.pids.map((each) => each.pid).join(", ")}`;
 
-/** `host:port` with the MagicDNS suffix dropped, so the port survives truncation. */
-function shortUrl(site: ServedSite, url: string): string {
-  if (!URL.canParse(url)) return url;
-  const parsed = new URL(url);
-  const host = site.visibility === "public" ? parsed.hostname : parsed.hostname.split(".")[0];
-  return parsed.port === ""
-    ? `${host}${parsed.pathname.replace(/\/$/, "")}`
-    : `${host}:${parsed.port}`;
-}
-
 interface SiteStatus {
   readonly label: string;
   readonly detail: string | null;
@@ -185,9 +175,8 @@ interface SiteRowProps {
   readonly onDismiss: () => void;
 }
 
-// After the name everything is shrink-0 but the URL, which gives way first and hides whole. The
-// widest fixed set (public, tearing down: badge, "Taking down", Dismiss) is ~14rem, so the name
-// keeps 5rem in a 19rem row.
+// Globe, name, Public badge and copy, then status and action on the right. Only the name shrinks;
+// the widest fixed set (public, tearing down: badge, "Taking down", Dismiss) is ~14rem.
 function SiteRow(props: SiteRowProps) {
   const { site } = props;
   const ended = isEnded(site);
@@ -216,13 +205,23 @@ function SiteRow(props: SiteRowProps) {
         <Tooltip>
           <TooltipTrigger
             render={
-              <span className="min-w-0 truncate text-sm font-medium leading-4 text-foreground/85" />
+              url === null ? (
+                <span className="min-w-0 truncate text-sm font-medium leading-4 text-foreground/85" />
+              ) : (
+                <a
+                  href={url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="min-w-0 truncate text-sm font-medium leading-4 text-foreground/85 underline-offset-2 hover:underline"
+                />
+              )
             }
           >
             {site.name}
           </TooltipTrigger>
           <TooltipPopup side="top">
-            {site.name} · {pidLabel(site)}
+            {url === null ? null : <span className="block">{url}</span>}
+            <span className="block">{pidLabel(site)}</span>
           </TooltipPopup>
         </Tooltip>
         {site.visibility === "public" && !ended ? (
@@ -230,7 +229,7 @@ function SiteRow(props: SiteRowProps) {
             Public
           </Badge>
         ) : null}
-        {url === null ? null : <SiteUrl site={site} url={url} />}
+        {url === null ? null : <CopySiteUrl url={url} />}
         <span className="flex-1" />
         {status === null ? null : <StatusLabel status={status} />}
         <SiteActions {...props} ended={ended} tearingDown={tearingDown} hasError={error !== null} />
@@ -289,50 +288,29 @@ function SiteError(props: { readonly error: string }) {
   );
 }
 
-function SiteUrl(props: { readonly site: ServedSite; readonly url: string }) {
+function CopySiteUrl(props: { readonly url: string }) {
   const { copyToClipboard, isCopied } = useCopyToClipboard();
   return (
-    <>
-      {/* Whole or hidden: past its width the URL wraps onto a clipped second line. */}
-      <span className="flex h-4 min-w-0 shrink-[1000] flex-wrap items-center overflow-hidden">
-        <span aria-hidden className="h-4 w-0" />
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <a
-                href={props.url}
-                target="_blank"
-                rel="noreferrer"
-                className="shrink-0 whitespace-nowrap text-2xs text-muted-foreground underline-offset-2 hover:underline"
-              />
-            }
-          >
-            {shortUrl(props.site, props.url)}
-          </TooltipTrigger>
-          <TooltipPopup side="top">{props.url}</TooltipPopup>
-        </Tooltip>
-      </span>
-      <Tooltip>
-        <TooltipTrigger
-          render={
-            <ThreadDetailsControl
-              size="icon-xs"
-              variant="ghost"
-              part="icon"
-              aria-label={`Copy ${props.url}`}
-              onClick={() => copyToClipboard(props.url, undefined)}
-            />
-          }
-        >
-          {isCopied ? (
-            <CheckIcon aria-hidden className="size-3" />
-          ) : (
-            <CopyIcon aria-hidden className="size-3" />
-          )}
-        </TooltipTrigger>
-        <TooltipPopup side="top">{isCopied ? "Copied" : "Copy URL"}</TooltipPopup>
-      </Tooltip>
-    </>
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <ThreadDetailsControl
+            size="icon-xs"
+            variant="ghost"
+            part="icon"
+            aria-label={`Copy ${props.url}`}
+            onClick={() => copyToClipboard(props.url, undefined)}
+          />
+        }
+      >
+        {isCopied ? (
+          <CheckIcon aria-hidden className="size-3" />
+        ) : (
+          <CopyIcon aria-hidden className="size-3" />
+        )}
+      </TooltipTrigger>
+      <TooltipPopup side="top">{isCopied ? "Copied" : "Copy URL"}</TooltipPopup>
+    </Tooltip>
   );
 }
 

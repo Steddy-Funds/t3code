@@ -327,7 +327,12 @@ export const make = Effect.gen(function* () {
       }
       const stray = pinned.find((each) => !servesPort(table, each.pid, listeners));
       if (stray !== undefined) {
-        return yield* invalid(`pid ${stray.pid} is not serving port ${input.port}`);
+        // An npm-style wrapper is refused too (Stop must not reach its shell), so name the listener.
+        return yield* invalid(
+          listeners.length === 0
+            ? `pid ${stray.pid} is not serving port ${input.port}`
+            : `pid ${stray.pid} is not serving port ${input.port}; the listener is pid ${listeners[0]}.`,
+        );
       }
     }
     const id = ServedSiteId.make(`site_${yield* random.uuidV4()}`);

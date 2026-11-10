@@ -1,8 +1,4 @@
-import type {
-  ResourceMonitorProcessTableEntry,
-  ServedSite,
-  ServedSiteProcess,
-} from "@t3tools/contracts";
+import type { ResourceMonitorProcessTableEntry, ServedSite } from "@t3tools/contracts";
 
 import { tableLiveness } from "../resourceTelemetry/ProcessOwnership.ts";
 
@@ -63,14 +59,21 @@ export const servesPort = (
   return false;
 };
 
+/** A process to stop: by start time when the table has one, else by name. */
+export interface TreeMember {
+  readonly pid: number;
+  readonly startTimeMs?: number | undefined;
+  readonly name?: string | undefined;
+}
+
 /**
- * What stopping a site signals: its pinned pids still running, and their descendants. Never their
+ * What stopping a site signals: the members still running and their descendants. Never their
  * process group, which an agent's shell shares with every other server it started. Null when the
  * tree holds the T3 server, one of its ancestors, or an agent CLI (a direct child of the server).
  */
 export const stoppableProcessTree = (
   table: ReadonlyArray<ResourceMonitorProcessTableEntry>,
-  pinned: ReadonlyArray<ServedSiteProcess>,
+  members: ReadonlyArray<TreeMember>,
   serverPid: number,
 ): ReadonlyArray<ResourceMonitorProcessTableEntry> | null => {
   const isAlive = tableLiveness(table);
@@ -81,10 +84,16 @@ export const stoppableProcessTree = (
     siblings.push(entry);
     children.set(entry.ppid, siblings);
   }
+  const queue = members.flatMap((member) => {
+    const entry = byPid.get(member.pid);
+    if (entry === undefined) return [];
+    const running =
+      member.startTimeMs === undefined
+        ? entry.startTimeMs === undefined && entry.name === member.name
+        : isAlive(member.pid, member.startTimeMs);
+    return running ? [entry] : [];
+  });
   const tree = new Map<number, ResourceMonitorProcessTableEntry>();
-  const queue = pinned.flatMap((each) =>
-    isAlive(each.pid, each.startTimeMs) ? [byPid.get(each.pid)!] : [],
-  );
   for (let entry = queue.shift(); entry !== undefined; entry = queue.shift()) {
     if (tree.has(entry.pid)) continue;
     tree.set(entry.pid, entry);

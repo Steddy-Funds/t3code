@@ -619,7 +619,9 @@ export function ThreadSitesIndicator({ lines }: { lines: ReadonlyArray<string> }
       <TooltipPopup side="top">
         <div className="flex flex-col">
           {lines.map((line) => (
-            <span key={line}>{line}</span>
+            <span key={line} className="whitespace-nowrap">
+              {line}
+            </span>
           ))}
         </div>
       </TooltipPopup>

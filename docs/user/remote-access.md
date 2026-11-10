@@ -297,7 +297,9 @@ Ask an agent to share a server it started and it publishes the server at an
 HTTPS address on your tailnet, such as `https://machine.tailnet.ts.net:5173`.
 The server's machine needs Tailscale signed in with MagicDNS on. The site
 appears under **Sites** in the thread's details, where you can copy its URL or
-stop it. It goes away by itself when the server's processes exit.
+stop it. It goes away by itself when the server's processes exit. Stop ends the
+server's processes and their children; a daemon that detached from them keeps
+running.
 
 Public URLs, reachable off the tailnet, need a hook command you provide. Set
 `servedSites.publicExposeCommand` in the server's `settings.json` to the

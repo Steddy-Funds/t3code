@@ -27,8 +27,7 @@ import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import * as PortScanner from "../preview/PortScanner.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import * as NativeTelemetryClient from "../resourceTelemetry/NativeTelemetryClient.ts";
-import { tableLiveness } from "../resourceTelemetry/ProcessOwnership.ts";
-import { stoppableProcessTree } from "./rules.ts";
+import { stoppableProcessTree, type TreeMember } from "./rules.ts";
 
 const failed = (detail: string) => new ServedSiteError({ reason: "failed", detail });
 const unavailable = (detail: string) => new ServedSiteError({ reason: "unavailable", detail });
@@ -233,30 +232,25 @@ export const layerProcesses = Layer.effect(
         unavailable("Served sites need the resource monitor to track processes."),
       ),
     );
-    const signal = (pids: ReadonlyArray<number>, name: "SIGTERM" | "SIGKILL") =>
-      Effect.forEach(
-        pids,
-        (pid) =>
-          Effect.suspend(() => {
-            try {
-              process.kill(pid, name);
-              return Effect.void;
-            } catch (cause) {
-              return isNoSuchProcess(cause)
-                ? Effect.void
-                : Effect.fail(failed("Could not signal its processes."));
-            }
-          }),
-        { discard: true },
-      );
-    const pinnedOf = (tree: ReadonlyArray<ResourceMonitorProcessTableEntry>) =>
-      tree.flatMap((entry) =>
-        entry.startTimeMs === undefined ? [] : [{ pid: entry.pid, startTimeMs: entry.startTimeMs }],
-      );
-    const stoppableTree = (pinned: ReadonlyArray<ServedSiteProcess>) =>
+    /** Signals every pid; one that refuses (EPERM) does not stop the rest. */
+    const signal = (
+      tree: ReadonlyArray<ResourceMonitorProcessTableEntry>,
+      name: "SIGTERM" | "SIGKILL",
+      refused: Set<number>,
+    ) =>
+      Effect.sync(() => {
+        for (const { pid } of tree) {
+          try {
+            process.kill(pid, name);
+          } catch (cause) {
+            if (!isNoSuchProcess(cause)) refused.add(pid);
+          }
+        }
+      });
+    const stoppableTree = (members: ReadonlyArray<TreeMember>) =>
       table.pipe(
         Effect.flatMap((current) => {
-          const tree = stoppableProcessTree(current, pinned, process.pid);
+          const tree = stoppableProcessTree(current, members, process.pid);
           return tree === null
             ? Effect.fail(
                 failed(
@@ -301,24 +295,20 @@ export const layerProcesses = Layer.effect(
         }
         const tree = yield* stoppableTree(pinned);
         if (tree.length === 0) return;
-        yield* signal(
-          tree.map((entry) => entry.pid),
-          "SIGTERM",
-        );
-        // Start times keep a pid reused after an exit from being signaled.
-        const members = pinnedOf(tree);
+        const refused = new Set<number>();
+        yield* signal(tree, "SIGTERM", refused);
+        // Each re-read finds what of the tree still runs, a reparented descendant included, and
+        // anything it started since.
+        let left = tree;
         const deadline = (yield* Clock.currentTimeMillis) + STOP_GRACE_MS;
-        while ((yield* Clock.currentTimeMillis) < deadline) {
+        while (left.length > 0 && (yield* Clock.currentTimeMillis) < deadline) {
           yield* Effect.sleep(STOP_POLL);
-          const isAlive = tableLiveness(yield* table);
-          if (!members.some((each) => isAlive(each.pid, each.startTimeMs))) return;
+          left = yield* stoppableTree(tree);
         }
-        // Again from the table: what ignored SIGTERM, and anything it started since.
-        const left = yield* stoppableTree(members);
-        yield* signal(
-          left.map((entry) => entry.pid),
-          "SIGKILL",
-        );
+        if (left.length > 0) yield* signal(left, "SIGKILL", refused);
+        if (refused.size === 0) return;
+        const stillRefused = (yield* stoppableTree(tree)).some((entry) => refused.has(entry.pid));
+        if (stillRefused) return yield* failed("Could not signal some of its processes.");
       }),
       runStopCommand: Effect.fn("SiteProcesses.runStopCommand")((input) =>
         runner

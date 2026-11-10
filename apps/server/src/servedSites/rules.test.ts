@@ -9,6 +9,7 @@ import {
   servesPort,
   slugSiteName,
   stoppableProcessTree,
+  type TreeMember,
 } from "./rules.ts";
 
 describe("slugSiteName", () => {
@@ -166,15 +167,16 @@ describe("stoppableProcessTree", () => {
   const pinned = (...pids: ReadonlyArray<number>) =>
     pids.map((pid) => ({ pid, startTimeMs: START }));
 
-  it.each<
-    [string, ReadonlyArray<{ pid: number; startTimeMs: number }>, ReadonlyArray<number> | null]
-  >([
+  it.each<[string, ReadonlyArray<TreeMember>, ReadonlyArray<number> | null]>([
     ["the listener and its descendants, not a sibling in its group", pinned(131), [131, 132]],
     ["a pinned wrapper's descendants", pinned(130), [130, 131, 132]],
     ["the other site alone", pinned(140), [140]],
     ["nothing for a pid reused by a later process", [{ pid: 131, startTimeMs: START + 5_000 }], []],
     ["no agent CLI", pinned(110), null],
     ["no ancestor of the T3 server", pinned(50), null],
+    ["a member with no start time, by name", [{ pid: 131, name: "node" }], [131, 132]],
+    ["nothing for a no-start-time pid now running another name", [{ pid: 131, name: "vim" }], []],
+    ["no agent CLI reached through a no-start-time member", [{ pid: 110, name: "claude" }], null],
   ])("%s", (_name, roots, expected) => {
     const tree = stoppableProcessTree(table, roots, SERVER);
     expect(tree === null ? null : tree.map((entry) => entry.pid).toSorted()).toEqual(expected);

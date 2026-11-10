@@ -152,6 +152,47 @@ describe("SiteProcesses.stopProcessTrees", () => {
       ),
   );
 
+  it.effect(
+    "SIGKILLs a child started in the grace period after its parent exits; a refused pid that exits succeeds",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          // node (400) ignores SIGTERM but starts 401; its helper (402) refuses signals. On the
+          // second re-read node has exited, 401 is reparented and the helper has exited too.
+          let reads = 0;
+          let table: Array<ResourceMonitorProcessTableEntry> = [
+            { pid: 400, ppid: 150, name: "node", startTimeMs: START },
+            { pid: 402, ppid: 400, name: "helper", startTimeMs: START },
+          ];
+          const sent = yield* spyOnKill((pid, signal) => {
+            if (pid === 402) throw errno("EPERM");
+            if (signal === "SIGKILL") table = table.filter((entry) => entry.pid !== pid);
+            else if (pid === 400) {
+              table = [...table, { pid: 401, ppid: 400, name: "worker", startTimeMs: START + 10 }];
+            }
+          });
+          const sites = yield* processes({
+            table: () => {
+              reads += 1;
+              if (reads === 3) {
+                table = table.flatMap((entry) =>
+                  entry.pid === 401 ? [{ ...entry, ppid: 1 }] : [],
+                );
+              }
+              return table;
+            },
+          });
+          const stopping = yield* sites
+            .stopProcessTrees([{ pid: 400, startTimeMs: START }])
+            .pipe(Effect.forkChild);
+          yield* TestClock.adjust("3 seconds");
+          yield* Fiber.join(stopping);
+          expect(sent("SIGKILL")).toEqual([401]);
+          expect(table).toEqual([]);
+        }),
+      ),
+  );
+
   it.effect("sends no SIGKILL to a tree that exits on SIGTERM", () =>
     Effect.scoped(
       Effect.gen(function* () {

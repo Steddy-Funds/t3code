@@ -23,7 +23,7 @@ const shared = {
 const SitePublishTool = Tool.make("t3_site_publish", {
   ...shared,
   description:
-    'Share a server you started at an HTTPS tailnet URL; `visibility: "public"` also gets a public URL where this server has a public URL hook. `port` must be listening on 127.0.0.1. The site is pinned to `pids` (default: the port\'s owner) and goes away by itself when they all exit. The user can stop it from T3 Code: `stopCommand` (run with sh in the project) replaces signaling the pids.',
+    "Publish a server you started at an HTTPS tailnet URL. It is removed when all its `pids` exit; they default to the port's owner, so pass them for a server no thread started. `visibility: \"public\"` needs this server's public URL hook. `stopCommand` runs with sh in the project when the user stops the site.",
   parameters: Schema.Struct({
     port: PortSchema,
     pids: Schema.optionalKey(Schema.Array(PositiveInt)),
@@ -36,8 +36,7 @@ const SitePublishTool = Tool.make("t3_site_publish", {
 
 const SiteListTool = Tool.make("t3_site_list", {
   ...shared,
-  description: "List this thread's published sites, with their URLs and status.",
-  parameters: Schema.Struct({}),
+  description: "List this thread's sites with URLs and status.",
   success: Schema.Struct({ sites: Schema.Array(ServedSite) }),
 })
   .annotate(Tool.Readonly, true)
@@ -46,7 +45,7 @@ const SiteListTool = Tool.make("t3_site_list", {
 const SiteStopTool = Tool.make("t3_site_stop", {
   ...shared,
   description:
-    "Stop a published site: runs its `stopCommand`, or signals its pids. `force: true` signals the pids even with a stop command. The site is removed once the pids exit.",
+    "Stop a site: runs its `stopCommand`, else signals its pids. `force` always signals.",
   parameters: Schema.Struct({
     siteId: ServedSiteId,
     force: Schema.optionalKey(Schema.Boolean),

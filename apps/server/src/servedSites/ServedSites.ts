@@ -16,6 +16,7 @@ import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -89,6 +90,8 @@ export const make = Effect.gen(function* () {
   const scope = yield* Effect.scope;
 
   const sites = yield* SubscriptionRef.make<ReadonlyArray<ServedSite>>([]);
+  // Reconcile replaces the in-memory list with the stored rows; changes wait so none is lost.
+  const reconciled = yield* Deferred.make<void>();
   const lock = yield* Semaphore.make(1);
   /** How a site in `stopping` is removed once its processes exit. */
   const stopKinds = new Map<ServedSiteId, ServedSiteRemovedReason>();
@@ -420,6 +423,7 @@ export const make = Effect.gen(function* () {
 
   const dismiss: ServedSites["Service"]["dismiss"] = Effect.fn("ServedSites.dismiss")(
     function* (input) {
+      yield* Deferred.await(reconciled);
       yield* lock.withPermits(1)(
         Effect.gen(function* () {
           const site = yield* find(input.siteId);
@@ -472,6 +476,7 @@ export const make = Effect.gen(function* () {
   });
 
   yield* reconcile().pipe(
+    Effect.ensuring(Deferred.succeed(reconciled, undefined)),
     Effect.andThen(
       Effect.all([removeExited(), expireRemoved()]).pipe(
         Effect.catchCause((cause) =>
@@ -484,10 +489,14 @@ export const make = Effect.gen(function* () {
   );
 
   return ServedSites.of({
-    publish: Effect.fn("ServedSites.publishDetached")((input) => detached(publishNow(input))),
+    publish: Effect.fn("ServedSites.publishDetached")((input) =>
+      Deferred.await(reconciled).pipe(Effect.andThen(detached(publishNow(input)))),
+    ),
     list: SubscriptionRef.get(sites),
     changes: SubscriptionRef.changes(sites).pipe(Stream.map((list) => ({ sites: list }))),
-    stop: Effect.fn("ServedSites.stopDetached")((input) => detached(stopNow(input))),
+    stop: Effect.fn("ServedSites.stopDetached")((input) =>
+      Deferred.await(reconciled).pipe(Effect.andThen(detached(stopNow(input)))),
+    ),
     dismiss,
   });
 });

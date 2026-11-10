@@ -75,6 +75,8 @@ import {
   TurnItemId,
   TrimmedNonEmptyString,
   managedRuntimeModeCeilingMessage,
+  AUTONOMY_OFF_THREAD_TAG,
+  AUTONOMY_ON_THREAD_TAG,
 } from "@t3tools/contracts";
 import { modelSelectionsEqual } from "@t3tools/shared/model";
 import { modelSwitchSince } from "./modelSwitch.ts";
@@ -2860,6 +2862,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
 
     const now = yield* DateTime.now;
     const emitEvent = emit(events, command);
+    // Only stamped work names a remote parent, so a client cannot claim one.
+    const delegatedFrom = command.linkOrigin === undefined ? undefined : command.delegatedFrom;
     const thread: OrchestrationV2AppThread = {
       createdBy: command.createdBy,
       creationSource: command.creationSource,
@@ -2875,10 +2879,23 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       activeProviderThreadId: null,
       pullRequests: [],
       ...(command.linkOrigin === undefined ? {} : { linkOrigin: command.linkOrigin }),
-      // Only stamped work names a remote parent, so a client cannot claim one.
-      ...(command.linkOrigin === undefined || command.delegatedFrom === undefined
+      ...(delegatedFrom === undefined
         ? {}
-        : { delegatedFrom: command.delegatedFrom }),
+        : {
+            delegatedFrom: {
+              environmentId: delegatedFrom.environmentId,
+              threadId: delegatedFrom.threadId,
+              title: delegatedFrom.title,
+            },
+          }),
+      // The tag, not delegatedFrom, carries autonomy from here so the user can change it.
+      ...(delegatedFrom?.autonomy === undefined
+        ? {}
+        : {
+            tags: [
+              delegatedFrom.autonomy === "on" ? AUTONOMY_ON_THREAD_TAG : AUTONOMY_OFF_THREAD_TAG,
+            ],
+          }),
       lineage: {
         parentThreadId: null,
         relationshipToParent: null,

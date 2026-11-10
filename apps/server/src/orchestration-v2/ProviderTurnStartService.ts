@@ -878,7 +878,17 @@ export const layer: Layer.Layer<
         restartCancelledWork.length === 0
           ? ""
           : restartCancelledBackgroundWorkNote(restartCancelledWork);
-      const autonomyInstructions = buildAutonomyInstructions(threadAutonomy(projection.thread));
+      // Native slash commands must stay first in the prompt.
+      const nativeSlash = message.attachments.length === 0 && userText.trimStart().startsWith("/");
+      const autonomyInstructions =
+        goalCommand || nativeSlash
+          ? ""
+          : buildAutonomyInstructions({
+              autonomy: threadAutonomy(projection.thread),
+              delegated:
+                projection.thread.lineage.relationshipToParent === "subagent" ||
+                projection.thread.delegatedFrom !== undefined,
+            });
       const tokenCap = yield* handoffTokenCapConfig.pipe(
         Effect.orElseSucceed(() => DEFAULT_HANDOFF_TOKEN_CAP),
       );
@@ -1609,7 +1619,7 @@ export const layer: Layer.Layer<
             sideChatHandoff === undefined || compact || goalCommand
               ? ""
               : sideChatHandoff.summaryText;
-          const autonomyContext = compact || goalCommand ? "" : autonomyInstructions;
+          const autonomyContext = compact ? "" : autonomyInstructions;
           const context = [autonomyContext, delivery.context, sideChatContext, restartNote]
             .filter((part) => part !== "")
             .join("\n\n");

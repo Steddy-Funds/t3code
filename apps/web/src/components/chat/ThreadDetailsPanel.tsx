@@ -59,6 +59,7 @@ import { useOrchestrationCommand } from "../../state/use-orchestration-command";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { toastManager } from "../ui/toast";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
 const GitActionsControl = memo(BaseGitActionsControl);
 
@@ -435,11 +436,14 @@ function ThreadDetailsFlags(props: { environmentId: EnvironmentId; threadId: Thr
   };
   return (
     <ThreadDetailsSection headingId="thread-details-flags-heading" title="Flags">
-      <div
-        className="flex min-h-6 items-center gap-2 px-1 text-xs font-medium text-muted-foreground"
-        title="On: the agent takes its own reversible defaults and logs them. Off: it asks first. Children inherit it."
-      >
-        <span>Autonomy</span>
+      <div className="flex min-h-6 items-center gap-2 px-1 text-xs font-medium text-muted-foreground">
+        <Tooltip>
+          <TooltipTrigger render={<span />}>Autonomy</TooltipTrigger>
+          <TooltipPopup side="top">
+            On: the agent takes its own reversible defaults and logs them. Off: it asks first.
+            Children inherit it.
+          </TooltipPopup>
+        </Tooltip>
         <Badge size="sm" variant="warning">
           Experimental
         </Badge>

@@ -2,7 +2,13 @@ import { describe, expect, it } from "@effect/vitest";
 import { SERVED_SITE_NAME_PATTERN } from "@t3tools/contracts";
 
 import type { HookRun } from "./ServedSitesHost.ts";
-import { chooseServePort, dedupeSiteName, interpretExpose, slugSiteName } from "./rules.ts";
+import {
+  chooseServePort,
+  dedupeSiteName,
+  interpretExpose,
+  servesPort,
+  slugSiteName,
+} from "./rules.ts";
 
 describe("slugSiteName", () => {
   it.each([
@@ -61,42 +67,46 @@ describe("interpretExpose", () => {
     [
       "no line",
       exited(0, "\n", "nope"),
-      { _tag: "failed", error: "The public URL hook did not print exactly one https:// URL: nope" },
+      {
+        _tag: "failed",
+        error: "Expose hook failed.\nIt did not print exactly one https:// URL: nope",
+      },
     ],
     [
       "two lines",
       exited(0, "https://a.example.com\nhttps://b.example.com\n"),
-      { _tag: "failed", error: "The public URL hook did not print exactly one https:// URL" },
+      { _tag: "failed", error: "Expose hook failed.\nIt did not print exactly one https:// URL" },
     ],
     [
       "an http line",
       exited(0, "http://web.example.com\n"),
-      { _tag: "failed", error: "The public URL hook did not print exactly one https:// URL" },
+      { _tag: "failed", error: "Expose hook failed.\nIt did not print exactly one https:// URL" },
     ],
     [
       "exit 3",
       exited(3, "", ` quota exceeded\n`),
-      { _tag: "refused", error: "Public URL refused: quota exceeded" },
+      { _tag: "refused", error: "Public URL refused by the expose hook.\nquota exceeded" },
+    ],
+    [
+      "exit 3, no stderr",
+      exited(3),
+      { _tag: "refused", error: "Public URL refused by the expose hook." },
     ],
     [
       "another exit",
       exited(1, "https://web.example.com\n", "boom"),
-      { _tag: "failed", error: "The public URL hook exited 1: boom" },
+      { _tag: "failed", error: "Expose hook failed.\nIt exited 1: boom" },
     ],
     [
       "another exit, no stderr",
       exited(2),
-      { _tag: "failed", error: "The public URL hook exited 2" },
+      { _tag: "failed", error: "Expose hook failed.\nIt exited 2" },
     ],
-    [
-      "a timeout",
-      { _tag: "timed-out" },
-      { _tag: "failed", error: "The public URL hook timed out." },
-    ],
+    ["a timeout", { _tag: "timed-out" }, { _tag: "failed", error: "Expose hook timed out." }],
     [
       "a spawn failure",
       { _tag: "spawn-failed", detail: "ENOENT" },
-      { _tag: "failed", error: "Could not run the public URL hook: ENOENT" },
+      { _tag: "failed", error: "Expose hook failed.\nCould not run it: ENOENT" },
     ],
   ])("%s", (_name, run, outcome) => {
     expect(interpretExpose(run)).toEqual(outcome);
@@ -106,11 +116,33 @@ describe("interpretExpose", () => {
     const stderr = "x".repeat(600);
     expect(interpretExpose(exited(3, "", stderr))).toEqual({
       _tag: "refused",
-      error: `Public URL refused: ${"x".repeat(500)}`,
+      error: `Public URL refused by the expose hook.\n${"x".repeat(500)}`,
     });
     expect(interpretExpose(exited(1, "", stderr))).toEqual({
       _tag: "failed",
-      error: `The public URL hook exited 1: ${"x".repeat(500)}`,
+      error: `Expose hook failed.\nIt exited 1: ${"x".repeat(500)}`,
     });
+  });
+});
+
+describe("servesPort", () => {
+  // init → systemd --user (10) → tmux (20) → npm (30) → node listener (40) → worker (50)
+  const table = [
+    { pid: 10, ppid: 1, name: "systemd" },
+    { pid: 20, ppid: 10, name: "tmux" },
+    { pid: 30, ppid: 20, name: "npm" },
+    { pid: 40, ppid: 30, name: "node" },
+    { pid: 50, ppid: 40, name: "worker" },
+    { pid: 60, ppid: 20, name: "zsh" },
+  ];
+
+  it.each<[string, number, boolean]>([
+    ["the listener", 40, true],
+    ["a descendant", 50, true],
+    ["its parent", 30, false],
+    ["a far ancestor (the tmux server)", 20, false],
+    ["an unrelated process", 60, false],
+  ])("%s", (_name, pid, accepted) => {
+    expect(servesPort(table, pid, [40])).toBe(accepted);
   });
 });

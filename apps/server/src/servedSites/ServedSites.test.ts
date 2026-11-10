@@ -69,6 +69,8 @@ interface Options {
   readonly stopGroupsError?: string;
   readonly serveError?: (servePort: number) => string | null;
   readonly hook?: (argv: ReadonlyArray<string>) => Host.HookRun;
+  /** The expose call never returns until interrupted. */
+  readonly exposeHangs?: boolean;
   /** What signaling the process groups does to the table; default: the pids exit. */
   readonly onStopGroups?: (pids: ReadonlyArray<number>) => void;
 }
@@ -91,6 +93,8 @@ const harness = Effect.fn("harness")(function* (options: Options = {}) {
     state.table = state.table.filter((each) => !pids.includes(each.pid));
   };
   const reconciled = yield* Deferred.make<void>();
+  const exposeStarted = yield* Deferred.make<void>();
+  const exposeInterrupted = yield* Deferred.make<void>();
   let uuid = 0;
 
   const dependencies = Layer.mergeAll(
@@ -131,12 +135,23 @@ const harness = Effect.fn("harness")(function* (options: Options = {}) {
     }),
     Layer.succeed(Host.SiteHookRunner, {
       run: (input) =>
-        Effect.sync(() => {
+        Effect.suspend(() => {
           state.hookArgv.push(input.argv);
           state.hookEnv.push(input.env);
-          return (
+          if (options.exposeHangs === true && input.argv.includes("expose")) {
+            return Deferred.succeed(exposeStarted, undefined).pipe(
+              Effect.andThen(Effect.never),
+              Effect.onInterrupt(() => Deferred.succeed(exposeInterrupted, undefined)),
+            );
+          }
+          return Effect.succeed(
             options.hook?.(input.argv) ??
-            ({ _tag: "exited", code: 0, stdout: "https://web.example.com\n", stderr: "" } as const)
+              ({
+                _tag: "exited",
+                code: 0,
+                stdout: "https://web.example.com\n",
+                stderr: "",
+              } as const),
           );
         }),
     }),
@@ -195,6 +210,10 @@ const harness = Effect.fn("harness")(function* (options: Options = {}) {
       Stream.filter((snapshot) => done(snapshot.sites)),
       Stream.runHead,
     );
+  const settled = (id: ServedSiteId, status: ServedSite["status"]) =>
+    waitFor((list) => list.some((site) => site.id === id && site.status === status)).pipe(
+      Effect.andThen(byId(id)),
+    );
   const publish = (input: Partial<ServedSites.PublishInput> = {}) =>
     sites.publish({
       threadId,
@@ -205,7 +224,17 @@ const harness = Effect.fn("harness")(function* (options: Options = {}) {
       visibility: "tailnet",
       ...input,
     });
-  return { sites, state, dropPids, byId, waitFor, publish };
+  return {
+    sites,
+    state,
+    dropPids,
+    byId,
+    waitFor,
+    settled,
+    publish,
+    exposeStarted,
+    exposeInterrupted,
+  };
 });
 
 const tick = TestClock.adjust("2 seconds");
@@ -292,9 +321,9 @@ describe("ServedSites", () => {
     {
       name: "a refusal",
       run: { _tag: "exited", code: 3, stdout: "", stderr: "no quota" },
-      error: "Public URL refused: no quota",
+      error: "Public URL refused by the expose hook.\nno quota",
     },
-    { name: "a timeout", run: { _tag: "timed-out" }, error: "The public URL hook timed out." },
+    { name: "a timeout", run: { _tag: "timed-out" }, error: "Expose hook timed out." },
   ])("after $name the route comes down, the hook unexposes, the record fails", ({ run, error }) =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -338,14 +367,14 @@ describe("ServedSites", () => {
   it.effect.each<{
     readonly name: string;
     readonly pids: ReadonlyArray<number>;
-    readonly accepted: boolean;
+    readonly refused?: number;
   }>([
-    { name: "the listener", pids: [PID], accepted: true },
-    { name: "the listener's parent", pids: [PID - 1], accepted: true },
-    { name: "the listener's child", pids: [PID + 1], accepted: true },
-    { name: "an unrelated process", pids: [PID + 7], accepted: false },
-    { name: "the listener and an unrelated process", pids: [PID, PID + 7], accepted: false },
-  ])("pins $name to the port only when it serves the port", ({ pids, accepted }) =>
+    { name: "the listener", pids: [PID] },
+    { name: "the listener's child", pids: [PID + 1] },
+    { name: "the listener's parent", pids: [PID - 1], refused: PID - 1 },
+    { name: "an unrelated process", pids: [PID + 7], refused: PID + 7 },
+    { name: "the listener and an unrelated process", pids: [PID, PID + 7], refused: PID + 7 },
+  ])("pins $name to the port only when it serves the port", ({ pids, refused }) =>
     Effect.scoped(
       Effect.gen(function* () {
         const { state, publish } = yield* harness();
@@ -356,12 +385,12 @@ describe("ServedSites", () => {
           entry(PID + 7, START),
         ];
         const result = yield* Effect.result(publish({ pids }));
-        if (accepted) {
+        if (refused === undefined) {
           expect(result).toMatchObject({ _tag: "Success", success: { status: "live" } });
         } else {
           expect(result).toMatchObject({
             _tag: "Failure",
-            failure: { reason: "invalid", detail: `pid ${PID + 7} is not serving port 3000` },
+            failure: { reason: "invalid", detail: `pid ${refused} is not serving port 3000` },
           });
           expect(state.serves).toEqual([]);
         }
@@ -378,9 +407,10 @@ describe("ServedSites", () => {
         yield* tick;
         expect(yield* byId(site.id)).toMatchObject({
           status: "live",
-          teardownPending: { reason: "pids-exited" },
+          removedReason: "pids-exited",
           lastError: expect.stringContaining("serve is stuck"),
         });
+        expect(state.rows.get(site.id)).toMatchObject({ removedReason: "pids-exited" });
         expect(state.routes.has(3000)).toBe(true);
         yield* tick;
         expect(yield* byId(site.id)).toMatchObject({
@@ -388,7 +418,6 @@ describe("ServedSites", () => {
           removedReason: "pids-exited",
           lastError: null,
         });
-        expect((yield* byId(site.id))?.teardownPending).toBeUndefined();
         expect(state.unserves).toEqual([3000]);
       }),
     ),
@@ -451,14 +480,14 @@ describe("ServedSites", () => {
     it.effect("with a stop command, removes the site once the pids exit within 15 s", () =>
       Effect.scoped(
         Effect.gen(function* () {
-          const { sites, state, publish, dropPids, byId } = yield* harness();
+          const { sites, state, publish, dropPids, byId, settled } = yield* harness();
           const site = yield* publish({ stopCommand: "make down" });
-          const stopping = yield* sites.stop({ siteId: site.id }).pipe(Effect.forkChild);
+          expect(yield* sites.stop({ siteId: site.id })).toMatchObject({ status: "stopping" });
           yield* TestClock.adjust("10 seconds");
           expect(yield* byId(site.id)).toMatchObject({ status: "stopping" });
           dropPids([PID]);
           yield* TestClock.adjust("500 millis");
-          expect(yield* Fiber.join(stopping)).toMatchObject({
+          expect(yield* settled(site.id, "removed")).toMatchObject({
             status: "removed",
             removedReason: "stop-command",
           });
@@ -472,11 +501,11 @@ describe("ServedSites", () => {
     it.effect("with a stop command that leaves the pids running, goes back to live", () =>
       Effect.scoped(
         Effect.gen(function* () {
-          const { sites, state, publish } = yield* harness();
+          const { sites, state, publish, settled } = yield* harness();
           const site = yield* publish({ stopCommand: "make down" });
-          const stopping = yield* sites.stop({ siteId: site.id }).pipe(Effect.forkChild);
+          expect(yield* sites.stop({ siteId: site.id })).toMatchObject({ status: "stopping" });
           yield* TestClock.adjust("15 seconds");
-          expect(yield* Fiber.join(stopping)).toMatchObject({
+          expect(yield* settled(site.id, "live")).toMatchObject({
             status: "live",
             lastError: ServedSites.STOP_COMMAND_LEFT_PIDS,
           });
@@ -488,9 +517,10 @@ describe("ServedSites", () => {
     it.effect("force signals the process groups even with a stop command", () =>
       Effect.scoped(
         Effect.gen(function* () {
-          const { sites, state, publish } = yield* harness();
+          const { sites, state, publish, settled } = yield* harness();
           const site = yield* publish({ stopCommand: "make down" });
-          expect(yield* sites.stop({ siteId: site.id, force: true })).toMatchObject({
+          yield* sites.stop({ siteId: site.id, force: true });
+          expect(yield* settled(site.id, "removed")).toMatchObject({
             status: "removed",
             removedReason: "stopped",
           });
@@ -502,11 +532,12 @@ describe("ServedSites", () => {
     it.effect("a signal stop refused for a shared group goes back to live with the error", () =>
       Effect.scoped(
         Effect.gen(function* () {
-          const { sites, state, publish } = yield* harness({
+          const { sites, state, publish, settled } = yield* harness({
             stopGroupsError: "Its process group also holds the T3 server or an agent.",
           });
           const site = yield* publish();
-          expect(yield* sites.stop({ siteId: site.id })).toMatchObject({
+          expect(yield* sites.stop({ siteId: site.id })).toMatchObject({ status: "stopping" });
+          expect(yield* settled(site.id, "live")).toMatchObject({
             status: "live",
             lastError: "Its process group also holds the T3 server or an agent.",
           });
@@ -516,6 +547,29 @@ describe("ServedSites", () => {
       ),
     );
   });
+
+  it.effect("stopping a publishing site interrupts the hook and takes its routes down", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { sites, state, publish, settled, exposeStarted, exposeInterrupted } = yield* harness(
+          { hookPrefix: HOOK, exposeHangs: true },
+        );
+        const publishing = yield* publish({ visibility: "public" }).pipe(Effect.forkChild);
+        yield* Deferred.await(exposeStarted);
+        const [site] = yield* sites.list;
+        expect(site).toMatchObject({ status: "publishing" });
+        expect(yield* sites.stop({ siteId: site!.id })).toMatchObject({ status: "stopping" });
+        yield* Deferred.await(exposeInterrupted);
+        expect(yield* Effect.flip(Fiber.join(publishing))).toMatchObject({
+          detail: ServedSites.STOPPED_WHILE_PUBLISHING,
+        });
+        expect(yield* settled(site!.id, "removed")).toMatchObject({ removedReason: "stopped" });
+        expect(state.unserves).toEqual([3000]);
+        expect(state.hookArgv.at(-1)).toEqual([...HOOK, "unexpose", "web"]);
+        expect(state.stoppedGroups).toEqual([]);
+      }),
+    ),
+  );
 
   it.effect("reconciles stored sites on start", () =>
     Effect.scoped(
@@ -534,6 +588,7 @@ describe("ServedSites", () => {
             storedSite({ id: id("stopping"), status: "stopping", servePort: 3003 }),
             storedSite({ id: id("live"), servePort: 3004 }),
             storedSite({ id: id("taken"), servePort: 3006 }),
+            storedSite({ id: id("pending"), servePort: 3007, removedReason: "publish-failed" }),
             storedSite({ id: id("unserved"), servePort: 3005 }),
             storedSite({
               id: id("removed"),
@@ -549,6 +604,7 @@ describe("ServedSites", () => {
             [3003, 3000],
             [3004, 3000],
             [3006, 4000],
+            [3007, 3000],
           ],
         });
         const byName = (list: ReadonlyArray<ServedSite>, name: string) =>
@@ -564,7 +620,14 @@ describe("ServedSites", () => {
           status: "removed",
           removedReason: "pids-exited",
         });
-        expect(byName(list, "stopping")).toMatchObject({ status: "live" });
+        expect(byName(list, "stopping")).toMatchObject({
+          status: "live",
+          lastError: ServedSites.STOP_INTERRUPTED,
+        });
+        expect(byName(list, "pending")).toMatchObject({
+          status: "failed",
+          removedReason: "publish-failed",
+        });
         expect(byName(list, "live")).toMatchObject({ status: "live", lastError: null });
         expect(byName(list, "removed")).toMatchObject({ status: "removed" });
         expect(byName(list, "taken")).toMatchObject({
@@ -572,7 +635,7 @@ describe("ServedSites", () => {
           lastError: ServedSites.ROUTE_TAKEN(3006),
         });
         expect(state.routes.get(3006)).toBe(4000);
-        expect(state.unserves.toSorted()).toEqual([3001, 3002]);
+        expect(state.unserves.toSorted()).toEqual([3001, 3002, 3007]);
         expect(state.hookArgv).toEqual([[...HOOK, "unexpose", "site-dead"]]);
         expect(state.serves.map((each) => each.servePort)).toEqual([3003, 3004, 3005]);
       }),

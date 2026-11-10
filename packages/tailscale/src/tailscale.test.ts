@@ -8,6 +8,7 @@ import { ChildProcessSpawner } from "effect/process";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 
 import {
+  disableTailscaleServe,
   ensureTailscaleServe,
   parseTailscaleExitNode,
   parseTailscaleServePorts,
@@ -338,6 +339,21 @@ describe("tailscale", () => {
       assertCarriesNoSecret(error, "tskey-auth-secret-token-value");
     });
   });
+
+  it.effect("counts turning off a handler that is already gone as done", () =>
+    Effect.gen(function* () {
+      yield* disableTailscaleServe({ servePort: 3000 }).pipe(
+        Effect.provide(
+          layerMockSpawner(() => ({ code: 1, stderr: "error: handler does not exist" })),
+        ),
+      );
+      const error = yield* disableTailscaleServe({ servePort: 3000 }).pipe(
+        Effect.flip,
+        Effect.provide(layerMockSpawner(() => ({ code: 1, stderr: "permission denied" }))),
+      );
+      assert.instanceOf(error, TailscaleCommandExitError);
+    }),
+  );
 
   // regression: #21609 - without forceKillAfter a timed-out probe only gets
   // SIGTERM, so a group member that ignores it outlives the call.

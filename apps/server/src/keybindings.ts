@@ -38,6 +38,7 @@ import {
   DEFAULT_KEYBINDINGS,
   insertMissingDefaultKeybindings,
   mergeWithDefaultKeybindings,
+  missingDefaultsThatFit,
   compileResolvedKeybindingRule,
   compileResolvedKeybindingsConfig,
   parseKeybindingShortcut,
@@ -560,8 +561,8 @@ const make = Effect.gen(function* () {
       }
 
       const availableSlots = Math.max(0, MAX_KEYBINDINGS_COUNT - customConfig.length);
-      const defaultsToAppend = missingDefaults.slice(0, availableSlots);
-      const skippedDefaults = missingDefaults.slice(availableSlots);
+      const defaultsToAppend = missingDefaultsThatFit(missingDefaults, availableSlots);
+      const skippedDefaults = missingDefaults.filter((rule) => !defaultsToAppend.includes(rule));
       if (skippedDefaults.length > 0) {
         yield* Effect.logWarning("skipping default keybinding backfill at max entries", {
           path: keybindingsConfigPath,

@@ -149,17 +149,17 @@ export const DEFAULT_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
   { key: "mod+shift+4", command: "usage.period.quarter", when: "usagePageOpen" },
   // JetBrains keys. The last match wins, so these stay below the defaults whose shortcuts they
   // share and take over only inside their focus scope. A rule on a shared shortcut must not match
-  // before its command has a handler: nothing falls through to the rule it out-ranks. Focus
-  // scopes hold only where a surface marks them; codeSymbols and projectPane hold once provided.
-  { key: "mod+b", command: "code.goToDeclaration", when: "codeFocus" },
-  { key: "mod+shift+b", command: "code.goToTypeDeclaration", when: "codeFocus" },
-  { key: "mod+alt+b", command: "code.goToImplementation", when: "codeFocus" },
-  { key: "alt+f7", command: "code.findUsages", when: "codeFocus" },
-  { key: "mod+alt+f7", command: "code.findUsages", when: "codeFocus" },
-  { key: "mod+shift+f7", command: "code.highlightUsages", when: "codeFocus" },
-  { key: "f1", command: "code.quickDocumentation", when: "codeFocus" },
-  { key: "alt+space", command: "code.quickDefinition", when: "codeFocus" },
-  { key: "mod+l", command: "code.goToLine", when: "codeFocus" },
+  // before its command has a handler there: nothing falls through to the rule it out-ranks. A
+  // scope says what a surface is; codeNavigation, codeSymbols and projectPane say a feature works.
+  { key: "mod+b", command: "code.goToDeclaration", when: "codeFocus && codeNavigation" },
+  { key: "mod+shift+b", command: "code.goToTypeDeclaration", when: "codeFocus && codeNavigation" },
+  { key: "mod+alt+b", command: "code.goToImplementation", when: "codeFocus && codeNavigation" },
+  { key: "alt+f7", command: "code.findUsages", when: "codeFocus && codeNavigation" },
+  { key: "mod+alt+f7", command: "code.findUsages", when: "codeFocus && codeNavigation" },
+  { key: "mod+shift+f7", command: "code.highlightUsages", when: "codeFocus && codeNavigation" },
+  { key: "f1", command: "code.quickDocumentation", when: "codeFocus && codeNavigation" },
+  { key: "alt+space", command: "code.quickDefinition", when: "codeFocus && codeNavigation" },
+  { key: "mod+l", command: "code.goToLine", when: "codeFocus && codeNavigation" },
   // Browsers keep mod+alt+arrows and mod+1 for their tabs.
   { key: "mod+alt+arrowleft", command: "navigation.back", when: "!terminalFocus && isDesktop" },
   { key: "mod+alt+arrowright", command: "navigation.forward", when: "!terminalFocus && isDesktop" },
@@ -488,17 +488,19 @@ function missingDefaultInsertIndex(
   for (const [index, entry] of config.entries()) {
     if (entry === null || shortcutPlacementKey(entry.shortcut) !== placementKey) continue;
     const entryOrder = DEFAULT_RULE_ORDER.get(ruleIdentity(entry));
-    if (entryOrder === undefined || entryOrder > order) break;
+    // A rule the user wrote does not stop the search: one above a default ranks below it already.
+    if (entryOrder === undefined) continue;
+    if (entryOrder > order) break;
     insertIndex = index + 1;
   }
   return insertIndex;
 }
 
 /**
- * Adds defaults a config lacks without moving or out-ranking what it holds. The last match wins,
- * so a default goes after the unmodified defaults on its shortcut that precede it in the default
- * list, as in a fresh config, and before any other rule on that shortcut: a rule the user wrote
- * still wins. With no such default before it, it goes first.
+ * Adds defaults a config lacks without moving what it holds. The last match wins, so a default
+ * goes right after the last unmodified default on its shortcut that precedes it in the default
+ * list, as in a fresh config. Rules after that slot, the user's among them, still out-rank it.
+ * With no such default before it, it goes first.
  */
 export function insertMissingDefaultKeybindings<Rule>(
   config: ReadonlyArray<Rule>,
@@ -530,6 +532,19 @@ export function insertMissingDefaultKeybindings<Rule>(
   return [...first, ...merged];
 }
 
+/**
+ * The missing defaults a config has room for, from the front of the list. A command comes whole
+ * or waits: a config that holds one of a command's rules counts as having set that command, so
+ * a rule cut off here would never be added.
+ */
+export function missingDefaultsThatFit<Rule extends { readonly command: string }>(
+  missingDefaults: ReadonlyArray<Rule>,
+  room: number,
+): Rule[] {
+  const cutOff = new Set(missingDefaults.slice(room).map((rule) => rule.command));
+  return missingDefaults.slice(0, room).filter((rule) => !cutOff.has(rule.command));
+}
+
 export function mergeWithDefaultKeybindings(
   custom: ResolvedKeybindingsConfig,
 ): ResolvedKeybindingsConfig {
@@ -541,10 +556,13 @@ export function mergeWithDefaultKeybindings(
   const retainedDefaults = DEFAULT_RESOLVED_KEYBINDINGS.filter(
     (binding) => !overriddenCommands.has(binding.command),
   );
-  // Over the cap the earliest retained defaults go, never a custom rule.
+  // Over the cap defaults give way, never a custom rule, and the same ones the server leaves out.
   const room = Math.max(0, MAX_KEYBINDINGS_COUNT - custom.length);
-  const fittingDefaults = retainedDefaults.slice(Math.max(0, retainedDefaults.length - room));
-  const merged = insertMissingDefaultKeybindings(custom, fittingDefaults, (rule) => rule);
+  const merged = insertMissingDefaultKeybindings(
+    custom,
+    missingDefaultsThatFit(retainedDefaults, room),
+    (rule) => rule,
+  );
 
   if (merged.length <= MAX_KEYBINDINGS_COUNT) {
     return merged;

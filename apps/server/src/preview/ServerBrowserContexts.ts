@@ -44,6 +44,7 @@ interface Options {
 }
 
 const REMOTE_CONNECT_TIMEOUT_MS = 10_000;
+const END_TIMEOUT_MS = 3_000;
 /** After a failed connection, how long tabs skip the remote browser rather than each waiting on it. */
 const REMOTE_RETRY_MS = 60_000;
 
@@ -136,6 +137,16 @@ class SharedBrowser {
     }
   }
 
+  /** Starts the browser without a context; it still closes when it stays idle. */
+  async ready(start: () => Promise<Browser>) {
+    const started = this.started(start);
+    try {
+      await started;
+    } finally {
+      this.retireWhenIdle(started);
+    }
+  }
+
   private started(start: () => Promise<Browser>) {
     if (!this.browser) {
       const started = start().then((browser) => {
@@ -168,7 +179,15 @@ class SharedBrowser {
   }
 
   private async stop(browser: Browser) {
-    await this.end(browser).catch(constVoid);
+    // A connection that died without closing never answers, and must not hold up a shutdown.
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([
+      this.end(browser).catch(constVoid),
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, END_TIMEOUT_MS);
+      }),
+    ]);
+    clearTimeout(timer);
     await browser.close().catch(constVoid);
   }
 
@@ -238,33 +257,61 @@ export class ServerBrowserContexts {
     );
   }
 
-  /** A context in the remote browser, or undefined when `url` has to load in the local one. */
-  private async remoteContext(options: Parameters<Browser["newContext"]>[0], url: string) {
+  /** How to start the remote browser for `url`, or undefined when the page has to load in the local one. */
+  private async remoteStart(url: string) {
     const remote = this.options.remote;
     if (!remote || this.remoteDown) return undefined;
     const endpoint = await remote.endpoint();
     if (!endpoint || !(await remote.reaches(url))) return undefined;
-    try {
-      return await this.remote.newContext(options, async () => {
-        const browser = await loadPlaywright().chromium.connectOverCDP(endpoint.url, {
-          headers: { ...endpoint.headers },
-          timeout: REMOTE_CONNECT_TIMEOUT_MS,
-        });
-        const session = await browser.newBrowserCDPSession();
-        const heartbeat = setInterval(
-          () => void session.send("Browser.getVersion").catch(constVoid),
-          remote.heartbeatMs,
-        );
-        heartbeat.unref();
-        browser.on("disconnected", () => clearInterval(heartbeat));
-        return browser;
+    return async () => {
+      const browser = await loadPlaywright().chromium.connectOverCDP(endpoint.url, {
+        headers: { ...endpoint.headers },
+        timeout: REMOTE_CONNECT_TIMEOUT_MS,
       });
+      const session = await browser.newBrowserCDPSession();
+      const heartbeat = setInterval(
+        () => void session.send("Browser.getVersion").catch(constVoid),
+        remote.heartbeatMs,
+      );
+      heartbeat.unref();
+      browser.on("disconnected", () => clearInterval(heartbeat));
+      return browser;
+    };
+  }
+
+  // Tabs opening together share one failed connection: one report, one wait.
+  private remoteFailed(cause: unknown) {
+    if (this.remoteDown) return;
+    this.remoteDown = true;
+    setTimeout(() => {
+      this.remoteDown = false;
+    }, REMOTE_RETRY_MS).unref();
+    this.options.remote?.onUnavailable?.(cause);
+  }
+
+  /**
+   * Whether the remote browser will take a tab for `url`, connecting to it now. A caller that
+   * gives up something for a remote tab, such as a profile's logins, asks before it does.
+   */
+  async remoteTakes(url: string) {
+    const start = await this.remoteStart(url);
+    if (!start) return false;
+    try {
+      await this.remote.ready(start);
+      return true;
     } catch (cause) {
-      this.remoteDown = true;
-      setTimeout(() => {
-        this.remoteDown = false;
-      }, REMOTE_RETRY_MS).unref();
-      remote.onUnavailable?.(cause);
+      this.remoteFailed(cause);
+      return false;
+    }
+  }
+
+  private async remoteContext(options: Parameters<Browser["newContext"]>[0], url: string) {
+    const start = await this.remoteStart(url);
+    if (!start) return undefined;
+    try {
+      return await this.remote.newContext(options, start);
+    } catch (cause) {
+      this.remoteFailed(cause);
       return undefined;
     }
   }

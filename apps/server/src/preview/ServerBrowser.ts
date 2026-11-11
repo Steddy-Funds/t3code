@@ -550,16 +550,13 @@ const make = Effect.gen(function* () {
 
   /** Why a Browser Run tab cannot load `url`, or null when it can. */
   const unreachableOnBrowserRun = async (tab: ServerTab, url: string) =>
-    onBrowserRun(tab) && !(await BrowserRun.reaches(url))
+    onBrowserRun(tab) && (await BrowserRun.blocks(url))
       ? `This tab runs on Cloudflare Browser Run, which cannot reach ${url}. Pages on this machine and its private networks load in the local browser: open it with preview_open and reuseExistingTab=false.`
       : null;
 
   /** Whether a new agent tab for `url` goes to Browser Run. The desktop app shows its own tabs. */
   const opensOnBrowserRun = async (url: string | undefined) =>
-    url !== undefined &&
-    !desktopChannel.available &&
-    Option.isSome(await runPromise(browserRun.endpoint)) &&
-    (await BrowserRun.reaches(url));
+    url !== undefined && !desktopChannel.available && (await contexts.remoteTakes(url));
 
   const dialogStatus = (tab: ServerTab) =>
     tab.dialog

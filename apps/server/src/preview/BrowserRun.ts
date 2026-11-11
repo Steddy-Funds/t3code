@@ -49,6 +49,13 @@ export const reaches = async (value: string) => {
   return resolvesPublicly(url.hostname.replace(/^\[|\]$/g, ""));
 };
 
+/** Whether Browser Run cannot load `url`: a file of this machine, or an http(s) page it cannot reach. */
+export const blocks = async (value: string) => {
+  const protocol = URL.parse(value)?.protocol;
+  if (protocol === "file:") return true;
+  return (protocol === "http:" || protocol === "https:") && !(await reaches(value));
+};
+
 /** Why a connection failed, without the error's text: that names the account in its URL. */
 export const connectFailure = (cause: unknown) => {
   const message = cause instanceof Error ? cause.message : String(cause);
@@ -73,14 +80,16 @@ const make = Effect.gen(function* () {
     if (!ACCOUNT_ID.test(accountId) || apiToken === "") return { _tag: "NotConfigured" } as const;
     // A vault that locked since the last read must not pass for a working token.
     if (refresh && typeof apiToken !== "string") yield* resolver.invalidate([apiToken]);
-    const token = yield* requireSettingsSecret(resolver, apiToken).pipe(Effect.option);
-    if (Option.isNone(token)) return { _tag: "TokenUnreadable" } as const;
-    if (!API_TOKEN.test(token.value)) return { _tag: "NotConfigured" } as const;
+    const read = yield* requireSettingsSecret(resolver, apiToken).pipe(Effect.option);
+    if (Option.isNone(read)) return { _tag: "TokenUnreadable" } as const;
+    // A vault entry often ends in a newline.
+    const token = read.value.trim();
+    if (!API_TOKEN.test(token)) return { _tag: "NotConfigured" } as const;
     return {
       _tag: "Ready",
       enabled,
       accountId,
-      headers: { Authorization: `Bearer ${token.value}` },
+      headers: { Authorization: `Bearer ${token}` },
     } as const;
   });
 

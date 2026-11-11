@@ -1218,6 +1218,133 @@ it.effect("queues a steer until the turn ends when the provider cannot steer it"
   ),
 );
 
+it.effect("starts the agent messages queued behind one another in a single turn", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { events, started, layer, startFirstTurn } = yield* nextTurnSelectionHarness(
+        "merged-agent-messages",
+        true,
+      );
+      yield* Effect.gen(function* () {
+        const orchestrator = yield* Orchestrator.OrchestratorV2;
+        const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+        const threadId = yield* startFirstTurn;
+        const first = started[0]!;
+        // What t3_thread_send queues twice, then a person's message, then an agent's again. The
+        // first two ids sort against the order they were sent in.
+        for (const [text, createdBy] of [
+          ["zulu report", "agent"],
+          ["alpha report", "agent"],
+          ["mine", "user"],
+          ["later report", "agent"],
+        ] as const) {
+          yield* orchestrator.dispatch({
+            type: "message.dispatch",
+            commandId: CommandId.make(text),
+            threadId,
+            messageId: MessageId.make(`message:${text}`),
+            text,
+            attachments: [],
+            dispatchMode: { type: "queue_after_active" },
+            createdBy,
+            creationSource: createdBy === "agent" ? "mcp" : "web",
+          });
+        }
+        const queued = yield* orchestrator.getThreadProjection(threadId);
+        const queuedRunId = (text: string) =>
+          queued.runs.find((run) => run.userMessageId === MessageId.make(`message:${text}`))!.id;
+
+        const settled = yield* orchestrator.streamDomainEvents.pipe(
+          Stream.filter(
+            (event) =>
+              event.type === "run.updated" &&
+              event.payload.id === first.runId &&
+              event.payload.status === "waiting",
+          ),
+          Stream.take(1),
+          Stream.runDrain,
+          Effect.forkScoped,
+        );
+        const mergedTurnRunning = yield* orchestrator.streamDomainEvents.pipe(
+          Stream.filter(
+            (event) =>
+              event.type === "provider-turn.updated" &&
+              event.payload.status === "running" &&
+              event.payload.id !== queued.providerTurns[0]!.id,
+          ),
+          Stream.take(1),
+          Stream.runDrain,
+          Effect.forkScoped,
+        );
+        const turn = queued.providerTurns[0]!;
+        yield* Queue.offer(events, {
+          type: "provider_turn.updated",
+          driver,
+          providerTurn: { ...turn, status: "completed", completedAt: yield* DateTime.now },
+        });
+        yield* Queue.offer(events, {
+          type: "turn.terminal",
+          driver,
+          providerThreadId: turn.providerThreadId,
+          providerTurnId: turn.id,
+          runOrdinal: first.runOrdinal,
+          status: "completed",
+          failure: null,
+          threadDisposition: "reusable",
+        });
+        yield* Fiber.join(settled);
+        yield* worker.drain();
+        yield* orchestrator.resumeQueuedRuns;
+        yield* worker.drain();
+        yield* Fiber.join(mergedTurnRunning);
+
+        const headRunId = queuedRunId("zulu report");
+        assert.lengthOf(started, 2);
+        assert.equal(started[1]?.runId, headRunId);
+        assert.match(started[1]!.message.text, /zulu report[^]*alpha report/);
+        assert.notInclude(started[1]!.message.text, "mine");
+        const after = yield* orchestrator.getThreadProjection(threadId);
+        assert.deepInclude(
+          after.runs.find((run) => run.id === queuedRunId("alpha report")),
+          { status: "cancelled", mergedIntoRunId: headRunId },
+        );
+        assert.deepEqual(
+          after.turnItems
+            .filter((item) => item.type === "user_message" && item.runId === headRunId)
+            .toSorted((left, right) => left.ordinal - right.ordinal)
+            .map((item) => (item.type === "user_message" ? item.messageId : null)),
+          [MessageId.make("message:zulu report"), MessageId.make("message:alpha report")],
+        );
+        assert.equal(
+          after.messages.find((message) => message.id === "message:alpha report")?.runId,
+          headRunId,
+        );
+        // Nothing moved ahead of the person's message.
+        assert.deepEqual(
+          after.runs.filter((run) => run.status === "queued").map((run) => run.userMessageId),
+          [MessageId.make("message:mine"), MessageId.make("message:later report")],
+        );
+
+        // A restart delivers its own message; the provider already holds the merged ones.
+        yield* orchestrator.dispatch({
+          type: "message.dispatch",
+          commandId: CommandId.make("restart"),
+          threadId,
+          messageId: MessageId.make("message:restart"),
+          text: "restart",
+          attachments: [],
+          modelSelection: runSelection,
+          dispatchMode: { type: "restart_active", targetRunId: headRunId },
+          createdBy: "user",
+          creationSource: "web",
+        });
+        yield* worker.drain();
+        assert.equal(started[2]?.message.text, "restart");
+      }).pipe(Effect.provide(layer));
+    }),
+  ),
+);
+
 // regression: #33454 a steer that restarts a completion wake run left its cohort claimed forever
 const restartCompletionWake = Effect.fn("restartCompletionWake")(function* (
   harness: Pick<

@@ -262,6 +262,11 @@ Press **Resume** in an empty composer to continue. **Resume** also continues a s
 run or one that hit a usage limit, even with nothing queued. Sending a new message also resumes the queue, unless it steers a turn that is already
 running. You can edit or remove held messages without starting them.
 
+Messages that other agents sent to a busy thread start together. When the queue reaches one, the
+agent messages directly behind it join the same turn, so the agent reads them all before it answers.
+Each still appears as its own message. Your own queued messages start one turn each, and an agent's
+message never moves ahead of one you queued before it.
+
 The pencil on a queued message opens it in the composer for editing. The original message
 stays in the queue until you save, and it is highlighted while you edit. The message's
 attachments appear above the text with a remove control, and new images can be added the usual way.

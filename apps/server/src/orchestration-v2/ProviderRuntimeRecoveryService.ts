@@ -375,18 +375,13 @@ export const make = Effect.gen(function* () {
           )
           .map((message) => message.id),
       );
-      // A saved user message the provider never accepted stays available through the held queue.
-      const retryableRuns = unstartedRuns.filter((run) =>
-        retryableMessageIds.has(run.userMessageId),
-      );
-      const retryableRunIds = new Set(retryableRuns.map((run) => run.id));
-      const retryableItems =
-        retryableRuns.length === 0
+      const unstartedItems =
+        unstartedRuns.length === 0
           ? []
           : (yield* projections
               .getThreadRecords(projection.thread.id, ["turnItems"], {
                 turnItemTypes: ["user_message"],
-                turnItemRunIds: retryableRuns.map((run) => run.id),
+                turnItemRunIds: unstartedRuns.map((run) => run.id),
               })
               .pipe(
                 Effect.mapError(
@@ -397,9 +392,22 @@ export const make = Effect.gen(function* () {
                       cause,
                     }),
                 ),
-              )).turnItems;
-      for (const item of retryableItems) {
-        if (item.type !== "user_message" || !retryableMessageIds.has(item.messageId)) continue;
+              )).turnItems.filter((item) => item.type === "user_message");
+      // A run that opens with several messages carries queued agent messages merged into its
+      // turn. Cancelling it would drop every one, where each used to wait in the held queue.
+      const mergedBatchRunIds = new Set(
+        unstartedRuns
+          .filter((run) => unstartedItems.filter((item) => item.runId === run.id).length > 1)
+          .map((run) => run.id),
+      );
+      // A saved user message the provider never accepted stays available through the held queue.
+      const retryableRuns = unstartedRuns.filter(
+        (run) => retryableMessageIds.has(run.userMessageId) || mergedBatchRunIds.has(run.id),
+      );
+      const retryableRunIds = new Set(retryableRuns.map((run) => run.id));
+      for (const item of unstartedItems) {
+        if (item.type !== "user_message" || item.runId === null) continue;
+        if (!retryableRunIds.has(item.runId)) continue;
         events.push({
           id: yield* allocateEventId(),
           type: "turn-item.updated",

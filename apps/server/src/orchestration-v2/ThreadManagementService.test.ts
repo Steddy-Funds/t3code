@@ -269,6 +269,74 @@ it.effect("waitForThread follows a restart continuation instead of the cut run",
   }),
 );
 
+it.effect("waitForThread follows a queued message into the run that delivered it", () =>
+  Effect.gen(function* () {
+    const projectId = ProjectId.make("project:thread-management:wait-merged");
+    const threadId = ThreadId.make("thread:thread-management:wait-merged");
+    const runId = RunId.make("run:thread-management:wait-merged:queued");
+    const deliveringId = RunId.make("run:thread-management:wait-merged:delivering");
+    const subscribed = yield* Deferred.make<void>();
+    const events = yield* Queue.unbounded<OrchestrationV2StoredEvent>();
+    let runs: Array<{
+      id: RunId;
+      status: OrchestrationV2Run["status"];
+      mergedIntoRunId?: RunId;
+    }> = [
+      { id: deliveringId, status: "queued" },
+      { id: runId, status: "queued" },
+    ];
+    const stored = (sequence: number, event: object) =>
+      ({ sequence, event: { threadId, ...event } }) as unknown as OrchestrationV2StoredEvent;
+    const layerTest = ThreadManagementService.layer.pipe(
+      Layer.provide(Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({})),
+      Layer.provide(
+        Layer.mock(Orchestrator.OrchestratorV2)({
+          getThreadEventSequence: () => Effect.succeed(0),
+          restartContinuationPending: () => Effect.succeed(false),
+          streamStoredEventsFrom: (input) =>
+            input?.eventType === "run.updated"
+              ? Stream.fromEffect(Deferred.succeed(subscribed, undefined)).pipe(
+                  Stream.drain,
+                  Stream.concat(Stream.fromQueue(events)),
+                )
+              : Stream.never,
+          getThreadRecords: () =>
+            Effect.sync(
+              () =>
+                ({
+                  thread: { id: threadId, projectId, deletedAt: null },
+                  runs,
+                }) as unknown as OrchestrationV2ThreadProjection,
+            ),
+        }),
+      ),
+      Layer.provide(ServerSettings.layerTest()),
+      Layer.provide(layerReceiptsTest),
+    );
+    const service = yield* ThreadManagementService.ThreadManagementService.pipe(
+      Effect.provide(layerTest),
+    );
+    const fiber = yield* service
+      .waitForThread({ projectId, threadId, runId, timeoutMs: 60 * 60 * 1_000 })
+      .pipe(Effect.forkChild);
+    yield* Deferred.await(subscribed);
+    const merged = { id: runId, status: "cancelled" as const, mergedIntoRunId: deliveringId };
+    runs = [{ id: deliveringId, status: "starting" }, merged];
+    yield* Queue.offer(events, stored(1, { type: "run.updated", payload: merged }));
+    runs = [{ id: deliveringId, status: "completed" }, merged];
+    yield* Queue.offer(
+      events,
+      stored(2, { type: "run.updated", payload: { id: deliveringId, status: "completed" } }),
+    );
+    const result = yield* Fiber.join(fiber);
+
+    expect(result).toMatchObject({
+      timedOut: false,
+      run: { id: deliveringId, status: "completed" },
+    });
+  }),
+);
+
 it.effect("waitForThread can wait past an ended run for the thread's delegated work", () =>
   Effect.gen(function* () {
     const projectId = ProjectId.make("project:thread-management:wait-delegated");

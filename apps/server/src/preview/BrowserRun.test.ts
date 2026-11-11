@@ -62,7 +62,8 @@ describe("BrowserRun", () => {
           }).pipe(Effect.provide(withSettings(browserRun, 200, secret).layer));
         const ready = { enabled: true, accountId: ACCOUNT.toUpperCase(), apiToken: vault };
         assert.deepEqual(
-          yield* endpointOf(ready, TOKEN),
+          // A vault entry often ends in a newline.
+          yield* endpointOf(ready, `${TOKEN}\n`),
           Option.some({
             url: `wss://api.cloudflare.com/client/v4/accounts/${ACCOUNT}/browser-run/devtools/browser?keep_alive=120000`,
             headers: { Authorization: `Bearer ${TOKEN}` },
@@ -124,6 +125,17 @@ describe("BrowserRun", () => {
       ].map(BrowserRun.reaches),
     );
     assert.deepEqual(reached, [true, false, false, false, false, false, false]);
+    // A hosted tab loads pages that name no host, so only local pages and files are refused there.
+    const blocked = await Promise.all(
+      [
+        "https://93.184.216.34/docs",
+        "about:blank",
+        "data:text/html,hi",
+        "http://127.0.0.1:5173/",
+        "file:///etc/hosts",
+      ].map(BrowserRun.blocks),
+    );
+    assert.deepEqual(blocked, [false, false, false, true, true]);
   });
 
   it("reports a failed connection without the account in its URL", () => {

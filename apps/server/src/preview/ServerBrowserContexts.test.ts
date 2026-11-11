@@ -52,6 +52,10 @@ const makeBrowser = () => {
       events.emit("disconnected");
     }),
     commands: [] as Array<string>,
+    async drop() {
+      for (const context of contexts) await context.close();
+      events.emit("disconnected");
+    },
     async newBrowserCDPSession() {
       return { send: async (command: string) => void this.commands.push(command) };
     },
@@ -162,26 +166,42 @@ describe("ServerBrowserContexts", () => {
     }
   });
 
-  it("opens the tab locally when the remote browser is off or cannot be reached, without retrying at once", async () => {
+  it("opens tabs locally while the remote browser cannot be reached, then reconnects", async () => {
     vi.useFakeTimers();
     try {
       const local = makeBrowser();
+      const hosted = [makeBrowser(), makeBrowser()];
       launches.launch.mockResolvedValue(local as unknown as Browser);
-      launches.connect.mockRejectedValue(new Error("401 Unauthorized"));
+      launches.connect
+        .mockRejectedValueOnce(new Error("401 Unauthorized"))
+        .mockResolvedValueOnce(hosted[0] as unknown as Browser)
+        .mockResolvedValueOnce(hosted[1] as unknown as Browser);
       const configuration = { ...options(), remote: remote() };
       const pool = new ServerBrowserContexts(configuration);
-      const first = await pool.contextFor("default", "a", "https://example.com/");
-      await pool.contextFor("default", "b", "https://example.com/");
+      const url = "https://example.com/";
+      // Tabs that open together share the failed connection: one report, and no retry at once.
+      const [first] = await Promise.all([
+        pool.contextFor("default", "a", url),
+        pool.contextFor("default", "b", url),
+      ]);
       expect(pool.isRemote(first)).toBe(false);
-      expect(local.newContext).toHaveBeenCalledTimes(2);
+      expect(await pool.remoteTakes(url)).toBe(false);
       expect(launches.connect).toHaveBeenCalledOnce();
       expect(configuration.remote.onUnavailable).toHaveBeenCalledOnce();
       await vi.advanceTimersByTimeAsync(60_000);
+      expect(await pool.remoteTakes(url)).toBe(true);
+      expect(pool.isRemote(await pool.contextFor("default", "c", url))).toBe(true);
+      expect(launches.connect).toHaveBeenCalledTimes(2);
+      // A hosted browser that drops takes its tabs with it; the next tab connects again.
+      await hosted[0]!.drop();
+      expect(pool.isRemote(await pool.contextFor("default", "d", url))).toBe(true);
+      expect(launches.connect).toHaveBeenCalledTimes(3);
       configuration.remote.endpoint.mockResolvedValue(undefined as never);
-      await pool.contextFor("default", "c", "https://example.com/");
-      expect(launches.connect).toHaveBeenCalledOnce();
-      expect(local.newContext).toHaveBeenCalledTimes(3);
+      expect(await pool.remoteTakes(url)).toBe(false);
       await pool.close();
+      // Shutdown ends the hosted browser rather than leaving it to time out.
+      expect(hosted[1]!.commands).toEqual(["Browser.close"]);
+      expect(hosted[1]!.close).toHaveBeenCalledOnce();
     } finally {
       vi.useRealTimers();
     }

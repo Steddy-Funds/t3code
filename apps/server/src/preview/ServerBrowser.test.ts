@@ -69,6 +69,9 @@ vi.mock("./ServerBrowserContexts.ts", () => ({
     isRemote() {
       return remoteTabs;
     }
+    async remoteTakes(url: string) {
+      return browserRunTakes && !url.includes("127.0.0.1");
+    }
     async connectDesktopPage(endpoint: string) {
       const context = makeContext(undefined, desktopPageUrl);
       context.page.viewportSize.mockReturnValue(null);
@@ -311,7 +314,7 @@ let focusedFrame: ReturnType<typeof makeFrame> | null = null;
 let contextFailure: Error | null = null;
 let remoteTabs = false;
 let desktopAvailable = true;
-let browserRunEndpoint = Option.none<BrowserRun.BrowserRunEndpoint>();
+let browserRunTakes = false;
 let pageSetupFailure: Error | null = null;
 let initialNavigation: (() => Promise<void>) | null = null;
 let desktopRendersNext = false;
@@ -364,7 +367,7 @@ const dependencies = Layer.mergeAll(
     executable: Effect.die("mock Chromium does not need an executable"),
     installed: Effect.die("mock Chromium does not need an executable"),
   }),
-  Layer.mock(BrowserRun.BrowserRun)({ endpoint: Effect.sync(() => browserRunEndpoint) }),
+  Layer.mock(BrowserRun.BrowserRun)({}),
   Layer.succeed(DesktopChannel.DesktopBrowserChannel, {
     get available() {
       return desktopAvailable;
@@ -491,7 +494,7 @@ beforeEach(() => {
   contextFailure = null;
   remoteTabs = false;
   desktopAvailable = true;
-  browserRunEndpoint = Option.none();
+  browserRunTakes = false;
   pageSetupFailure = null;
   initialNavigation = null;
   pageCopy = "";
@@ -840,7 +843,7 @@ it.live("a standalone server opens an agent's public page without a profile for 
       yield* Effect.yieldNow;
       yield* (yield* browser.profileReporter)({ profiles: [], defaultProfileId: "default" });
       desktopAvailable = false;
-      browserRunEndpoint = Option.some({ url: "wss://remote.test", headers: {} });
+      browserRunTakes = true;
       const open = (input: PreviewAutomationOpenInput) =>
         broker.invoke<PreviewAutomationStatus>({ scope, operation: "open", input });
       const hosted = yield* open({ url: "http://93.184.216.34/", open: false });
@@ -851,7 +854,11 @@ it.live("a standalone server opens an agent's public page without a profile for 
       expect(local.tabId).not.toBe(hosted.tabId);
       // A named profile keeps its logins, on this machine.
       yield* open({ url: "http://93.184.216.34/", profileId: "default", reuseExistingTab: false });
+      // So does a tab Browser Run cannot take just now.
+      browserRunTakes = false;
+      yield* open({ url: "http://93.184.216.34/", reuseExistingTab: false });
       expect(contextRequests.slice(1)).toEqual([
+        { profileId: "default", isolated: false },
         { profileId: "default", isolated: false },
         { profileId: "default", isolated: false },
       ]);

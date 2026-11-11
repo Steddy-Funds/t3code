@@ -3,6 +3,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import { assertFailure } from "@effect/vitest/utils";
 import * as Effect from "effect/Effect";
+import * as Equal from "effect/Equal";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Logger from "effect/Logger";
@@ -142,6 +143,10 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
 
       const persisted = yield* readKeybindingsConfig(keybindingsConfigPath);
       assert.deepEqual(persisted, SharedKeybindings.DEFAULT_KEYBINDINGS);
+
+      const written = yield* fs.readFileString(keybindingsConfigPath);
+      yield* (yield* Keybindings.Keybindings).syncDefaultKeybindingsOnStartup;
+      assert.equal(yield* fs.readFileString(keybindingsConfigPath), written);
     }).pipe(Effect.provide(layerKeybindings())),
   );
 
@@ -246,7 +251,12 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
           configState.keybindings
             .filter((entry) => entry.shortcut.key === "b" && entry.shortcut.shiftKey)
             .map((entry) => entry.command),
-          ["threadPanel.toggle", "script.custom-panel.run", "script.custom-composer.run"],
+          [
+            "threadPanel.toggle",
+            "code.goToTypeDeclaration",
+            "script.custom-panel.run",
+            "script.custom-composer.run",
+          ],
         );
       }).pipe(Effect.provide(layerKeybindings())),
   );
@@ -352,6 +362,154 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
       ),
     );
   });
+
+  // The last rule on a shortcut wins, so it names what the shortcut runs where its condition holds.
+  const topCommand = (rules: readonly KeybindingRule[], key: string) =>
+    rules.findLast((rule) => rule.key === key)?.command;
+  const isSameRule = (left: KeybindingRule, right: KeybindingRule) =>
+    left.key === right.key && left.command === right.command && left.when === right.when;
+  const withoutAdded = (rules: readonly KeybindingRule[], before: readonly KeybindingRule[]) =>
+    rules.filter((rule) => before.some((entry) => isSameRule(entry, rule)));
+  const syncExisting = (rules: readonly KeybindingRule[]) =>
+    Effect.gen(function* () {
+      const { keybindingsConfigPath } = yield* ServerConfig.ServerConfig;
+      const keybindings = yield* Keybindings.Keybindings;
+      yield* writeKeybindingsConfig(keybindingsConfigPath, rules);
+      yield* keybindings.syncDefaultKeybindingsOnStartup;
+      return yield* readKeybindingsConfig(keybindingsConfigPath);
+    });
+
+  it.effect("ranks new scoped defaults above the defaults an existing config holds", () =>
+    Effect.gen(function* () {
+      const persisted = yield* syncExisting(EXISTING_INSTALL_KEYBINDINGS);
+
+      assert.deepStrictEqual(
+        withoutAdded(persisted, EXISTING_INSTALL_KEYBINDINGS),
+        EXISTING_INSTALL_KEYBINDINGS,
+      );
+      assert.sameDeepMembers([...persisted], [...SharedKeybindings.DEFAULT_KEYBINDINGS]);
+      for (const [key, scoped, earlier] of [
+        ["mod+b", "code.goToDeclaration", "sidebar.toggle"],
+        ["mod+shift+b", "code.goToTypeDeclaration", "threadPanel.toggle"],
+        ["mod+alt+b", "code.goToImplementation", "rightPanel.toggle"],
+        ["mod+l", "code.goToLine", "preview.focusUrl"],
+        ["mod+o", "code.goToClass", "editor.openFavorite"],
+        ["mod+shift+o", "filePicker.toggle", "chat.new"],
+        ["mod+1", "projectPane.toggle", "modelPicker.jump.1"],
+      ] as const) {
+        assert.equal(topCommand(persisted, key), scoped);
+        // Each lands right after the rule it refines, not at the end of the file.
+        const index = persisted.findIndex((rule) => rule.key === key && rule.command === scoped);
+        assert.equal(persisted[index - 1]?.command, earlier);
+      }
+
+      const { keybindings } = yield* (yield* Keybindings.Keybindings).loadConfigState;
+      assert.deepStrictEqual(
+        keybindings,
+        SharedKeybindings.compileResolvedKeybindingsConfig(persisted),
+      );
+    }).pipe(Effect.provide(layerKeybindings())),
+  );
+
+  it.effect("keeps a rule the user wrote above the defaults it adds", () =>
+    Effect.gen(function* () {
+      const userRules = [
+        { key: "mod+b", command: "chat.newLocal" },
+        { key: "mod+shift+o", command: "script.open-notes.run" },
+      ] as const;
+      const existing = [...EXISTING_INSTALL_KEYBINDINGS, ...userRules];
+      const persisted = yield* syncExisting(existing);
+
+      assert.deepStrictEqual(withoutAdded(persisted, existing), existing);
+      assert.equal(topCommand(persisted, "mod+b"), "chat.newLocal");
+      assert.equal(topCommand(persisted, "mod+shift+o"), "script.open-notes.run");
+      assert.isTrue(persisted.some((rule) => rule.command === "code.goToDeclaration"));
+    }).pipe(Effect.provide(layerKeybindings())),
+  );
+
+  it.effect("restores a removed default below the scoped default on its shortcut", () =>
+    Effect.gen(function* () {
+      const persisted = yield* syncExisting(
+        EXISTING_INSTALL_KEYBINDINGS.filter((rule) => rule.command !== "sidebar.toggle"),
+      );
+      const onModB = persisted.filter((rule) => rule.key === "mod+b").map((rule) => rule.command);
+
+      assert.deepStrictEqual(onModB, ["sidebar.toggle", "code.goToDeclaration"]);
+    }).pipe(Effect.provide(layerKeybindings())),
+  );
+
+  it.effect("adds the extra shortcuts of existing commands once", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const { keybindingsConfigPath } = yield* ServerConfig.ServerConfig;
+      const keybindings = yield* Keybindings.Keybindings;
+      const extras = [
+        { key: "mod+shift+o", command: "filePicker.toggle", when: "codeFocus || projectTreeFocus" },
+        {
+          key: "mod+alt+arrowleft",
+          command: "navigation.back",
+          when: "!terminalFocus && isDesktop",
+        },
+        {
+          key: "mod+alt+arrowright",
+          command: "navigation.forward",
+          when: "!terminalFocus && isDesktop",
+        },
+      ] as const;
+      const isExtra = (rule: KeybindingRule) => extras.some((extra) => isSameRule(extra, rule));
+
+      const migrated = yield* syncExisting(EXISTING_INSTALL_KEYBINDINGS);
+      assert.sameDeepMembers(migrated.filter(isExtra), [...extras]);
+
+      const written = yield* fs.readFileString(keybindingsConfigPath);
+      yield* keybindings.syncDefaultKeybindingsOnStartup;
+      assert.equal(yield* fs.readFileString(keybindingsConfigPath), written);
+
+      // Removing one is the user's choice: its command still has a rule, so it stays removed.
+      const trimmed = migrated.filter((rule) => !isExtra(rule));
+      assert.deepStrictEqual(yield* syncExisting(trimmed), trimmed);
+    }).pipe(Effect.provide(layerKeybindings())),
+  );
+
+  it.effect("adds nothing to a full config, then migrates it once there is room", () =>
+    Effect.gen(function* () {
+      const fillers = Array.from(
+        { length: MAX_KEYBINDINGS_COUNT - EXISTING_INSTALL_KEYBINDINGS.length },
+        (_, index) => ({ key: "mod+alt+f9", command: `script.filler-${index}.run` as const }),
+      );
+      const full = [...EXISTING_INSTALL_KEYBINDINGS, ...fillers];
+
+      assert.deepStrictEqual(yield* syncExisting(full), full);
+
+      const persisted = yield* syncExisting(EXISTING_INSTALL_KEYBINDINGS);
+      assert.equal(topCommand(persisted, "mod+b"), "code.goToDeclaration");
+      assert.equal(topCommand(persisted, "mod+shift+o"), "filePicker.toggle");
+    }).pipe(Effect.provide(layerKeybindings())),
+  );
+
+  it.effect("leaves a config with issues unwritten and still ranks the scoped defaults", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const { keybindingsConfigPath } = yield* ServerConfig.ServerConfig;
+      const keybindings = yield* Keybindings.Keybindings;
+      const written = JSON.stringify([
+        { key: "mod+alt+arrowup", command: "thread.fromAnotherBuild" },
+        ...EXISTING_INSTALL_KEYBINDINGS,
+      ]);
+      yield* fs.writeFileString(keybindingsConfigPath, written);
+
+      yield* keybindings.syncDefaultKeybindingsOnStartup;
+      assert.equal(yield* fs.readFileString(keybindingsConfigPath), written);
+
+      const state = yield* keybindings.loadConfigState;
+      assert.lengthOf(state.issues, 1);
+      const modB = SharedKeybindings.parseKeybindingShortcut("mod+b");
+      assert.equal(
+        state.keybindings.findLast((rule) => Equal.equals(rule.shortcut, modB))?.command,
+        "code.goToDeclaration",
+      );
+    }).pipe(Effect.provide(layerKeybindings())),
+  );
 
   it.effect("appends additional custom keybindings for the same command", () =>
     Effect.gen(function* () {
@@ -617,3 +775,107 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
     }).pipe(Effect.provide(layerKeybindings())),
   );
 });
+
+// The keybindings.json of a server that ran builds from before the JetBrains keys, as those
+// builds wrote it: every default of the time, in the order their backfills left them.
+const EXISTING_INSTALL_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
+  { key: "mod+shift+d", command: "composer.dictation", when: "!terminalFocus" },
+  { key: "mod+b", command: "sidebar.toggle" },
+  { key: "f6", command: "workspace.focusNext" },
+  { key: "shift+f6", command: "workspace.focusPrevious" },
+  { key: "mod+f6", command: "workspace.focusNext" },
+  { key: "mod+shift+f6", command: "workspace.focusPrevious" },
+  { key: "mod+[", command: "navigation.back", when: "!terminalFocus" },
+  { key: "mod+]", command: "navigation.forward", when: "!terminalFocus" },
+  { key: "mod+j", command: "terminal.toggle" },
+  { key: "mod+alt+b", command: "rightPanel.toggle" },
+  { key: "mod+shift+b", command: "threadPanel.toggle", when: "!terminalFocus" },
+  { key: "mod+t", command: "rightPanel.new", when: "rightPanelOpen && !terminalFocus" },
+  { key: "mod+d", command: "terminal.split", when: "terminalFocus" },
+  { key: "mod+shift+d", command: "terminal.splitVertical", when: "terminalFocus" },
+  { key: "mod+n", command: "terminal.new", when: "terminalFocus" },
+  { key: "mod+w", command: "terminal.close", when: "terminalFocus" },
+  { key: "mod+w", command: "rightPanel.close", when: "!terminalFocus" },
+  { key: "mod+shift+t", command: "view.reopenClosed" },
+  { key: "mod+d", command: "diff.toggle", when: "!terminalFocus" },
+  { key: "mod+shift+j", command: "preview.toggle" },
+  { key: "mod+r", command: "preview.refresh", when: "previewFocus" },
+  { key: "mod+l", command: "preview.focusUrl", when: "previewFocus" },
+  { key: "mod+=", command: "preview.zoomIn", when: "previewFocus" },
+  { key: "mod++", command: "preview.zoomIn", when: "previewFocus" },
+  { key: "mod+-", command: "preview.zoomOut", when: "previewFocus" },
+  { key: "mod+0", command: "preview.resetZoom", when: "previewFocus" },
+  { key: "mod+k", command: "commandPalette.toggle", when: "!terminalFocus" },
+  { key: "mod+p", command: "filePicker.toggle", when: "!terminalFocus" },
+  { key: "mod+shift+f", command: "projectSearch.toggle", when: "!terminalFocus" },
+  { key: "mod+u", command: "usage.open", when: "!terminalFocus" },
+  { key: "mod+alt+a", command: "theme.select", when: "!terminalFocus" },
+  { key: "mod+alt+shift+a", command: "appearance.cycle", when: "!terminalFocus" },
+  { key: "mod+alt+shift+t", command: "themeEditor.toggle" },
+  { key: "mod+s", command: "composer.stash", when: "!terminalFocus" },
+  { key: "mod+shift+enter", command: "thread.steerQueuedMessage", when: "!terminalFocus" },
+  { key: "alt+arrowup", command: "thread.editQueuedMessage", when: "composerFocus" },
+  { key: "mod+enter", command: "composer.sendAlternate", when: "composerFocus && turnRunning" },
+  {
+    key: "mod+enter",
+    command: "composer.sendBackground",
+    when: "composerFocus && draftThreadRoute",
+  },
+  {
+    key: "mod+alt+enter",
+    command: "composer.sendBackground",
+    when: "composerFocus && draftThreadRoute",
+  },
+  {
+    key: "mod+alt+enter",
+    command: "composer.sendAndNewThread",
+    when: "composerFocus && !draftThreadRoute",
+  },
+  { key: "mod+n", command: "chat.new", when: "!terminalFocus" },
+  { key: "mod+shift+o", command: "chat.new", when: "!terminalFocus" },
+  { key: "mod+shift+n", command: "chat.newLocal", when: "!terminalFocus" },
+  { key: "mod+alt+n", command: "chat.newWithoutProject", when: "!terminalFocus" },
+  { key: "mod+f", command: "chat.find", when: "!terminalFocus && !previewFocus" },
+  { key: "mod+shift+m", command: "modelPicker.toggle", when: "!terminalFocus" },
+  { key: "mod+shift+h", command: "composer.host", when: "!terminalFocus" },
+  { key: "mod+shift+e", command: "composer.effort", when: "!terminalFocus" },
+  { key: "mod+shift+a", command: "composer.mode", when: "!terminalFocus" },
+  { key: "mod+shift+x", command: "composer.workspace", when: "!terminalFocus" },
+  { key: "mod+shift+g", command: "composer.branch", when: "!terminalFocus" },
+  { key: "mod+shift+l", command: "composer.previousWorktree", when: "!terminalFocus" },
+  { key: "mod+shift+k", command: "pullRequest.copyNumber", when: "!terminalFocus" },
+  { key: "mod+shift+arrowup", command: "modelPicker.previousProvider", when: "modelPickerOpen" },
+  { key: "mod+shift+arrowdown", command: "modelPicker.nextProvider", when: "modelPickerOpen" },
+  { key: "mod+o", command: "editor.openFavorite" },
+  { key: "mod+shift+[", command: "thread.previous" },
+  { key: "mod+shift+]", command: "thread.next" },
+  { key: "mod+shift+c", command: "thread.copyReference", when: "!terminalFocus" },
+  { key: "mod+shift+s", command: "thread.settle", when: "!terminalFocus" },
+  { key: "mod+shift+p", command: "thread.pin", when: "!terminalFocus" },
+  { key: "mod+z", command: "thread.undo", when: "!terminalFocus && !editableFocus" },
+  { key: "mod+1", command: "thread.jump.1", when: "!modelPickerOpen && isDesktop" },
+  { key: "mod+2", command: "thread.jump.2", when: "!modelPickerOpen && isDesktop" },
+  { key: "mod+3", command: "thread.jump.3", when: "!modelPickerOpen && isDesktop" },
+  { key: "mod+4", command: "thread.jump.4", when: "!modelPickerOpen && isDesktop" },
+  { key: "mod+5", command: "thread.jump.5", when: "!modelPickerOpen && isDesktop" },
+  { key: "mod+6", command: "thread.jump.6", when: "!modelPickerOpen && isDesktop" },
+  { key: "mod+7", command: "thread.jump.7", when: "!modelPickerOpen && isDesktop" },
+  { key: "mod+8", command: "thread.jump.8", when: "!modelPickerOpen && isDesktop" },
+  { key: "mod+9", command: "thread.jump.9", when: "!modelPickerOpen && isDesktop" },
+  { key: "mod+1", command: "modelPicker.jump.1", when: "modelPickerOpen && isDesktop" },
+  { key: "mod+2", command: "modelPicker.jump.2", when: "modelPickerOpen && isDesktop" },
+  { key: "mod+3", command: "modelPicker.jump.3", when: "modelPickerOpen && isDesktop" },
+  { key: "mod+4", command: "modelPicker.jump.4", when: "modelPickerOpen && isDesktop" },
+  { key: "mod+5", command: "modelPicker.jump.5", when: "modelPickerOpen && isDesktop" },
+  { key: "mod+6", command: "modelPicker.jump.6", when: "modelPickerOpen && isDesktop" },
+  { key: "mod+7", command: "modelPicker.jump.7", when: "modelPickerOpen && isDesktop" },
+  { key: "mod+8", command: "modelPicker.jump.8", when: "modelPickerOpen && isDesktop" },
+  { key: "mod+9", command: "modelPicker.jump.9", when: "modelPickerOpen && isDesktop" },
+  { key: "c", command: "usage.cost", when: "usagePageOpen" },
+  { key: "t", command: "usage.tokens", when: "usagePageOpen" },
+  { key: "l", command: "usage.limits", when: "usagePageOpen" },
+  { key: "mod+shift+1", command: "usage.period.day", when: "usagePageOpen" },
+  { key: "mod+shift+2", command: "usage.period.week", when: "usagePageOpen" },
+  { key: "mod+shift+3", command: "usage.period.month", when: "usagePageOpen" },
+  { key: "mod+shift+4", command: "usage.period.quarter", when: "usagePageOpen" },
+];

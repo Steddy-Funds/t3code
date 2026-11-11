@@ -78,6 +78,41 @@ describe("HtmlRenderDocument", () => {
 
     await vi.waitFor(() => expect(replayed).toHaveBeenCalledWith("b", frame));
   });
+
+  it("leaves desktop-only shortcuts with the page in a browser tab", async () => {
+    using pageUrl = (() => {
+      // The page reports back the shortcuts it was told to hand over.
+      const page = `<script>
+        addEventListener("message", function (event) {
+          var data = event.data;
+          if (data && data.method === "t3/notifications/shortcuts") {
+            parent.postMessage({ handedOver: data.params.shortcuts }, "*");
+          }
+        });
+      </script>`;
+      const url = URL.createObjectURL(new Blob([page], { type: "text/html" }));
+      return { url, [Symbol.dispose]: () => URL.revokeObjectURL(url) };
+    })();
+    const handedOver: Array<ReadonlyArray<{ key: string; altKey: boolean }>> = [];
+    const messages = new AbortController();
+    using _messages = { [Symbol.dispose]: () => messages.abort() };
+    window.addEventListener(
+      "message",
+      (event) => {
+        if (Array.isArray(event.data?.handedOver)) handedOver.push(event.data.handedOver);
+      },
+      { signal: messages.signal },
+    );
+    await using _screen = await render(<HtmlRenderDocument src={pageUrl.url} title="Keys" />);
+
+    await vi.waitFor(() => expect(handedOver.length).toBeGreaterThan(0));
+    const takes = (key: string, altKey: boolean) =>
+      handedOver.at(-1)?.some((shortcut) => shortcut.key === key && shortcut.altKey === altKey);
+    expect(takes("b", false)).toBe(true);
+    // Back and Forward on mod+alt+arrows and the mod+1 jumps run only in the desktop app.
+    expect(takes("arrowleft", true)).toBe(false);
+    expect(takes("1", false)).toBe(false);
+  });
 });
 
 it("keeps the first and last selected card rings inside the fitted renderer frame", async () => {

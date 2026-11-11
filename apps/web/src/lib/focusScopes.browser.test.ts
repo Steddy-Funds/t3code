@@ -60,6 +60,8 @@ describe("readFocusScopes", () => {
     host.attachShadow({ mode: "open" }).append(document.createElement("slot"));
     const comment = mount("textarea", host);
     const find = mount("input", pane);
+    const toggle = mount("input", pane);
+    toggle.setAttribute("type", "checkbox");
     using tree = mountPane("project-tree");
     const search = mount("input", tree);
 
@@ -67,6 +69,13 @@ describe("readFocusScopes", () => {
       field.focus();
       expect(readFocusScopes()).toEqual(NO_FOCUS_SCOPES);
     }
+    // A checkbox in the pane's toolbar takes no typing, so the pane's keys still work from it.
+    toggle.focus();
+    expect(readFocusScopes()).toEqual({
+      codeFocus: true,
+      diffFocus: true,
+      projectTreeFocus: false,
+    });
     search.focus();
     expect(readFocusScopes()).toEqual({ ...NO_FOCUS_SCOPES, projectTreeFocus: true });
   });

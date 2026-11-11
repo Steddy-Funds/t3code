@@ -105,6 +105,13 @@ export function getTraitSelectChange(
   };
 }
 
+/** An auto-compact window left on `default` defers to the provider, so triggers do not name it. */
+export function isUnsetAutoCompactWindow(descriptor: ProviderOptionDescriptor): boolean {
+  return (
+    descriptor.id === "autoCompactWindow" && getProviderOptionCurrentValue(descriptor) === "default"
+  );
+}
+
 export function buildTraitsTriggerDisplay(input: {
   descriptors: ReadonlyArray<ProviderOptionDescriptor>;
   primarySelectDescriptorId: string | null;
@@ -155,6 +162,7 @@ export function buildTraitsTriggerDisplay(input: {
         continue;
       }
     }
+    if (isUnsetAutoCompactWindow(descriptor)) continue;
     const label =
       input.ultrathinkPromptControlled && descriptor.id === input.primarySelectDescriptorId
         ? "Ultrathink"

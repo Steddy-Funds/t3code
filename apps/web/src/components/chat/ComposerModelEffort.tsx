@@ -2,6 +2,7 @@ import {
   buildTraitsTriggerDisplay,
   getDescriptorStringValue,
   isReasoningControl,
+  isUnsetAutoCompactWindow,
   selectableProviderOptionChoices,
 } from "@t3tools/client-runtime/model-traits";
 import type { ProviderOptionDescriptor, RuntimeMode } from "@t3tools/contracts";
@@ -133,6 +134,7 @@ export function describeComposerEffort(
   // Agent options such as modes live in the picker; the trigger adds only the context window.
   const contextWindow =
     visibility.contextWindowDescriptor &&
+    !isUnsetAutoCompactWindow(visibility.contextWindowDescriptor) &&
     getProviderOptionCurrentLabel(
       visibility.contextWindowDescriptor,
       modelSelection,

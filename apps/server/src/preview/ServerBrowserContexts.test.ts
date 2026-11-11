@@ -8,11 +8,13 @@ import { ServerBrowserContexts } from "./ServerBrowserContexts.ts";
 
 const launches = vi.hoisted(() => ({
   launch: vi.fn<BrowserType["launch"]>(),
+  connect: vi.fn<BrowserType["connectOverCDP"]>(),
   persistent: vi.fn<BrowserType["launchPersistentContext"]>(),
   mkdir: vi.fn().mockResolvedValue(undefined),
   rm: vi.fn().mockResolvedValue(undefined),
 }));
 vi.spyOn(chromium, "launch").mockImplementation(launches.launch);
+vi.spyOn(chromium, "connectOverCDP").mockImplementation(launches.connect);
 vi.spyOn(chromium, "launchPersistentContext").mockImplementation(launches.persistent);
 vi.mock("node:fs/promises", () => ({ mkdir: launches.mkdir, rm: launches.rm }));
 
@@ -49,8 +51,19 @@ const makeBrowser = () => {
       for (const context of contexts) await context.close();
       events.emit("disconnected");
     }),
+    commands: [] as Array<string>,
+    async newBrowserCDPSession() {
+      return { send: async (command: string) => void this.commands.push(command) };
+    },
   };
 };
+
+const remote = () => ({
+  endpoint: vi.fn(async () => ({ url: "wss://remote.test", headers: { Authorization: "t" } })),
+  reaches: vi.fn(async (url: string) => url.startsWith("https://")),
+  heartbeatMs: 30,
+  onUnavailable: vi.fn(),
+});
 
 const options = () => ({
   profilesDir: "/test/profiles",
@@ -71,6 +84,7 @@ const withLauncher = () => {
 
 beforeEach(() => {
   launches.launch.mockReset();
+  launches.connect.mockReset();
   launches.persistent.mockReset();
   launches.mkdir.mockClear();
   launches.rm.mockClear();
@@ -102,6 +116,71 @@ describe("ServerBrowserContexts", () => {
       await pool.contextFor("default", "later");
       expect(launches.launch).toHaveBeenCalledTimes(2);
       expect(second.newContext).toHaveBeenCalledOnce();
+      await pool.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("opens per-tab contexts in the remote browser for the pages it reaches, and keeps it alive until idle", async () => {
+    vi.useFakeTimers();
+    try {
+      const hosted = makeBrowser();
+      const local = makeBrowser();
+      launches.connect.mockResolvedValue(hosted as unknown as Browser);
+      launches.launch.mockResolvedValue(local as unknown as Browser);
+      const configuration = { ...options(), idleBrowserMs: 100, remote: remote() };
+      const pool = new ServerBrowserContexts(configuration);
+      const publicTab = await pool.contextFor("default", "a", "https://example.com/");
+      const localTab = await pool.contextFor("default", "b", "http://localhost:5173/");
+      const incognito = await pool.contextFor(
+        INCOGNITO_BROWSER_PROFILE_ID,
+        undefined,
+        "https://example.com/",
+      );
+      expect(launches.connect).toHaveBeenCalledExactlyOnceWith(
+        "wss://remote.test",
+        expect.objectContaining({ headers: { Authorization: "t" } }),
+      );
+      expect([publicTab, localTab, incognito].map((context) => pool.isRemote(context))).toEqual([
+        true,
+        false,
+        false,
+      ]);
+      expect(configuration.executable).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(90);
+      expect(hosted.commands).toEqual(Array(3).fill("Browser.getVersion"));
+      await publicTab.close();
+      await vi.advanceTimersByTimeAsync(100);
+      // Disconnecting alone would leave the hosted browser running until it timed out.
+      expect(hosted.commands.at(-1)).toBe("Browser.close");
+      expect(hosted.close).toHaveBeenCalledOnce();
+      expect(local.close).not.toHaveBeenCalled();
+      await pool.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("opens the tab locally when the remote browser is off or cannot be reached, without retrying at once", async () => {
+    vi.useFakeTimers();
+    try {
+      const local = makeBrowser();
+      launches.launch.mockResolvedValue(local as unknown as Browser);
+      launches.connect.mockRejectedValue(new Error("401 Unauthorized"));
+      const configuration = { ...options(), remote: remote() };
+      const pool = new ServerBrowserContexts(configuration);
+      const first = await pool.contextFor("default", "a", "https://example.com/");
+      await pool.contextFor("default", "b", "https://example.com/");
+      expect(pool.isRemote(first)).toBe(false);
+      expect(local.newContext).toHaveBeenCalledTimes(2);
+      expect(launches.connect).toHaveBeenCalledOnce();
+      expect(configuration.remote.onUnavailable).toHaveBeenCalledOnce();
+      await vi.advanceTimersByTimeAsync(60_000);
+      configuration.remote.endpoint.mockResolvedValue(undefined as never);
+      await pool.contextFor("default", "c", "https://example.com/");
+      expect(launches.connect).toHaveBeenCalledOnce();
+      expect(local.newContext).toHaveBeenCalledTimes(3);
       await pool.close();
     } finally {
       vi.useRealTimers();

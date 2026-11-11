@@ -51,6 +51,12 @@ Set **Auto-compact after** in the Claude provider settings to an integer between
 300,000 tokens. This changes when compaction happens, not the model's context
 window. Leave it empty for Claude Code's default.
 
+To choose a size for one thread, pick it under **Auto-compact after** in the
+composer's model options. The choice shows for models with a 1M context window
+and beats the provider setting. **Default** follows the provider setting. An
+agent can set the same option, `autoCompactWindow`, on a task it delegates or a
+thread it launches.
+
 You can also send `/compact` in an existing conversation. Claude Code also
 compacts automatically. To see context usage, see
 [commands and skills](./composer.md#commands-and-skills).

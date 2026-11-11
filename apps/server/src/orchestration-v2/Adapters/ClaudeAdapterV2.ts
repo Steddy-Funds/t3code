@@ -1664,13 +1664,17 @@ export const layerQueryRunner: Layer.Layer<
 
 type ClaudeFlagSettings = Parameters<ClaudeQuery["applyFlagSettings"]>[0];
 
-/** Thinking requires a new process. Clearing effort also requires one to reload user settings instead of model defaults. */
+/**
+ * Thinking requires a new process. Clearing effort also requires one to reload user settings instead of model defaults.
+ * So does the auto-compact window: clearing it live would also drop the instance's and the launch arguments' window.
+ */
 function canApplyClaudeSelectionLive(
   live: CompiledClaudeModelSelection,
   next: CompiledClaudeModelSelection,
 ): boolean {
   return (
     live.settings.alwaysThinkingEnabled === next.settings.alwaysThinkingEnabled &&
+    live.settings.autoCompactWindow === next.settings.autoCompactWindow &&
     (next.effort !== undefined || live.effort === undefined)
   );
 }
@@ -1818,8 +1822,11 @@ export function makeClaudeQueryOptions(input: {
       : typeof input.sdkSettings === "object" && input.sdkSettings !== null
         ? ({ ...input.sdkSettings, ...selectionSettings } as ClaudeSdkSettings)
         : selectionSettings;
+  // A window picked for the thread is already in the selection's settings and beats the instance's.
   const compactQuerySettings =
-    input.settings?.autoCompactWindow === undefined || input.settings.autoCompactWindow.length === 0
+    compiledSelection.settings.autoCompactWindow !== undefined ||
+    input.settings?.autoCompactWindow === undefined ||
+    input.settings.autoCompactWindow.length === 0
       ? querySettings
       : ({
           ...(typeof querySettings === "object" && querySettings !== null ? querySettings : {}),
@@ -5045,9 +5052,12 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
     modelSelection: ModelSelection,
     launchArgSettings: ClaudeSdkSettings | undefined,
   ) {
+    const compiledSelection = compileClaudeModelSelection(modelSelection, modelCatalog);
+    if (compiledSelection.settings.autoCompactWindow !== undefined)
+      return String(compiledSelection.settings.autoCompactWindow);
     if (adapterOptions.settings.autoCompactWindow !== "")
       return adapterOptions.settings.autoCompactWindow;
-    const model = compileClaudeModelSelection(modelSelection).apiModelId.replace(/\[1m\]$/i, "");
+    const model = compiledSelection.apiModelId.replace(/\[1m\]$/i, "");
     const windowFrom = (settings: unknown) => {
       if (typeof settings !== "object" || settings === null) return undefined;
       const models = Reflect.get(settings, "modelSettings");

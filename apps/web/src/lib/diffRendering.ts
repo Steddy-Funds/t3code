@@ -406,7 +406,7 @@ ${CHANGED_LINE} [data-diff-span] {
   background-color: ${diff.modified.line};
 }
 
-[data-line][data-editor-active-line] {
+:is([data-line], [data-column-number])[data-editor-active-line] {
   --diffs-computed-editor-active-line-bg: ${caretRow};
 }
 `;

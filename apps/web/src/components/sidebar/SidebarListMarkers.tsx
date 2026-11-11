@@ -9,6 +9,7 @@ import {
   sidebarMarkerId,
   type PullRequestShelfFilter,
   type SidebarListMarker,
+  type WorkingShelfSort,
 } from "../Sidebar.logic";
 import { SIDEBAR_SORTABLE_DRAG_DISABLED } from "./SidebarThreadRow";
 
@@ -187,6 +188,55 @@ export function SidebarReviewShelfHeader(props: {
             <Toggle key={value} value={value}>
               {label}
               <span className="tabular-nums opacity-60">{props.filterCounts[value]}</span>
+            </Toggle>
+          ))}
+        </ToggleGroup>
+      ) : null}
+    </SortableSidebarMarker>
+  );
+}
+
+const WORKING_SORTS: ReadonlyArray<{ value: WorkingShelfSort; label: string }> = [
+  { value: "recent", label: "Recent" },
+  { value: "burn", label: "Burn rate" },
+];
+
+export function SidebarWorkingShelfHeader(props: {
+  count: number;
+  className?: string;
+  expanded: boolean;
+  onToggle: () => void;
+  sort: WorkingShelfSort;
+  onSortChange: (sort: WorkingShelfSort) => void;
+}) {
+  return (
+    <SortableSidebarMarker
+      marker="working-header"
+      data-testid="sidebar-working-header"
+      className={cn("relative mx-0.5", props.className)}
+    >
+      <CollapsibleSectionHeader
+        data-sidebar-row="shelf:working"
+        onClick={props.onToggle}
+        expanded={props.expanded}
+        data-testid="sidebar-working-shelf-toggle"
+        accessory={<span className="font-normal tabular-nums">{props.count}</span>}
+      >
+        Working
+      </CollapsibleSectionHeader>
+      {props.expanded && props.count > 1 ? (
+        <ToggleGroup
+          aria-label="Sort working threads"
+          className="mx-2 mb-1"
+          value={[props.sort]}
+          onValueChange={(value) => {
+            const next = WORKING_SORTS.find((sort) => sort.value === value[0]);
+            if (next) props.onSortChange(next.value);
+          }}
+        >
+          {WORKING_SORTS.map(({ value, label }) => (
+            <Toggle key={value} value={value}>
+              {label}
             </Toggle>
           ))}
         </ToggleGroup>

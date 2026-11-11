@@ -155,6 +155,7 @@ import {
   useQuietThreadShells,
 } from "../state/entities";
 import { environmentPresentations } from "../state/presentation";
+import { tokenBurnRates } from "../state/tokenBurnRates";
 import { primaryServerKeybindingsAtom } from "../state/server";
 import { environmentProjects } from "../state/projects";
 import { threadEnvironment } from "../state/threads";
@@ -218,6 +219,8 @@ import {
   pullRequestShelfMatches,
   threadWatchesPullRequest,
   type PullRequestShelfFilter,
+  sortThreadsByBurnRate,
+  type WorkingShelfSort,
   type SidebarSection,
   resolveSidebarRowThreadId,
 } from "./Sidebar.logic";
@@ -279,6 +282,7 @@ import {
 import {
   SidebarDragBoundary,
   SidebarReviewShelfHeader,
+  SidebarWorkingShelfHeader,
   SidebarSectionHeader,
   SidebarSectionPlaceholder,
 } from "./sidebar/SidebarListMarkers";
@@ -344,6 +348,9 @@ const WORKING_SHELF_EXPANDED_KEY = "t3code:sidebar:working-expanded";
 const REVIEW_SHELF_EXPANDED_KEY = "t3code:sidebar:review-expanded";
 const REVIEW_SHELF_FILTER_KEY = "t3code:sidebar:review-filter";
 const PullRequestShelfFilterSchema = Schema.Literals(["all", "draft", "open"]);
+const WORKING_SHELF_SORT_KEY = "t3code:sidebar:working-sort";
+const WorkingShelfSortSchema = Schema.Literals(["recent", "burn"]);
+const NO_BURN_RATES_ATOM = Atom.make<ReadonlyMap<string, number>>(new Map());
 
 const inboxReturns = createInboxReturnTracker();
 
@@ -490,6 +497,15 @@ function useSidebarThreads(input: {
     true,
     Schema.Boolean,
   );
+  const [workingShelfSort, setWorkingShelfSort] = useLocalStorage(
+    WORKING_SHELF_SORT_KEY,
+    "recent" as WorkingShelfSort,
+    WorkingShelfSortSchema,
+  );
+  // Read only while sorting by it, so the minute's new rates re-render nothing otherwise.
+  const burnRates = useAtomValue(
+    workingShelfSort === "burn" ? tokenBurnRates.treeRatesAtom : NO_BURN_RATES_ATOM,
+  );
   const [reviewShelfFilter, setReviewShelfFilter] = useLocalStorage(
     REVIEW_SHELF_FILTER_KEY,
     "all" as PullRequestShelfFilter,
@@ -526,11 +542,14 @@ function useSidebarThreads(input: {
     pinnedThreads,
     activeThreads,
     reviewThreads,
-    workingThreads,
     snoozedThreads,
     backgroundedThreads,
     settledThreads,
   } = partition;
+  const workingThreads =
+    workingShelfSort === "burn"
+      ? sortThreadsByBurnRate(partition.workingThreads, burnRates, threadShellKey)
+      : partition.workingThreads;
   // Older settled threads load in pages; the shelf lists them only as far as they are loaded.
   const olderSettledShelf = useOlderSettledShelf({
     scopes: olderSettledScopes([...serverConfigs.keys()], scopedProjectKeys),
@@ -650,8 +669,11 @@ function useSidebarThreads(input: {
     toggleSnoozedShelf: () => setSnoozedShelfExpanded((value) => !value),
     backgroundedShelfExpanded,
     toggleBackgroundedShelf: () => setBackgroundedShelfExpanded((value) => !value),
+    workingThreads,
     workingShelfExpanded,
     toggleWorkingShelf: () => setWorkingShelfExpanded((value) => !value),
+    workingShelfSort,
+    setWorkingShelfSort,
     reviewShelfExpanded,
     toggleReviewShelf: () => setReviewShelfExpanded((value) => !value),
     reviewShelfFilter,
@@ -1412,6 +1434,8 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     toggleBackgroundedShelf,
     workingShelfExpanded,
     toggleWorkingShelf,
+    workingShelfSort,
+    setWorkingShelfSort,
     reviewShelfExpanded,
     toggleReviewShelf,
     reviewShelfFilter,
@@ -2141,6 +2165,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     reviewShelfExpanded,
     reviewShelfFilter,
     workingShelfExpanded,
+    workingShelfSort,
     snoozedShelfExpanded,
     backgroundedShelfExpanded,
     settledShelfExpanded,
@@ -3723,16 +3748,14 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                             break;
                           case "working-header":
                             items.push(
-                              <SidebarSectionHeader
+                              <SidebarWorkingShelfHeader
                                 key="working-shelf-header"
-                                marker="working-header"
                                 className={cn(reviewThreads.length === 0 && "mt-auto")}
-                                label="Working"
                                 count={workingThreads.length}
-                                toggle={{
-                                  expanded: workingShelfExpanded,
-                                  onToggle: toggleWorkingShelf,
-                                }}
+                                expanded={workingShelfExpanded}
+                                onToggle={toggleWorkingShelf}
+                                sort={workingShelfSort}
+                                onSortChange={setWorkingShelfSort}
                               />,
                             );
                             break;

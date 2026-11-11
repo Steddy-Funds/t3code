@@ -195,6 +195,19 @@ export const ThreadUsage = Schema.Struct({
 });
 export type ThreadUsage = typeof ThreadUsage.Type;
 
+export const ThreadTokenBurnRate = Schema.Struct({
+  threadId: ThreadId,
+  tokensPerMinute: NonNegativeInt,
+});
+export type ThreadTokenBurnRate = typeof ThreadTokenBurnRate.Type;
+
+/** Tokens per minute over the last five minutes, sampled each minute; idle threads are absent. */
+export const TokenBurnRates = Schema.Struct({
+  sampledAt: Schema.String,
+  threads: ForwardCompatibleArray(ThreadTokenBurnRate),
+});
+export type TokenBurnRates = typeof TokenBurnRates.Type;
+
 export class UsageReadError extends Schema.TaggedError<UsageReadError>()("UsageReadError", {
   reason: Schema.Literals(["scanFailed", "invalidWindow", "threadNotFound"]),
   detail: TrimmedNonEmptyString,

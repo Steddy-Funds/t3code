@@ -66,7 +66,6 @@ type Phase =
       readonly _tag: "starting";
       readonly scope: Scope.Closeable;
       readonly ready: Deferred.Deferred<LiveServer, CodeIntelError>;
-      fiber: Fiber.Fiber<void> | undefined;
     }
   | { readonly _tag: "ready"; readonly scope: Scope.Closeable; readonly live: LiveServer }
   | { readonly _tag: "stopping"; readonly stopped: Deferred.Deferred<void> }
@@ -77,6 +76,8 @@ interface Slot {
   readonly row: LanguageRow;
   readonly root: string;
   phase: Phase;
+  /** Starts the server, then waits for its exit; interrupted by every stop. */
+  fiber: Fiber.Fiber<void> | undefined;
   /** Bumped by every start and stop, so a late callback cannot touch a newer run. */
   generation: number;
   lastUsedAt: number;
@@ -173,14 +174,14 @@ const make = Effect.gen(function* () {
       if (phase._tag === "stopping") return Effect.succeed(phase.stopped);
       if (phase._tag !== "starting" && phase._tag !== "ready") return Effect.undefined;
       const stopped = Deferred.makeUnsafe<void>();
+      const fiber = slot.fiber;
+      slot.fiber = undefined;
       slot.generation += 1;
       slot.phase = { _tag: "stopping", stopped };
       if (phase._tag === "ready") phase.live.stopReason = reason;
       return Effect.gen(function* () {
-        // Interrupts a start, or the backoff before one.
-        if (phase._tag === "starting" && phase.fiber !== undefined) {
-          yield* Fiber.interrupt(phase.fiber);
-        }
+        // Interrupts a start, the backoff before one, or the wait for a running server's exit.
+        if (fiber !== undefined) yield* Fiber.interrupt(fiber);
         yield* Scope.close(phase.scope, Exit.void);
         slot.phase = after;
         if (phase._tag === "starting") {
@@ -408,9 +409,8 @@ const make = Effect.gen(function* () {
         : Math.min(START_BACKOFF_BASE_MS * 2 ** (slot.startFailuresInARow - 2), START_BACKOFF_MAX_MS);
     slot.generation += 1;
     slot.lastUsedAt = now;
-    const starting: Phase = { _tag: "starting", scope, ready, fiber: undefined };
-    slot.phase = starting;
-    starting.fiber = yield* run(slot, slot.generation, spec, scope, ready, backoffMs).pipe(
+    slot.phase = { _tag: "starting", scope, ready };
+    slot.fiber = yield* run(slot, slot.generation, spec, scope, ready, backoffMs).pipe(
       Effect.forkIn(poolScope),
     );
     yield* followSettings;
@@ -431,6 +431,7 @@ const make = Effect.gen(function* () {
           row,
           root,
           phase: { _tag: "stopped" },
+          fiber: undefined,
           generation: 0,
           lastUsedAt: 0,
           crashTimes: [],
@@ -542,14 +543,14 @@ const make = Effect.gen(function* () {
       [...slots.values()],
       (slot) => {
         const phase = slot.phase;
+        const fiber = slot.fiber;
+        slot.fiber = undefined;
         slot.generation += 1;
         if (phase._tag !== "starting" && phase._tag !== "ready") return Effect.void;
         if (phase._tag === "ready") phase.live.stopReason = "shutdown";
-        return (
-          phase._tag === "starting" && phase.fiber !== undefined
-            ? Fiber.interrupt(phase.fiber)
-            : Effect.void
-        ).pipe(Effect.andThen(Scope.close(phase.scope, Exit.void)));
+        return (fiber === undefined ? Effect.void : Fiber.interrupt(fiber)).pipe(
+          Effect.andThen(Scope.close(phase.scope, Exit.void)),
+        );
       },
       { concurrency: "unbounded", discard: true },
     ),

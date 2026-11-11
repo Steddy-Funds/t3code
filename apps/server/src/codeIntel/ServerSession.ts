@@ -18,6 +18,7 @@ const MAX_OPEN_DOCUMENTS = 24;
 // A sync takes every permit; a request against the synced text takes one.
 const DOCUMENT_PERMITS = 64;
 const MAX_CHECKED_ANSWER_FILES = 64;
+const MAX_REMEMBERED_ANSWER_FILES = 4_096;
 
 const FILE_CHANGED = 2;
 const FILE_DELETED = 3;
@@ -203,6 +204,7 @@ export const make = Effect.fn("ServerSession.make")(function* (
         const stat = yield* Effect.promise(() => NodeFSP.stat(filePath).catch(() => undefined));
         const signature = stat === undefined ? "missing" : `${stat.mtimeMs}:${stat.size}`;
         const known = answerFileStats.get(filePath);
+        if (answerFileStats.size >= MAX_REMEMBERED_ANSWER_FILES) answerFileStats.clear();
         answerFileStats.set(filePath, signature);
         if (known === undefined || known === signature) continue;
         const uri = pathToUri(filePath);

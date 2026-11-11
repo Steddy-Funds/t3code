@@ -34,6 +34,24 @@ describe("compileClaudeModelSelection", () => {
     });
   });
 
+  it.each([
+    { model: "claude-opus-5-5", value: "300k", window: 300_000 },
+    { model: "claude-opus-5-5", value: "1m", window: 1_000_000 },
+    { model: "claude-opus-5-5", value: "default", window: undefined },
+    { model: "claude-opus-5-5", value: "250k", window: undefined },
+    // A 200k model has no smaller window worth offering, and 4.6 picks its window by variant.
+    { model: "claude-opus-4-5", value: "200k", window: undefined },
+    { model: "claude-sonnet-4-6", value: "200k", window: undefined },
+  ])("compiles the auto-compact window $value picked on $model", ({ model, value, window }) => {
+    const compiled = compileClaudeModelSelection(
+      selection(model, [{ id: "autoCompactWindow", value }]),
+    );
+    expect(compiled.settings.autoCompactWindow).toBe(window);
+    expect(
+      compiled.queryIdentity === compileClaudeModelSelection(selection(model, [])).queryIdentity,
+    ).toBe(window === undefined);
+  });
+
   it("runs Ultracode at the chosen effort and reads the old Ultracode effort as xhigh", () => {
     expect(
       compileClaudeModelSelection(

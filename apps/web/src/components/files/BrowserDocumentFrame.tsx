@@ -210,8 +210,10 @@ export function HtmlRenderDocument(props: {
     shiftKey: shortcut.shiftKey,
     altKey: shortcut.altKey,
   });
-  // A frame is never a focus scope, so a rule that needs one cannot run on a replayed key.
-  const reachable = (binding: ResolvedKeybindingRule) => ruleCanMatch(binding, NO_FOCUS_SCOPES);
+  // A frame is never a focus scope, and a browser tab is never the desktop app: a rule that
+  // needs either cannot run on a replayed key, so the page keeps that key.
+  const reachable = (binding: ResolvedKeybindingRule) =>
+    ruleCanMatch(binding, { ...NO_FOCUS_SCOPES, isDesktop: isElectron, isWeb: !isElectron });
   const blocked = [...keybindings, ...(environmentKeybindings ?? [])]
     .filter((binding) => !HTML_RENDER_SHORTCUT_COMMANDS.has(binding.command) && reachable(binding))
     .map((binding) => resolve(binding.shortcut));

@@ -44,33 +44,44 @@ export interface ShortcutMatchContext {
   [key: string]: boolean;
 }
 
-/** A feature whose default shortcuts share keys with older commands. */
-export type ShortcutCapability = "codeSymbols" | "projectPane";
+/** A feature whose default shortcuts wait until it works where the keyboard is. */
+export type ShortcutCapability = "codeNavigation" | "codeSymbols" | "projectPane";
 
-const capabilityProviders = new Map<ShortcutCapability, number>();
-let capabilityContext: Readonly<Record<string, boolean>> = {};
-
-function setCapabilityProviders(name: ShortcutCapability, count: number) {
-  if (count > 0) capabilityProviders.set(name, count);
-  else capabilityProviders.delete(name);
-  capabilityContext = Object.fromEntries(
-    Array.from(capabilityProviders.keys(), (provided) => [provided, true]),
-  );
-}
+const capabilityProviders = new Map<ShortcutCapability, Set<() => boolean>>();
 
 /**
- * Turns on a capability's `when` variable. Call it where the feature registers its handlers:
- * until then its rules stay off and their keys keep the older command, since a command without
- * a handler runs nothing. Returns the way to withdraw it.
+ * Turns on a capability's `when` variable while `isAvailable` holds. Call it where the feature
+ * registers its handlers, before the first render. `isAvailable` says whether the feature works
+ * where focus is now; it runs on every key that resolves and as labels render, so it must be
+ * cheap and synchronous. Returns the way to withdraw the capability.
  */
-export function provideShortcutCapability(name: ShortcutCapability): () => void {
-  setCapabilityProviders(name, (capabilityProviders.get(name) ?? 0) + 1);
-  let provided = true;
+export function provideShortcutCapability(
+  name: ShortcutCapability,
+  isAvailable: () => boolean = () => true,
+): () => void {
+  const providers = capabilityProviders.get(name) ?? new Set<() => boolean>();
+  capabilityProviders.set(name, providers);
+  // One entry per call, so two providers that pass the same function withdraw separately.
+  const provider = () => isAvailable();
+  providers.add(provider);
   return () => {
-    if (!provided) return;
-    provided = false;
-    setCapabilityProviders(name, (capabilityProviders.get(name) ?? 1) - 1);
+    providers.delete(provider);
+    if (providers.size === 0 && capabilityProviders.get(name) === providers) {
+      capabilityProviders.delete(name);
+    }
   };
+}
+
+function readCapabilities(): Record<string, boolean> {
+  const capabilities: Record<string, boolean> = {};
+  for (const [name, providers] of capabilityProviders) {
+    for (const isAvailable of providers) {
+      if (!isAvailable()) continue;
+      capabilities[name] = true;
+      break;
+    }
+  }
+  return capabilities;
 }
 
 interface ShortcutMatchOptions {
@@ -100,7 +111,7 @@ function resolveContext(options: ShortcutMatchOptions | undefined): ShortcutMatc
     isWeb: !isElectron,
     isDesktop: isElectron,
     editableFocus: false,
-    ...capabilityContext,
+    ...readCapabilities(),
     ...options?.context,
   };
 }

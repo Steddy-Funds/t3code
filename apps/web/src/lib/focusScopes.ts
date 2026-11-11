@@ -15,9 +15,14 @@ export const NO_FOCUS_SCOPES: FocusScopes = {
 
 const SCOPE_ATTRIBUTE = "data-focus-scope";
 
+// Fields that take typed text. A checkbox or a button in a pane's toolbar is not one.
+const TEXT_FIELD_SELECTOR =
+  'textarea, input:not([type="checkbox"], [type="radio"], [type="button"], [type="submit"], [type="reset"], [type="range"], [type="color"], [type="file"], [type="image"])';
+
 /**
- * Marks an element as one or more scopes. A scope holds only while keyboard focus is inside the
- * element, so a read-only surface needs something there that a click can focus.
+ * Marks an element as one or more scopes. A scope says what the surface is; whether a feature
+ * works there is a capability (`provideShortcutCapability`). A scope holds while keyboard focus
+ * is inside the element, so a read-only surface needs something there that a click can focus.
  */
 export function focusScopeProps(...scopes: ReadonlyArray<FocusScope>) {
   return { [SCOPE_ATTRIBUTE]: scopes.join(" ") };
@@ -45,9 +50,10 @@ export function readFocusScopes(target: EventTarget | null = document.activeElem
       scopes.add(scope);
     }
   }
-  // A comment box or find field inside a code pane types text, so it keeps its own keys. The
-  // Project tree's search field belongs to the tree and stays in its scope.
-  const inTextField = focused.matches("input, textarea");
+  // A text input or textarea inside a code pane (a comment box, a find field) keeps its own
+  // keys; a contenteditable there is the editor itself. The Project tree's search field belongs
+  // to the tree and stays in its scope.
+  const inTextField = focused.matches(TEXT_FIELD_SELECTOR);
   return {
     codeFocus: !inTextField && scopes.has("code"),
     diffFocus: !inTextField && scopes.has("diff"),

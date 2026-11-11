@@ -1,12 +1,15 @@
 import { assert, describe, it } from "vite-plus/test";
 import {
   compileResolvedKeybindingsConfig,
+  DEFAULT_KEYBINDINGS,
   DEFAULT_RESOLVED_KEYBINDINGS,
+  insertMissingDefaultKeybindings,
   mergeWithDefaultKeybindings,
 } from "@t3tools/shared/keybindings";
 
 import {
   type KeybindingCommand,
+  type KeybindingRule,
   type KeybindingShortcut,
   type KeybindingWhenNode,
   type ResolvedKeybindingsConfig,
@@ -1269,22 +1272,66 @@ describe("defaults merged into a server's rules", () => {
     }
   });
 
-  it("ranks a scoped default right above the default it refines, whatever sits above that", () => {
-    // Rules above a default rank below it. One of them on the shortcut, or on what a server
-    // cannot tell from it (ctrl or meta for mod), does not hold the scoped default back.
-    for (const above of ["mod+b", "ctrl+b", "meta+b"]) {
-      const merged = mergeWithDefaultKeybindings([
-        ...compileResolvedKeybindingsConfig([{ key: above, command: "chat.newLocal" }]),
-        ...EARLIER_DEFAULTS,
-        ...compileResolvedKeybindingsConfig([{ key: "mod+b", command: "thread.pin" }]),
-      ]);
-      const onModB = merged.filter(({ shortcut }) => shortcut.key === "b" && !shortcut.shiftKey);
-      assert.deepStrictEqual(
-        onModB.filter(({ shortcut }) => !shortcut.altKey).map(({ command }) => command),
-        ["chat.newLocal", "sidebar.toggle", "code.goToDeclaration", "thread.pin"],
-        above,
-      );
-    }
+  // The placement rule, one layout of a shortcut's rules per row. A missing default goes right
+  // after the earlier defaults on its shortcut. A rule the user wrote above all of those ranks
+  // below them already and does not count; one among or after them still out-ranks the default.
+  const rules = Object.fromEntries(
+    Object.entries({
+      jump: { key: "mod+1", command: "thread.jump.1", when: "!modelPickerOpen && isDesktop" },
+      picker: { key: "mod+1", command: "modelPicker.jump.1", when: "modelPickerOpen && isDesktop" },
+      olderJump: { key: "mod+1", command: "thread.jump.1" },
+      pane: DEFAULT_KEYBINDINGS.find(({ command }) => command === "projectPane.toggle")!,
+      sidebar: { key: "mod+b", command: "sidebar.toggle" },
+      declaration: DEFAULT_KEYBINDINGS.find(({ command }) => command === "code.goToDeclaration")!,
+      user: { key: "mod+1", command: "chat.newLocal" },
+      userCtrl: { key: "ctrl+1", command: "thread.pin" },
+      userOnB: { key: "mod+b", command: "chat.newLocal" },
+      userMetaB: { key: "meta+b", command: "thread.pin" },
+    } satisfies Record<string, KeybindingRule>).map(([name, rule]) => [
+      name,
+      compileResolvedKeybindingsConfig([rule])[0]!,
+    ]),
+  );
+  it.each<{ config: string; missing: string; placed: string }>([
+    { config: "", missing: "pane", placed: "pane" },
+    { config: "jump picker", missing: "pane", placed: "jump picker pane" },
+    { config: "jump picker user", missing: "pane", placed: "jump picker pane user" },
+    { config: "user jump picker", missing: "pane", placed: "user jump picker pane" },
+    {
+      config: "userCtrl jump picker user",
+      missing: "pane",
+      placed: "userCtrl jump picker pane user",
+    },
+    { config: "jump user picker", missing: "pane", placed: "jump pane user picker" },
+    { config: "jump userCtrl picker", missing: "pane", placed: "jump pane userCtrl picker" },
+    { config: "olderJump picker", missing: "pane", placed: "olderJump picker pane" },
+    { config: "user", missing: "pane", placed: "pane user" },
+    { config: "sidebar", missing: "declaration", placed: "sidebar declaration" },
+    { config: "userOnB sidebar", missing: "declaration", placed: "userOnB sidebar declaration" },
+    {
+      config: "userMetaB sidebar",
+      missing: "declaration",
+      placed: "userMetaB sidebar declaration",
+    },
+    { config: "sidebar userOnB", missing: "declaration", placed: "sidebar declaration userOnB" },
+    // A default the config lacks goes below the later defaults on its shortcut.
+    { config: "declaration", missing: "sidebar", placed: "sidebar declaration" },
+    { config: "userOnB declaration", missing: "sidebar", placed: "sidebar userOnB declaration" },
+    {
+      config: "jump user picker",
+      missing: "sidebar declaration",
+      placed: "sidebar declaration jump user picker",
+    },
+  ])("places $missing into [$config] as [$placed]", ({ config, missing, placed }) => {
+    const named = (names: string) =>
+      names
+        .split(" ")
+        .filter(Boolean)
+        .map((name) => rules[name]!);
+    assert.deepStrictEqual(
+      insertMissingDefaultKeybindings(named(config), named(missing), (rule) => rule),
+      named(placed),
+    );
   });
 
   it("ranks a new default above defaults from earlier builds", () => {

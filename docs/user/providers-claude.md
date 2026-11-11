@@ -52,8 +52,8 @@ Set **Auto-compact after** in the Claude provider settings to an integer between
 window. Leave it empty for Claude Code's default.
 
 To choose a size for one thread, pick it under **Auto-compact after** in the
-composer's model options. The choice shows for models with a 1M context window
-and beats the provider setting. **Provider setting**, the default, leaves it
+composer's model options. The choice shows for models that always run with a 1M
+context window and beats the provider setting. **Provider setting**, the default, leaves it
 alone. An agent can set the same option, `autoCompactWindow`, on a task it
 delegates or a thread it launches.
 

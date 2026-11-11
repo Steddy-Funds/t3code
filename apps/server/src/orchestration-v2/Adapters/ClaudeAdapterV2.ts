@@ -1822,16 +1822,29 @@ export function makeClaudeQueryOptions(input: {
       : typeof input.sdkSettings === "object" && input.sdkSettings !== null
         ? ({ ...input.sdkSettings, ...selectionSettings } as ClaudeSdkSettings)
         : selectionSettings;
-  // A window picked for the thread is already in the selection's settings and beats the instance's.
+  const pickedWindow = compiledSelection.settings.autoCompactWindow;
+  const pickedWindowModel = compiledSelection.apiModelId.replace(/\[1m\]$/i, "");
+  // A window picked for the thread beats the instance's. Within one settings source Claude reads
+  // a model's own window ahead of the top-level one, so the pick is written there too.
   const compactQuerySettings =
-    compiledSelection.settings.autoCompactWindow !== undefined ||
-    input.settings?.autoCompactWindow === undefined ||
-    input.settings.autoCompactWindow.length === 0
-      ? querySettings
-      : ({
-          ...(typeof querySettings === "object" && querySettings !== null ? querySettings : {}),
-          autoCompactWindow: Number(input.settings.autoCompactWindow),
-        } as ClaudeSdkSettings);
+    pickedWindow !== undefined && typeof querySettings === "object" && querySettings !== null
+      ? ({
+          ...querySettings,
+          modelSettings: {
+            ...querySettings.modelSettings,
+            [pickedWindowModel]: {
+              ...querySettings.modelSettings?.[pickedWindowModel],
+              autoCompactWindow: pickedWindow,
+            },
+          },
+        } as ClaudeSdkSettings)
+      : input.settings?.autoCompactWindow === undefined ||
+          input.settings.autoCompactWindow.length === 0
+        ? querySettings
+        : ({
+            ...(typeof querySettings === "object" && querySettings !== null ? querySettings : {}),
+            autoCompactWindow: Number(input.settings.autoCompactWindow),
+          } as ClaudeSdkSettings);
   // A settings file path cannot take extra keys, so it goes through unchanged.
   const effectiveQuerySettings =
     input.toolSearchOverride === undefined || typeof compactQuerySettings === "string"

@@ -131,7 +131,12 @@ function withAutoCompactWindowChoice(
     (choice) => fixedContextWindowTokens !== undefined && choice.tokens <= fixedContextWindowTokens,
   );
   // Claude caps the window at the model's own, so a lone choice would change nothing.
-  if (choices.length < 2 || descriptors.some((descriptor) => descriptor.id === "autoCompactWindow"))
+  // Clients read a model's first select as its effort, so this is never the only one.
+  if (
+    choices.length < 2 ||
+    !descriptors.some((descriptor) => descriptor.type === "select") ||
+    descriptors.some((descriptor) => descriptor.id === "autoCompactWindow")
+  )
     return capabilities;
   return {
     ...capabilities,

@@ -1,5 +1,7 @@
 import { injectHtmlRenderBootstrap } from "@t3tools/shared/htmlRender";
+import { isMacPlatform } from "@t3tools/shared/keybindings";
 import { describe, expect, it, vi } from "vite-plus/test";
+import { userEvent } from "vite-plus/test/browser";
 
 import "~/index.css";
 import { render } from "../../../test/render";
@@ -33,6 +35,48 @@ describe("HtmlRenderDocument", () => {
     window.postMessage(sizeChanged(999), "*");
     await delivered;
     expect(onContentHeight).toHaveBeenCalledTimes(1);
+  });
+
+  it("replays an app shortcut whose key a code shortcut shares", async () => {
+    const mac = isMacPlatform(navigator.platform);
+    // What the page's bootstrap reports for a mod+b the page left unused.
+    const modB = {
+      jsonrpc: "2.0",
+      method: "t3/notifications/keydown",
+      params: { key: "b", code: "KeyB", metaKey: mac, ctrlKey: !mac },
+    };
+    using pageUrl = (() => {
+      const page = `<script>
+        addEventListener("message", function (event) {
+          if (event.data === "press") parent.postMessage(${JSON.stringify(modB)}, "*");
+        });
+        parent.postMessage(${JSON.stringify(sizeChanged(120))}, "*");
+      </script>`;
+      const url = URL.createObjectURL(new Blob([page], { type: "text/html" }));
+      return { url, [Symbol.dispose]: () => URL.revokeObjectURL(url) };
+    })();
+    const onContentHeight = vi.fn();
+    const replayed = vi.fn();
+    const keys = new AbortController();
+    using _keys = { [Symbol.dispose]: () => keys.abort() };
+    window.addEventListener("keydown", (event) => replayed(event.key, event.target), {
+      signal: keys.signal,
+    });
+    await using screen = await render(
+      <>
+        <style>{`iframe[title="Keys"] { display: block; width: 300px; height: 120px; }`}</style>
+        <HtmlRenderDocument src={pageUrl.url} title="Keys" onContentHeight={onContentHeight} />
+      </>,
+    );
+    await vi.waitFor(() => expect(onContentHeight).toHaveBeenCalled());
+    const frame = screen.getByTitle("Keys").element() as HTMLIFrameElement;
+
+    // The frame replays keys only while it has the focus and the reader was just active.
+    await userEvent.click(frame);
+    await vi.waitFor(() => expect(document.activeElement).toBe(frame));
+    frame.contentWindow?.postMessage("press", "*");
+
+    await vi.waitFor(() => expect(replayed).toHaveBeenCalledWith("b", frame));
   });
 });
 

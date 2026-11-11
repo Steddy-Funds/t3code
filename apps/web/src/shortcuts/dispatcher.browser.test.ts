@@ -1,6 +1,8 @@
 import type { KeybindingCommand, ResolvedKeybindingsConfig } from "@t3tools/contracts";
+import { DEFAULT_RESOLVED_KEYBINDINGS, isMacPlatform } from "@t3tools/shared/keybindings";
 import { describe, expect, it, vi } from "vite-plus/test";
 
+import { focusScopeProps } from "../lib/focusScopes";
 import { dispatchMenuAction, registerCommands, registerMenuAction } from "./dispatcher";
 
 function bindings(entries: ReadonlyArray<[string, KeybindingCommand]>): ResolvedKeybindingsConfig {
@@ -128,6 +130,56 @@ describe("command dispatcher", () => {
 
     expect(command).not.toHaveBeenCalled();
     expect(event.defaultPrevented).toBe(true);
+  });
+
+  it("runs a scoped default only for focus inside its scope, and nothing when it has no handler", () => {
+    const pane = document.createElement("div");
+    pane.setAttribute("data-focus-scope", focusScopeProps("code")["data-focus-scope"]);
+    // Focus sits in a shadow root, as in a code viewer: the key reaches the window targeting the host.
+    const code = document.createElement("div");
+    code.tabIndex = -1;
+    pane.attachShadow({ mode: "open" }).append(code);
+    const composer = document.createElement("textarea");
+    document.body.append(pane, composer);
+    const toggleSidebar = vi.fn();
+    const goToDeclaration = vi.fn();
+    const defaults = { keybindings: () => DEFAULT_RESOLVED_KEYBINDINGS };
+    using stack = new DisposableStack();
+    stack.defer(() => pane.remove());
+    stack.defer(() => composer.remove());
+    stack.defer(registerCommands({ "sidebar.toggle": toggleSidebar }, defaults));
+    const pressModB = (target: HTMLElement) => {
+      target.focus();
+      const mac = isMacPlatform(navigator.platform);
+      const event = new KeyboardEvent("keydown", {
+        key: "b",
+        metaKey: mac,
+        ctrlKey: !mac,
+        cancelable: true,
+        bubbles: true,
+        composed: true,
+      });
+      target.dispatchEvent(event);
+      return event;
+    };
+
+    // No handler yet: the command resolves, runs nothing, and the key stays the page's.
+    expect(pressModB(code).defaultPrevented).toBe(false);
+    expect(toggleSidebar).not.toHaveBeenCalled();
+
+    stack.defer(
+      registerCommands(
+        { "code.goToDeclaration": (event) => (goToDeclaration(), event.preventDefault()) },
+        defaults,
+      ),
+    );
+    expect(pressModB(code).defaultPrevented).toBe(true);
+    expect(goToDeclaration).toHaveBeenCalledOnce();
+    expect(toggleSidebar).not.toHaveBeenCalled();
+
+    pressModB(composer);
+    expect(toggleSidebar).toHaveBeenCalledOnce();
+    expect(goToDeclaration).toHaveBeenCalledOnce();
   });
 
   it("routes a menu action to its newest handler", () => {

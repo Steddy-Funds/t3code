@@ -316,6 +316,31 @@ describe("ClaudeAdapterV2 runtime query policy", () => {
     assert.deepInclude(options.settings, { autoCompactWindow: row.window });
   });
 
+  it("sends the thread's auto-compact window ahead of a launch-argument window for its model", () => {
+    const launchModelSettings = (window: number | "auto") => ({
+      "claude-opus-5-5": { maxEffortLevel: "high" as const, autoCompactWindow: window },
+      "claude-sonnet-5-5": { autoCompactWindow: 450_000 },
+    });
+    const settingsFor = (picked: string) =>
+      ClaudeAdapterV2.makeClaudeQueryOptions({
+        modelSelection: {
+          ...CLAUDE_TEST_MODEL_SELECTION,
+          model: "claude-opus-5-5",
+          options: [{ id: "autoCompactWindow", value: picked }],
+        },
+        nativeThreadId: "native-auto-compact-model",
+        resume: false,
+        cwd: "/workspace",
+        sdkSettings: { modelSettings: launchModelSettings(400_000) },
+      }).settings;
+    assert.deepInclude(settingsFor("200k"), {
+      autoCompactWindow: 200_000,
+      modelSettings: launchModelSettings(200_000),
+    });
+    assert.deepInclude(settingsFor("default"), { modelSettings: launchModelSettings(400_000) });
+    assert.notProperty(settingsFor("default"), "autoCompactWindow");
+  });
+
   it("passes every --add-dir launch directory to Claude", () => {
     const options = ClaudeAdapterV2.makeClaudeQueryOptions({
       modelSelection: CLAUDE_TEST_MODEL_SELECTION,
@@ -5934,6 +5959,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           for (const [ordinal, selection] of [
             [5, CLAUDE_TEST_RESTART_MODEL_SELECTION],
             [6, { ...normal, model: "claude-haiku-4-5-20251001" }],
+            [7, { ...normal, options: [{ id: "autoCompactWindow", value: "300k" }] }],
           ] as const) {
             const refused = yield* harness.runtime
               .startTurn(turn(ordinal, selection))

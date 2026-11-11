@@ -53,6 +53,8 @@ import {
 import {
   OrchestrationGetFullThreadDiffInput,
   OrchestrationGetFullThreadDiffResult,
+  OrchestrationGetTurnDiffFileContentsInput,
+  OrchestrationGetTurnDiffFileContentsResult,
   OrchestrationGetTurnDiffInput,
   OrchestrationGetTurnDiffResult,
 } from "./checkpointDiff.ts";
@@ -3707,6 +3709,7 @@ export type OrchestrationV2ServerCommand = OrchestrationV2Command | Orchestratio
 export const ORCHESTRATION_V2_WS_METHODS = {
   dispatchCommand: "orchestration.dispatchCommand",
   getTurnDiff: "orchestration.getTurnDiff",
+  getTurnDiffFileContents: "orchestration.getTurnDiffFileContents",
   getFullThreadDiff: "orchestration.getFullThreadDiff",
   searchThreads: "orchestration.searchThreads",
   searchThread: "orchestration.searchThread",
@@ -4377,6 +4380,10 @@ export const OrchestrationV2RpcSchemas = {
   getTurnDiff: {
     input: OrchestrationGetTurnDiffInput,
     output: OrchestrationGetTurnDiffResult,
+  },
+  getTurnDiffFileContents: {
+    input: OrchestrationGetTurnDiffFileContentsInput,
+    output: OrchestrationGetTurnDiffFileContentsResult,
   },
   getFullThreadDiff: {
     input: OrchestrationGetFullThreadDiffInput,

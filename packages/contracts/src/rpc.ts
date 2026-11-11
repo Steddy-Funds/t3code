@@ -137,6 +137,7 @@ import {
 import {
   OrchestrationGetFullThreadDiffError,
   OrchestrationGetTurnDiffError,
+  OrchestrationGetTurnDiffFileContentsError,
 } from "./checkpointDiff.ts";
 import {
   WorktreeSetupCancelInput,
@@ -1927,6 +1928,15 @@ const WsOrchestrationV2GetTurnDiffRpc = Rpc.make(ORCHESTRATION_V2_WS_METHODS.get
   error: Schema.Union([OrchestrationGetTurnDiffError, EnvironmentAuthorizationError]),
 });
 
+const WsOrchestrationV2GetTurnDiffFileContentsRpc = Rpc.make(
+  ORCHESTRATION_V2_WS_METHODS.getTurnDiffFileContents,
+  {
+    payload: OrchestrationV2RpcSchemas.getTurnDiffFileContents.input,
+    success: OrchestrationV2RpcSchemas.getTurnDiffFileContents.output,
+    error: Schema.Union([OrchestrationGetTurnDiffFileContentsError, EnvironmentAuthorizationError]),
+  },
+);
+
 const WsOrchestrationV2GetFullThreadDiffRpc = Rpc.make(
   ORCHESTRATION_V2_WS_METHODS.getFullThreadDiff,
   {
@@ -2456,6 +2466,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsOrchestrationV2ForceStopThreadRpc,
   WsOrchestrationV2GetTurnItemRpc,
   WsOrchestrationV2GetTurnDiffRpc,
+  WsOrchestrationV2GetTurnDiffFileContentsRpc,
   WsOrchestrationV2GetFullThreadDiffRpc,
   WsOrchestrationV2SearchThreadsRpc,
   WsOrchestrationV2SearchThreadRpc,

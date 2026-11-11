@@ -2146,6 +2146,10 @@ export const layerWsRpc = (
                 }),
             ),
           ),
+        [ORCHESTRATION_V2_WS_METHODS.getTurnDiffFileContents]: (input) =>
+          checkpointDiffQuery
+            .getTurnDiffFileContents(input)
+            .pipe(Effect.mapError(CheckpointDiffQuery.turnDiffFileContentsRpcError)),
         [ORCHESTRATION_V2_WS_METHODS.getFullThreadDiff]: (input) =>
           checkpointDiffQuery.getFullThreadDiff(input).pipe(
             Effect.mapError(

@@ -43,6 +43,18 @@ export interface VcsListAuthoredPathsInput {
   readonly toCheckpointRef: CheckpointRef;
 }
 
+export interface VcsReadCheckpointFileInput {
+  readonly cwd: string;
+  readonly checkpointRef: CheckpointRef;
+  /** Repository-relative, matched literally. */
+  readonly path: string;
+  readonly maxBytes: number;
+}
+
+export type VcsCheckpointFile =
+  | { readonly kind: "text"; readonly contents: string }
+  | { readonly kind: "missing" | "too_large" | "binary" | "not_a_file" };
+
 export interface VcsDeleteCheckpointRefsInput {
   readonly cwd: string;
   readonly checkpointRefs: ReadonlyArray<CheckpointRef>;
@@ -60,6 +72,10 @@ export interface VcsCheckpointOps {
   readonly listAuthoredPaths: (
     input: VcsListAuthoredPathsInput,
   ) => Effect.Effect<ReadonlySet<string> | null, VcsError>;
+  /** Reads one file as the checkpoint recorded it, never from the working tree. */
+  readonly readCheckpointFile: (
+    input: VcsReadCheckpointFileInput,
+  ) => Effect.Effect<VcsCheckpointFile, VcsError>;
   readonly deleteCheckpointRefs: (
     input: VcsDeleteCheckpointRefsInput,
   ) => Effect.Effect<void, VcsError>;

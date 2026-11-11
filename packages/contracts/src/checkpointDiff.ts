@@ -48,6 +48,48 @@ export type OrchestrationGetFullThreadDiffInput = typeof OrchestrationGetFullThr
 export const OrchestrationGetFullThreadDiffResult = ThreadTurnDiff;
 export type OrchestrationGetFullThreadDiffResult = typeof OrchestrationGetFullThreadDiffResult.Type;
 
+/** Git paths are bounded by the platform, not by Git; this is far above any real one. */
+const TurnDiffFilePath = TrimmedNonEmptyString.check(Schema.isMaxLength(4_096));
+
+export const OrchestrationGetTurnDiffFileContentsInput = TurnCountRange.mapFields(
+  Struct.assign({
+    threadId: ThreadId,
+    /** Repository-relative, as the turn diff names the file. */
+    path: TurnDiffFilePath,
+    /** The path before a rename, as the turn diff names it. */
+    previousPath: Schema.optionalKey(TurnDiffFilePath),
+  }),
+  { unsafePreserveChecks: true },
+);
+export type OrchestrationGetTurnDiffFileContentsInput =
+  typeof OrchestrationGetTurnDiffFileContentsInput.Type;
+
+/** A side the file does not exist on (added or deleted in the range) is the empty string. */
+export const OrchestrationGetTurnDiffFileContentsResult = Schema.Struct({
+  oldContents: Schema.String,
+  newContents: Schema.String,
+});
+export type OrchestrationGetTurnDiffFileContentsResult =
+  typeof OrchestrationGetTurnDiffFileContentsResult.Type;
+
+export const TurnDiffFileContentsUnavailableReason = Schema.Literals([
+  "not_in_diff",
+  "too_large",
+  "binary",
+  "unavailable",
+]);
+export type TurnDiffFileContentsUnavailableReason =
+  typeof TurnDiffFileContentsUnavailableReason.Type;
+
+export class OrchestrationGetTurnDiffFileContentsError extends Schema.TaggedError<OrchestrationGetTurnDiffFileContentsError>()(
+  "OrchestrationGetTurnDiffFileContentsError",
+  {
+    message: TrimmedNonEmptyString,
+    reason: TurnDiffFileContentsUnavailableReason,
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {}
+
 export class OrchestrationGetTurnDiffError extends Schema.TaggedError<OrchestrationGetTurnDiffError>()(
   "OrchestrationGetTurnDiffError",
   {

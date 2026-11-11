@@ -202,6 +202,12 @@ describe("ServerBrowserContexts", () => {
       // Shutdown ends the hosted browser rather than leaving it to time out.
       expect(hosted[1]!.commands).toEqual(["Browser.close"]);
       expect(hosted[1]!.close).toHaveBeenCalledOnce();
+      configuration.remote.endpoint.mockResolvedValue({
+        url: "wss://remote.test",
+        headers: { Authorization: "t" },
+      });
+      expect(await pool.remoteTakes(url)).toBe(false);
+      expect(launches.connect).toHaveBeenCalledTimes(3);
     } finally {
       vi.useRealTimers();
     }

@@ -260,7 +260,8 @@ export class ServerBrowserContexts {
   /** How to start the remote browser for `url`, or undefined when the page has to load in the local one. */
   private async remoteStart(url: string) {
     const remote = this.options.remote;
-    if (!remote || this.remoteDown) return undefined;
+    // Nothing would end a browser that connects after the pool closed.
+    if (!remote || this.closing || this.remoteDown) return undefined;
     const endpoint = await remote.endpoint();
     if (!endpoint || !(await remote.reaches(url))) return undefined;
     return async () => {

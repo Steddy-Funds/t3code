@@ -838,20 +838,24 @@ export const layer: Layer.Layer<
       });
       let effectiveHandoffs = handoffs;
       let resumeFellBack = false;
-      // Queued agent messages that joined this run go out with its opening message. A steering
-      // restart delivers a later message, and the provider already holds the opening ones.
+      // Queued agent messages that joined this run go out with its opening message. A restart
+      // delivers a steer instead, and the provider already holds the opening ones.
       const mergedMessageIds = new Set(
         projection.runs
           .filter((candidate) => candidate.mergedIntoRunId === run.id)
           .map((candidate) => candidate.userMessageId),
       );
-      const userMessageItems = projection.turnItems.filter(
-        (item) => item.type === "user_message" && item.runId === run.id,
+      const userMessageItems = projection.turnItems.flatMap((item) =>
+        item.type === "user_message" && item.runId === run.id ? [item] : [],
       );
-      const mergedItems =
-        userMessageItems[0]?.messageId === message.id
-          ? userMessageItems.filter((item) => mergedMessageIds.has(item.messageId))
-          : [];
+      const opensQueuedTurn =
+        userMessageItems.find((item) => item.messageId === message.id)?.inputIntent ===
+        "queued_turn";
+      const mergedItems = opensQueuedTurn
+        ? userMessageItems
+            .filter((item) => mergedMessageIds.has(item.messageId))
+            .toSorted((left, right) => left.ordinal - right.ordinal)
+        : [];
       const userText = mergedTurnText(
         [message, ...mergedItems].map((part) =>
           projectComposerContextForProvider({

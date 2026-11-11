@@ -44,7 +44,10 @@ import {
 import { ProviderOptionSelection, ProviderOptionSelectionValue } from "./model.ts";
 import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
 
-const OrchestratorMcpPrompt = TrimmedNonEmptyString.check(Schema.isMaxLength(120_000));
+export const ORCHESTRATOR_MCP_PROMPT_MAX_CHARS = 120_000;
+const OrchestratorMcpPrompt = TrimmedNonEmptyString.check(
+  Schema.isMaxLength(ORCHESTRATOR_MCP_PROMPT_MAX_CHARS),
+);
 const OrchestratorMcpTitle = TrimmedNonEmptyString.check(Schema.isMaxLength(512));
 export const OrchestratorMcpClientRequestId = TrimmedNonEmptyString.check(Schema.isMaxLength(256))
   .check(

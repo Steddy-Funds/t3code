@@ -1,12 +1,10 @@
-import type {
-  OrchestrationV2ConversationMessage,
-  OrchestrationV2Run,
-  OrchestrationV2ThreadProjection,
+import {
+  ORCHESTRATOR_MCP_PROMPT_MAX_CHARS,
+  type OrchestrationV2ConversationMessage,
+  type OrchestrationV2Run,
+  type OrchestrationV2ThreadProjection,
 } from "@t3tools/contracts";
 import { modelSelectionsEqual } from "@t3tools/shared/model";
-
-/** A merged turn stays within what `t3_thread_send` accepts for one message. */
-const MERGED_TURN_MAX_CHARS = 120_000;
 
 export function isAutomaticCompletionRun(
   projection: Pick<OrchestrationV2ThreadProjection, "runs" | "messages">,
@@ -106,7 +104,8 @@ export function queuedRunsMergedInto(
       break;
     }
     chars += message.text.length;
-    if (chars > MERGED_TURN_MAX_CHARS) break;
+    // A merged turn stays within what `t3_thread_send` accepts for one message.
+    if (chars > ORCHESTRATOR_MCP_PROMPT_MAX_CHARS) break;
     merged.push({ run, message });
   }
   return merged;

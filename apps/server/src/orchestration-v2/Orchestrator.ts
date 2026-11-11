@@ -2479,6 +2479,35 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                 },
               ],
             );
+      // Restart recovery returns a batch that never started to the queue with its merged rows
+      // pending. They are sent with it again.
+      const rejoinedEvents: ReadonlyArray<Omit<OrchestrationV2DomainEvent, "id">> =
+        projection.turnItems.flatMap((item) =>
+          item.type === "user_message" &&
+          item.runId === queuedRun.id &&
+          item.messageId !== queuedRun.userMessageId &&
+          item.inputIntent === "queued_turn" &&
+          item.status === "pending"
+            ? [
+                {
+                  type: "turn-item.updated" as const,
+                  threadId,
+                  runId: queuedRun.id,
+                  nodeId: rootNodeId,
+                  providerInstanceId: queuedRun.providerInstanceId,
+                  occurredAt: now,
+                  payload: {
+                    ...item,
+                    providerThreadId: queuedProviderThread.id,
+                    status: "completed" as const,
+                    startedAt: now,
+                    completedAt: now,
+                    updatedAt: now,
+                  },
+                },
+              ]
+            : [],
+        );
       const handoffTurnItem: OrchestrationV2TurnItem | null =
         activeHandoff === null
           ? null
@@ -2689,6 +2718,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
               yield* notificationTasks(threadId, queuedMessage, projection.subagents),
             ),
           },
+          ...rejoinedEvents,
           ...mergedEvents,
           {
             type: "run.updated",

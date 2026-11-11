@@ -1230,12 +1230,13 @@ it.effect("starts the agent messages queued behind one another in a single turn"
         const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
         const threadId = yield* startFirstTurn;
         const first = started[0]!;
-        // What t3_thread_send queues twice, then a person's message, then an agent's again.
+        // What t3_thread_send queues twice, then a person's message, then an agent's again. The
+        // first two ids sort against the order they were sent in.
         for (const [text, createdBy] of [
-          ["report one", "agent"],
-          ["report two", "agent"],
+          ["zulu report", "agent"],
+          ["alpha report", "agent"],
           ["mine", "user"],
-          ["report three", "agent"],
+          ["later report", "agent"],
         ] as const) {
           yield* orchestrator.dispatch({
             type: "message.dispatch",
@@ -1297,14 +1298,14 @@ it.effect("starts the agent messages queued behind one another in a single turn"
         yield* worker.drain();
         yield* Fiber.join(mergedTurnRunning);
 
-        const headRunId = queuedRunId("report one");
+        const headRunId = queuedRunId("zulu report");
         assert.lengthOf(started, 2);
         assert.equal(started[1]?.runId, headRunId);
-        assert.match(started[1]!.message.text, /report one[^]*report two/);
+        assert.match(started[1]!.message.text, /zulu report[^]*alpha report/);
         assert.notInclude(started[1]!.message.text, "mine");
         const after = yield* orchestrator.getThreadProjection(threadId);
         assert.deepInclude(
-          after.runs.find((run) => run.id === queuedRunId("report two")),
+          after.runs.find((run) => run.id === queuedRunId("alpha report")),
           { status: "cancelled", mergedIntoRunId: headRunId },
         );
         assert.deepEqual(
@@ -1312,16 +1313,16 @@ it.effect("starts the agent messages queued behind one another in a single turn"
             .filter((item) => item.type === "user_message" && item.runId === headRunId)
             .toSorted((left, right) => left.ordinal - right.ordinal)
             .map((item) => (item.type === "user_message" ? item.messageId : null)),
-          [MessageId.make("message:report one"), MessageId.make("message:report two")],
+          [MessageId.make("message:zulu report"), MessageId.make("message:alpha report")],
         );
         assert.equal(
-          after.messages.find((message) => message.id === "message:report two")?.runId,
+          after.messages.find((message) => message.id === "message:alpha report")?.runId,
           headRunId,
         );
         // Nothing moved ahead of the person's message.
         assert.deepEqual(
           after.runs.filter((run) => run.status === "queued").map((run) => run.userMessageId),
-          [MessageId.make("message:mine"), MessageId.make("message:report three")],
+          [MessageId.make("message:mine"), MessageId.make("message:later report")],
         );
 
         // A restart delivers its own message; the provider already holds the merged ones.

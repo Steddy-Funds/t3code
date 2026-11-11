@@ -508,12 +508,16 @@ it.effect.each([
   "starting-other-request",
   "starting-own-request",
   "starting-scheduled",
+  "starting-agent",
+  "starting-merged",
 ] as const)("recovers $0 work after restart", (scenario) => {
   const status = scenario.startsWith("starting") ? "starting" : scenario;
   const terminalized =
     status === "preparing" ||
     scenario === "starting-own-request" ||
-    scenario === "starting-scheduled";
+    scenario === "starting-scheduled" ||
+    scenario === "starting-agent";
+  const fromAgent = scenario === "starting-agent" || scenario === "starting-merged";
   const threadId = ThreadId.make("thread_queued_restart");
   const runId = RunId.make("run_queued_restart");
   const attemptId = RunAttemptId.make("attempt_queued_restart");
@@ -587,12 +591,22 @@ it.effect.each([
         ? [
             {
               id: MessageId.make("message_queued_restart"),
-              createdBy: "user",
+              createdBy: fromAgent ? "agent" : "user",
               ...(scenario === "starting-scheduled" ? { scheduledTaskId: "scheduled-task" } : {}),
             },
           ]
         : [],
-    turnItems: [],
+    // A run that opens with two messages carries a queued agent message merged into its turn.
+    turnItems: ["message_queued_restart", "message_merged_restart"]
+      .slice(0, scenario === "starting-merged" ? 2 : scenario === "starting-agent" ? 1 : 0)
+      .map((messageId) => ({
+        id: `item:${messageId}`,
+        type: "user_message",
+        runId,
+        messageId,
+        inputIntent: "queued_turn",
+        status: "completed",
+      })),
   } as unknown as OrchestrationV2ThreadProjection;
   const layer = ProviderRuntimeRecovery.layer.pipe(
     Layer.provide(ServerSettings.layerTest()),
@@ -660,6 +674,17 @@ it.effect.each([
       assert.isUndefined(attemptEvent);
       assert.isUndefined(nodeEvent);
     }
+    assert.deepEqual(
+      command.events.flatMap((event) =>
+        event.type === "turn-item.updated" ? [[event.payload.id, event.payload.status]] : [],
+      ),
+      scenario === "starting-merged"
+        ? [
+            ["item:message_queued_restart", "pending"],
+            ["item:message_merged_restart", "pending"],
+          ]
+        : [],
+    );
   }).pipe(Effect.provide(layer));
 });
 

@@ -3,6 +3,7 @@ import { MessageCircle, Trash2 } from "lucide-react";
 import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 
 import { Button } from "~/components/ui/button";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
 import {
   PullRequestMarkdownTextarea,
   type PullRequestCompletionScope,
@@ -20,6 +21,8 @@ interface DiffCommentSecondaryAction {
   readonly label: string;
   readonly icon?: ReactNode;
   readonly allowEmpty?: boolean;
+  /** ⌘/Ctrl+Shift+Enter runs this action instead of the primary one. */
+  readonly shiftEnter?: boolean;
   readonly onAction: (text: string) => void;
 }
 
@@ -31,6 +34,8 @@ interface DiffCommentAnnotationProps {
   kind: "draft" | "comment";
   rangeLabel: string;
   text: string;
+  /** Code the comment will open with, quoted; shown above a draft. */
+  quote?: string | undefined;
   onTextChange?: (text: string) => void;
   onCancel: () => void;
   onComment: (text: string) => void;
@@ -51,6 +56,7 @@ export function DiffCommentAnnotation({
   kind,
   rangeLabel,
   text,
+  quote,
   onTextChange,
   onCancel,
   onComment,
@@ -119,6 +125,19 @@ export function DiffCommentAnnotation({
     else finish(displayedText);
   };
 
+  const secondaryButtonProps = (speech: TextFieldSpeech | undefined) =>
+    ({
+      size: "xs",
+      variant: "outline",
+      disabled:
+        speech?.preparing ||
+        pending ||
+        (!speech?.blocksSubmission && !secondaryAction?.allowEmpty && !trimmedText),
+      onClick: () => {
+        if (secondaryAction) submit(speech, secondaryAction.onAction, secondaryAction.allowEmpty);
+      },
+    }) as const;
+
   // Pierre hides native carets and selection; textarea comments need their own visible feedback.
   const renderDraft = (speech?: TextFieldSpeech) => (
     <div
@@ -127,10 +146,15 @@ export function DiffCommentAnnotation({
       contentEditable={false}
       onPointerDown={(event) => event.stopPropagation()}
     >
+      {quote ? (
+        <p className="mb-1.5 line-clamp-2 whitespace-pre-wrap border-s-2 border-border ps-2 font-mono text-2xs text-muted-foreground">
+          {quote}
+        </p>
+      ) : null}
       <PullRequestMarkdownTextarea
         ref={textareaRef}
         completionScope={completionScope}
-        readOnly={speech?.freezesEditor}
+        readOnly={speech?.freezesEditor || pending}
         autoFocus={focusOnMount}
         size="sm"
         value={displayedText}
@@ -150,38 +174,44 @@ export function DiffCommentAnnotation({
           }
           if (isCommentSubmitShortcut(event, trimmedText, pending, speech?.blocksSubmission)) {
             event.preventDefault();
-            submit(speech, onComment);
+            if (event.shiftKey && secondaryAction?.shiftEnter) {
+              submit(speech, secondaryAction.onAction, secondaryAction.allowEmpty);
+            } else {
+              submit(speech, onComment);
+            }
           }
         }}
       />
       <div className="mt-1.5 flex flex-wrap items-center gap-1">
         <span className="mr-auto text-3xs text-muted-foreground/70">⌘/Ctrl Enter to send</span>
-        {speech ? <TextFieldSpeechControls speech={speech} disabled={pending} /> : null}
-        <Button variant="ghost-muted" size="xs" onClick={onCancel}>
-          Cancel
-        </Button>
-        {secondaryAction ? (
+        {/* One group, so a narrow panel wraps the buttons together and never one alone. */}
+        <div className="flex items-center gap-1">
+          {speech ? <TextFieldSpeechControls speech={speech} disabled={pending} /> : null}
+          <Button variant="ghost-muted" size="xs" onClick={onCancel}>
+            Cancel
+          </Button>
+          {secondaryAction?.shiftEnter ? (
+            <Tooltip>
+              <TooltipTrigger render={<Button {...secondaryButtonProps(speech)} />}>
+                {secondaryAction.icon}
+                {secondaryAction.label}
+              </TooltipTrigger>
+              <TooltipPopup side="top">⌘/Ctrl Shift Enter</TooltipPopup>
+            </Tooltip>
+          ) : secondaryAction ? (
+            <Button {...secondaryButtonProps(speech)}>
+              {secondaryAction.icon}
+              {secondaryAction.label}
+            </Button>
+          ) : null}
           <Button
             size="xs"
-            variant="outline"
-            disabled={
-              speech?.preparing ||
-              pending ||
-              (!speech?.blocksSubmission && !secondaryAction.allowEmpty && !trimmedText)
-            }
-            onClick={() => submit(speech, secondaryAction.onAction, secondaryAction.allowEmpty)}
+            disabled={speech?.preparing || pending || (!speech?.blocksSubmission && !trimmedText)}
+            onClick={() => submit(speech, onComment)}
           >
-            {secondaryAction.icon}
-            {secondaryAction.label}
+            {submitLabel}
           </Button>
-        ) : null}
-        <Button
-          size="xs"
-          disabled={speech?.preparing || pending || (!speech?.blocksSubmission && !trimmedText)}
-          onClick={() => submit(speech, onComment)}
-        >
-          {submitLabel}
-        </Button>
+        </div>
       </div>
     </div>
   );

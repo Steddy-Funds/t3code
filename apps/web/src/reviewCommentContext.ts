@@ -58,6 +58,11 @@ export function formatReviewCommentFence(language: string, contents: string): st
   return [`${fence}${language}`, contents.trimEnd(), fence].join("\n");
 }
 
+/** The section a comment on a file, rather than on a diff of it, belongs to. */
+export function fileReviewSectionId(filePath: string): string {
+  return `file:${filePath}`;
+}
+
 export function buildFileReviewComment(input: {
   id: string;
   filePath: string;
@@ -71,7 +76,7 @@ export function buildFileReviewComment(input: {
   const selectedLines = input.contents.split("\n").slice(startLine - 1, endLine);
   return {
     id: input.id,
-    sectionId: `file:${input.filePath}`,
+    sectionId: fileReviewSectionId(input.filePath),
     sectionTitle: "File comment",
     filePath: input.filePath,
     startIndex: startLine - 1,

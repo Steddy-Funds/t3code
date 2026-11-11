@@ -13,6 +13,7 @@ import { lazy, Suspense } from "react";
 import SideChatPane from "./SideChatPane";
 import type { ComposerImageAttachment, DraftId } from "../../composerDraftStore";
 import type { ShortcutMatchContext } from "../../keybindings";
+import type { SendReviewComments } from "../diffs/useReviewCommentDrafts";
 import type { SideChatParentPanel } from "../../lib/sideChatPane";
 import { type RightPanelSurface, useRightPanelStore } from "../../rightPanelStore";
 import {
@@ -74,6 +75,8 @@ export function RightPanelSurfaceContent(props: {
     annotation: PreviewAnnotationPayload,
     image: ComposerImageAttachment | null,
   ) => void;
+  /** Absent where there is no thread to send to, or this connection cannot send. */
+  readonly onSendReviewComments?: SendReviewComments;
   readonly onCloseSurface: (surface: RightPanelSurface) => void;
   readonly terminal: RightPanelTerminalProps;
   readonly pullRequest: RightPanelPullRequestProps;
@@ -114,6 +117,9 @@ export function RightPanelSurfaceContent(props: {
             composerDraftTarget={props.composerDraftTarget}
             workspaceMutationId={props.workspaceMutationId}
             visible={visible}
+            {...(props.onSendReviewComments
+              ? { onSendReviewComments: props.onSendReviewComments }
+              : {})}
           />
         </Suspense>
       );
@@ -230,6 +236,9 @@ export function RightPanelSurfaceContent(props: {
             onPendingChange={files.onPendingChange}
             selectedFilePending={surface.kind === "file" && files.pendingSurfaceIds.has(surface.id)}
             workspaceMutationId={props.workspaceMutationId}
+            {...(props.onSendReviewComments
+              ? { onSendReviewComments: props.onSendReviewComments }
+              : {})}
           />
         </Suspense>
       );

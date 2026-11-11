@@ -1,5 +1,7 @@
 import type { LineAnnotation, SelectedLineRange } from "@pierre/diffs";
 
+import type { ReviewCommentAnnotation } from "../diffs/useReviewCommentDrafts";
+
 export interface FileCommentAnnotationEntry {
   id: string;
   kind: "draft" | "comment";
@@ -14,25 +16,16 @@ export interface FileCommentAnnotationGroup {
 
 export type FileCommentLineAnnotation = LineAnnotation<FileCommentAnnotationGroup>;
 
-let fileCommentSequence = 0;
-
-export function nextFileCommentId(): string {
-  fileCommentSequence += 1;
-  return `file-comment-${Date.now()}-${fileCommentSequence}`;
+export interface FileCommentRange {
+  readonly startLine: number;
+  readonly endLine: number;
 }
 
-export function normalizeFileCommentRange(range: SelectedLineRange): {
-  startLine: number;
-  endLine: number;
-} {
+export function normalizeFileCommentRange(range: SelectedLineRange): FileCommentRange {
   return {
     startLine: Math.min(range.start, range.end),
     endLine: Math.max(range.start, range.end),
   };
-}
-
-export function formatFileCommentRange(startLine: number, endLine: number): string {
-  return startLine === endLine ? `L${startLine}` : `L${startLine} to L${endLine}`;
 }
 
 export function remapFileCommentAnnotations(
@@ -51,4 +44,83 @@ export function remapFileCommentAnnotations(
       }),
     },
   }));
+}
+
+/** The file's comments as the viewer takes them: grouped on the last line of each range. */
+export function fileCommentLineAnnotations(
+  annotations: ReadonlyArray<ReviewCommentAnnotation<FileCommentRange>>,
+): FileCommentLineAnnotation[] {
+  const byLine = new Map<number, FileCommentAnnotationEntry[]>();
+  for (const annotation of annotations) {
+    const entry: FileCommentAnnotationEntry =
+      annotation.kind === "draft"
+        ? // A draft's text stays out, so typing in the box does not re-render the file.
+          { id: annotation.id, kind: "draft", ...annotation.range, text: "" }
+        : {
+            id: annotation.id,
+            kind: "comment",
+            startLine: annotation.comment.startIndex + 1,
+            endLine: annotation.comment.endIndex + 1,
+            text: annotation.comment.text,
+          };
+    byLine.set(entry.endLine, [...(byLine.get(entry.endLine) ?? []), entry]);
+  }
+  return Array.from(byLine, ([lineNumber, entries]) => ({ lineNumber, metadata: { entries } }));
+}
+
+/** Whether two annotation lists show the same comments on the same lines. */
+export function sameFileCommentAnnotations(
+  left: ReadonlyArray<FileCommentLineAnnotation>,
+  right: ReadonlyArray<FileCommentLineAnnotation>,
+): boolean {
+  return (
+    left.length === right.length &&
+    left.every((annotation, index) => {
+      const other = right[index];
+      return (
+        other !== undefined &&
+        annotation.lineNumber === other.lineNumber &&
+        annotation.metadata.entries.length === other.metadata.entries.length &&
+        annotation.metadata.entries.every((entry, entryIndex) => {
+          const otherEntry = other.metadata.entries[entryIndex];
+          return (
+            otherEntry !== undefined &&
+            entry.id === otherEntry.id &&
+            entry.kind === otherEntry.kind &&
+            entry.startLine === otherEntry.startLine &&
+            entry.endLine === otherEntry.endLine &&
+            entry.text === otherEntry.text
+          );
+        })
+      );
+    })
+  );
+}
+
+interface EditorPosition {
+  readonly line: number;
+  readonly character: number;
+}
+
+/** The text of the editor's first selection that is not just a caret. */
+export function editorSelectedText(
+  text: string,
+  selections: ReadonlyArray<{ readonly start: EditorPosition; readonly end: EditorPosition }>,
+): string | undefined {
+  const selection = selections.find(
+    ({ start, end }) => start.line !== end.line || start.character !== end.character,
+  );
+  if (!selection) return undefined;
+  const backward =
+    selection.start.line > selection.end.line ||
+    (selection.start.line === selection.end.line &&
+      selection.start.character > selection.end.character);
+  const from = backward ? selection.end : selection.start;
+  const to = backward ? selection.start : selection.end;
+  const lines = text.split("\n").slice(from.line, to.line + 1);
+  const last = lines.length - 1;
+  if (last < 0) return undefined;
+  lines[last] = lines[last]!.slice(0, to.character);
+  lines[0] = lines[0]!.slice(from.character);
+  return lines.join("\n");
 }

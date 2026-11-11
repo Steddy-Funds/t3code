@@ -1,3 +1,4 @@
+import { useDiffThemeName } from "../hooks/useDiffThemeName";
 import { RefreshIcon } from "~/components/ui/refresh-icon";
 import { useAtomValue } from "@effect/atom-react";
 import type { FileDiffContentsLoader, FileDiffMetadata } from "@pierre/diffs";
@@ -48,7 +49,6 @@ import {
   buildFileDiffIdentityKey,
   getDiffLineStat,
   getRenderablePatch,
-  resolveDiffThemeName,
   resolveFileDiffPath,
 } from "../lib/diffRendering";
 import { PREFERRED_HIGHLIGHTER } from "../lib/syntaxHighlighting";
@@ -221,6 +221,7 @@ export default function DiffPanel({
   visible,
 }: DiffPanelProps) {
   const resolvedTheme = useRenderedAppearance();
+  const diffThemeName = useDiffThemeName(resolvedTheme);
   const settings = useClientSettings((settings) => ({
     diffFilesCollapsed: settings.diffFilesCollapsed,
     diffIgnoreWhitespace: settings.diffIgnoreWhitespace,
@@ -1485,7 +1486,7 @@ export default function DiffPanel({
                       diffStyle: diffLayout === "split" ? "split" : "unified",
                       lineDiffType: "none",
                       overflow: wordWrap ? "wrap" : "scroll",
-                      theme: resolveDiffThemeName(resolvedTheme),
+                      theme: diffThemeName,
                       preferredHighlighter: PREFERRED_HIGHLIGHTER,
                       themeType: resolvedTheme as DiffThemeType,
                       stickyHeaders: true,

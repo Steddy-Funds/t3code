@@ -11,16 +11,19 @@ import {
   EMBER_THEME,
   GROVE_THEME,
   IRIS_THEME,
+  MATERIAL_OCEAN_THEME,
   OCEAN_THEME,
   T3_CHAT_THEME,
   T3_CODE_LIGHT_THEME_COLORS,
   T3_CODE_DARK_THEME_COLORS,
   RESERVED_THEME_IDS,
   THEME_COLOR_ROLES,
+  getThemeEditorColors,
   type ThemeAppearance,
   type ThemeColorRole,
   type ThemeColors,
   type ThemeDefinition,
+  type ThemeEditorColors,
   type ThemeVariants,
 } from "@t3tools/shared/themePalettes";
 import {
@@ -32,7 +35,15 @@ import {
 import { appAtomRegistry, subscribeAtomChanges } from "./rpc/atomRegistry";
 import { themeServerEnvironmentThemesAtom } from "./state/server";
 
-export { EMBER_THEME, GROVE_THEME, IRIS_THEME, OCEAN_THEME, T3_CHAT_THEME, THEME_COLOR_ROLES };
+export {
+  EMBER_THEME,
+  GROVE_THEME,
+  IRIS_THEME,
+  MATERIAL_OCEAN_THEME,
+  OCEAN_THEME,
+  T3_CHAT_THEME,
+  THEME_COLOR_ROLES,
+};
 export type { ThemeAppearance, ThemeColorRole, ThemeColors, ThemeDefinition, ThemeVariants };
 
 const T3_CHAT_THEME_ID = "t3-chat" as const;
@@ -1609,6 +1620,34 @@ export function getThemeColorVariable(role: ThemeColorRole): string {
   return APP_THEME_VARIABLES[role];
 }
 
+function themeEditorVariables(editor: ThemeEditorColors): Readonly<Record<string, string>> {
+  return {
+    "--app-theme-editor-line-number": editor.lineNumber,
+    "--app-theme-editor-diff-addition": editor.diff.inserted.line,
+    "--app-theme-editor-diff-addition-word": editor.diff.inserted.word,
+    "--app-theme-editor-diff-deletion": editor.diff.deleted.line,
+    "--app-theme-editor-diff-deletion-word": editor.diff.deleted.word,
+    "--app-theme-editor-find-match": editor.find.match,
+    "--app-theme-editor-find-current-match": editor.find.currentMatch,
+    "--app-theme-editor-find-foreground": editor.find.foreground,
+  };
+}
+
+const THEME_EDITOR_VARIABLE_NAMES = Object.keys(
+  themeEditorVariables(MATERIAL_OCEAN_THEME.editor!.dark!),
+);
+
+// Code surfaces fall back to their stock colours when these are absent, so a theme
+// without editor colours must clear the ones the previous theme set.
+function applyThemeEditorVariables(root: HTMLElement, editor: ThemeEditorColors | null): void {
+  const variables = editor ? themeEditorVariables(editor) : null;
+  for (const name of THEME_EDITOR_VARIABLE_NAMES) {
+    const value = variables?.[name];
+    if (value) root.style.setProperty(name, value);
+    else root.style.removeProperty(name);
+  }
+}
+
 export const THEME_PREVIEW_ID = "__preview";
 
 /** Callers must restore the stored theme with refreshTheme when the draft closes. */
@@ -1622,6 +1661,7 @@ export function applyThemeColorPreview(colors: ThemeColors, appearance: ThemeApp
   for (const [role, value] of Object.entries(colors) as Array<[ThemeColorRole, string]>) {
     if (isThemeColor(value)) root.style.setProperty(APP_THEME_VARIABLES[role], value);
   }
+  applyThemeEditorVariables(root, null);
   applyContextChipVariables(root, colors);
   setThemePreviewAppearance(appearance);
 }
@@ -1642,6 +1682,7 @@ export function applyThemePalette(theme: ThemePreference, appearance?: ThemeAppe
     for (const [role, value] of Object.entries(colors) as Array<[ThemeColorRole, string]>) {
       root.style.setProperty(APP_THEME_VARIABLES[role], value);
     }
+    applyThemeEditorVariables(root, getThemeEditorColors(palette, mode));
     applyContextChipVariables(root, colors);
     return;
   }
@@ -1650,6 +1691,7 @@ export function applyThemePalette(theme: ThemePreference, appearance?: ThemeAppe
   for (const variable of Object.values(APP_THEME_VARIABLES)) {
     root.style.removeProperty(variable);
   }
+  applyThemeEditorVariables(root, null);
   applyContextChipVariables(root, getStandardPaintedThemeColors(appearance ?? "light"));
 }
 

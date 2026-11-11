@@ -1,4 +1,5 @@
 import { getResolvedOrResolveTheme, registerCustomTheme, type DiffsTheme } from "@pierre/diffs";
+import { BUILT_IN_THEMES } from "@t3tools/shared/themePalettes";
 
 /** pierre-light with every syntax color darkened until it reads on every light code surface. */
 export const READABLE_LIGHT_THEME_NAME = "t3-light";
@@ -74,3 +75,9 @@ registerCustomTheme(
   },
   "zed",
 );
+
+for (const theme of BUILT_IN_THEMES) {
+  for (const editor of Object.values(theme.editor ?? {})) {
+    registerCustomTheme(editor.syntax.name, () => Promise.resolve(editor.syntax), "zed");
+  }
+}

@@ -1,3 +1,4 @@
+import { useDiffThemeName } from "../hooks/useDiffThemeName";
 import { buildFileLinkParentSuffixByPath, fileLinkLabel } from "@t3tools/shared/fileLinks";
 import {
   isWindowsDrivePathHref,
@@ -130,7 +131,6 @@ import {
   usePreferredEditor,
 } from "../editorPreferences";
 import { openInEditorMenuLabel } from "../editorLabels";
-import { resolveDiffThemeName } from "../lib/diffRendering";
 import { RenderErrorBoundary } from "./RenderErrorBoundary";
 import { useRenderedAppearance } from "../hooks/useTheme";
 import { useClientSettings } from "../hooks/useSettings";
@@ -651,7 +651,7 @@ function useChatMarkdownState({
       input: { cwd: filePath, editor: "file-manager", reveal: true },
     });
   };
-  const diffThemeName = resolveDiffThemeName(resolvedTheme);
+  const diffThemeName = useDiffThemeName(resolvedTheme);
   const handleCopy = (event: ReactClipboardEvent<HTMLElement>) => {
     const selection = window.getSelection();
     if (!selection || selection.isCollapsed || !event.clipboardData) return;

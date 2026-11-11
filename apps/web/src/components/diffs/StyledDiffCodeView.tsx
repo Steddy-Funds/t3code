@@ -20,15 +20,18 @@ export const DIFF_VIEW_UNSAFE_CSS = `${DIFF_SURFACE_THEME_UNSAFE_CSS}
   --diffs-code-grid: var(--diffs-grid-number-column-width) minmax(0, 1fr);
 }
 
-/* Translucent find matches keep the syntax colours under them. */
+/* Translucent find matches keep the syntax colours under them. A theme with its own
+   find colours (--app-theme-editor-find-*) paints them solid, as its scheme does. */
 :host {
-  --diffs-bg-search-match-override: light-dark(#ff963288, #ff963266);
-  --diffs-bg-search-match-current-override: color-mix(
-    in lab,
-    var(--diffs-modified-base) 45%,
-    transparent
+  --diffs-bg-search-match-override: var(
+    --app-theme-editor-find-match,
+    light-dark(#ff963288, #ff963266)
   );
-  --diffs-fg-search-match-override: currentColor;
+  --diffs-bg-search-match-current-override: var(
+    --app-theme-editor-find-current-match,
+    color-mix(in lab, var(--diffs-modified-base) 45%, transparent)
+  );
+  --diffs-fg-search-match-override: var(--app-theme-editor-find-foreground, currentColor);
 }
 
 :is(

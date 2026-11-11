@@ -32,6 +32,7 @@ import {
   type ThreadId,
 } from "@t3tools/contracts";
 import { getTerminalLabel } from "@t3tools/shared/terminalLabels";
+import type { ThemeAnsiColors } from "@t3tools/shared/themePalettes";
 import * as Schema from "effect/Schema";
 import { AsyncResult } from "effect/reactivity";
 import {
@@ -60,6 +61,7 @@ import {
   GhosttyTerminalSurface,
   type GhosttyTerminalSurfaceOptions,
 } from "~/terminal/ghostty/surface";
+import { getRenderedThemeEditorColors } from "~/hooks/useTheme";
 import { type GhosttyColor, type GhosttyTheme } from "~/terminal/ghostty/core";
 import { useOpenInPreferredEditor } from "../editorPreferences";
 import { resolvePathLinkTarget } from "@t3tools/shared/fileLinks";
@@ -279,6 +281,20 @@ const TERMINAL_PALETTES = {
   ].map(hexToGhosttyColor),
 };
 
+const themeTerminalPalettes = new WeakMap<ThemeAnsiColors, GhosttyColor[]>();
+
+/** The painted theme's ANSI colours when it has them for this appearance, else the stock ones. */
+function terminalPalette(appearance: "light" | "dark"): GhosttyColor[] {
+  const editorColors = getRenderedThemeEditorColors();
+  if (editorColors?.syntax.appearance !== appearance) return TERMINAL_PALETTES[appearance];
+  let palette = themeTerminalPalettes.get(editorColors.ansi);
+  if (!palette) {
+    palette = editorColors.ansi.map(hexToGhosttyColor);
+    themeTerminalPalettes.set(editorColors.ansi, palette);
+  }
+  return palette;
+}
+
 // Read visibility when WASM finishes loading, not when setup starts.
 function withLiveVisibility(
   visibleRef: { readonly current: boolean },
@@ -382,7 +398,7 @@ export function terminalThemeFromApp(mountElement?: HTMLElement | null): Ghostty
       terminalCursor,
       isDark ? { r: 180, g: 203, b: 255 } : { r: 38, g: 56, b: 78 },
     ),
-    palette: TERMINAL_PALETTES[isDark ? "dark" : "light"],
+    palette: terminalPalette(isDark ? "dark" : "light"),
     selectionBackground: terminalSelection,
   };
 }

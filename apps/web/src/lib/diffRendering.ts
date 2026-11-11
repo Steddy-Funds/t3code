@@ -1,6 +1,11 @@
 import { parsePatchFiles } from "@pierre/diffs/utils/parsePatchFiles";
 import { parseDiffFromFile } from "@pierre/diffs";
 import type { FileDiffMetadata } from "@pierre/diffs/types";
+import {
+  THEME_SYNTAX_THEME_NAMES,
+  type ThemeAppearance,
+  type ThemeEditorColors,
+} from "@t3tools/shared/themePalettes";
 import { READABLE_LIGHT_THEME_NAME } from "./readableSyntaxTheme";
 
 // Light mode uses a darker pierre-light so syntax stays readable on every code surface.
@@ -9,10 +14,22 @@ export const DIFF_THEME_NAMES = {
   dark: "pierre-dark",
 } as const;
 
-export type DiffThemeName = (typeof DIFF_THEME_NAMES)[keyof typeof DIFF_THEME_NAMES];
+/** Every syntax theme a code surface can be asked for: the stock pair and the themes' own. */
+export const ALL_DIFF_THEME_NAMES = [
+  ...Object.values(DIFF_THEME_NAMES),
+  ...THEME_SYNTAX_THEME_NAMES,
+] as const;
 
-export function resolveDiffThemeName(theme: "light" | "dark"): DiffThemeName {
-  return DIFF_THEME_NAMES[theme];
+export type DiffThemeName = (typeof ALL_DIFF_THEME_NAMES)[number];
+
+/** The painted theme's syntax theme when it has one for this appearance, else the stock pair's. */
+export function resolveDiffThemeName(
+  appearance: ThemeAppearance,
+  editorColors: ThemeEditorColors | null = null,
+): DiffThemeName {
+  return editorColors?.syntax.appearance === appearance
+    ? editorColors.syntax.name
+    : DIFF_THEME_NAMES[appearance];
 }
 
 const FNV_OFFSET_BASIS_32 = 0x811c9dc5;
@@ -292,38 +309,50 @@ export const DIFF_SURFACE_THEME_UNSAFE_CSS = `
   );
   --diffs-bg-buffer-override: color-mix(in srgb, var(--code-background) 90%, var(--code-foreground));
 
-  --diffs-bg-addition-override: light-dark(
-    color-mix(in srgb, var(--code-background) 50%, var(--diff-addition)),
-    color-mix(in srgb, var(--code-background) 70%, var(--diff-addition))
+  /* A theme with its own editor colours sets --app-theme-editor-*; every other theme
+     takes the fallback, which is the tint it always had. */
+  --diffs-bg-addition-override: var(
+    --app-theme-editor-diff-addition,
+    light-dark(
+      color-mix(in srgb, var(--code-background) 50%, var(--diff-addition)),
+      color-mix(in srgb, var(--code-background) 70%, var(--diff-addition))
+    )
   );
-  --diffs-bg-addition-number-override: light-dark(
-    color-mix(in srgb, var(--code-background) 35%, var(--diff-addition)),
-    color-mix(in srgb, var(--code-background) 60%, var(--diff-addition))
+  --diffs-bg-addition-number-override: var(
+    --app-theme-editor-diff-addition,
+    light-dark(
+      color-mix(in srgb, var(--code-background) 35%, var(--diff-addition)),
+      color-mix(in srgb, var(--code-background) 60%, var(--diff-addition))
+    )
   );
   --diffs-bg-addition-hover-override: color-mix(in srgb, var(--code-background) 85%, var(--diff-addition));
-  --diffs-bg-addition-emphasis-override: color-mix(
-    in srgb,
-    var(--code-background) 80%,
-    var(--diff-addition)
+  --diffs-bg-addition-emphasis-override: var(
+    --app-theme-editor-diff-addition-word,
+    color-mix(in srgb, var(--code-background) 80%, var(--diff-addition))
   );
 
-  --diffs-bg-deletion-override: light-dark(
-    color-mix(in srgb, var(--code-background) 50%, var(--diff-deletion)),
-    color-mix(in srgb, var(--code-background) 70%, var(--diff-deletion))
+  --diffs-bg-deletion-override: var(
+    --app-theme-editor-diff-deletion,
+    light-dark(
+      color-mix(in srgb, var(--code-background) 50%, var(--diff-deletion)),
+      color-mix(in srgb, var(--code-background) 70%, var(--diff-deletion))
+    )
   );
-  --diffs-bg-deletion-number-override: light-dark(
-    color-mix(in srgb, var(--code-background) 35%, var(--diff-deletion)),
-    color-mix(in srgb, var(--code-background) 60%, var(--diff-deletion))
+  --diffs-bg-deletion-number-override: var(
+    --app-theme-editor-diff-deletion,
+    light-dark(
+      color-mix(in srgb, var(--code-background) 35%, var(--diff-deletion)),
+      color-mix(in srgb, var(--code-background) 60%, var(--diff-deletion))
+    )
   );
   --diffs-bg-deletion-hover-override: color-mix(
     in srgb,
     var(--code-background) 85%,
     var(--diff-deletion)
   );
-  --diffs-bg-deletion-emphasis-override: color-mix(
-    in srgb,
-    var(--code-background) 80%,
-    var(--diff-deletion)
+  --diffs-bg-deletion-emphasis-override: var(
+    --app-theme-editor-diff-deletion-word,
+    color-mix(in srgb, var(--code-background) 80%, var(--diff-deletion))
   );
 
   background-color: var(--diffs-bg) !important;

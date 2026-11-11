@@ -7,6 +7,7 @@ import { BUILT_IN_THEME_IDS, type BuiltInThemeId } from "@t3tools/shared/themePa
 
 import {
   createMobileThemeVariables,
+  getMobileThemeAppearances,
   getMobileThemeColors,
   getMobileThemeVariables,
   DEFAULT_MOBILE_THEME_ID,
@@ -158,7 +159,7 @@ const ADAPTIVE_COLORS: Readonly<Record<string, readonly [light: string, dark: st
 };
 
 export const customThemeNames = BUILT_IN_THEME_IDS.flatMap((themeId) =>
-  APPEARANCES.map((appearance) => `${themeId}-${appearance}`),
+  getMobileThemeAppearances(themeId).map((appearance) => `${themeId}-${appearance}`),
 );
 
 const adaptiveVariablesFor = (appearance: MobileThemeAppearance) =>
@@ -228,7 +229,7 @@ export const renderUniwindThemesCSS = () => {
       }),
     ),
     ...BUILT_IN_THEME_IDS.flatMap((themeId) =>
-      APPEARANCES.map((appearance) =>
+      getMobileThemeAppearances(themeId).map((appearance) =>
         renderVariant(`${themeId}-${appearance}`, variablesFor(themeId, appearance)),
       ),
     ),

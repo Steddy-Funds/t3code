@@ -121,6 +121,14 @@
               chrome: "oklch(0.225975 0.031062 293.741)",
             },
           },
+          "material-ocean": {
+            dark: {
+              background: "#263238",
+              foreground: "#B0BEC5",
+              accent: "#009688",
+              chrome: "#263238",
+            },
+          },
         };
         const BUILT_IN_THEME_MODES = Object.fromEntries(
           Object.entries(BUILT_IN_THEME_PALETTES).map(([id, palettes]) => [
@@ -137,6 +145,7 @@
           "ocean",
           "ember",
           "iris",
+          "material-ocean",
           "t3-chat-dark",
           "t3-grove",
           "t3-ocean",
@@ -242,7 +251,10 @@
             themeModes !== null;
           const theme = isKnownTheme && storedTheme ? storedTheme : "system";
           const isThemed = isKnownTheme && themeModes !== null;
-          const baseAppearance = customTheme ? customTheme.appearance : "light";
+          // A built-in lists its base appearance first; one without a light palette is dark.
+          const baseAppearance = customTheme
+            ? customTheme.appearance
+            : (builtInModes?.[0] ?? "light");
           const systemMode = prefersDark ? "dark" : "light";
           const storedAppearanceMode = window.localStorage.getItem(
             THEME_APPEARANCE_MODE_STORAGE_KEY,

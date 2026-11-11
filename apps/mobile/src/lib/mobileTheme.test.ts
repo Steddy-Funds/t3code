@@ -23,6 +23,7 @@ import {
   resolveMobileThemeIds,
   themeColorWithAlpha,
   themeColorToNativeColor,
+  getMobileThemeAppearances,
 } from "./mobileTheme";
 
 function relativeLuminance(hex: string): number {
@@ -68,7 +69,7 @@ describe("mobile themes", () => {
   });
 
   it.each(MOBILE_THEME_IDS)("uses the web color roles for %s in both appearances", (themeId) => {
-    for (const appearance of ["light", "dark"] as const) {
+    for (const appearance of getMobileThemeAppearances(themeId)) {
       const theme = BUILT_IN_THEMES.find((candidate) => candidate.id === themeId);
       const colors = theme
         ? getThemeColorsForAppearance(theme, appearance)!
@@ -145,7 +146,7 @@ describe("mobile themes", () => {
   });
 
   it.each(MOBILE_THEME_IDS)("keeps %s sidebar text readable on Android", (themeId) => {
-    for (const appearance of ["light", "dark"] as const) {
+    for (const appearance of getMobileThemeAppearances(themeId)) {
       const variables = getMobileThemeRuntimeVariables(themeId, appearance, "android");
       for (const foreground of [
         "--color-drawer-foreground",
@@ -160,7 +161,7 @@ describe("mobile themes", () => {
   });
 
   it.each(MOBILE_THEME_IDS)("separates %s filled groups from their sheets", (themeId) => {
-    for (const appearance of ["light", "dark"] as const) {
+    for (const appearance of getMobileThemeAppearances(themeId)) {
       const generated = readGeneratedMobileThemeVariables(
         themeId === DEFAULT_MOBILE_THEME_ID ? appearance : `${themeId}-${appearance}`,
       );
@@ -260,7 +261,7 @@ describe("mobile themes", () => {
 
   it("keeps placeholders and selected-row labels readable on their mobile surfaces", () => {
     for (const themeId of BUILT_IN_THEME_IDS) {
-      for (const appearance of ["light", "dark"] as const) {
+      for (const appearance of getMobileThemeAppearances(themeId)) {
         const variables = getMobileThemeVariables(themeId, appearance);
         expect(
           contrastRatio(variables["--color-placeholder"], variables["--color-input"]),
@@ -269,7 +270,7 @@ describe("mobile themes", () => {
     }
 
     for (const themeId of BUILT_IN_THEME_IDS) {
-      for (const appearance of ["light", "dark"] as const) {
+      for (const appearance of getMobileThemeAppearances(themeId)) {
         const variables = getMobileThemeVariables(themeId, appearance);
         expect(
           contrastRatio(

@@ -3,12 +3,14 @@ import type { DesktopBridge } from "@t3tools/contracts";
 import { safeErrorLogAttributes } from "@t3tools/client-runtime/errors";
 import * as Schema from "effect/Schema";
 import { useSyncExternalStore } from "react";
+import { getThemeEditorColors, type ThemeEditorColors } from "@t3tools/shared/themePalettes";
 import {
   applyThemePalette,
   CUSTOM_THEMES_STORAGE_KEY,
   invalidateCustomThemes,
   canonicalThemePreference,
   isKnownThemePreference,
+  getThemeDefinition,
   getThemePreferenceMode,
   getThemePreviewAppearance,
   parseThemeHalves,
@@ -503,6 +505,27 @@ export function subscribeRenderedAppearance(listener: () => void): () => void {
 
 export function getRenderedAppearance(): ThemeAppearance {
   return getThemePreviewAppearance() ?? getSnapshot().resolvedTheme;
+}
+
+/**
+ * The painted theme's own code and terminal colours. Null under the stock themes, a theme
+ * without them, and a theme editor preview, which paints a draft over the stored theme.
+ */
+export function getRenderedThemeEditorColors(): ThemeEditorColors | null {
+  if (getThemePreviewAppearance() !== null) return null;
+  const { theme, themeHalves, resolvedTheme } = getSnapshot();
+  return getThemeEditorColors(
+    getThemeDefinition(resolveThemeHalf(theme, themeHalves, resolvedTheme)),
+    resolvedTheme,
+  );
+}
+
+export function useRenderedThemeEditorColors(): ThemeEditorColors | null {
+  return useSyncExternalStore(
+    subscribeRenderedAppearance,
+    getRenderedThemeEditorColors,
+    () => null,
+  );
 }
 
 export function useRenderedAppearance() {

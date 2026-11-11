@@ -239,7 +239,7 @@ const make = Effect.gen(function* () {
             ),
             Effect.tap(() => pool.reportOutcome(live, "answered")),
           );
-        return yield* use(live, send).pipe(
+        return yield* live.gate.withPermits(1)(use(live, send)).pipe(
           Effect.catchTags({
             LspResponseError: (error) => Effect.fail(fail("server_failed", error.message)),
             LspConnectionClosedError: () => {
@@ -312,65 +312,75 @@ const make = Effect.gen(function* () {
     (live.context.python?.libraryRoots ?? []).map((root) => root.path);
 
   /**
-   * Maps server locations to what a client may open. A location in a server-internal path is
-   * dropped, and a preview line is read through the same rule as any file read.
+   * Maps server locations to what a client may open, one result an input (`undefined` for a
+   * dropped one). A location in a server-internal path is dropped, and a preview line is read
+   * through the same rule as any file read. Each file is read once and only its asked-for lines
+   * are kept, so a wide answer never holds hundreds of files at a time.
    */
-  const makeLocator = (live: LanguageServerPool.LiveServer, withLineText: boolean) => {
+  const locateEach = Effect.fnUntraced(function* (
+    live: LanguageServerPool.LiveServer,
+    locations: ReadonlyArray<LspResults.LspLocation>,
+    withLineText: boolean,
+  ) {
     const libraryRoots = libraryRootPaths(live);
-    const files = new Map<
-      string,
-      Effect.Effect<{ readonly real: string; readonly lines: ReadonlyArray<string> } | undefined>
-    >();
-    const readFile = Effect.fnUntraced(function* (lexical: string) {
-      const real = yield* fileSystem
-        .realPath(lexical)
-        .pipe(Effect.orElseSucceed(() => path.resolve(lexical)));
-      if (yield* isServerInternalPath(real)) return undefined;
-      if (!withLineText) return { real, lines: [] };
-      const contents = yield* workspaceFileSystem
-        .readFile({ cwd: live.root, relativePath: real })
-        .pipe(
-          Effect.map((file) => file.contents),
-          Effect.orElseSucceed(() => ""),
-        );
-      return { real, lines: contents.split(/\r?\n/) };
-    });
-    return Effect.fnUntraced(function* (location: LspResults.LspLocation) {
+    const byFile = new Map<string, Array<number>>();
+    locations.forEach((location, index) => {
       const lexical = uriToPath(location.uri);
-      if (lexical === undefined) return undefined;
-      let read = files.get(lexical);
-      if (read === undefined) {
-        read = yield* Effect.cached(readFile(lexical));
-        files.set(lexical, read);
-      }
-      const file = yield* read;
-      if (file === undefined) return undefined;
-      const inside =
-        KnownWorkspaces.isWithinRoot(path, lexical, live.root) &&
-        KnownWorkspaces.isWithinRoot(path, file.real, live.root);
-      const external =
-        !inside ||
-        libraryRoots.some((root) => KnownWorkspaces.isWithinRoot(path, file.real, root)) ||
-        file.real
-          .split(path.sep)
-          .some((segment) => segment === "node_modules" || segment === "site-packages");
-      const lineText = file.lines[location.range.start.line];
-      return {
-        path: inside ? path.relative(live.root, lexical).split(path.sep).join("/") : file.real,
-        external,
-        range: location.range,
-        ...(lineText === undefined || lineText.length === 0
-          ? {}
-          : { lineText: lineText.slice(0, CODE_INTEL_LINE_TEXT_MAX_LENGTH) }),
-      } satisfies CodeLocation;
+      if (lexical === undefined) return;
+      const indexes = byFile.get(lexical);
+      if (indexes === undefined) byFile.set(lexical, [index]);
+      else indexes.push(index);
     });
-  };
+    const located: Array<CodeLocation | undefined> = locations.map(() => undefined);
+    yield* Effect.forEach(
+      byFile,
+      Effect.fnUntraced(function* ([lexical, indexes]) {
+        const real = yield* fileSystem
+          .realPath(lexical)
+          .pipe(Effect.orElseSucceed(() => path.resolve(lexical)));
+        if (yield* isServerInternalPath(real)) return;
+        const lines = withLineText
+          ? yield* workspaceFileSystem.readFile({ cwd: live.root, relativePath: real }).pipe(
+              Effect.map((file) => file.contents.split(/\r?\n/)),
+              Effect.orElseSucceed((): Array<string> => []),
+            )
+          : [];
+        // A symlink inside the root that leaves it is shown by its real path, which a read allows.
+        const inside =
+          KnownWorkspaces.isWithinRoot(path, lexical, live.root) &&
+          KnownWorkspaces.isWithinRoot(path, real, live.root);
+        const external =
+          !inside ||
+          libraryRoots.some((root) => KnownWorkspaces.isWithinRoot(path, real, root)) ||
+          real
+            .split(path.sep)
+            .some((segment) => segment === "node_modules" || segment === "site-packages");
+        const shownPath = inside
+          ? path.relative(live.root, lexical).split(path.sep).join("/")
+          : real;
+        for (const index of indexes) {
+          const range = (locations[index] as LspResults.LspLocation).range;
+          const lineText = lines[range.start.line];
+          located[index] = {
+            path: shownPath,
+            external,
+            range,
+            ...(lineText === undefined || lineText.length === 0
+              ? {}
+              : { lineText: lineText.slice(0, CODE_INTEL_LINE_TEXT_MAX_LENGTH) }),
+          };
+        }
+      }),
+      { concurrency: LOCATION_CONCURRENCY, discard: true },
+    );
+    return located;
+  });
 
   const locateAll = (
     live: LanguageServerPool.LiveServer,
     locations: ReadonlyArray<LspResults.LspLocation>,
   ) =>
-    Effect.forEach(locations, makeLocator(live, true), { concurrency: LOCATION_CONCURRENCY }).pipe(
+    locateEach(live, locations, true).pipe(
       Effect.map((located) => located.filter((location) => location !== undefined)),
     );
 
@@ -567,26 +577,24 @@ const make = Effect.gen(function* () {
               0,
               input.limit + 1,
             );
-            const locate = makeLocator(live, false);
-            const located = yield* Effect.forEach(
-              ranked,
-              (symbol) =>
-                locate(symbol.location).pipe(
-                  Effect.map((location) =>
-                    location === undefined
-                      ? undefined
-                      : ({
-                          name: symbol.name,
-                          kind: symbol.kind,
-                          ...(symbol.containerName === undefined
-                            ? {}
-                            : { containerName: symbol.containerName }),
-                          location,
-                        } satisfies CodeWorkspaceSymbol),
-                  ),
-                ),
-              { concurrency: LOCATION_CONCURRENCY },
+            const locations = yield* locateEach(
+              live,
+              ranked.map((symbol) => symbol.location),
+              false,
             );
+            const located = ranked.map((symbol, index) => {
+              const location = locations[index];
+              return location === undefined
+                ? undefined
+                : ({
+                    name: symbol.name,
+                    kind: symbol.kind,
+                    ...(symbol.containerName === undefined
+                      ? {}
+                      : { containerName: symbol.containerName }),
+                    location,
+                  } satisfies CodeWorkspaceSymbol);
+            });
             return located.filter((symbol) => symbol !== undefined);
           }),
         ),

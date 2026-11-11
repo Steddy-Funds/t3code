@@ -10,6 +10,7 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Scope from "effect/Scope";
+import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
@@ -23,6 +24,8 @@ import * as WorkspaceWatcher from "./WorkspaceWatcher.ts";
 
 /** Counts servers that are starting or stopping too. */
 export const MAX_LIVE_SERVERS = 4;
+/** Requests one server works on at a time; the rest wait inside their own deadline. */
+const MAX_CONCURRENT_REQUESTS = 8;
 export const IDLE_TIMEOUT_MS = 15 * 60_000;
 const CRASH_WINDOW_MS = 10 * 60_000;
 const CRASH_LIMIT = 3;
@@ -46,6 +49,7 @@ export interface LiveServer {
   readonly context: LanguageContext;
   readonly server: LanguageServerProcess.RunningLanguageServer;
   readonly session: ServerSession.ServerSession;
+  readonly gate: Semaphore.Semaphore;
   /** Why the pool stopped it; unset while it runs and after a crash. */
   stopReason: StopReason | undefined;
 }
@@ -304,6 +308,7 @@ const make = Effect.gen(function* () {
       context,
       server,
       session,
+      gate: yield* Semaphore.make(MAX_CONCURRENT_REQUESTS),
       stopReason: undefined,
     };
     slot.phase = { _tag: "ready", scope, live };

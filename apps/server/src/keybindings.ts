@@ -36,6 +36,7 @@ import { writeFileStringAtomically } from "@t3tools/shared/atomicWrite";
 import { fromJsonStringPretty, fromLenientJson } from "@t3tools/shared/schemaJson";
 import {
   DEFAULT_KEYBINDINGS,
+  insertMissingDefaultKeybindings,
   mergeWithDefaultKeybindings,
   compileResolvedKeybindingRule,
   compileResolvedKeybindingsConfig,
@@ -110,6 +111,33 @@ const LATE_DEFAULT_KEYBINDINGS: ReadonlyArray<{
       key: "mod+enter",
       command: "composer.sendBackground",
       when: "composerFocus && draftThreadRoute",
+    },
+  },
+  {
+    id: "navigation.back:mod+alt+arrowleft",
+    alongside: { key: "mod+[", command: "navigation.back", when: "!terminalFocus" },
+    rule: {
+      key: "mod+alt+arrowleft",
+      command: "navigation.back",
+      when: "!terminalFocus && isDesktop",
+    },
+  },
+  {
+    id: "navigation.forward:mod+alt+arrowright",
+    alongside: { key: "mod+]", command: "navigation.forward", when: "!terminalFocus" },
+    rule: {
+      key: "mod+alt+arrowright",
+      command: "navigation.forward",
+      when: "!terminalFocus && isDesktop",
+    },
+  },
+  {
+    id: "filePicker.toggle:mod+shift+o",
+    alongside: { key: "mod+p", command: "filePicker.toggle", when: "!terminalFocus" },
+    rule: {
+      key: "mod+shift+o",
+      command: "filePicker.toggle",
+      when: "codeFocus || projectTreeFocus",
     },
   },
 ];
@@ -531,7 +559,6 @@ const make = Effect.gen(function* () {
         }
       }
 
-      // Put defaults before persisted rules so custom shortcuts win overlapping conditions.
       const availableSlots = Math.max(0, MAX_KEYBINDINGS_COUNT - customConfig.length);
       const defaultsToAppend = missingDefaults.slice(0, availableSlots);
       const skippedDefaults = missingDefaults.slice(availableSlots);
@@ -543,7 +570,14 @@ const make = Effect.gen(function* () {
         });
       }
       if (defaultsToAppend.length > 0) {
-        yield* writeConfigAtomically([...defaultsToAppend, ...customConfig]);
+        // Existing rules keep their place and order; only the missing defaults are placed.
+        yield* writeConfigAtomically(
+          insertMissingDefaultKeybindings(
+            customConfig,
+            defaultsToAppend,
+            compileResolvedKeybindingRule,
+          ),
+        );
       }
       const settledLateDefaults = pendingLateDefaults.filter(
         (late) => !skippedDefaults.includes(late.rule),

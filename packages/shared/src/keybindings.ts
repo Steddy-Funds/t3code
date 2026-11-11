@@ -147,6 +147,43 @@ export const DEFAULT_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
   { key: "mod+shift+2", command: "usage.period.week", when: "usagePageOpen" },
   { key: "mod+shift+3", command: "usage.period.month", when: "usagePageOpen" },
   { key: "mod+shift+4", command: "usage.period.quarter", when: "usagePageOpen" },
+  // JetBrains keys. The last match wins, so these stay below the defaults whose shortcuts they
+  // share and take over only inside their focus scope. A rule on a shared shortcut must not match
+  // before its command has a handler: nothing falls through to the rule it out-ranks. Focus
+  // scopes hold only where a surface marks them; codeSymbols and projectPane hold once provided.
+  { key: "mod+b", command: "code.goToDeclaration", when: "codeFocus" },
+  { key: "mod+shift+b", command: "code.goToTypeDeclaration", when: "codeFocus" },
+  { key: "mod+alt+b", command: "code.goToImplementation", when: "codeFocus" },
+  { key: "alt+f7", command: "code.findUsages", when: "codeFocus" },
+  { key: "mod+alt+f7", command: "code.findUsages", when: "codeFocus" },
+  { key: "mod+shift+f7", command: "code.highlightUsages", when: "codeFocus" },
+  { key: "f1", command: "code.quickDocumentation", when: "codeFocus" },
+  { key: "alt+space", command: "code.quickDefinition", when: "codeFocus" },
+  { key: "mod+l", command: "code.goToLine", when: "codeFocus" },
+  // Browsers keep mod+alt+arrows and mod+1 for their tabs.
+  { key: "mod+alt+arrowleft", command: "navigation.back", when: "!terminalFocus && isDesktop" },
+  { key: "mod+alt+arrowright", command: "navigation.forward", when: "!terminalFocus && isDesktop" },
+  {
+    key: "mod+o",
+    command: "code.goToClass",
+    when: "(codeFocus || projectTreeFocus) && codeSymbols",
+  },
+  { key: "mod+alt+o", command: "code.goToSymbol", when: "!terminalFocus && codeSymbols" },
+  { key: "mod+shift+o", command: "filePicker.toggle", when: "codeFocus || projectTreeFocus" },
+  { key: "mod+e", command: "code.recentFiles", when: "!terminalFocus && codeSymbols" },
+  { key: "mod+f12", command: "code.fileStructure", when: "codeFocus && codeSymbols" },
+  { key: "ctrl+shift+arrowdown", command: "code.nextMethod", when: "codeFocus && codeSymbols" },
+  { key: "ctrl+shift+arrowup", command: "code.previousMethod", when: "codeFocus && codeSymbols" },
+  { key: "f7", command: "diff.nextChange", when: "diffFocus" },
+  { key: "shift+f7", command: "diff.previousChange", when: "diffFocus" },
+  { key: "f4", command: "diff.jumpToSource", when: "diffFocus" },
+  { key: "mod+arrowdown", command: "diff.jumpToSource", when: "diffFocus" },
+  {
+    key: "mod+1",
+    command: "projectPane.toggle",
+    when: "(codeFocus || projectTreeFocus) && projectPane && isDesktop",
+  },
+  { key: "alt+f1", command: "projectPane.selectOpenedFile", when: "codeFocus && projectPane" },
 ];
 
 function normalizeKeyToken(token: string): string {
@@ -388,6 +425,111 @@ export function compileResolvedKeybindingsConfig(
 
 export const DEFAULT_RESOLVED_KEYBINDINGS = compileResolvedKeybindingsConfig(DEFAULT_KEYBINDINGS);
 
+// Earlier builds wrote these defaults into keybindings.json, on shortcuts a later default shares.
+const SUPERSEDED_DEFAULT_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
+  { key: "mod+1", command: "thread.jump.1" },
+  { key: "mod+1", command: "thread.jump.1", when: "isDesktop" },
+  { key: "mod+1", command: "modelPicker.jump.1", when: "modelPickerOpen" },
+  { key: "mod+shift+o", command: "chat.new" },
+];
+
+function whenIdentity(node: KeybindingWhenNode): string {
+  switch (node.type) {
+    case "identifier":
+      return node.name;
+    case "not":
+      return `!(${whenIdentity(node.node)})`;
+    case "and":
+      return `(${whenIdentity(node.left)}&&${whenIdentity(node.right)})`;
+    case "or":
+      return `(${whenIdentity(node.left)}||${whenIdentity(node.right)})`;
+  }
+}
+
+function ruleIdentity({ command, shortcut, whenAst }: ResolvedKeybindingRule): string {
+  return JSON.stringify([
+    command,
+    shortcut.key,
+    shortcut.modKey,
+    shortcut.metaKey,
+    shortcut.ctrlKey,
+    shortcut.altKey,
+    shortcut.shiftKey,
+    whenAst ? whenIdentity(whenAst) : null,
+  ]);
+}
+
+// A rule's place in the default list; superseded defaults come before all of it.
+const DEFAULT_RULE_ORDER = new Map([
+  ...compileResolvedKeybindingsConfig(SUPERSEDED_DEFAULT_KEYBINDINGS).map(
+    (rule) => [ruleIdentity(rule), -1] as const,
+  ),
+  ...DEFAULT_RESOLVED_KEYBINDINGS.map((rule, index) => [ruleIdentity(rule), index] as const),
+]);
+
+// Which of Cmd and Ctrl `mod` means is the client's to know, so mod, ctrl and meta count as one
+// modifier here. Matching too much only places a default more cautiously.
+function shortcutPlacementKey(shortcut: KeybindingShortcut): string {
+  return [
+    shortcut.key,
+    shortcut.modKey || shortcut.metaKey || shortcut.ctrlKey ? "primary" : "",
+    shortcut.shiftKey ? "shift" : "",
+    shortcut.altKey ? "alt" : "",
+  ].join("|");
+}
+
+function missingDefaultInsertIndex(
+  config: ReadonlyArray<ResolvedKeybindingRule | null>,
+  rule: ResolvedKeybindingRule,
+  order: number,
+): number {
+  const placementKey = shortcutPlacementKey(rule.shortcut);
+  let insertIndex = 0;
+  for (const [index, entry] of config.entries()) {
+    if (entry === null || shortcutPlacementKey(entry.shortcut) !== placementKey) continue;
+    const entryOrder = DEFAULT_RULE_ORDER.get(ruleIdentity(entry));
+    if (entryOrder === undefined || entryOrder > order) break;
+    insertIndex = index + 1;
+  }
+  return insertIndex;
+}
+
+/**
+ * Adds defaults a config lacks without moving or out-ranking what it holds. The last match wins,
+ * so a default goes after the unmodified defaults on its shortcut that precede it in the default
+ * list, as in a fresh config, and before any other rule on that shortcut: a rule the user wrote
+ * still wins. With no such default before it, it goes first.
+ */
+export function insertMissingDefaultKeybindings<Rule>(
+  config: ReadonlyArray<Rule>,
+  missingDefaults: ReadonlyArray<Rule>,
+  resolve: (rule: Rule) => ResolvedKeybindingRule | null,
+): Rule[] {
+  const first: Rule[] = [];
+  const merged = [...config];
+  const mergedResolved = merged.map(resolve);
+  const inDefaultOrder = missingDefaults
+    .map((rule) => {
+      const resolved = resolve(rule);
+      const order = resolved ? DEFAULT_RULE_ORDER.get(ruleIdentity(resolved)) : undefined;
+      return { rule, resolved, order };
+    })
+    .sort((left, right) => (left.order ?? -1) - (right.order ?? -1));
+  for (const { rule, resolved, order } of inDefaultOrder) {
+    const insertIndex =
+      resolved && order !== undefined
+        ? missingDefaultInsertIndex(mergedResolved, resolved, order)
+        : 0;
+    if (insertIndex === 0) {
+      first.push(rule);
+      continue;
+    }
+    merged.splice(insertIndex, 0, rule);
+    mergedResolved.splice(insertIndex, 0, resolved);
+  }
+  return [...first, ...merged];
+}
+
 export function mergeWithDefaultKeybindings(
   custom: ResolvedKeybindingsConfig,
 ): ResolvedKeybindingsConfig {
@@ -399,7 +541,10 @@ export function mergeWithDefaultKeybindings(
   const retainedDefaults = DEFAULT_RESOLVED_KEYBINDINGS.filter(
     (binding) => !overriddenCommands.has(binding.command),
   );
-  const merged = [...retainedDefaults, ...custom];
+  // Over the cap the earliest retained defaults go, never a custom rule.
+  const room = Math.max(0, MAX_KEYBINDINGS_COUNT - custom.length);
+  const fittingDefaults = retainedDefaults.slice(Math.max(0, retainedDefaults.length - room));
+  const merged = insertMissingDefaultKeybindings(custom, fittingDefaults, (rule) => rule);
 
   if (merged.length <= MAX_KEYBINDINGS_COUNT) {
     return merged;

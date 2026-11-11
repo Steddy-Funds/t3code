@@ -314,6 +314,7 @@ export const make = Effect.gen(function* () {
       loadGuard: true,
       loadPause: true,
       freshContext: true,
+      tokenBurnRates: true,
       scheduledTaskThreadModes: true,
       npmReleaseLookup: true,
       voiceTranscription: isSpeechPlatformSupported(hostPlatform, hostArchitecture, hostLibc),

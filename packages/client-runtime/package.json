@@ -171,6 +171,10 @@
       "types": "./src/state/machineIndicator.ts",
       "default": "./src/state/machineIndicator.ts"
     },
+    "./state/tokenBurnRates": {
+      "types": "./src/state/tokenBurnRates.ts",
+      "default": "./src/state/tokenBurnRates.ts"
+    },
     "./state/machineFormat": {
       "types": "./src/state/machineFormat.ts",
       "default": "./src/state/machineFormat.ts"

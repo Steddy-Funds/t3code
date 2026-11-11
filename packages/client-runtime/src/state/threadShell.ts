@@ -795,6 +795,7 @@ export function createEnvironmentThreadShellAtoms(input: {
     navigationThreadShellsAtom,
     delegatedUnderParentAtom,
     pendingSubagentRequestsAtom,
+    childThreadsByParentAtom,
     threadShellsForProjectRefsAtom: (refs: ReadonlyArray<ScopedProjectRef>) =>
       threadShellsForProjectRefsAtomFamily(projectRefCollectionKey(refs)),
     threadShellAtom: (ref: ScopedThreadRef) => threadShellAtomFamily(threadKey(ref)),

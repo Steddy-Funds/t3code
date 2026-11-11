@@ -369,6 +369,7 @@ import {
 import {
   ThreadUsage,
   ThreadUsageInput,
+  TokenBurnRates,
   UsagePricing,
   UsageReadError,
   UsageSummary,
@@ -658,6 +659,7 @@ export const WS_METHODS = {
   subscribeAuthAccess: "subscribeAuthAccess",
   subscribeResourceTelemetry: "subscribeResourceTelemetry",
   subscribeMachine: "subscribeMachine",
+  subscribeTokenBurnRates: "subscribeTokenBurnRates",
   subscribeMachineProcesses: "subscribeMachineProcesses",
 } as const;
 
@@ -2142,6 +2144,13 @@ const WsSubscribeMachineRpc = Rpc.make(WS_METHODS.subscribeMachine, {
   stream: true,
 });
 
+const WsSubscribeTokenBurnRatesRpc = Rpc.make(WS_METHODS.subscribeTokenBurnRates, {
+  payload: Schema.Struct({}),
+  success: TokenBurnRates,
+  error: EnvironmentAuthorizationError,
+  stream: true,
+});
+
 const WsMachineClaimsReleaseRpc = Rpc.make(WS_METHODS.machineClaimsRelease, {
   payload: MachineClaimsReleaseInput,
   error: EnvironmentAuthorizationError,
@@ -2363,6 +2372,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsSubscribeAuthAccessRpc,
   WsSubscribeResourceTelemetryRpc,
   WsSubscribeMachineRpc,
+  WsSubscribeTokenBurnRatesRpc,
   WsSubscribeMachineProcessesRpc,
   WsOrchestrationV2DispatchCommandRpc,
   WsOrchestrationV2GetWorkflowScriptRpc,

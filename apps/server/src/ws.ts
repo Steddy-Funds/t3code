@@ -247,6 +247,7 @@ import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import { commandFeatureUsage, featureUsage } from "./telemetry/FeatureUsage.ts";
 import type { TelemetryOwner } from "./telemetry/Identify.ts";
 import * as ThreadUsageService from "./usage/ThreadUsageService.ts";
+import * as TokenBurnRates from "./usage/TokenBurnRates.ts";
 import * as UsageService from "./usage/UsageService.ts";
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
 import * as TriageService from "./triage/TriageService.ts";
@@ -1484,6 +1485,7 @@ export const layerWsRpc = (
             );
       const usage = yield* UsageService.UsageService;
       const threadUsage = yield* ThreadUsageService.ThreadUsageService;
+      const tokenBurnRates = yield* TokenBurnRates.TokenBurnRatesService;
       const usageLimitSources = yield* UsageLimitSources.UsageLimitSources;
       const worktreeSetupTracker = yield* WorktreeSetupTracker.WorktreeSetupTracker;
       const projectCloneTracker = yield* ProjectCloneTracker.ProjectCloneTracker;
@@ -3538,6 +3540,7 @@ export const layerWsRpc = (
             }),
           ),
         [WS_METHODS.subscribeMachine]: (input) => hostResources.subscribe(input),
+        [WS_METHODS.subscribeTokenBurnRates]: (_input) => tokenBurnRates.changes,
         [WS_METHODS.subscribeMachineProcesses]: (input) => hostProcesses.frames(input),
         [WS_METHODS.subscribeResourceTelemetry]: (_input) =>
           Stream.unwrap(

@@ -126,6 +126,8 @@ import { useClientSettings } from "../../hooks/useSettings";
 import { resolveSidebarDetailsVisibility } from "./sidebarDetailsItems";
 import { SidebarBranchName } from "./SidebarBranchName";
 import { SidebarAgentBadge, showsAgentBadge } from "./SidebarAgentBadge";
+import { SidebarBurnRate } from "./SidebarBurnRate";
+import { useTreeBurnRate } from "../../state/tokenBurnRates";
 import { InlineButton } from "../ui/button";
 import { Kbd } from "../ui/kbd";
 import { Menu, MenuItem, MenuItemDetail, MenuPopup, MenuSeparator, MenuTrigger } from "../ui/menu";
@@ -752,6 +754,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
   const isUnread = hasUnseenCompletion({ ...thread, lastVisitedAt });
   const agents = useAgentTreeSummary(threadRef);
   const liveAgents = agents.live;
+  const burnRate = useTreeBurnRate(threadRef);
   const ownStatus = resolveSidebarThreadStatus(thread);
   // A finished thread whose agents, or their agents, still work is not done yet.
   const status = ownStatus === "ready" && liveAgents > 0 ? "waiting" : ownStatus;
@@ -1131,6 +1134,8 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
       onThreadActivate={onThreadActivate}
     />
   ) : null;
+  const burnBadge =
+    liveAgents > 0 && burnRate > 0 ? <SidebarBurnRate tokensPerMinute={burnRate} /> : null;
   const terminalStatusIcon = (
     <>
       <ThreadSitesIndicator lines={liveSiteLines} />
@@ -1236,6 +1241,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
       !showsScratchMachine &&
       prBadge === null &&
       agentBadge === null &&
+      burnBadge === null &&
       diff === null &&
       runningTerminalIds.length === 0);
   const metaLine = metaLineEmpty ? null : (
@@ -1262,6 +1268,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
       )}
       {terminalStatusIcon}
       {agentBadge}
+      {burnBadge}
       {prBadge}
       {diff ? (
         <span className="shrink-0 font-mono">
@@ -1287,6 +1294,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     runningTerminalIds.length > 0 ||
     liveSiteLines.length > 0 ||
     agentBadge !== null ||
+    burnBadge !== null ||
     prBadge !== null ||
     diff !== null ||
     twoRowTrailingIcons !== null;
@@ -1295,6 +1303,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
       <span className="inline-flex shrink-0 items-center gap-1.5 text-secondary-label text-xs">
         {terminalStatusIcon}
         {agentBadge}
+        {burnBadge}
         {prBadge}
         {diff ? (
           <span className="shrink-0 font-mono">

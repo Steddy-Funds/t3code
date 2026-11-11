@@ -193,6 +193,18 @@ export function isPlacedSidebarSection(
 
 export type PullRequestShelfFilter = "all" | "draft" | "open";
 
+export type WorkingShelfSort = "recent" | "burn";
+
+/** Hottest agent tree first; threads with no rate keep their order below. */
+export function sortThreadsByBurnRate<T>(
+  threads: readonly T[],
+  rates: ReadonlyMap<string, number>,
+  keyOf: (thread: T) => string,
+): readonly T[] {
+  if (rates.size === 0) return threads;
+  return threads.toSorted((a, b) => (rates.get(keyOf(b)) ?? 0) - (rates.get(keyOf(a)) ?? 0));
+}
+
 type PullRequestShelfThread = {
   readonly pullRequests: ReadonlyArray<
     Pick<ThreadPullRequestLink, "watch" | "source" | "snapshot">

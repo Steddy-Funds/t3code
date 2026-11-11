@@ -69,6 +69,7 @@ export type EnvironmentSubscriptionRpcTag =
   | typeof WS_METHODS.subscribeDeviceState
   | typeof WS_METHODS.subscribeResourceTelemetry
   | typeof WS_METHODS.subscribeMachine
+  | typeof WS_METHODS.subscribeTokenBurnRates
   | typeof WS_METHODS.subscribeMachineProcesses
   | typeof WS_METHODS.pullRequestsSubscribeRefreshes
   | typeof WS_METHODS.subscribeVcsStatus

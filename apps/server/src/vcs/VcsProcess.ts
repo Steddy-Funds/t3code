@@ -81,6 +81,7 @@ const gitMetricOperations = new Set([
   "GitVcsDriver.checkpoints.diffCheckpoints",
   "GitVcsDriver.checkpoints.hasHeadCommit",
   "GitVcsDriver.checkpoints.listAuthoredPaths",
+  "GitVcsDriver.checkpoints.readCheckpointFile",
   "GitVcsDriver.checkpoints.resolveCheckpointCommit",
   "GitVcsDriver.checkpoints.resolveGitCommonDir",
   "GitVcsDriver.checkpoints.resolveHeadCommit",

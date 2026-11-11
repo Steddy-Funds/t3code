@@ -47,7 +47,7 @@ vi.mock(import("../../hooks/useSettings"), async (original) => ({
 }));
 vi.mock(import("../../state/peerLinks"), async (original) => ({
   ...(await original()),
-  useLinkedEnvironments: () => [],
+  useLinkedEnvironments: () => new Map(),
 }));
 vi.mock(import("../../hooks/useHandleNewThread"), async (original) => ({
   ...(await original()),

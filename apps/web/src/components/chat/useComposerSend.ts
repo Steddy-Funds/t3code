@@ -366,12 +366,16 @@ export function useComposerSend(input: ComposerSendInput) {
   }, [pendingApprovals, respondingRequestIds]);
 
   // A review surface can cover the composer, so it gets the reason as a toast.
-  const notifyReviewCommentsKept = (reason: string, type: "warning" | "error" = "warning") => {
+  const notifyReviewCommentsKept = (
+    reason: string,
+    count: number,
+    type: "warning" | "error" = "warning",
+  ) => {
     toastManager.add(
       stackedThreadToast({
         type,
-        title: "Review comments not sent",
-        description: `${reason} They are in your message draft.`,
+        title: count === 1 ? "Comment not sent" : "Comments not sent",
+        description: `${reason} ${count === 1 ? "It is" : "They are"} in your message draft.`,
       }),
     );
   };
@@ -387,7 +391,7 @@ export function useComposerSend(input: ComposerSendInput) {
     const directAnnotation = direct?.kind === "preview-annotation" ? direct : undefined;
     const reviewSend = direct?.kind === "review-comments" ? direct : undefined;
     const refuse = (reason: string, alreadyShown = false): ReviewSendOutcome => {
-      if (reviewSend && !alreadyShown) notifyReviewCommentsKept(reason);
+      if (reviewSend && !alreadyShown) notifyReviewCommentsKept(reason, reviewSend.comments.length);
       return { status: "refused", reason };
     };
     // What the user pressed send on; uploads below can take a while, and a redirect must not
@@ -1447,7 +1451,7 @@ export function useComposerSend(input: ComposerSendInput) {
     if (failure !== null) {
       const error = isAtomCommandInterrupted(failure) ? null : squashAtomCommandFailure(failure);
       const reason = error instanceof Error ? error.message : "The message could not be sent.";
-      if (reviewSend) notifyReviewCommentsKept(reason, "error");
+      if (reviewSend) notifyReviewCommentsKept(reason, reviewSend.comments.length, "error");
       return { status: "failed", reason };
     }
     return { status: shouldQueueBehindActiveRun ? "queued" : "dispatched" };
@@ -1469,7 +1473,7 @@ export function useComposerSend(input: ComposerSendInput) {
     );
     if (outcome) return outcome;
     const reason = "This thread can't take a message right now.";
-    notifyReviewCommentsKept(reason);
+    notifyReviewCommentsKept(reason, comments.length);
     return { status: "refused", reason };
   };
 

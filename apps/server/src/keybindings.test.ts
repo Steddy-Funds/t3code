@@ -471,18 +471,28 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
     }).pipe(Effect.provide(layerKeybindings())),
   );
 
-  it.effect("adds nothing to a full config, then migrates it once there is room", () =>
+  it.effect("adds whole commands only, as a full config gains room", () =>
     Effect.gen(function* () {
       const fillers = Array.from(
         { length: MAX_KEYBINDINGS_COUNT - EXISTING_INSTALL_KEYBINDINGS.length },
         (_, index) => ({ key: "mod+alt+f9", command: `script.filler-${index}.run` as const }),
       );
       const full = [...EXISTING_INSTALL_KEYBINDINGS, ...fillers];
-
       assert.deepStrictEqual(yield* syncExisting(full), full);
 
+      // Four free slots end between the two shortcuts of code.findUsages. Once one of a
+      // command's rules is in the file the sync leaves the command alone, so it waits whole.
+      const nearlyFull = full.slice(0, -4);
+      const added = (yield* syncExisting(nearlyFull)).filter(
+        (rule) => !nearlyFull.some((entry) => isSameRule(entry, rule)),
+      );
+      assert.sameMembers(
+        added.map((rule) => rule.command),
+        ["code.goToDeclaration", "code.goToTypeDeclaration", "code.goToImplementation"],
+      );
+
       const persisted = yield* syncExisting(EXISTING_INSTALL_KEYBINDINGS);
-      assert.equal(topCommand(persisted, "mod+b"), "code.goToDeclaration");
+      assert.sameDeepMembers([...persisted], [...SharedKeybindings.DEFAULT_KEYBINDINGS]);
       assert.equal(topCommand(persisted, "mod+shift+o"), "filePicker.toggle");
     }).pipe(Effect.provide(layerKeybindings())),
   );

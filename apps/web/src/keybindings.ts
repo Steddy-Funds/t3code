@@ -20,6 +20,7 @@ import {
 } from "@t3tools/shared/keybindings";
 import { isElectron } from "./env";
 import { isEditableFocused } from "./lib/editableFocus";
+import { readFocusScopes } from "./lib/focusScopes";
 import { projectScriptIdFromCommand } from "./projectScripts";
 
 export type { ShortcutModifierStateLike } from "@t3tools/shared/keybindings";
@@ -37,7 +38,39 @@ export interface ShortcutMatchContext {
   isWeb: boolean;
   isDesktop: boolean;
   editableFocus?: boolean;
+  codeFocus?: boolean;
+  diffFocus?: boolean;
+  projectTreeFocus?: boolean;
   [key: string]: boolean;
+}
+
+/** A feature whose default shortcuts share keys with older commands. */
+export type ShortcutCapability = "codeSymbols" | "projectPane";
+
+const capabilityProviders = new Map<ShortcutCapability, number>();
+let capabilityContext: Readonly<Record<string, boolean>> = {};
+
+function setCapabilityProviders(name: ShortcutCapability, count: number) {
+  if (count > 0) capabilityProviders.set(name, count);
+  else capabilityProviders.delete(name);
+  capabilityContext = Object.fromEntries(
+    Array.from(capabilityProviders.keys(), (provided) => [provided, true]),
+  );
+}
+
+/**
+ * Turns on a capability's `when` variable. Call it where the feature registers its handlers:
+ * until then its rules stay off and their keys keep the older command, since a command without
+ * a handler runs nothing. Returns the way to withdraw it.
+ */
+export function provideShortcutCapability(name: ShortcutCapability): () => void {
+  setCapabilityProviders(name, (capabilityProviders.get(name) ?? 0) + 1);
+  let provided = true;
+  return () => {
+    if (!provided) return;
+    provided = false;
+    setCapabilityProviders(name, (capabilityProviders.get(name) ?? 1) - 1);
+  };
 }
 
 interface ShortcutMatchOptions {
@@ -67,6 +100,7 @@ function resolveContext(options: ShortcutMatchOptions | undefined): ShortcutMatc
     isWeb: !isElectron,
     isDesktop: isElectron,
     editableFocus: false,
+    ...capabilityContext,
     ...options?.context,
   };
 }
@@ -92,6 +126,51 @@ function matchesWhenClause(
 ): boolean {
   if (!whenAst) return true;
   return evaluateWhenNode(whenAst, context);
+}
+
+function whenOutcomes(
+  node: KeybindingWhenNode,
+  known: Readonly<Record<string, boolean>>,
+): { canBeTrue: boolean; canBeFalse: boolean } {
+  switch (node.type) {
+    case "identifier": {
+      const value = node.name === "true" ? true : node.name === "false" ? false : known[node.name];
+      return value === undefined
+        ? { canBeTrue: true, canBeFalse: true }
+        : { canBeTrue: value, canBeFalse: !value };
+    }
+    case "not": {
+      const inner = whenOutcomes(node.node, known);
+      return { canBeTrue: inner.canBeFalse, canBeFalse: inner.canBeTrue };
+    }
+    case "and": {
+      const left = whenOutcomes(node.left, known);
+      const right = whenOutcomes(node.right, known);
+      return {
+        canBeTrue: left.canBeTrue && right.canBeTrue,
+        canBeFalse: left.canBeFalse || right.canBeFalse,
+      };
+    }
+    case "or": {
+      const left = whenOutcomes(node.left, known);
+      const right = whenOutcomes(node.right, known);
+      return {
+        canBeTrue: left.canBeTrue || right.canBeTrue,
+        canBeFalse: left.canBeFalse && right.canBeFalse,
+      };
+    }
+  }
+}
+
+/**
+ * Whether a rule can match while the `known` variables hold, whatever the others are. It errs
+ * towards true: a variable read twice counts as two unknowns.
+ */
+export function ruleCanMatch(
+  binding: ResolvedKeybindingRule,
+  known: Readonly<Record<string, boolean>>,
+): boolean {
+  return binding.whenAst === undefined || whenOutcomes(binding.whenAst, known).canBeTrue;
 }
 
 export function shortcutConflictKey(
@@ -182,8 +261,17 @@ export function resolveShortcutCommand(
 ): KeybindingCommand | null {
   const platform = resolvePlatform(options);
   const context = resolveContext(options);
-  if (options?.context?.editableFocus === undefined && typeof document !== "undefined") {
-    context.editableFocus = isEditableFocused(event.target ?? document.activeElement);
+  if (typeof document !== "undefined") {
+    const target = event.target ?? document.activeElement;
+    if (options?.context?.editableFocus === undefined) {
+      context.editableFocus = isEditableFocused(target);
+    }
+    // Listeners build their own context and do not know the focus scopes. Reading them here
+    // keeps every listener agreeing on the command a key means.
+    const focusScopes = readFocusScopes(target);
+    context.codeFocus = options?.context?.codeFocus ?? focusScopes.codeFocus;
+    context.diffFocus = options?.context?.diffFocus ?? focusScopes.diffFocus;
+    context.projectTreeFocus = options?.context?.projectTreeFocus ?? focusScopes.projectTreeFocus;
   }
 
   for (let index = keybindings.length - 1; index >= 0; index -= 1) {

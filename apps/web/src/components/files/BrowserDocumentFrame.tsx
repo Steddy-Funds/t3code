@@ -3,6 +3,7 @@ import {
   type KeybindingCommand,
   type KeybindingShortcut,
   MODEL_PICKER_JUMP_KEYBINDING_COMMANDS,
+  type ResolvedKeybindingRule,
   type ScopedThreadRef,
   THREAD_JUMP_KEYBINDING_COMMANDS,
 } from "@t3tools/contracts";
@@ -39,7 +40,8 @@ import { useOpenLink } from "~/browser/useOpenLink";
 import { ExpandedImageDialog } from "~/components/chat/ExpandedImageDialog";
 import type { ExpandedImagePreview } from "~/components/chat/ExpandedImagePreview";
 import { useHtmlRenderTheme } from "~/hooks/useHtmlRenderTheme";
-import { shortcutConflictKey } from "~/keybindings";
+import { ruleCanMatch, shortcutConflictKey } from "~/keybindings";
+import { NO_FOCUS_SCOPES } from "~/lib/focusScopes";
 import { useOpenChangeRequestLink } from "~/lib/openPullRequestLink";
 import { readLocalApi } from "~/localApi";
 import { cn } from "~/lib/utils";
@@ -208,11 +210,13 @@ export function HtmlRenderDocument(props: {
     shiftKey: shortcut.shiftKey,
     altKey: shortcut.altKey,
   });
+  // A frame is never a focus scope, so a rule that needs one cannot run on a replayed key.
+  const reachable = (binding: ResolvedKeybindingRule) => ruleCanMatch(binding, NO_FOCUS_SCOPES);
   const blocked = [...keybindings, ...(environmentKeybindings ?? [])]
-    .filter((binding) => !HTML_RENDER_SHORTCUT_COMMANDS.has(binding.command))
+    .filter((binding) => !HTML_RENDER_SHORTCUT_COMMANDS.has(binding.command) && reachable(binding))
     .map((binding) => resolve(binding.shortcut));
   const shortcutsByKey = new Map<string, HtmlRenderShortcut>();
-  for (const { command, shortcut } of keybindings) {
+  for (const { command, shortcut } of keybindings.filter(reachable)) {
     if (
       HTML_RENDER_SHORTCUT_COMMANDS.has(command) &&
       (shortcut.metaKey || shortcut.ctrlKey || shortcut.modKey)

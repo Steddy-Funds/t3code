@@ -69,6 +69,44 @@ match in a folded file opens it. Escape closes the search. This shortcut is not
 configurable. A very large uncommitted diff loads its files as you scroll, and
 find only searches the files loaded so far.
 
+## Code, diffs, and the Project pane
+
+Code navigation, the side-by-side diff, and the Project pane use the shortcuts of JetBrains
+IDEs. Each runs only where it applies, and the key keeps its other command everywhere else:
+`mod+b` goes to a declaration while the keyboard is in code, and toggles the sidebar anywhere
+else.
+
+| Shortcut                                     | Command                                  | Runs while the keyboard is in        |
+| -------------------------------------------- | ---------------------------------------- | ------------------------------------ |
+| `mod+b`                                      | Go to Declaration or Usages              | code                                 |
+| `mod+shift+b`                                | Go to Type Declaration                   | code                                 |
+| `mod+alt+b`                                  | Go to Implementation                     | code                                 |
+| `alt+f7`, `mod+alt+f7`                       | Find Usages                              | code                                 |
+| `mod+shift+f7`                               | Highlight Usages in File                 | code                                 |
+| `f1`                                         | Quick Documentation                      | code                                 |
+| `alt+space`                                  | Quick Definition                         | code                                 |
+| `mod+l`                                      | Go to Line                               | code                                 |
+| `mod+o`                                      | Go to Class                              | code or the Project pane             |
+| `mod+alt+o`                                  | Go to Symbol                             | anything but a terminal              |
+| `mod+shift+o`                                | Open the file picker                     | code or the Project pane             |
+| `mod+e`                                      | Recent Files                             | anything but a terminal              |
+| `mod+f12`                                    | File Structure                           | code                                 |
+| `ctrl+shift+arrowdown`, `ctrl+shift+arrowup` | Next Method, Previous Method             | code                                 |
+| `f7`, `shift+f7`                             | Next Change, Previous Change             | a diff                               |
+| `f4`, `mod+arrowdown`                        | Jump to Source                           | a diff                               |
+| `mod+1`                                      | Show the Project pane, or return to code | code or the Project pane, on desktop |
+| `alt+f1`                                     | Select Opened File in the Project pane   | code                                 |
+| `mod+alt+arrowleft`, `mod+alt+arrowright`    | Back, Forward                            | anything but a terminal, on desktop  |
+
+A comment box or a find field inside code or a diff is a text field, so these shortcuts leave
+its typing alone. In a browser tab, `mod+1` and `mod+alt+arrowleft` / `mod+alt+arrowright`
+stay with the browser. To use one of these keys for its other command everywhere, give that
+command a shortcut of your own in **Settings → Keybindings**: your rule wins.
+
+Shortcuts come from your primary environment. If its server is older than this app,
+`mod+shift+o` and `mod+alt+arrowleft` / `mod+alt+arrowright` are missing until you update it;
+the rest of the table works.
+
 ## iPad
 
 With a hardware keyboard, use `Cmd+1` through `Cmd+9` to open the first nine
@@ -104,9 +142,12 @@ It is a JSON array of rules:
 ```
 
 T3 Code creates the file with its defaults and adds new defaults on later startups.
-New defaults do not replace commands you customized. If a new default overlaps one
-of your shortcuts, [rule order](#precedence) decides which runs.
-Invalid rules are ignored; if the file cannot be parsed, T3 Code uses defaults.
+New defaults do not replace commands you customized, and your rules stay where they are.
+A new default that shares a shortcut with an older default goes right after it and before
+any rule of your own on that shortcut, so by [rule order](#precedence) it refines the older
+default and your rule still wins.
+Invalid rules are ignored, and T3 Code adds nothing to the file while it has one; if the
+file cannot be parsed, T3 Code uses defaults.
 
 ## Rule shape
 
@@ -125,13 +166,18 @@ Join modifiers and a key with `+`, such as `mod+shift+d` or `ctrl+l`.
 
 Available context keys are `terminalFocus`, `terminalOpen`, `previewFocus`,
 `previewOpen`, `rightPanelOpen`, `modelPickerOpen`, `usagePageOpen`, `composerFocus`,
-`draftThreadRoute`, `turnRunning`, `editableFocus`, `isWeb`, and `isDesktop`.
+`draftThreadRoute`, `turnRunning`, `editableFocus`, `codeFocus`, `diffFocus`,
+`projectTreeFocus`, `codeSymbols`, `projectPane`, `isWeb`, and `isDesktop`.
 `rightPanelOpen` applies only to `rightPanel.new` and is true while the right panel is
 open; the default `mod+t` uses it to open the panel's new-tab menu.
 `draftThreadRoute` is true on a draft thread, including a restored draft, until it is first sent.
 `editableFocus` is true while a text field, the composer, or another editor has
-the keyboard. `isWeb` is true in a browser tab. `isDesktop` is true in the
-desktop app. Unknown keys evaluate to `false`.
+the keyboard. `codeFocus` is true while the keyboard is in code, such as an open file.
+`diffFocus` is true in the side-by-side diff. `projectTreeFocus` is true in the Project pane,
+including its search field. A text field inside code or a diff, such as a comment box, turns
+`codeFocus` and `diffFocus` off. `codeSymbols` and `projectPane` are true when this app has
+symbol search and the Project pane. `isWeb` is true in a browser tab. `isDesktop` is true in
+the desktop app. Unknown keys evaluate to `false`.
 
 `mod+1` through `mod+9` jump to the first nine threads, and to models while the
 model picker is open. The thread jumps do not run while the model picker is open.

@@ -1,7 +1,18 @@
 import { hydratePartialDiff } from "@pierre/diffs";
+import {
+  GROVE_THEME,
+  MATERIAL_OCEAN_THEME,
+  THEME_SYNTAX_THEME_NAMES,
+  getThemeEditorColors,
+  type ThemeEditorColors,
+} from "@t3tools/shared/themePalettes";
 import { describe, expect, it } from "vite-plus/test";
 import { resolveDiffReviewPosition } from "../reviewCommentContext";
 import {
+  ALL_DIFF_THEME_NAMES,
+  DIFF_THEME_NAMES,
+  DIFF_SURFACE_THEME_UNSAFE_CSS,
+  resolveDiffThemeName,
   buildFileDiffContentVersion,
   buildFileDiffIdentityKey,
   buildFileDiffRenderKey,
@@ -403,5 +414,62 @@ describe("a file whose name a patch header cannot carry plainly", () => {
 
     expect(resolveFileDiffPath(file)).toBe("new\tname.ts");
     expect(resolveFileDiffPreviousPath(file)).toBe("old\tname.ts");
+  });
+});
+
+describe("resolveDiffThemeName", () => {
+  const materialDark = getThemeEditorColors(MATERIAL_OCEAN_THEME, "dark");
+
+  it("keeps the stock pair for a theme without editor colours", () => {
+    expect(resolveDiffThemeName("light")).toBe(DIFF_THEME_NAMES.light);
+    expect(resolveDiffThemeName("dark")).toBe(DIFF_THEME_NAMES.dark);
+    expect(resolveDiffThemeName("light", null)).toBe("t3-light");
+    expect(resolveDiffThemeName("dark", null)).toBe("pierre-dark");
+    expect(resolveDiffThemeName("dark", getThemeEditorColors(GROVE_THEME, "dark"))).toBe(
+      "pierre-dark",
+    );
+  });
+
+  it("takes the editor's syntax theme when its appearance is the one asked for", () => {
+    expect(materialDark).not.toBeNull();
+    expect(resolveDiffThemeName("dark", materialDark)).toBe("material-deep-ocean");
+  });
+
+  it("falls back to the stock pair when the block's appearance differs from the one asked for", () => {
+    expect(resolveDiffThemeName("light", materialDark)).toBe("t3-light");
+    const lightBlock: ThemeEditorColors = {
+      ...materialDark!,
+      syntax: { ...materialDark!.syntax, appearance: "light" },
+    };
+    expect(resolveDiffThemeName("dark", lightBlock)).toBe("pierre-dark");
+    expect(resolveDiffThemeName("light", lightBlock)).toBe("material-deep-ocean");
+  });
+});
+
+describe("ALL_DIFF_THEME_NAMES", () => {
+  it("is the stock pair plus every theme syntax name, with no duplicates", () => {
+    expect([...ALL_DIFF_THEME_NAMES]).toEqual([
+      ...Object.values(DIFF_THEME_NAMES),
+      ...THEME_SYNTAX_THEME_NAMES,
+    ]);
+    expect(new Set(ALL_DIFF_THEME_NAMES).size).toBe(ALL_DIFF_THEME_NAMES.length);
+    expect(ALL_DIFF_THEME_NAMES).toContain("material-deep-ocean");
+  });
+});
+
+describe("DIFF_SURFACE_THEME_UNSAFE_CSS", () => {
+  it("falls back to the stock tint wherever it reads an editor variable", () => {
+    const reads = [
+      ...DIFF_SURFACE_THEME_UNSAFE_CSS.matchAll(/var\(\s*(--app-theme-editor-[\w-]+)(\s*,)?/g),
+    ];
+    expect(new Set(reads.map((read) => read[1]))).toEqual(
+      new Set([
+        "--app-theme-editor-diff-addition",
+        "--app-theme-editor-diff-addition-word",
+        "--app-theme-editor-diff-deletion",
+        "--app-theme-editor-diff-deletion-word",
+      ]),
+    );
+    for (const read of reads) expect(read[2], `${read[1]} has no fallback`).toBeDefined();
   });
 });

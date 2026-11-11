@@ -1,12 +1,20 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 import { converter } from "culori/fn";
-import { BUILT_IN_THEMES } from "@t3tools/shared/themePalettes";
+import { BUILT_IN_THEMES, MATERIAL_OCEAN_THEME } from "@t3tools/shared/themePalettes";
 
 import { CONTEXT_CHIP_ACCENTS, contextChipColorVariable } from "./lib/contextChipAccents";
 
 import {
+  applyThemeColorPreview,
   applyThemePalette,
   contextChipVariables,
+  getThemeColorVariable,
+  getThemeDefinition,
+  getThemePreviewAppearance,
+  isKnownThemePreference,
+  parseThemeHalves,
+  THEME_PREVIEW_ID,
+  THEME_COLOR_ROLES,
   getThemeColorsForMode,
   getThemeModes,
   getCustomThemes,
@@ -767,5 +775,259 @@ describe("stored theme preferences", () => {
 
     vi.unstubAllGlobals();
     invalidateCustomThemes();
+  });
+});
+
+describe("per-theme editor colours on the root", () => {
+  const EDITOR_PREFIX = "--app-theme-editor-";
+  const editor = MATERIAL_OCEAN_THEME.editor!.dark!;
+  const expectedEditorVariables = {
+    "--app-theme-editor-line-number": editor.lineNumber,
+    "--app-theme-editor-diff-addition": editor.diff.inserted.line,
+    "--app-theme-editor-diff-addition-word": editor.diff.inserted.word,
+    "--app-theme-editor-diff-deletion": editor.diff.deleted.line,
+    "--app-theme-editor-diff-deletion-word": editor.diff.deleted.word,
+    "--app-theme-editor-find-match": editor.find.match,
+    "--app-theme-editor-find-current-match": editor.find.currentMatch,
+    "--app-theme-editor-find-foreground": editor.find.foreground,
+  };
+
+  function withRoot(
+    run: (root: { properties: Map<string, string>; dataset: Record<string, string> }) => void,
+    storedThemes?: unknown,
+  ) {
+    const properties = new Map<string, string>();
+    const dataset: Record<string, string> = {};
+    vi.stubGlobal("window", {
+      localStorage: {
+        getItem: (key: string) =>
+          key === CUSTOM_THEMES_STORAGE_KEY && storedThemes !== undefined
+            ? JSON.stringify(storedThemes)
+            : null,
+      },
+    });
+    vi.stubGlobal("document", {
+      documentElement: {
+        dataset,
+        classList: { toggle: () => false },
+        style: {
+          setProperty: (name: string, value: string) => properties.set(name, value),
+          removeProperty: (name: string) => properties.delete(name),
+        },
+      },
+    });
+    invalidateCustomThemes();
+    try {
+      run({ properties, dataset });
+    } finally {
+      applyThemePalette("system", "light");
+      vi.unstubAllGlobals();
+      invalidateCustomThemes();
+    }
+  }
+
+  const editorVariables = (properties: ReadonlyMap<string, string>) =>
+    Object.fromEntries([...properties].filter(([name]) => name.startsWith(EDITOR_PREFIX)));
+
+  it("sets chrome, code and terminal variables and the eight editor variables for material-ocean", () => {
+    withRoot(({ properties, dataset }) => {
+      applyThemePalette("material-ocean", "dark");
+      expect(dataset.themeId).toBe("material-ocean");
+      expect(properties.get(getThemeColorVariable("canvas"))).toBe("#263238");
+      expect(properties.get(getThemeColorVariable("text"))).toBe("#b0bec5");
+      expect(properties.get(getThemeColorVariable("accent"))).toBe("#009688");
+      expect(properties.get(getThemeColorVariable("codeBackground"))).toBe("#0f111a");
+      expect(properties.get(getThemeColorVariable("codeForeground"))).toBe("#c3cee3");
+      expect(properties.get(getThemeColorVariable("terminalBackground"))).toBe("#0f111a");
+      expect(properties.get(getThemeColorVariable("terminalForeground"))).toBe("#c3cee3");
+      for (const role of THEME_COLOR_ROLES) {
+        expect(properties.get(getThemeColorVariable(role)), role).toBe(
+          MATERIAL_OCEAN_THEME.colors[role],
+        );
+      }
+      expect(editorVariables(properties)).toEqual(expectedEditorVariables);
+    });
+  });
+
+  it("paints material-ocean the same when no appearance is passed", () => {
+    withRoot(({ properties }) => {
+      applyThemePalette("material-ocean");
+      expect(editorVariables(properties)).toEqual(expectedEditorVariables);
+    });
+  });
+
+  it("sets no editor variable under any other built-in, in either appearance", () => {
+    withRoot(({ properties }) => {
+      const others = BUILT_IN_THEMES.filter((theme) => theme.id !== "material-ocean");
+      expect(others.length).toBeGreaterThan(0);
+      for (const theme of others) {
+        for (const appearance of ["light", "dark"] as const) {
+          applyThemePalette(theme.id, appearance);
+          expect(editorVariables(properties), `${theme.id} ${appearance}`).toEqual({});
+        }
+      }
+    });
+  });
+
+  it("sets no editor variable under the stock themes", () => {
+    withRoot(({ properties }) => {
+      for (const preference of ["system", "light", "dark"] as const) {
+        for (const appearance of ["light", "dark"] as const) {
+          applyThemePalette(preference, appearance);
+          expect(editorVariables(properties), `${preference} ${appearance}`).toEqual({});
+        }
+      }
+    });
+  });
+
+  it("sets no editor variable under a custom theme", () => {
+    const custom = parseThemeFile({
+      version: THEME_FILE_VERSION,
+      id: "midnight",
+      name: "Midnight",
+      appearance: "dark",
+      colors: { canvas: "#101820" },
+    });
+    withRoot(
+      ({ properties, dataset }) => {
+        applyThemePalette("midnight", "dark");
+        expect(dataset.themeId).toBe("midnight");
+        expect(editorVariables(properties)).toEqual({});
+      },
+      [custom],
+    );
+  });
+
+  it("removes the editor variables when switching away from material-ocean", () => {
+    const custom = parseThemeFile({
+      version: THEME_FILE_VERSION,
+      id: "midnight",
+      name: "Midnight",
+      appearance: "dark",
+      colors: { canvas: "#101820" },
+    });
+    withRoot(
+      ({ properties }) => {
+        for (const next of ["t3-chat", "grove", "system", "dark", "midnight"] as const) {
+          applyThemePalette("material-ocean", "dark");
+          expect(Object.keys(editorVariables(properties)), next).toHaveLength(8);
+          applyThemePalette(next, "dark");
+          expect(editorVariables(properties), next).toEqual({});
+        }
+      },
+      [custom],
+    );
+  });
+
+  it("sets none when material-ocean is asked for in light, where it has no editor block", () => {
+    withRoot(({ properties }) => {
+      applyThemePalette("material-ocean", "dark");
+      applyThemePalette("material-ocean", "light");
+      expect(editorVariables(properties)).toEqual({});
+    });
+  });
+
+  it("removes the editor variables while a theme editor preview is open, and sets them again after", () => {
+    withRoot(({ properties, dataset }) => {
+      applyThemePalette("material-ocean", "dark");
+      applyThemeColorPreview(getThemeColorsForMode(GROVE_THEME, "dark")!, "dark");
+      expect(dataset.themeId).toBe(THEME_PREVIEW_ID);
+      expect(getThemePreviewAppearance()).toBe("dark");
+      expect(editorVariables(properties)).toEqual({});
+
+      // A preview of material-ocean's own colours is still a draft: no editor colours.
+      applyThemeColorPreview(MATERIAL_OCEAN_THEME.colors, "dark");
+      expect(editorVariables(properties)).toEqual({});
+
+      applyThemePalette("material-ocean", "dark");
+      expect(getThemePreviewAppearance()).toBeNull();
+      expect(editorVariables(properties)).toEqual(expectedEditorVariables);
+    });
+  });
+
+  it("never lets a custom or imported theme carry an editor block", () => {
+    const parsed = parseThemeFile({
+      version: THEME_FILE_VERSION,
+      id: "sneaky",
+      name: "Sneaky",
+      appearance: "dark",
+      colors: { canvas: "#101820" },
+      editor: { dark: MATERIAL_OCEAN_THEME.editor!.dark },
+    });
+    expect(parsed.editor).toBeUndefined();
+    withRoot(
+      ({ properties }) => {
+        expect(getCustomThemes()[0]?.editor).toBeUndefined();
+        applyThemePalette("sneaky", "dark");
+        expect(editorVariables(properties)).toEqual({});
+      },
+      [
+        {
+          id: "sneaky",
+          label: "Sneaky",
+          appearance: "dark",
+          colors: { canvas: "#101820" },
+          editor: { dark: MATERIAL_OCEAN_THEME.editor!.dark },
+        },
+      ],
+    );
+  });
+
+  it("reserves the built-in id against a custom theme", () => {
+    withRoot(() => {
+      expect(getCustomThemes()).toEqual([]);
+      expect(getThemeDefinition("material-ocean")).toBe(MATERIAL_OCEAN_THEME);
+    }, [
+      { id: "material-ocean", label: "Mine", appearance: "dark", colors: { canvas: "#000000" } },
+    ]);
+  });
+});
+
+describe("material-ocean as a stored preference", () => {
+  it("is a known preference, and an unknown id is not", () => {
+    expect(isKnownThemePreference("material-ocean")).toBe(true);
+    expect(isKnownThemePreference("material-ocean-dark")).toBe(false);
+    expect(isKnownThemePreference("material-oceans")).toBe(false);
+    expect(isKnownThemePreference("")).toBe(false);
+  });
+
+  it("keeps it as a dark mix half and drops it from the light half", () => {
+    expect(
+      parseThemeHalves(JSON.stringify({ light: "material-ocean", dark: "material-ocean" })),
+    ).toEqual({ dark: "material-ocean" });
+    expect(parseThemeHalves(JSON.stringify({ light: "grove", dark: "material-ocean" }))).toEqual({
+      light: "grove",
+      dark: "material-ocean",
+    });
+    expect(parseThemeHalves(JSON.stringify({ light: "material-ocean" }))).toBeNull();
+  });
+
+  it("drops a half that names an unknown id and keeps the other", () => {
+    expect(parseThemeHalves(JSON.stringify({ light: "nope", dark: "material-ocean" }))).toEqual({
+      dark: "material-ocean",
+    });
+    expect(parseThemeHalves(JSON.stringify({ light: "grove", dark: "nope" }))).toEqual({
+      light: "grove",
+    });
+    expect(parseThemeHalves(JSON.stringify({ light: "nope", dark: "nope" }))).toBeNull();
+    expect(parseThemeHalves(JSON.stringify({ dark: 3 }))).toBeNull();
+    expect(parseThemeHalves("not json")).toBeNull();
+    expect(parseThemeHalves(null)).toBeNull();
+  });
+
+  it("resolves a dark-only theme to dark whatever the system or the stored mode says", () => {
+    for (const systemDark of [true, false]) {
+      expect(resolveThemeAppearance("material-ocean", systemDark, true)).toBe("dark");
+      expect(resolveThemeAppearance("material-ocean", systemDark, false, "light")).toBe("dark");
+      expect(resolveThemeAppearance("material-ocean", systemDark, false, "dark")).toBe("dark");
+      expect(resolveThemeAppearance("material-ocean", systemDark, false, "system")).toBe("dark");
+    }
+  });
+
+  it("resolves a dark mix half to dark even when the base theme and mode say light", () => {
+    const halves = { dark: "material-ocean" };
+    expect(resolveThemeAppearance("grove", true, true, undefined, halves)).toBe("dark");
+    expect(resolveThemeAppearance("grove", false, false, "dark", halves)).toBe("dark");
+    expect(resolveThemeAppearance("grove", false, false, "light", halves)).toBe("light");
   });
 });

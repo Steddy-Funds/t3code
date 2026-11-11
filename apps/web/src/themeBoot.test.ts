@@ -12,6 +12,7 @@ import {
   EMBER_THEME,
   GROVE_THEME,
   IRIS_THEME,
+  MATERIAL_OCEAN_THEME,
   OCEAN_THEME,
   THEME_APPEARANCE_MODE_STORAGE_KEY,
   THEME_FOLLOW_SYSTEM_STORAGE_KEY,
@@ -187,6 +188,40 @@ describe("index.html boot script", () => {
       prefersDark: true,
     },
     {
+      name: "Material Ocean on a light OS",
+      storage: { [THEME_STORAGE_KEY]: "material-ocean" },
+      prefersDark: false,
+    },
+    {
+      name: "Material Ocean with a stored light mode",
+      storage: {
+        [THEME_STORAGE_KEY]: "material-ocean",
+        [THEME_APPEARANCE_MODE_STORAGE_KEY]: "light",
+      },
+      prefersDark: false,
+    },
+    {
+      name: "Material Ocean with a stored system mode on a light OS",
+      storage: {
+        [THEME_STORAGE_KEY]: "material-ocean",
+        [THEME_APPEARANCE_MODE_STORAGE_KEY]: "system",
+      },
+      prefersDark: false,
+    },
+    {
+      name: "Material Ocean with follow-system on a light OS",
+      storage: { [THEME_STORAGE_KEY]: "material-ocean", [THEME_FOLLOW_SYSTEM_STORAGE_KEY]: "true" },
+      prefersDark: false,
+    },
+    {
+      name: "Material Ocean with a stored dark mode on a dark OS",
+      storage: {
+        [THEME_STORAGE_KEY]: "material-ocean",
+        [THEME_APPEARANCE_MODE_STORAGE_KEY]: "dark",
+      },
+      prefersDark: true,
+    },
+    {
       name: "a legacy t3-grove preference resolves through the alias",
       storage: { [THEME_STORAGE_KEY]: "t3-grove", [THEME_FOLLOW_SYSTEM_STORAGE_KEY]: "true" },
       prefersDark: true,
@@ -305,6 +340,98 @@ describe("index.html boot script", () => {
         expect(boot.metaContent).toBe(colors!.chrome);
       }
     }
+  });
+
+  it("paints Material Ocean's own dark splash whatever the stored mode or the OS says", () => {
+    const colors = getThemeColorsForMode(MATERIAL_OCEAN_THEME, "dark")!;
+    expect(MATERIAL_OCEAN_THEME.appearance).toBe("dark");
+    expect(getThemeColorsForMode(MATERIAL_OCEAN_THEME, "light")).toBeNull();
+    expect(colors.canvas).toBe("#263238");
+    expect(colors.text).toBe("#b0bec5");
+    expect(colors.accent).toBe("#009688");
+    for (const mode of [undefined, "light", "dark", "system"] as const) {
+      for (const prefersDark of [false, true]) {
+        const label = `mode ${mode ?? "unset"}, ${prefersDark ? "dark" : "light"} OS`;
+        const boot = runBootScript({
+          storage: {
+            [THEME_STORAGE_KEY]: MATERIAL_OCEAN_THEME.id,
+            ...(mode ? { [THEME_APPEARANCE_MODE_STORAGE_KEY]: mode } : {}),
+          },
+          prefersDark,
+        });
+        expect(boot.themeId, label).toBe(MATERIAL_OCEAN_THEME.id);
+        expect(boot.isDark, label).toBe(true);
+        expect(boot.bootVariables["--boot-background"], label).toBe(colors.canvas);
+        expect(boot.bootVariables["--boot-foreground"], label).toBe(colors.text);
+        expect(boot.bootVariables["--boot-accent"], label).toBe(colors.accent);
+        expect(boot.backgroundColor, label).toBe(colors.chrome);
+        expect(boot.metaContent, label).toBe(colors.chrome);
+      }
+    }
+  });
+
+  it("paints Material Ocean's splash as a dark mix half, and the base theme for the light half", () => {
+    const colors = getThemeColorsForMode(MATERIAL_OCEAN_THEME, "dark")!;
+    const storage = {
+      [THEME_STORAGE_KEY]: "t3-chat",
+      [THEME_APPEARANCE_MODE_STORAGE_KEY]: "system",
+      "t3code:theme-halves:v1": JSON.stringify({ dark: MATERIAL_OCEAN_THEME.id }),
+    };
+
+    const dark = runBootScript({ storage, prefersDark: true });
+    expect(dark.isDark).toBe(true);
+    expect(dark.themeId).toBe(MATERIAL_OCEAN_THEME.id);
+    expect(dark.bootVariables["--boot-background"]).toBe(colors.canvas);
+    expect(dark.backgroundColor).toBe(colors.chrome);
+
+    const light = runBootScript({ storage, prefersDark: false });
+    expect(light.isDark).toBe(false);
+    expect(light.themeId).toBe("t3-chat");
+  });
+
+  it("ignores Material Ocean as a light mix half", () => {
+    const boot = runBootScript({
+      storage: {
+        [THEME_STORAGE_KEY]: "grove",
+        [THEME_APPEARANCE_MODE_STORAGE_KEY]: "system",
+        "t3code:theme-halves:v1": JSON.stringify({ light: MATERIAL_OCEAN_THEME.id }),
+      },
+      prefersDark: false,
+    });
+    expect(boot.isDark).toBe(false);
+    expect(boot.themeId).toBe(GROVE_THEME.id);
+    expect(boot.bootVariables["--boot-background"]).toBe(
+      getThemeColorsForMode(GROVE_THEME, "light")!.canvas,
+    );
+  });
+
+  it("falls back to the default for an unknown stored id without a crash", () => {
+    const boot = runBootScript({
+      storage: {
+        [THEME_STORAGE_KEY]: "material-ocean-2",
+        [THEME_APPEARANCE_MODE_STORAGE_KEY]: "dark",
+      },
+      prefersDark: false,
+    });
+    expect(boot.themeId).toBeUndefined();
+    expect(boot.themeSelected).toBeUndefined();
+    expect(boot.bootVariables["--boot-background"]).toBeUndefined();
+  });
+
+  it("falls back to the base theme when a mix half names an unknown id", () => {
+    const boot = runBootScript({
+      storage: {
+        [THEME_STORAGE_KEY]: "grove",
+        [THEME_APPEARANCE_MODE_STORAGE_KEY]: "system",
+        "t3code:theme-halves:v1": JSON.stringify({ dark: "no-such-theme" }),
+      },
+      prefersDark: true,
+    });
+    expect(boot.isDark).toBe(true);
+    expect(boot.themeId).toBe(GROVE_THEME.id);
+    expect(boot.bootVariables["--boot-background"]).toBe(
+      getThemeColorsForMode(GROVE_THEME, "dark")!.canvas,
+    );
   });
 
   it("applies the matching half of an automatic mix to the splash", () => {

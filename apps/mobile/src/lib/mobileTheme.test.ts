@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   BUILT_IN_THEME_IDS,
   BUILT_IN_THEMES,
+  MATERIAL_OCEAN_THEME,
   T3_CHAT_THEME,
   T3_CODE_LIGHT_THEME_COLORS,
   T3_CODE_DARK_THEME_COLORS,
@@ -24,6 +25,7 @@ import {
   themeColorWithAlpha,
   themeColorToNativeColor,
   getMobileThemeAppearances,
+  getMobileThemeAnsiColors,
 } from "./mobileTheme";
 
 function relativeLuminance(hex: string): number {
@@ -321,6 +323,94 @@ describe("mobile themes", () => {
       expect(
         contrastRatio(variables["--color-md-user-code-text"], codeSurface),
       ).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+});
+
+describe("dark-only built-in themes", () => {
+  const stockAppearanceThemeIds = [...MOBILE_THEME_IDS, "material-you" as const].filter(
+    (themeId) => themeId !== "material-ocean",
+  );
+
+  it("fills the dark slot alone", () => {
+    expect(getMobileThemeAppearances("material-ocean")).toEqual(["dark"]);
+  });
+
+  it("keeps both appearances for every other theme, the default and Material You included", () => {
+    expect(stockAppearanceThemeIds).toContain(DEFAULT_MOBILE_THEME_ID);
+    expect(stockAppearanceThemeIds).toContain("material-you");
+    for (const themeId of stockAppearanceThemeIds) {
+      expect(getMobileThemeAppearances(themeId), themeId).toEqual(["light", "dark"]);
+    }
+  });
+
+  it("drops it from a stored light slot and keeps it for dark", () => {
+    expect(
+      resolveMobileThemeIds({
+        themeId: "material-ocean",
+        lightThemeId: "material-ocean",
+        darkThemeId: "material-ocean",
+      }),
+    ).toEqual({ light: DEFAULT_MOBILE_THEME_ID, dark: "material-ocean" });
+    expect(
+      resolveMobileThemeIds({
+        themeId: "grove",
+        lightThemeId: "material-ocean",
+        darkThemeId: "ocean",
+      }),
+    ).toEqual({ light: DEFAULT_MOBILE_THEME_ID, dark: "ocean" });
+  });
+
+  it("drops it from the light slot when the legacy single theme id carries it", () => {
+    expect(resolveMobileThemeIds({ themeId: "material-ocean" })).toEqual({
+      light: DEFAULT_MOBILE_THEME_ID,
+      dark: "material-ocean",
+    });
+    expect(resolveMobileThemeIds({ themeId: "material-ocean", darkThemeId: "iris" })).toEqual({
+      light: DEFAULT_MOBILE_THEME_ID,
+      dark: "iris",
+    });
+    expect(resolveMobileThemeIds({ themeId: "material-ocean", lightThemeId: "iris" })).toEqual({
+      light: "iris",
+      dark: "material-ocean",
+    });
+  });
+
+  it("keeps it in the dark slot when the stored dark id is unset or unknown elsewhere", () => {
+    expect(resolveMobileThemeIds({ darkThemeId: "material-ocean" })).toEqual({
+      light: DEFAULT_MOBILE_THEME_ID,
+      dark: "material-ocean",
+    });
+    expect(resolveMobileThemeIds({ themeId: "material-ocean", darkThemeId: "missing" })).toEqual({
+      light: DEFAULT_MOBILE_THEME_ID,
+      dark: DEFAULT_MOBILE_THEME_ID,
+    });
+  });
+
+  it("still resolves light-capable themes for both slots", () => {
+    for (const themeId of stockAppearanceThemeIds) {
+      expect(resolveMobileThemeIds({ themeId }), themeId).toEqual({
+        light: themeId,
+        dark: themeId,
+      });
+    }
+  });
+});
+
+describe("getMobileThemeAnsiColors", () => {
+  it("gives material-ocean's own colours for dark only", () => {
+    expect(getMobileThemeAnsiColors("material-ocean", "dark")).toBe(
+      MATERIAL_OCEAN_THEME.editor?.dark?.ansi,
+    );
+    expect(getMobileThemeAnsiColors("material-ocean", "light")).toBeNull();
+  });
+
+  it("gives nothing for every other theme", () => {
+    for (const themeId of [...MOBILE_THEME_IDS, "material-you" as const].filter(
+      (id) => id !== "material-ocean",
+    )) {
+      expect(getMobileThemeAnsiColors(themeId, "light"), `${themeId} light`).toBeNull();
+      expect(getMobileThemeAnsiColors(themeId, "dark"), `${themeId} dark`).toBeNull();
     }
   });
 });

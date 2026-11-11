@@ -15,6 +15,11 @@ export interface AgentScopeShape {
      * Falls back to ordinary scope behavior on older systemd.
      */
     readonly shared?: boolean | undefined;
+    /**
+     * A memory ceiling for this scope alone, so the kernel kills it before the
+     * agents slice reaches its own. Enforced only where scopes are on.
+     */
+    readonly memoryMaxBytes?: number | undefined;
   }) => Effect.Effect<AgentScopeCommand>;
   readonly oomKilled: (threadId: string) => Effect.Effect<boolean>;
   /**

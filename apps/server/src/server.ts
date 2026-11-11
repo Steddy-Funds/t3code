@@ -122,6 +122,10 @@ import * as WorkspaceEntries from "./workspace/WorkspaceEntries.ts";
 import * as KnownWorkspaces from "./workspace/KnownWorkspaces.ts";
 import * as WorkspaceFileSystem from "./workspace/WorkspaceFileSystem.ts";
 import * as CodeIntel from "./codeIntel/CodeIntel.ts";
+import * as LanguageServerBinaries from "./codeIntel/LanguageServerBinaries.ts";
+import * as LanguageServerPool from "./codeIntel/LanguageServerPool.ts";
+import * as PythonEnvironment from "./codeIntel/PythonEnvironment.ts";
+import * as WorkspaceWatcher from "./codeIntel/WorkspaceWatcher.ts";
 import * as WorkspacePaths from "./workspace/WorkspacePaths.ts";
 import * as GitVcsDriver from "./vcs/GitVcsDriver.ts";
 import * as VcsDriverRegistry from "./vcs/VcsDriverRegistry.ts";
@@ -515,11 +519,21 @@ const layerWorkspaceFileSystem = WorkspaceFileSystem.layer.pipe(
   Layer.provide(layerKnownWorkspaces),
 );
 
+// Building these starts nothing: a language server and its watcher exist only after a request.
+const layerCodeIntel = CodeIntel.layer.pipe(
+  Layer.provide(LanguageServerPool.layer),
+  Layer.provide(WorkspaceWatcher.layer),
+  Layer.provide(Layer.mergeAll(LanguageServerBinaries.layer, PythonEnvironment.layer)),
+  Layer.provide(layerServerSettings),
+  Layer.provide(layerWorkspaceFileSystem),
+  Layer.provide(layerKnownWorkspaces),
+);
+
 const layerWorkspace = Layer.mergeAll(
   WorkspacePaths.layer,
   layerWorkspaceEntries,
   layerWorkspaceFileSystem,
-  CodeIntel.layer,
+  layerCodeIntel,
 );
 
 const layerProjectFaviconResolver = ProjectFaviconResolver.layer.pipe(

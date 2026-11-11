@@ -45,6 +45,15 @@ interface DiffCommentRange {
   readonly lines: SelectedLineRange;
 }
 
+/** Whether `node` is under `root`, looking through the shadow roots the viewer renders into. */
+function composedContains(root: Node, node: Node | null): boolean {
+  for (let current = node; current;) {
+    if (current === root) return true;
+    current = current.parentNode ?? (current instanceof ShadowRoot ? current.host : null);
+  }
+  return false;
+}
+
 function appendAnnotationEntry(
   annotations: ReadonlyArray<DiffCommentLineAnnotation>,
   range: SelectedLineRange,
@@ -237,7 +246,7 @@ export function AnnotatableCodeView({
       onPointerDownCapture={(event) => {
         const selection = document.getSelection();
         selectedTextRef.current =
-          selection && event.currentTarget.contains(selection.anchorNode)
+          selection && composedContains(event.currentTarget, selection.anchorNode)
             ? selection.toString()
             : "";
       }}

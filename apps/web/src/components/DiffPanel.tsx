@@ -232,6 +232,7 @@ export default function DiffPanel({
         .getComposerDraft(composerDraftTarget)
         ?.reviewComments.filter((comment) => !isPullRequestSummaryContext(comment)).length ?? 0,
   );
+  const sendCommentsLabel = `Send ${unsentCommentCount} ${unsentCommentCount === 1 ? "comment" : "comments"}`;
   const [sendingComments, setSendingComments] = useState(false);
   const sendAllComments = async () => {
     const comments =
@@ -1140,14 +1141,23 @@ export default function DiffPanel({
         )}
       >
         {onSendReviewComments && unsentCommentCount > 0 ? (
-          <Button
-            type="button"
-            size="xs"
-            disabled={sendingComments}
-            onClick={() => void sendAllComments()}
-          >
-            Send {unsentCommentCount} {unsentCommentCount === 1 ? "comment" : "comments"}
-          </Button>
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  type="button"
+                  size="xs"
+                  aria-label={sendCommentsLabel}
+                  disabled={sendingComments}
+                  onClick={() => void sendAllComments()}
+                />
+              }
+            >
+              {/* The full label would push the base picker out of a panel of the usual width. */}
+              Send {unsentCommentCount}
+            </TooltipTrigger>
+            <TooltipPopup side="top">{sendCommentsLabel} to the agent</TooltipPopup>
+          </Tooltip>
         ) : null}
         {codeViewFiles.length > 0 || (isGitSelection && selectedGitSource?.files?.length) ? (
           <DiffStatLabel

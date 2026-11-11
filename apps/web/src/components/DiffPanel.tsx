@@ -16,6 +16,7 @@ import {
   FolderTreeIcon,
   PilcrowIcon,
   Rows3Icon,
+  SquareSplitHorizontalIcon,
   TextWrapIcon,
 } from "lucide-react";
 import { ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown } from "lucide";
@@ -100,7 +101,13 @@ import { serverEnvironment } from "../state/server";
 import { reviewEnvironment } from "../state/review";
 import { vcsEnvironment } from "../state/vcs";
 import { buildBaseRefChoices, filterBaseRefChoices } from "../lib/baseRefChoices";
-import { createGitDiffFileContentsLoader } from "../lib/diffFileContents";
+import {
+  createGitDiffFileContentsLoader,
+  createTurnDiffFileContentsLoader,
+} from "../lib/diffFileContents";
+import { observeResize } from "~/lib/observeResize";
+import { orchestrationEnvironment } from "../state/orchestration";
+import { SideBySideDiffPanel } from "./diffs/sbs/SideBySideDiffPanel";
 
 import { observeIntersection } from "~/lib/observeIntersection";
 import { useReviewFilePatches } from "./diffs/useReviewFilePatches";
@@ -113,6 +120,8 @@ import { useOpenLink } from "../browser/useOpenLink";
 type DiffThemeType = "light" | "dark";
 const AUTOMATIC_BASE_REF = "__automatic_base_ref__";
 const DIFF_FILE_TREE_STORAGE_KEY = "t3code.diffFileTreeOpen";
+/** Narrower than this, two panes and their divider leave too little of each line to read. */
+const SIDE_BY_SIDE_MIN_WIDTH = 560;
 const fileEntryCache = new WeakMap<
   FileDiffMetadata,
   { fileDiff: FileDiffMetadata; fileKey: string; fileVersion: number }
@@ -225,6 +234,7 @@ export default function DiffPanel({
     diffFilesCollapsed: settings.diffFilesCollapsed,
     diffIgnoreWhitespace: settings.diffIgnoreWhitespace,
     diffLayout: settings.diffLayout,
+    diffSideBySide: settings.diffSideBySide,
     timestampFormat: settings.timestampFormat,
     wordWrap: settings.wordWrap,
   }));
@@ -241,6 +251,12 @@ export default function DiffPanel({
   // The open commit menu keeps the list it opened with, so rows do not move under the pointer.
   const [openCommitMenu, setOpenCommitMenu] = useState<ReviewBranchCommitsResult | null>(null);
   const [codeViewRevision, setCodeViewRevision] = useState(0);
+  const [diffAreaWidth, setDiffAreaWidth] = useState<number | null>(null);
+  // The side-by-side layout shows one file: the one picked in this selection, else the first.
+  const [sideBySideFile, setSideBySideFile] = useState<{
+    scopeKey: string | null;
+    fileKey: string;
+  } | null>(null);
 
   const routeThreadRef = useThreadRouteRef();
   const activeThreadId = routeThreadRef?.threadId ?? null;
@@ -269,6 +285,11 @@ export default function DiffPanel({
     serverConfig?.availableEditors ?? [],
   );
   const getDiffFileContents = useAtomCommand(reviewEnvironment.diffFileContents);
+  // A refusal (too large, binary, an older server) is shown in the panel, not logged.
+  const getTurnDiffFileContents = useAtomCommand(orchestrationEnvironment.turnDiffFileContents, {
+    reportFailure: false,
+    reportDefect: false,
+  });
   const gitStatusQuery = useEnvironmentQuery(
     activeThread !== null && activeThread !== undefined && activeCwd != null
       ? vcsEnvironment.status({
@@ -549,6 +570,32 @@ export default function DiffPanel({
     }
     return currentLoadDiffFiles(fileDiff);
   });
+  // Whole files of a turn need the file read grant on top of the thread's own.
+  const currentLoadWholeFiles =
+    currentLoadDiffFiles ??
+    (selectedTurn && activeThread && activeThreadId && selectedCheckpointRange && canReadFiles
+      ? createTurnDiffFileContentsLoader(getTurnDiffFileContents, {
+          environmentId: activeThread.environmentId,
+          threadId: activeThreadId,
+          ...selectedCheckpointRange,
+          cacheKey: `turn:${selectedTurn.runId}`,
+        })
+      : undefined);
+  const loadWholeFiles: FileDiffContentsLoader = useStableCallback(async (fileDiff) => {
+    if (!currentLoadWholeFiles) {
+      throw new Error("Whole files are unavailable for this selection.");
+    }
+    return currentLoadWholeFiles(fileDiff);
+  });
+  const sideBySide =
+    settings.diffSideBySide && (diffAreaWidth === null || diffAreaWidth >= SIDE_BY_SIDE_MIN_WIDTH);
+  const observeDiffArea = useStableCallback((element: HTMLDivElement | null) => {
+    if (!element) return;
+    return observeResize(element, ([entry]) => {
+      if (entry) setDiffAreaWidth(entry.contentRect.width);
+    });
+  });
+
   const canSelectBranchBase = canReadFiles && canRefreshGitDiff && selectedGitScope === "branch";
   const branchRefsCwd = branchDiffPreview.data?.cwd ?? activeCwd;
   const localBranchRefs = useEnvironmentQuery(
@@ -612,6 +659,7 @@ export default function DiffPanel({
     previewInput: branchDiffPreviewInput,
     preview: renderablePatch,
   });
+  const requestFilePatch = useStableCallback((filePath: string) => requestFile(filePath));
   const refreshBranchDiffPreview = refreshPreviewQuery;
   const diffRefreshKey = `diff:${activeThreadRefreshKey ?? ""}`;
 
@@ -702,6 +750,7 @@ export default function DiffPanel({
       return next;
     });
     if (lazySource) requestFile(filePath);
+    setSideBySideFile({ scopeKey: collapseScopeKey, fileKey: file.fileKey });
     codeViewReveal.request(file.fileKey);
     return true;
   };
@@ -722,10 +771,11 @@ export default function DiffPanel({
     }
   }, [collapseScopeKey, selectedFilePath, selectedFileRevealRequestId, revealDiffFile]);
 
-  const openDiffFile = (filePath: string) => {
+  const openDiffFile = (filePath: string, line?: number) => {
     openDiffFilePrimaryAction({
       threadRef: routeThreadRef,
       filePath,
+      line,
       activeCwd,
       repositoryRoot: activeRepositoryRoot,
       openInEditor: (targetPath) => {
@@ -1146,7 +1196,7 @@ export default function DiffPanel({
             </TooltipPopup>
           </Tooltip>
         )}
-        {diffFileKeys.length > 0 && (
+        {diffFileKeys.length > 0 && !sideBySide && (
           <Tooltip>
             <TooltipTrigger
               render={
@@ -1173,11 +1223,13 @@ export default function DiffPanel({
           aria-label="Diff layout"
           className="shrink-0"
           variant="segmented"
-          value={[diffLayout]}
+          value={[settings.diffSideBySide ? "side-by-side" : diffLayout]}
           onValueChange={(value) => {
             const next = value[0];
             if (next === "stacked" || next === "split") {
-              updateClientSettings({ diffLayout: next });
+              updateClientSettings({ diffLayout: next, diffSideBySide: false });
+            } else if (next === "side-by-side") {
+              updateClientSettings({ diffSideBySide: true });
             }
           }}
         >
@@ -1187,27 +1239,44 @@ export default function DiffPanel({
           <Toggle aria-label="Split diff view" value="split">
             <Columns2Icon className="size-3.5" />
           </Toggle>
+          <Tooltip>
+            <TooltipTrigger
+              render={<Toggle aria-label="Side-by-side diff view" value="side-by-side" />}
+            >
+              <SquareSplitHorizontalIcon className="size-3.5" />
+            </TooltipTrigger>
+            <TooltipPopup side="top">
+              {settings.diffSideBySide && !sideBySide
+                ? "Side by side needs a wider panel. Showing the stored layout."
+                : "Side by side: whole files, one at a time"}
+            </TooltipPopup>
+          </Tooltip>
         </ToggleGroup>
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <Toggle
-                aria-label={wordWrap ? "Disable diff line wrapping" : "Enable diff line wrapping"}
-                variant="ghost"
-                size="sm"
-                pressed={wordWrap}
-                onPressedChange={(pressed) => {
-                  setWordWrap(Boolean(pressed));
-                }}
-              />
-            }
-          >
-            <TextWrapIcon className="size-3.5" />
-          </TooltipTrigger>
-          <TooltipPopup side="top">
-            {wordWrap ? "Disable line wrapping" : "Enable line wrapping"}
-          </TooltipPopup>
-        </Tooltip>
+        {/* Side by side never wraps: its two panes line up by line. */}
+        {!sideBySide && (
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Toggle
+                  aria-label={
+                    wordWrap ? "Disable diff line wrapping" : "Enable diff line wrapping"
+                  }
+                  variant="ghost"
+                  size="sm"
+                  pressed={wordWrap}
+                  onPressedChange={(pressed) => {
+                    setWordWrap(Boolean(pressed));
+                  }}
+                />
+              }
+            >
+              <TextWrapIcon className="size-3.5" />
+            </TooltipTrigger>
+            <TooltipPopup side="top">
+              {wordWrap ? "Disable line wrapping" : "Enable line wrapping"}
+            </TooltipPopup>
+          </Tooltip>
+        )}
         <Tooltip>
           <TooltipTrigger
             render={
@@ -1372,7 +1441,45 @@ export default function DiffPanel({
               )
             ) : lazySource || renderablePatch?.kind === "files" ? (
               <div className="flex min-h-0 flex-1 overflow-hidden">
+                {sideBySide ? (
+                  <div ref={observeDiffArea} className="flex min-h-0 min-w-0 flex-1">
+                    <SideBySideDiffPanel
+                      files={shownFileEntries.map(({ fileDiff, fileKey }) => ({
+                        fileDiff,
+                        fileKey,
+                        filePath: resolveFileDiffPath(fileDiff),
+                      }))}
+                      selectedFileKey={
+                        sideBySideFile?.scopeKey === collapseScopeKey
+                          ? sideBySideFile.fileKey
+                          : null
+                      }
+                      onSelectFile={(fileKey) =>
+                        setSideBySideFile({ scopeKey: collapseScopeKey, fileKey })
+                      }
+                      loadFileContents={currentLoadWholeFiles ? loadWholeFiles : undefined}
+                      scopeKey={collapseScopeKey ?? reviewSectionId}
+                      contentsKey={selectedGitSource?.diffHash ?? ""}
+                      ignoreWhitespace={diffIgnoreWhitespace}
+                      patchState={(filePath) => ({
+                        pending: renderableFiles.some(
+                          (file) =>
+                            resolveFileDiffPath(file) === filePath &&
+                            file.cacheKey?.endsWith(":pending") === true,
+                        ),
+                        error: fileStates.get(filePath)?.error ?? false,
+                        truncated:
+                          isSelectedPatchTruncated ||
+                          (fileStates.get(filePath)?.truncated ?? false),
+                      })}
+                      onRequestPatch={requestFilePatch}
+                      onRetryPatch={retry}
+                      onOpenFile={openDiffFile}
+                    />
+                  </div>
+                ) : (
                 <div
+                  ref={observeDiffArea}
                   className="min-h-0 min-w-0 flex-1"
                   onClickCapture={(event) => {
                     const composedPath = event.nativeEvent.composedPath?.() ?? [];
@@ -1494,6 +1601,7 @@ export default function DiffPanel({
                     }}
                   />
                 </div>
+                )}
                 {fileTreeOpen ? (
                   <FileExplorerPane
                     resizable
@@ -1504,7 +1612,17 @@ export default function DiffPanel({
                     <DiffFileTree
                       ariaLabel={`${reviewSectionTitle} files`}
                       entries={fileTreeEntries}
-                      selectedPath={selectedFilePath}
+                      selectedPath={
+                        sideBySide
+                          ? (shownFileEntries.find(
+                              (file) =>
+                                sideBySideFile?.scopeKey === collapseScopeKey &&
+                                file.fileKey === sideBySideFile.fileKey,
+                            )?.fileDiff.name ??
+                            shownFileEntries[0]?.fileDiff.name ??
+                            null)
+                          : selectedFilePath
+                      }
                       revealRequestId={selectedFileRevealRequestId}
                       onSelectFile={revealDiffFile}
                     />

@@ -145,9 +145,9 @@ It is a JSON array of rules:
 
 T3 Code creates the file with its defaults and adds new defaults on later startups.
 New defaults do not replace commands you customized, and your rules stay where they are.
-A new default that shares a shortcut with an older default goes right after the last such
-default in the file. By [rule order](#precedence) it refines that default, and any rule of
-yours below it still wins.
+A new default that shares a shortcut with older defaults goes right after them, and before
+the first rule of yours that comes after one of them. By [rule order](#precedence) it refines
+the older defaults, and your rule still wins.
 Invalid rules are ignored, and T3 Code adds nothing to the file while it has one; if the
 file cannot be parsed, T3 Code uses defaults. T3 Code rewrites the file when it adds defaults
 or saves a change from Settings, so comments in it are not kept.

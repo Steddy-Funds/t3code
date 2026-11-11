@@ -185,7 +185,7 @@ export function DiffCommentAnnotation({
       <div className="mt-1.5 flex flex-wrap items-center gap-1">
         <span className="mr-auto text-3xs text-muted-foreground/70">⌘/Ctrl Enter to send</span>
         {/* One group, so a narrow panel wraps the buttons together and never one alone. */}
-        <div className="flex items-center gap-1">
+        <div className="ml-auto flex items-center gap-1">
           {speech ? <TextFieldSpeechControls speech={speech} disabled={pending} /> : null}
           <Button variant="ghost-muted" size="xs" onClick={onCancel}>
             Cancel

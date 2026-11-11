@@ -142,7 +142,7 @@ function withAutoCompactWindowChoice(
         label: "Auto-compact after",
         type: "select",
         options: [
-          { id: "default", label: "Default", isDefault: true },
+          { id: "default", label: "Provider setting", isDefault: true },
           ...choices.map(({ id, label }) => ({ id, label })),
         ],
       },

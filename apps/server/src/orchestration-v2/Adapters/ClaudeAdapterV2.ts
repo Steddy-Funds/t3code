@@ -1681,13 +1681,17 @@ export const layerQueryRunner: Layer.Layer<
 
 type ClaudeFlagSettings = Parameters<ClaudeQuery["applyFlagSettings"]>[0];
 
-/** Thinking requires a new process. Clearing effort also requires one to reload user settings instead of model defaults. */
+/**
+ * Thinking requires a new process. Clearing effort also requires one to reload user settings instead of model defaults.
+ * So does the auto-compact window: clearing it live would also drop the instance's and the launch arguments' window.
+ */
 function canApplyClaudeSelectionLive(
   live: CompiledClaudeModelSelection,
   next: CompiledClaudeModelSelection,
 ): boolean {
   return (
     live.settings.alwaysThinkingEnabled === next.settings.alwaysThinkingEnabled &&
+    live.settings.autoCompactWindow === next.settings.autoCompactWindow &&
     (next.effort !== undefined || live.effort === undefined)
   );
 }
@@ -1835,13 +1839,29 @@ export function makeClaudeQueryOptions(input: {
       : typeof input.sdkSettings === "object" && input.sdkSettings !== null
         ? ({ ...input.sdkSettings, ...selectionSettings } as ClaudeSdkSettings)
         : selectionSettings;
+  const pickedWindow = compiledSelection.settings.autoCompactWindow;
+  const pickedWindowModel = compiledSelection.apiModelId.replace(/\[1m\]$/i, "");
+  // A window picked for the thread beats the instance's. Within one settings source Claude reads
+  // a model's own window ahead of the top-level one, so the pick is written there too.
   const compactQuerySettings =
-    input.settings?.autoCompactWindow === undefined || input.settings.autoCompactWindow.length === 0
-      ? querySettings
-      : ({
-          ...(typeof querySettings === "object" && querySettings !== null ? querySettings : {}),
-          autoCompactWindow: Number(input.settings.autoCompactWindow),
-        } as ClaudeSdkSettings);
+    pickedWindow !== undefined && typeof querySettings === "object" && querySettings !== null
+      ? ({
+          ...querySettings,
+          modelSettings: {
+            ...querySettings.modelSettings,
+            [pickedWindowModel]: {
+              ...querySettings.modelSettings?.[pickedWindowModel],
+              autoCompactWindow: pickedWindow,
+            },
+          },
+        } as ClaudeSdkSettings)
+      : input.settings?.autoCompactWindow === undefined ||
+          input.settings.autoCompactWindow.length === 0
+        ? querySettings
+        : ({
+            ...(typeof querySettings === "object" && querySettings !== null ? querySettings : {}),
+            autoCompactWindow: Number(input.settings.autoCompactWindow),
+          } as ClaudeSdkSettings);
   // A settings file path cannot take extra keys, so it goes through unchanged.
   const effectiveQuerySettings =
     input.toolSearchOverride === undefined || typeof compactQuerySettings === "string"
@@ -5063,9 +5083,12 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
     modelSelection: ModelSelection,
     launchArgSettings: ClaudeSdkSettings | undefined,
   ) {
+    const compiledSelection = compileClaudeModelSelection(modelSelection, modelCatalog);
+    if (compiledSelection.settings.autoCompactWindow !== undefined)
+      return String(compiledSelection.settings.autoCompactWindow);
     if (adapterOptions.settings.autoCompactWindow !== "")
       return adapterOptions.settings.autoCompactWindow;
-    const model = compileClaudeModelSelection(modelSelection).apiModelId.replace(/\[1m\]$/i, "");
+    const model = compiledSelection.apiModelId.replace(/\[1m\]$/i, "");
     const windowFrom = (settings: unknown) => {
       if (typeof settings !== "object" || settings === null) return undefined;
       const models = Reflect.get(settings, "modelSettings");

@@ -1104,6 +1104,14 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["address bar duckduckgo google bing brave kagi ecosia custom url"],
   },
   {
+    id: "browser-cloudflare",
+    title: "Cloudflare Browser Run",
+    to: "/settings/browser",
+    targetId: "browser-cloudflare",
+    scope: "environment",
+    searchTerms: ["hosted remote chrome agent tabs account id api token check connection"],
+  },
+  {
     id: "pull-request-links-open-in-app",
     title: "Open pull requests in T3 Code",
     to: "/settings/diffs",

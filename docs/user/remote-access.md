@@ -429,6 +429,38 @@ For a systemd service, add `Environment=T3CODE_SERVER_BROWSER_SANDBOX=0` under
 your T3 service. Setting the variable in an agent's terminal does not change the
 environment of an already running T3 server.
 
+### Cloudflare Browser Run
+
+Agent tabs can run on [Cloudflare Browser Run](https://developers.cloudflare.com/browser-run/),
+Cloudflare's hosted Chrome, so the host stops spending memory and CPU on the
+pages agents browse. Open **Settings → Browser → Cloudflare Browser Run**,
+enter your Cloudflare account ID and an API token with the **Browser Rendering
+Edit** permission, select **Check connection**, then turn it on. The setting
+belongs to the environment, and applies to a server that runs without the
+desktop app, which shows its own environment's tabs itself.
+
+A new agent tab goes to Browser Run when its address resolves to a public
+address from the host. It starts logged out: a hosted browser does not hold
+your browser profiles. An agent that needs a login opens the tab with that
+profile, and the tab stays on the host. `localhost`, private and tailnet
+addresses, and names only the host's DNS knows also keep opening in the host's
+Chrome. If Cloudflare is unreachable or refuses the token, tabs open on the
+host instead.
+
+A tab keeps the browser it opened in. In a Browser Run tab:
+
+- Local addresses do not load, including a redirect to one, such as a sign-in
+  callback on `localhost`. Agents open those in a new tab.
+- Downloads are not saved.
+- Sites see Cloudflare's addresses and its bot headers, and some block them.
+  Turn the setting off to browse those from the host.
+- The tab closes if the host sleeps or loses its connection for two minutes,
+  because Cloudflare ends a browser the host stops talking to.
+
+Cloudflare bills browser time and concurrent browsers. An environment's Browser
+Run tabs share one browser, which T3 Code closes five minutes after its last
+tab.
+
 ## Connect an outside agent
 
 Claude Code, Codex, ChatGPT and other agents T3 Code did not start can drive

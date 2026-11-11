@@ -314,6 +314,7 @@ import {
 import {
   ServerConfigStreamEvent,
   DesktopUpdateCommitInput,
+  BrowserRunCheckResult,
   OtlpEndpointCheckInput,
   ServerPrepareTriageError,
   ServerPrepareTriageInput,
@@ -569,6 +570,7 @@ export const WS_METHODS = {
   serverGetResourceTelemetryHistory: "server.getResourceTelemetryHistory",
   serverRetryResourceTelemetry: "server.retryResourceTelemetry",
   serverCheckOtlpEndpoint: "server.checkOtlpEndpoint",
+  serverCheckBrowserRun: "server.checkBrowserRun",
   serverListTextGeneratorModels: "server.listTextGeneratorModels",
   serverPrepareTriage: "server.prepareTriage",
   serverSignalProcess: "server.signalProcess",
@@ -1018,6 +1020,12 @@ const WsServerRetryResourceTelemetryRpc = Rpc.make(WS_METHODS.serverRetryResourc
 const WsServerCheckOtlpEndpointRpc = Rpc.make(WS_METHODS.serverCheckOtlpEndpoint, {
   payload: OtlpEndpointCheckInput,
   success: OtlpEndpointCheckResult,
+  error: EnvironmentAuthorizationError,
+});
+
+const WsServerCheckBrowserRunRpc = Rpc.make(WS_METHODS.serverCheckBrowserRun, {
+  payload: Schema.Struct({}),
+  success: BrowserRunCheckResult,
   error: EnvironmentAuthorizationError,
 });
 
@@ -2206,6 +2214,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerGetResourceTelemetryHistoryRpc,
   WsServerRetryResourceTelemetryRpc,
   WsServerCheckOtlpEndpointRpc,
+  WsServerCheckBrowserRunRpc,
   WsServerListTextGeneratorModelsRpc,
   WsServerPrepareTriageRpc,
   WsServerGetUsageSummaryRpc,

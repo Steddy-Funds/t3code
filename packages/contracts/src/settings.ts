@@ -1367,6 +1367,14 @@ export const CloudSpeechCredentials = Schema.Struct({
   openrouter: CloudSpeechCredential,
 });
 
+/** Cloudflare Browser Run: the server browser opens public pages there instead of in local Chrome. */
+export const BrowserRunSettings = Schema.Struct({
+  enabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  accountId: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
+  apiToken: SettingsSecretValue.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
+});
+export type BrowserRunSettings = typeof BrowserRunSettings.Type;
+
 export const ServerSettings = Schema.Struct({
   // Null means unmigrated; empty is authoritative and must not resurrect cleared preferences.
   favorites: Schema.NullOr(ModelFavorites).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
@@ -1394,6 +1402,9 @@ export const ServerSettings = Schema.Struct({
   ),
 
   enableAgentBrowserAccess: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  browserRun: BrowserRunSettings.pipe(
+    Schema.withDecodingDefault(Effect.succeed({ enabled: false, accountId: "", apiToken: "" })),
+  ),
   cloudSpeechCredentials: CloudSpeechCredentials.pipe(
     Schema.withDecodingDefault(Effect.succeed({ openai: "", xai: "", openrouter: "" })),
   ),
@@ -1843,6 +1854,13 @@ export const ServerSettingsPatch = Schema.Struct({
   enableProviderUpdateChecks: Schema.optionalKey(Schema.Boolean),
   continueThreadsAfterServerUpdate: Schema.optionalKey(Schema.Boolean),
   enableAgentBrowserAccess: Schema.optionalKey(Schema.Boolean),
+  browserRun: Schema.optionalKey(
+    Schema.Struct({
+      enabled: Schema.optionalKey(Schema.Boolean),
+      accountId: Schema.optionalKey(TrimmedString),
+      apiToken: Schema.optionalKey(SettingsSecretValue),
+    }),
+  ),
   cloudSpeechCredentials: Schema.optionalKey(
     Schema.Struct({
       openai: Schema.optionalKey(SettingsSecretValue),

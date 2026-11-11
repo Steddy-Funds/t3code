@@ -32,6 +32,8 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [WS_METHODS.serverSignalProcess]: AuthEnvironmentMaintainScope,
   // Releasing a claim changes which thread a process counts toward, and what load pause may stop.
   [WS_METHODS.machineClaimsRelease]: AuthEnvironmentMaintainScope,
+  // The check spends the stored API token.
+  [WS_METHODS.serverCheckBrowserRun]: AuthSettingsWriteScope,
   // Listing models spends the stored API key, so only those who can choose a model may.
   [WS_METHODS.serverListTextGeneratorModels]: AuthSettingsWriteScope,
   [WS_METHODS.serverRefreshProviders]: AuthOrchestrationReadScope,

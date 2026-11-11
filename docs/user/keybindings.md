@@ -99,9 +99,11 @@ else.
 | `mod+alt+arrowleft`, `mod+alt+arrowright`    | Back, Forward                            | anything but a terminal, on desktop  |
 
 A comment box or a find field inside code or a diff is a text field, so these shortcuts leave
-its typing alone. In a browser tab, `mod+1` and `mod+alt+arrowleft` / `mod+alt+arrowright`
-stay with the browser. To use one of these keys for its other command everywhere, give that
-command a shortcut of your own in **Settings → Keybindings**: your rule wins.
+its typing alone. Where a feature does not work, such as code navigation in a thread on a
+machine whose server lacks it, its keys keep their other command. In a browser tab, `mod+1`
+and `mod+alt+arrowleft` / `mod+alt+arrowright` stay with the browser. To use one of these keys
+for its other command everywhere, give that command a shortcut of your own in
+**Settings → Keybindings**: your rule wins.
 
 Shortcuts come from your primary environment. If its server is older than this app,
 `mod+shift+o` and `mod+alt+arrowleft` / `mod+alt+arrowright` are missing until you update it;
@@ -143,11 +145,12 @@ It is a JSON array of rules:
 
 T3 Code creates the file with its defaults and adds new defaults on later startups.
 New defaults do not replace commands you customized, and your rules stay where they are.
-A new default that shares a shortcut with an older default goes right after it and before
-any rule of your own on that shortcut, so by [rule order](#precedence) it refines the older
-default and your rule still wins.
+A new default that shares a shortcut with an older default goes right after the last such
+default in the file. By [rule order](#precedence) it refines that default, and any rule of
+yours below it still wins.
 Invalid rules are ignored, and T3 Code adds nothing to the file while it has one; if the
-file cannot be parsed, T3 Code uses defaults.
+file cannot be parsed, T3 Code uses defaults. T3 Code rewrites the file when it adds defaults
+or saves a change from Settings, so comments in it are not kept.
 
 ## Rule shape
 
@@ -167,7 +170,7 @@ Join modifiers and a key with `+`, such as `mod+shift+d` or `ctrl+l`.
 Available context keys are `terminalFocus`, `terminalOpen`, `previewFocus`,
 `previewOpen`, `rightPanelOpen`, `modelPickerOpen`, `usagePageOpen`, `composerFocus`,
 `draftThreadRoute`, `turnRunning`, `editableFocus`, `codeFocus`, `diffFocus`,
-`projectTreeFocus`, `codeSymbols`, `projectPane`, `isWeb`, and `isDesktop`.
+`projectTreeFocus`, `codeNavigation`, `codeSymbols`, `projectPane`, `isWeb`, and `isDesktop`.
 `rightPanelOpen` applies only to `rightPanel.new` and is true while the right panel is
 open; the default `mod+t` uses it to open the panel's new-tab menu.
 `draftThreadRoute` is true on a draft thread, including a restored draft, until it is first sent.
@@ -175,8 +178,9 @@ open; the default `mod+t` uses it to open the panel's new-tab menu.
 the keyboard. `codeFocus` is true while the keyboard is in code, such as an open file.
 `diffFocus` is true in the side-by-side diff. `projectTreeFocus` is true in the Project pane,
 including its search field. A text field inside code or a diff, such as a comment box, turns
-`codeFocus` and `diffFocus` off. `codeSymbols` and `projectPane` are true when this app has
-symbol search and the Project pane. `isWeb` is true in a browser tab. `isDesktop` is true in
+`codeFocus` and `diffFocus` off. `codeNavigation`, `codeSymbols` and `projectPane` are true
+where code navigation, symbol search and the Project pane work: code navigation, for one,
+needs the thread's machine to run a server that has it. `isWeb` is true in a browser tab. `isDesktop` is true in
 the desktop app. Unknown keys evaluate to `false`.
 
 `mod+1` through `mod+9` jump to the first nine threads, and to models while the

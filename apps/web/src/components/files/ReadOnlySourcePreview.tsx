@@ -1,4 +1,4 @@
-import { useDiffThemeName } from "~/hooks/useDiffThemeName";
+import { useDiffThemeName, useThemeEditorSurfaceCss } from "~/hooks/useDiffThemeName";
 import { File, type FileOptions, Virtualizer } from "@pierre/diffs/react";
 
 import { DiffWorkerPoolProvider } from "~/components/DiffWorkerPoolProvider";
@@ -18,6 +18,7 @@ export default function ReadOnlySourcePreview(props: {
 }) {
   const resolvedTheme = useRenderedAppearance();
   const diffThemeName = useDiffThemeName(resolvedTheme);
+  const themeCss = useThemeEditorSurfaceCss();
   const defaultWordWrap = useClientSettings((settings) => settings.wordWrap);
   const wordWrap = props.wordWrap ?? defaultWordWrap;
   return (
@@ -39,7 +40,7 @@ export default function ReadOnlySourcePreview(props: {
             theme: diffThemeName,
             preferredHighlighter: PREFERRED_HIGHLIGHTER,
             themeType: resolvedTheme,
-            unsafeCSS: FILE_LINK_REVEAL_UNSAFE_CSS,
+            unsafeCSS: `${FILE_LINK_REVEAL_UNSAFE_CSS}${themeCss}`,
             ...(props.onPostRender ? { onPostRender: props.onPostRender } : {}),
           }}
           className="min-h-full"

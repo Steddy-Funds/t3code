@@ -1,4 +1,4 @@
-import { useDiffThemeName } from "~/hooks/useDiffThemeName";
+import { useDiffThemeName, useThemeEditorSurfaceCss } from "~/hooks/useDiffThemeName";
 import { DownloadIcon, CopyIcon, CheckIcon } from "lucide-react";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import { Spinner } from "~/components/ui/spinner";
@@ -683,6 +683,7 @@ function EditableFileSurface({
   onPendingChange,
 }: EditableFileSurfaceProps) {
   const diffThemeName = useDiffThemeName(resolvedTheme);
+  const themeCss = useThemeEditorSurfaceCss();
   const addReviewComment = useComposerDraftStore((store) => store.addReviewComment);
   const removeReviewComment = useComposerDraftStore((store) => store.removeReviewComment);
   const [lineAnnotations, setLineAnnotations] = useState<FileCommentLineAnnotation[]>([]);
@@ -892,7 +893,7 @@ function EditableFileSurface({
               theme: diffThemeName,
               preferredHighlighter: PREFERRED_HIGHLIGHTER,
               themeType: resolvedTheme,
-              unsafeCSS: FILE_LINK_REVEAL_UNSAFE_CSS,
+              unsafeCSS: `${FILE_LINK_REVEAL_UNSAFE_CSS}${themeCss}`,
               onPostRender: handlePostRender,
             }}
             selectedLines={selectedRange}

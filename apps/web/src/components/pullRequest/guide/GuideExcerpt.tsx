@@ -1,4 +1,4 @@
-import { useDiffThemeName } from "~/hooks/useDiffThemeName";
+import { useDiffThemeName, useThemeEditorSurfaceCss } from "~/hooks/useDiffThemeName";
 import type {
   DiffLineAnnotation,
   FileDiffContentsLoader,
@@ -204,6 +204,7 @@ function ExcerptDiff({
 }) {
   const resolvedTheme = useRenderedAppearance();
   const diffThemeName = useDiffThemeName(resolvedTheme);
+  const themeCss = useThemeEditorSurfaceCss();
   const loadExcerptFiles = excerptLoader(excerpt, slice.rows, loadDiffFiles);
 
   const annotations = (() => {
@@ -282,7 +283,7 @@ function ExcerptDiff({
     theme: diffThemeName,
     themeType: resolvedTheme,
     preferredHighlighter: PREFERRED_HIGHLIGHTER,
-    unsafeCSS: EXCERPT_UNSAFE_CSS,
+    unsafeCSS: `${EXCERPT_UNSAFE_CSS}${themeCss}`,
     enableGutterUtility: interactive,
     enableLineSelection: interactive,
     onGutterUtilityClick: beginComment,

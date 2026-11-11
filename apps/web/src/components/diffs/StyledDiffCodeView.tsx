@@ -9,6 +9,7 @@ import {
 /* oxlint-enable eslint/no-restricted-imports */
 import type { Ref } from "react";
 
+import { useThemeEditorSurfaceCss } from "~/hooks/useDiffThemeName";
 import { DIFF_SURFACE_THEME_UNSAFE_CSS } from "~/lib/diffRendering";
 import { DiffWorkerPoolProvider } from "../DiffWorkerPoolProvider";
 
@@ -20,18 +21,15 @@ export const DIFF_VIEW_UNSAFE_CSS = `${DIFF_SURFACE_THEME_UNSAFE_CSS}
   --diffs-code-grid: var(--diffs-grid-number-column-width) minmax(0, 1fr);
 }
 
-/* Translucent find matches keep the syntax colours under them. A theme with its own
-   find colours (--app-theme-editor-find-*) paints them solid, as its scheme does. */
+/* Translucent find matches keep the syntax colours under them. */
 :host {
-  --diffs-bg-search-match-override: var(
-    --app-theme-editor-find-match,
-    light-dark(#ff963288, #ff963266)
+  --diffs-bg-search-match-override: light-dark(#ff963288, #ff963266);
+  --diffs-bg-search-match-current-override: color-mix(
+    in lab,
+    var(--diffs-modified-base) 45%,
+    transparent
   );
-  --diffs-bg-search-match-current-override: var(
-    --app-theme-editor-find-current-match,
-    color-mix(in lab, var(--diffs-modified-base) 45%, transparent)
-  );
-  --diffs-fg-search-match-override: var(--app-theme-editor-find-foreground, currentColor);
+  --diffs-fg-search-match-override: currentColor;
 }
 
 :is(
@@ -238,21 +236,21 @@ export function StyledDiffCodeView<LAnnotation = undefined>({
   unsafeCSSExtra,
   ...props
 }: StyledDiffCodeViewProps<LAnnotation>) {
+  const themeCss = useThemeEditorSurfaceCss();
+  // A theme with its own editor colours keeps the diff on its code surface; the others blend
+  // the diff into the panel it sits in.
+  const surfaceClass = themeCss
+    ? "diff-render-surface bg-(--code-background) outline-none"
+    : "diff-render-surface [--code-background:var(--background)] outline-none";
   return (
     <DiffWorkerPoolProvider>
       <CodeView<LAnnotation>
         {...props}
         {...(viewerRef ? { ref: viewerRef } : {})}
-        className={
-          className
-            ? `diff-render-surface [--code-background:var(--background)] outline-none ${className}`
-            : "diff-render-surface [--code-background:var(--background)] outline-none"
-        }
+        className={className ? `${surfaceClass} ${className}` : surfaceClass}
         options={{
           ...options,
-          unsafeCSS: unsafeCSSExtra
-            ? `${DIFF_VIEW_UNSAFE_CSS}\n${unsafeCSSExtra}`
-            : DIFF_VIEW_UNSAFE_CSS,
+          unsafeCSS: [DIFF_VIEW_UNSAFE_CSS, unsafeCSSExtra, themeCss].filter(Boolean).join("\n"),
           itemMetrics: {
             diffHeaderHeight: 32,
             hunkSeparatorHeight: 24,

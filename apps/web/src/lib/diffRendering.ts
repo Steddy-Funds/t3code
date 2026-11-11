@@ -309,50 +309,38 @@ export const DIFF_SURFACE_THEME_UNSAFE_CSS = `
   );
   --diffs-bg-buffer-override: color-mix(in srgb, var(--code-background) 90%, var(--code-foreground));
 
-  /* A theme with its own editor colours sets --app-theme-editor-*; every other theme
-     takes the fallback, which is the tint it always had. */
-  --diffs-bg-addition-override: var(
-    --app-theme-editor-diff-addition,
-    light-dark(
-      color-mix(in srgb, var(--code-background) 50%, var(--diff-addition)),
-      color-mix(in srgb, var(--code-background) 70%, var(--diff-addition))
-    )
+  --diffs-bg-addition-override: light-dark(
+    color-mix(in srgb, var(--code-background) 50%, var(--diff-addition)),
+    color-mix(in srgb, var(--code-background) 70%, var(--diff-addition))
   );
-  --diffs-bg-addition-number-override: var(
-    --app-theme-editor-diff-addition,
-    light-dark(
-      color-mix(in srgb, var(--code-background) 35%, var(--diff-addition)),
-      color-mix(in srgb, var(--code-background) 60%, var(--diff-addition))
-    )
+  --diffs-bg-addition-number-override: light-dark(
+    color-mix(in srgb, var(--code-background) 35%, var(--diff-addition)),
+    color-mix(in srgb, var(--code-background) 60%, var(--diff-addition))
   );
   --diffs-bg-addition-hover-override: color-mix(in srgb, var(--code-background) 85%, var(--diff-addition));
-  --diffs-bg-addition-emphasis-override: var(
-    --app-theme-editor-diff-addition-word,
-    color-mix(in srgb, var(--code-background) 80%, var(--diff-addition))
+  --diffs-bg-addition-emphasis-override: color-mix(
+    in srgb,
+    var(--code-background) 80%,
+    var(--diff-addition)
   );
 
-  --diffs-bg-deletion-override: var(
-    --app-theme-editor-diff-deletion,
-    light-dark(
-      color-mix(in srgb, var(--code-background) 50%, var(--diff-deletion)),
-      color-mix(in srgb, var(--code-background) 70%, var(--diff-deletion))
-    )
+  --diffs-bg-deletion-override: light-dark(
+    color-mix(in srgb, var(--code-background) 50%, var(--diff-deletion)),
+    color-mix(in srgb, var(--code-background) 70%, var(--diff-deletion))
   );
-  --diffs-bg-deletion-number-override: var(
-    --app-theme-editor-diff-deletion,
-    light-dark(
-      color-mix(in srgb, var(--code-background) 35%, var(--diff-deletion)),
-      color-mix(in srgb, var(--code-background) 60%, var(--diff-deletion))
-    )
+  --diffs-bg-deletion-number-override: light-dark(
+    color-mix(in srgb, var(--code-background) 35%, var(--diff-deletion)),
+    color-mix(in srgb, var(--code-background) 60%, var(--diff-deletion))
   );
   --diffs-bg-deletion-hover-override: color-mix(
     in srgb,
     var(--code-background) 85%,
     var(--diff-deletion)
   );
-  --diffs-bg-deletion-emphasis-override: var(
-    --app-theme-editor-diff-deletion-word,
-    color-mix(in srgb, var(--code-background) 80%, var(--diff-deletion))
+  --diffs-bg-deletion-emphasis-override: color-mix(
+    in srgb,
+    var(--code-background) 80%,
+    var(--diff-deletion)
   );
 
   background-color: var(--diffs-bg) !important;
@@ -379,3 +367,47 @@ export const DIFF_SURFACE_THEME_UNSAFE_CSS = `
   ) !important;
 }
 `;
+
+const DIFF_SURFACE_ROOTS =
+  ":host, [data-diffs-header], [data-diff], [data-file], [data-error-wrapper], [data-virtualizer-buffer]";
+const CHANGED_LINE =
+  ':is([data-line], [data-no-newline]):is([data-line-type="change-addition"], [data-line-type="change-deletion"])';
+
+/**
+ * A theme's own line number, caret row, diff and find colours for Pierre's surfaces. Appended
+ * to a surface's CSS only under such a theme, so every other theme gets the CSS it always had.
+ */
+export function themeEditorSurfaceCss(editorColors: ThemeEditorColors | null): string {
+  if (!editorColors) return "";
+  const { lineNumber, caretRow, diff, find } = editorColors;
+  return `
+${DIFF_SURFACE_ROOTS} {
+  --diffs-fg-number-override: ${lineNumber};
+  --diffs-bg-addition-number-override: ${diff.inserted.line};
+  --diffs-bg-deletion-number-override: ${diff.deleted.line};
+  --diffs-bg-search-match-override: ${find.match};
+  --diffs-bg-search-match-current-override: ${find.currentMatch};
+  --diffs-fg-search-match-override: ${find.foreground};
+}
+
+/* Pierre mixes a tint into the surface; an IDE scheme's diff colour is the painted colour. */
+:is([data-line], [data-no-newline])[data-line-type="change-addition"] {
+  --diffs-computed-diff-line-bg: ${diff.inserted.line};
+}
+:is([data-line], [data-no-newline])[data-line-type="change-deletion"] {
+  --diffs-computed-diff-line-bg: ${diff.deleted.line};
+}
+
+/* A line with changed words is a modified line: muted, its words at the full colour. */
+${CHANGED_LINE}:has([data-diff-span]) {
+  --diffs-computed-diff-line-bg: ${diff.modified.muted};
+}
+${CHANGED_LINE} [data-diff-span] {
+  background-color: ${diff.modified.line};
+}
+
+[data-line][data-editor-active-line] {
+  --diffs-computed-editor-active-line-bg: ${caretRow};
+}
+`;
+}

@@ -1386,9 +1386,6 @@ html[data-theme-id]:not([data-theme-id=""]) {
   --terminal-foreground: var(--app-theme-terminal-foreground);
   --terminal-cursor: var(--app-theme-terminal-cursor);
   --terminal-selection-background: var(--app-theme-terminal-selection-background);
-  /* Set only by a theme with its own editor colours. Undefined, the override is
-     invalid and Pierre keeps its own line number colour. */
-  --diffs-fg-number-override: var(--app-theme-editor-line-number);
 }
 
 /* Theme-token dependency probes are restored synchronously, before paint. Keep

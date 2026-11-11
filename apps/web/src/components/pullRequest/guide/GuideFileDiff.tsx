@@ -1,4 +1,4 @@
-import { useDiffThemeName } from "~/hooks/useDiffThemeName";
+import { useDiffThemeName, useThemeEditorSurfaceCss } from "~/hooks/useDiffThemeName";
 import {
   cloneFileDiffMetadata,
   type FileDiffContentsLoader,
@@ -20,6 +20,7 @@ export function GuideFileDiff({
 }) {
   const resolvedTheme = useRenderedAppearance();
   const diffThemeName = useDiffThemeName(resolvedTheme);
+  const themeCss = useThemeEditorSurfaceCss();
   // Loading the unchanged lines rewrites the diff it is given; the excerpts read the same file
   // as a patch, so this view expands a copy of its own.
   const expandable = cloneFileDiffMetadata(file);
@@ -31,7 +32,7 @@ export function GuideFileDiff({
     theme: diffThemeName,
     themeType: resolvedTheme,
     preferredHighlighter: PREFERRED_HIGHLIGHTER,
-    unsafeCSS: DIFF_VIEW_UNSAFE_CSS,
+    unsafeCSS: `${DIFF_VIEW_UNSAFE_CSS}${themeCss}`,
     loadDiffFiles,
   };
   return (

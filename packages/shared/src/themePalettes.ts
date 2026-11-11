@@ -159,6 +159,8 @@ export type ThemeEditorColors = Readonly<{
   /** Colours 0 to 15, in SGR order. */
   ansi: ThemeAnsiColors;
   lineNumber: string;
+  /** The line the caret is on, in an editable file. */
+  caretRow: string;
   diff: Readonly<{
     inserted: ThemeDiffColors;
     deleted: ThemeDiffColors;
@@ -1013,7 +1015,7 @@ export const MATERIAL_OCEAN_THEME: ThemeDefinition = {
     text: "#b0bec5",
     textMuted: "#607d8b",
     border: "#2a373e",
-    input: "#32424a",
+    input: "#425b67",
     focus: "#009688",
     accent: "#009688",
     accentForeground: "#0f111a",
@@ -1195,6 +1197,7 @@ export const MATERIAL_OCEAN_THEME: ThemeDefinition = {
         "#f8f8f0",
       ],
       lineNumber: "#475f63",
+      caretRow: "#1b2529",
       diff: {
         inserted: { line: "#264b33", muted: "#182824", word: "#447152" },
         deleted: { line: "#41454b", muted: "#23262e", word: "#656e76" },

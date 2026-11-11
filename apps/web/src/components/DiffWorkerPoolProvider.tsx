@@ -4,7 +4,7 @@ import DiffsWorker from "@pierre/diffs/worker/worker.js?worker";
 import * as Schema from "effect/Schema";
 import { useEffect, useState, useSyncExternalStore, type ReactNode } from "react";
 import { getDiffThemeName } from "../hooks/useDiffThemeName";
-import { subscribeRenderedAppearance } from "../hooks/useTheme";
+import { getRenderedAppearance, subscribeRenderedAppearance } from "../hooks/useTheme";
 import { ALL_DIFF_THEME_NAMES } from "../lib/diffRendering";
 import { PREFERRED_HIGHLIGHTER } from "../lib/syntaxHighlighting";
 
@@ -34,7 +34,7 @@ let sharedWorkerPool:
   | undefined;
 
 function applyDiffWorkerTheme(pool: WorkerPoolManager) {
-  const themeName = getDiffThemeName();
+  const themeName = getDiffThemeName(getRenderedAppearance());
   let operation: DiffWorkerError["operation"] = "get-render-options";
   void (async () => {
     try {
@@ -51,7 +51,7 @@ function applyDiffWorkerTheme(pool: WorkerPoolManager) {
 // The pool follows the rendered theme for as long as it lives, so it never depends on a
 // mounted provider to carry a theme change across.
 function createDiffWorkerPool(poolSize: number) {
-  const themeName = getDiffThemeName();
+  const themeName = getDiffThemeName(getRenderedAppearance());
   const pool = new WorkerPoolManager(
     {
       workerFactory: () => {

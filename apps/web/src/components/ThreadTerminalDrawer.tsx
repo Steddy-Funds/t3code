@@ -61,7 +61,7 @@ import {
   GhosttyTerminalSurface,
   type GhosttyTerminalSurfaceOptions,
 } from "~/terminal/ghostty/surface";
-import { getRenderedThemeEditorColors } from "~/hooks/useTheme";
+import { getPaintedThemeEditorColors } from "~/lib/paintedThemeEditorColors";
 import { type GhosttyColor, type GhosttyTheme } from "~/terminal/ghostty/core";
 import { useOpenInPreferredEditor } from "../editorPreferences";
 import { resolvePathLinkTarget } from "@t3tools/shared/fileLinks";
@@ -285,7 +285,7 @@ const themeTerminalPalettes = new WeakMap<ThemeAnsiColors, GhosttyColor[]>();
 
 /** The painted theme's ANSI colours when it has them for this appearance, else the stock ones. */
 function terminalPalette(appearance: "light" | "dark"): GhosttyColor[] {
-  const editorColors = getRenderedThemeEditorColors();
+  const editorColors = getPaintedThemeEditorColors();
   if (editorColors?.syntax.appearance !== appearance) return TERMINAL_PALETTES[appearance];
   let palette = themeTerminalPalettes.get(editorColors.ansi);
   if (!palette) {

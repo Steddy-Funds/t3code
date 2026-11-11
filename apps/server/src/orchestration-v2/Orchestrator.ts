@@ -175,7 +175,11 @@ import { makeProviderFailure } from "@t3tools/provider-core/server/failure";
 import * as RunExecutionService from "./RunExecutionService.ts";
 import { ProviderSessionManagerV2 } from "./ProviderSessionManager.ts";
 import { ProviderSwitchServiceV2 } from "./ProviderSwitchService.ts";
-import { isAutomaticCompletionRun, queuedRunsInDeliveryOrder } from "./QueuedRunOrder.ts";
+import {
+  isAutomaticCompletionRun,
+  queuedRunsInDeliveryOrder,
+  queuedRunsMergedInto,
+} from "./QueuedRunOrder.ts";
 import { isRuntimePolicyAboveCeilingError, RuntimePolicyV2 } from "./RuntimePolicy.ts";
 import {
   endOrphanedNativeSubagent,
@@ -830,6 +834,60 @@ function nextQueuedRun(
   projection: Pick<OrchestrationV2ThreadProjection, "runs" | "messages">,
 ): OrchestrationV2Run | undefined {
   return queuedRunsInDeliveryOrder(projection).find((run) => run.queueHeld !== true);
+}
+
+/** Ends a queued run that never started, with the attempt and node it reserved. */
+function queuedRunCancellationEvents(input: {
+  readonly projection: Pick<OrchestrationV2ThreadProjection, "nodes" | "attempts">;
+  readonly run: OrchestrationV2Run;
+  readonly now: DateTime.Utc;
+}): ReadonlyArray<Omit<OrchestrationV2DomainEvent, "id">> {
+  const { run, now } = input;
+  const rootNode =
+    run.rootNodeId === null
+      ? undefined
+      : input.projection.nodes.find((candidate) => candidate.id === run.rootNodeId);
+  const attempt =
+    run.activeAttemptId === null
+      ? undefined
+      : input.projection.attempts.find((candidate) => candidate.id === run.activeAttemptId);
+  return [
+    {
+      type: "run.updated" as const,
+      threadId: run.threadId,
+      runId: run.id,
+      ...(run.rootNodeId === null ? {} : { nodeId: run.rootNodeId }),
+      providerInstanceId: run.providerInstanceId,
+      occurredAt: now,
+      payload: { ...run, status: "cancelled" as const, queuePosition: null, completedAt: now },
+    },
+    ...(attempt === undefined || rootNode === undefined
+      ? []
+      : [
+          {
+            type: "run-attempt.updated" as const,
+            threadId: run.threadId,
+            runId: run.id,
+            nodeId: rootNode.id,
+            providerInstanceId: run.providerInstanceId,
+            occurredAt: now,
+            payload: { ...attempt, status: "cancelled" as const, completedAt: now },
+          },
+        ]),
+    ...(rootNode === undefined
+      ? []
+      : [
+          {
+            type: "node.updated" as const,
+            threadId: run.threadId,
+            runId: run.id,
+            nodeId: rootNode.id,
+            providerInstanceId: run.providerInstanceId,
+            occurredAt: now,
+            payload: { ...rootNode, status: "cancelled" as const, completedAt: now },
+          },
+        ]),
+  ];
 }
 
 function followsCurrentConversation(
@@ -1706,61 +1764,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       readonly run: OrchestrationV2Run;
       readonly now: DateTime.Utc;
     }) {
-      const rootNode =
-        input.run.rootNodeId === null
-          ? undefined
-          : input.projection.nodes.find((candidate) => candidate.id === input.run.rootNodeId);
-      const attempt =
-        input.run.activeAttemptId === null
-          ? undefined
-          : input.projection.attempts.find(
-              (candidate) => candidate.id === input.run.activeAttemptId,
-            );
       const emitEvent = emit(input.events, input.command);
-      yield* emitEvent({
-        type: "run.updated",
-        threadId: input.run.threadId,
-        runId: input.run.id,
-        ...(input.run.rootNodeId === null ? {} : { nodeId: input.run.rootNodeId }),
-        providerInstanceId: input.run.providerInstanceId,
-        occurredAt: input.now,
-        payload: {
-          ...input.run,
-          status: "cancelled",
-          queuePosition: null,
-          completedAt: input.now,
-        },
-      });
-      if (attempt !== undefined && rootNode !== undefined) {
-        yield* emitEvent({
-          type: "run-attempt.updated",
-          threadId: input.run.threadId,
-          runId: input.run.id,
-          nodeId: rootNode.id,
-          providerInstanceId: input.run.providerInstanceId,
-          occurredAt: input.now,
-          payload: {
-            ...attempt,
-            status: "cancelled",
-            completedAt: input.now,
-          },
-        });
-      }
-      if (rootNode !== undefined) {
-        yield* emitEvent({
-          type: "node.updated",
-          threadId: input.run.threadId,
-          runId: input.run.id,
-          nodeId: rootNode.id,
-          providerInstanceId: input.run.providerInstanceId,
-          occurredAt: input.now,
-          payload: {
-            ...rootNode,
-            status: "cancelled",
-            completedAt: input.now,
-          },
-        });
-      }
+      for (const event of queuedRunCancellationEvents(input)) yield* emitEvent(event);
     },
   );
 
@@ -2416,6 +2421,64 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         updatedAt: now,
         ...(activeHandoff === null ? modelSwitchSince(projection, queuedRun.modelSelection) : {}),
       };
+      // Agent messages queued directly behind this one start in its turn: each keeps its own
+      // transcript row, and its run ends pointing here so a sender waiting on it follows.
+      const mergedEvents: ReadonlyArray<Omit<OrchestrationV2DomainEvent, "id">> =
+        options?.queuedRunId !== undefined
+          ? []
+          : queuedRunsMergedInto(projection, storedQueuedRun).flatMap(
+              ({ run: mergedRun, message }) => [
+                ...queuedRunCancellationEvents({
+                  projection,
+                  run: { ...mergedRun, mergedIntoRunId: queuedRun.id },
+                  now,
+                }),
+                {
+                  type: "message.updated" as const,
+                  threadId,
+                  runId: queuedRun.id,
+                  nodeId: rootNodeId,
+                  providerInstanceId: queuedRun.providerInstanceId,
+                  occurredAt: now,
+                  payload: { ...message, runId: queuedRun.id, nodeId: rootNodeId, updatedAt: now },
+                },
+                {
+                  type: "turn-item.updated" as const,
+                  threadId,
+                  runId: queuedRun.id,
+                  nodeId: rootNodeId,
+                  providerInstanceId: queuedRun.providerInstanceId,
+                  occurredAt: now,
+                  payload: {
+                    id: idAllocator.derive.userTurnItem({ messageId: message.id }),
+                    threadId,
+                    runId: queuedRun.id,
+                    nodeId: rootNodeId,
+                    providerThreadId: queuedProviderThread.id,
+                    providerTurnId: null,
+                    nativeItemRef: null,
+                    parentItemId: null,
+                    ordinal: userTurnItem.ordinal,
+                    status: "completed" as const,
+                    title: null,
+                    type: "user_message" as const,
+                    messageId: message.id,
+                    text: message.text,
+                    attachments: message.attachments,
+                    ...(message.context ? { context: message.context } : {}),
+                    createdBy: message.createdBy,
+                    creationSource: message.creationSource,
+                    ...(message.senderThreadId === undefined
+                      ? {}
+                      : { senderThreadId: message.senderThreadId }),
+                    inputIntent: "queued_turn" as const,
+                    startedAt: now,
+                    completedAt: now,
+                    updatedAt: now,
+                  },
+                },
+              ],
+            );
       const handoffTurnItem: OrchestrationV2TurnItem | null =
         activeHandoff === null
           ? null
@@ -2626,6 +2689,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
               yield* notificationTasks(threadId, queuedMessage, projection.subagents),
             ),
           },
+          ...mergedEvents,
           {
             type: "run.updated",
             threadId,

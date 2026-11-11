@@ -50,6 +50,7 @@ import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter"
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
+import { mergedTurnText } from "./QueuedRunOrder.ts";
 import {
   ContextHandoffBackgroundWorkError,
   knownProviderFailureMessage,
@@ -837,10 +838,28 @@ export const layer: Layer.Layer<
       });
       let effectiveHandoffs = handoffs;
       let resumeFellBack = false;
-      const userText = projectComposerContextForProvider({
-        text: message.text,
-        records: message.context?.records ?? [],
-      });
+      // Queued agent messages that joined this run go out with its opening message. A steering
+      // restart delivers a later message, and the provider already holds the opening ones.
+      const mergedMessageIds = new Set(
+        projection.runs
+          .filter((candidate) => candidate.mergedIntoRunId === run.id)
+          .map((candidate) => candidate.userMessageId),
+      );
+      const userMessageItems = projection.turnItems.filter(
+        (item) => item.type === "user_message" && item.runId === run.id,
+      );
+      const mergedItems =
+        userMessageItems[0]?.messageId === message.id
+          ? userMessageItems.filter((item) => mergedMessageIds.has(item.messageId))
+          : [];
+      const userText = mergedTurnText(
+        [message, ...mergedItems].map((part) =>
+          projectComposerContextForProvider({
+            text: part.text,
+            records: part.context?.records ?? [],
+          }),
+        ),
+      );
       // Codex and Claude parse /goal from the prompt, so it goes verbatim and history waits a turn.
       const goalDriver = session.driver === "codex" || session.driver === "claudeAgent";
       const goalCommand = goalDriver && parseGoalCommand(message) !== null;

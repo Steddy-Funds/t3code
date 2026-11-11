@@ -116,6 +116,7 @@ export function withUltracodeToggle(
 const AUTO_COMPACT_WINDOW_CHOICES = [
   { id: "200k", label: "200k", tokens: 200_000 },
   { id: "300k", label: "300k", tokens: 300_000 },
+  { id: "400k", label: "400k", tokens: 400_000 },
   { id: "500k", label: "500k", tokens: 500_000 },
   { id: "1m", label: "1M", tokens: 1_000_000 },
 ];

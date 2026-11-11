@@ -115,10 +115,7 @@ const make = Effect.gen(function* () {
       sampledAt: DateTime.formatIso(DateTime.makeUnsafe(nowMs)),
       threads: meter.sample(nowMs),
     });
-  }).pipe(
-    Effect.repeat(Schedule.spaced(TOKEN_BURN_SAMPLE_INTERVAL_MS)),
-    Effect.forkScoped,
-  );
+  }).pipe(Effect.repeat(Schedule.spaced(TOKEN_BURN_SAMPLE_INTERVAL_MS)), Effect.forkScoped);
 
   return { changes: SubscriptionRef.changes(latest) } as const;
 });

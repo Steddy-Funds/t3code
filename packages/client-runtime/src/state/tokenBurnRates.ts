@@ -23,14 +23,20 @@ export function rollUpTreeBurnRates(
   ownRates: ReadonlyMap<string, number>,
   childrenByParent: ReadonlyMap<
     string,
-    ReadonlyArray<{ readonly environmentId: EnvironmentId; readonly thread: { readonly id: ThreadId } }>
+    ReadonlyArray<{
+      readonly environmentId: EnvironmentId;
+      readonly thread: { readonly id: ThreadId };
+    }>
   >,
 ): ReadonlyMap<string, number> {
   if (ownRates.size === 0) return NO_RATES;
   const parentOf = new Map<string, string>();
   for (const [parent, children] of childrenByParent) {
     for (const child of children) {
-      parentOf.set(threadKey({ environmentId: child.environmentId, threadId: child.thread.id }), parent);
+      parentOf.set(
+        threadKey({ environmentId: child.environmentId, threadId: child.thread.id }),
+        parent,
+      );
     }
   }
   const tree = new Map(ownRates);
@@ -59,7 +65,10 @@ export function createTokenBurnRateAtoms<R, E>(
     readonly childThreadsByParentAtom: Atom.Atom<
       ReadonlyMap<
         string,
-        ReadonlyArray<{ readonly environmentId: EnvironmentId; readonly thread: { readonly id: ThreadId } }>
+        ReadonlyArray<{
+          readonly environmentId: EnvironmentId;
+          readonly thread: { readonly id: ThreadId };
+        }>
       >
     >;
   },

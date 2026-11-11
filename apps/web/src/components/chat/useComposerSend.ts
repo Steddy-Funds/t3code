@@ -187,6 +187,8 @@ interface ComposerSendInput {
   readonly providerInstanceEntries: ReadonlyArray<ProviderInstanceEntry>;
   readonly composerRef: ComposerHandleRef;
   readonly composerDraftTarget: ComposerThreadTarget;
+  /** The thread's own draft: `composerDraftTarget`, except while a queued message is edited. */
+  readonly threadDraftTarget: ComposerThreadTarget;
   readonly promptRef: { current: string };
   readonly composerImagesRef: { current: ComposerImageAttachment[] };
   readonly composerFilesRef: { current: ComposerFileAttachment[] };
@@ -281,6 +283,7 @@ export function useComposerSend(input: ComposerSendInput) {
     providerInstanceEntries,
     composerRef,
     composerDraftTarget,
+    threadDraftTarget,
     promptRef,
     composerImagesRef,
     composerFilesRef,
@@ -522,6 +525,11 @@ export function useComposerSend(input: ComposerSendInput) {
       }
       onAdvanceActivePendingUserInput();
       return;
+    }
+    // A composer send declines a waiting approval and redirects the agent, with the approval
+    // in view. A comment box can be out of its sight, so a review send never does that.
+    if (reviewSend && pendingApprovalsRef.current.length > 0) {
+      return refuse("Answer the pending approval first.");
     }
     if (!sendCtx?.providerAvailable) {
       notifyDirectAnnotationAttached();
@@ -954,6 +962,10 @@ export function useComposerSend(input: ComposerSendInput) {
           )
         : [];
     if (approvalsToDecline.length > 0 || approvalFeedbackTarget !== undefined) {
+      if (reviewSend) {
+        sendInFlightRef.current = false;
+        return refuse("Answer the pending approval first.");
+      }
       // A draft edited since send, or a paste still landing in it, is no longer the message
       // the user sent.
       const attachmentIdsAtSend = composerAttachmentsSnapshot.map((attachment) => attachment.id);
@@ -966,8 +978,6 @@ export function useComposerSend(input: ComposerSendInput) {
       const sameIds = (left: ReadonlyArray<string>, right: ReadonlyArray<string>) =>
         left.length === right.length && left.every((id, index) => id === right[index]);
       const draftChangedSinceSend = () => {
-        // A review send carries nothing from the draft, so an edit to it changes nothing.
-        if (reviewSend) return false;
         if (composerRef.current?.hasPendingAttachments() === true) return true;
         const sendContext = composerRef.current?.getSendContext();
         const attachmentIds = sendContext
@@ -992,10 +1002,6 @@ export function useComposerSend(input: ComposerSendInput) {
         respondingRequestIdsRef.current.includes(approval.requestId),
       );
       if (approvalFeedbackTarget !== undefined) {
-        if (reviewSend) {
-          sendInFlightRef.current = false;
-          return refuse("Answer the pending approval first.");
-        }
         if (composerAttachmentsSnapshot.length > 0 || outgoingMessageContext !== undefined) {
           setThreadError(
             threadIdForSend,
@@ -1040,9 +1046,8 @@ export function useComposerSend(input: ComposerSendInput) {
       const draftChanged =
         changedBeforeDecline ||
         draftChangedSinceSend() ||
-        (!reviewSend &&
-          useComposerDraftStore.getState().getComposerDraft(composerDraftTarget) !==
-            draftBeforeDecline);
+        useComposerDraftStore.getState().getComposerDraft(composerDraftTarget) !==
+          draftBeforeDecline;
       // An approval that arrived during the decline would block the redirect; keep the draft so
       // the next send declines it too.
       const approvalArrived = pendingApprovalsRef.current.some(
@@ -1071,7 +1076,7 @@ export function useComposerSend(input: ComposerSendInput) {
             description: "Send again when it's ready.",
           });
         }
-        return refuse(notice ?? "The pending approval could not be declined.", notice !== null);
+        return;
       }
     }
     if (sendQueuesBehindSetup) {
@@ -1460,21 +1465,29 @@ export function useComposerSend(input: ComposerSendInput) {
   /**
    * Sends one message holding only these review comments, as the composer would send one now:
    * same guards, same queue or steer preference. The comments leave the draft only once the
-   * message is on its way; otherwise they stay and the reason is shown.
+   * message is on its way; otherwise they wait in the thread's draft and the reason is shown.
    */
   const sendReviewComments = async (
     comments: ReadonlyArray<ReviewCommentContext>,
   ): Promise<ReviewSendOutcome> => {
-    const outcome = await onSend(
+    let outcome = await onSend(
       undefined,
       composerRef.current?.getSendContext().dispatchMode ?? "auto",
       "foreground",
       { kind: "review-comments", comments },
     );
-    if (outcome) return outcome;
-    const reason = "This thread can't take a message right now.";
-    notifyReviewCommentsKept(reason, comments.length);
-    return { status: "refused", reason };
+    if (!outcome) {
+      outcome = { status: "refused", reason: "This thread can't take a message right now." };
+      notifyReviewCommentsKept(outcome.reason, comments.length);
+    }
+    if (outcome.status === "refused" || outcome.status === "failed") {
+      // Never the draft of a queued message under edit: cancelling that edit would drop them.
+      const store = useComposerDraftStore.getState();
+      for (const comment of comments) {
+        store.addReviewComment(threadDraftTarget, comment, { insertAtCaret: false });
+      }
+    }
+    return outcome;
   };
 
   return { onSend, sendReviewComments };

@@ -6,6 +6,7 @@ import { type DraftId, useComposerDraftStore } from "~/composerDraftStore";
 import type { ReviewCommentContext } from "~/reviewCommentContext";
 
 import type { ReviewSendOutcome } from "../chat/composerSend.logic";
+import { stackedThreadToast, toastManager } from "../ui/toast";
 
 /** Sends one message holding these comments and nothing else. Settles with how it ended. */
 export type SendReviewComments = (
@@ -57,6 +58,19 @@ export interface ReviewCommentDrafts<TRange> {
 }
 
 const EMPTY_REVIEW_COMMENTS: ReadonlyArray<ReviewCommentContext> = [];
+
+/**
+ * The comments a review send carries. Pull request context stays behind: a reference belongs
+ * to the message being written, and a remark on a pull request travels with its reference.
+ */
+export function sendableReviewComments(
+  comments: ReadonlyArray<ReviewCommentContext>,
+): ReviewCommentContext[] {
+  return comments.filter(
+    (comment) =>
+      comment.pullRequest === undefined && !comment.sectionId.startsWith("pull-request:"),
+  );
+}
 const QUOTED_SELECTION_MAX_CHARS = 400;
 
 let commentSequence = 0;
@@ -189,7 +203,15 @@ export function useReviewCommentDrafts<TRange = SelectedLineRange>({
       ? async (text) => {
           const comment = buildOpenComment(text);
           if (!comment) {
-            return { status: "refused", reason: "These lines are no longer in view." };
+            const reason = "These lines are no longer in view.";
+            toastManager.add(
+              stackedThreadToast({
+                type: "warning",
+                title: "Comment not sent",
+                description: `${reason} Your words are still in the box.`,
+              }),
+            );
+            return { status: "refused", reason };
           }
           setOpen((current) =>
             current?.id === comment.id ? { ...current, sending: true } : current,

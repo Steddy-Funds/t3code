@@ -26,7 +26,6 @@ import { useFilesystemReadAccess } from "~/state/filesystem";
 import { useOpenInPreferredEditor } from "../editorPreferences";
 import { useFileContextMenuHandler } from "../fileContextMenu";
 import { type DraftId, useComposerDraftStore } from "../composerDraftStore";
-import { isPullRequestSummaryContext } from "../lib/composerContextRecords";
 import { openDiffFilePrimaryAction } from "../diffFileActions";
 import { toolCallDiff } from "../lib/toolCallDiff";
 import { useCheckpointDiff, useTurnItemDetail } from "~/state/queries";
@@ -67,7 +66,7 @@ import { DiffFilePathCopyButton } from "./DiffFilePathCopyButton";
 import { DiffPanelLoadingState, DiffPanelShell, type DiffPanelMode } from "./DiffPanelShell";
 import { DiffStatLabel } from "./chat/DiffStatLabel";
 import { AnnotatableCodeView } from "./diffs/AnnotatableCodeView";
-import type { SendReviewComments } from "./diffs/useReviewCommentDrafts";
+import { sendableReviewComments, type SendReviewComments } from "./diffs/useReviewCommentDrafts";
 import { DiffFileTree } from "./diffs/DiffFileTree";
 import { FileExplorerPane } from "./files/FileExplorerPane";
 import { diffFileTreeEntries } from "./diffs/diffFileTree.logic";
@@ -228,15 +227,15 @@ export default function DiffPanel({
   // Every review comment waiting in the message, whichever surface it was written on.
   const unsentCommentCount = useComposerDraftStore(
     (store) =>
-      store
-        .getComposerDraft(composerDraftTarget)
-        ?.reviewComments.filter((comment) => !isPullRequestSummaryContext(comment)).length ?? 0,
+      sendableReviewComments(store.getComposerDraft(composerDraftTarget)?.reviewComments ?? [])
+        .length,
   );
   const sendCommentsLabel = `Send ${unsentCommentCount} ${unsentCommentCount === 1 ? "comment" : "comments"}`;
   const [sendingComments, setSendingComments] = useState(false);
   const sendAllComments = async () => {
-    const comments =
-      useComposerDraftStore.getState().getComposerDraft(composerDraftTarget)?.reviewComments ?? [];
+    const comments = sendableReviewComments(
+      useComposerDraftStore.getState().getComposerDraft(composerDraftTarget)?.reviewComments ?? [],
+    );
     if (!onSendReviewComments || comments.length === 0) return;
     setSendingComments(true);
     await onSendReviewComments(comments).catch(() => undefined);

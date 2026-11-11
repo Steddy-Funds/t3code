@@ -67,6 +67,11 @@ export function RightPanelSurfaceContent(props: {
   readonly environmentId: EnvironmentId;
   readonly visible: boolean;
   readonly composerDraftTarget: ScopedThreadRef | DraftId;
+  /**
+   * The thread's own draft, also while a queued message is being edited. Review comments wait
+   * there, so they never join that edit and are never dropped with it.
+   */
+  readonly reviewDraftTarget: ScopedThreadRef | DraftId;
   readonly keybindings: ResolvedKeybindingsConfig;
   readonly configuredPreviewUrls: ReadonlyArray<string>;
   readonly workspaceMutationId: string | null;
@@ -114,7 +119,7 @@ export function RightPanelSurfaceContent(props: {
           <DiffPanel
             key={scopedThreadKey(threadRef)}
             mode="embedded"
-            composerDraftTarget={props.composerDraftTarget}
+            composerDraftTarget={props.reviewDraftTarget}
             workspaceMutationId={props.workspaceMutationId}
             visible={visible}
             {...(props.onSendReviewComments
@@ -218,7 +223,7 @@ export function RightPanelSurfaceContent(props: {
             projectName={files.projectName ?? ""}
             projectId={files.projectId}
             threadRef={threadRef}
-            composerDraftTarget={props.composerDraftTarget}
+            composerDraftTarget={props.reviewDraftTarget}
             keybindings={props.keybindings}
             availableEditors={files.availableEditors}
             openInShortcutEnabled={visible}

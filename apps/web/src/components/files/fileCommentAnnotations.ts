@@ -46,6 +46,28 @@ export function remapFileCommentAnnotations(
   }));
 }
 
+/**
+ * Whether the file still reads, at the comment's lines, what the comment quotes. One that no
+ * longer fits is left alone: drawn there, the next edit would rewrite its excerpt from the
+ * wrong lines.
+ */
+export function fileCommentStillFits(
+  contents: string,
+  comment: { readonly startIndex: number; readonly diff: string },
+): boolean {
+  // Walks to the comment's first line without splitting a file that can be megabytes long.
+  let start = 0;
+  for (let line = 0; line < comment.startIndex; line += 1) {
+    const lineEnd = contents.indexOf("\n", start);
+    if (lineEnd < 0) return false;
+    start = lineEnd + 1;
+  }
+  const end = start + comment.diff.length;
+  return (
+    contents.startsWith(comment.diff, start) && (end === contents.length || contents[end] === "\n")
+  );
+}
+
 /** The file's comments as the viewer takes them: grouped on the last line of each range. */
 export function fileCommentLineAnnotations(
   annotations: ReadonlyArray<ReviewCommentAnnotation<FileCommentRange>>,

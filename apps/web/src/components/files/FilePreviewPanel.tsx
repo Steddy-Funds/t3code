@@ -94,6 +94,7 @@ import {
   type FileCommentAnnotationGroup,
   fileCommentLineAnnotations,
   type FileCommentRange,
+  fileCommentStillFits,
   normalizeFileCommentRange,
   remapFileCommentAnnotations,
   sameFileCommentAnnotations,
@@ -700,7 +701,9 @@ function EditableFileSurface({
         buildFileReviewComment({ id, filePath: relativePath, ...range, text, contents }),
         selectedText,
       ),
-    ownsComment: (comment) => comment.sectionId === fileReviewSectionId(relativePath),
+    ownsComment: (comment) =>
+      comment.sectionId === fileReviewSectionId(relativePath) &&
+      fileCommentStillFits(contents, comment),
   });
   // The viewer re-renders its rows for a new array, so it gets one only when a comment changed.
   const nextLineAnnotations = fileCommentLineAnnotations(comments.annotations);

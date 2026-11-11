@@ -2896,6 +2896,7 @@ export default function ChatView(props: ChatViewProps) {
     providerInstanceEntries,
     composerRef,
     composerDraftTarget,
+    threadDraftTarget: baseComposerDraftTarget,
     promptRef,
     composerImagesRef,
     composerFilesRef,
@@ -3182,6 +3183,7 @@ export default function ChatView(props: ChatViewProps) {
       environmentId={activeThread.environmentId}
       visible={rightPanelOpen}
       composerDraftTarget={composerDraftTarget}
+      reviewDraftTarget={baseComposerDraftTarget}
       keybindings={keybindings}
       configuredPreviewUrls={configuredPreviewUrls}
       workspaceMutationId={workspaceMutationId}

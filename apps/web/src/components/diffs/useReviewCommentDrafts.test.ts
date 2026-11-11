@@ -2,7 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { buildFileReviewComment, type ReviewCommentContext } from "~/reviewCommentContext";
 
-import { withQuotedSelection } from "./useReviewCommentDrafts";
+import { sendableReviewComments, withQuotedSelection } from "./useReviewCommentDrafts";
 
 const fileComment = buildFileReviewComment({
   id: "c1",
@@ -17,6 +17,32 @@ const diffComment: ReviewCommentContext = {
   diff: "@@ -1,1 +1,2 @@\n-const value = foo();\n+const value = foo(bar);\n+  return value;",
   fenceLanguage: "diff",
 };
+
+describe("sendableReviewComments", () => {
+  it("leaves pull request context out of a review send", () => {
+    const pullRequest = {
+      number: 12,
+      title: "Billing",
+      url: "https://example.com/pull/12",
+      headBranch: "billing",
+      baseBranch: "main",
+      state: "open",
+      isDraft: false,
+    } as const;
+    const comments: ReviewCommentContext[] = [
+      fileComment,
+      { ...diffComment, id: "diff", sectionId: "unstaged" },
+      { ...fileComment, id: "reference", sectionId: "pull-request:12", diff: "", pullRequest },
+      { ...diffComment, id: "remark", sectionId: "pull-request:12" },
+      { ...fileComment, id: "note-reply", sectionId: "review-note:x" },
+    ];
+    expect(sendableReviewComments(comments).map((comment) => comment.id)).toEqual([
+      "c1",
+      "diff",
+      "note-reply",
+    ]);
+  });
+});
 
 describe("withQuotedSelection", () => {
   it.each([

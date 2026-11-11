@@ -6,7 +6,11 @@ import { useImperativeHandle, type RefObject } from "react";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import { render } from "../../../test/render";
-import { type ComposerImageAttachment, useComposerDraftStore } from "../../composerDraftStore";
+import {
+  type ComposerImageAttachment,
+  DraftId,
+  useComposerDraftStore,
+} from "../../composerDraftStore";
 import { formatInlineContextReference } from "../../lib/composerContextReferences";
 import { reviewCommentContextReference } from "../../lib/composerContextRecords";
 import { buildFileReviewComment } from "../../reviewCommentContext";
@@ -61,6 +65,8 @@ vi.mock("./useMultipleModelSend", () => ({ useMultipleModelSend: () => async () 
 
 const ENV = EnvironmentId.make("env-review-send");
 const THREAD: ScopedThreadRef = { environmentId: ENV, threadId: ThreadId.make("thread-1") };
+// Where the composer writes while a queued message is being edited.
+const QUEUED_EDIT = DraftId.make("queued-edit-draft");
 const ROUTE_KEY = `${ENV}:${THREAD.threadId}`;
 const TYPED = "half a thought";
 const IMAGE = {
@@ -93,6 +99,7 @@ interface Scenario {
   readonly phase?: SendInput["phase"];
   readonly editingQueuedMessage?: boolean;
   readonly questionOpen?: boolean;
+  readonly approvalWaiting?: boolean;
 }
 
 function setup(scenario: Scenario = {}) {
@@ -105,11 +112,15 @@ function setup(scenario: Scenario = {}) {
   const optimistic: { messages: ChatMessage[] } = { messages: [] };
   const saveQueuedEdit = vi.fn(async () => {});
   const advanceQuestion = vi.fn();
+  const respondToApproval = vi.fn(async () => {});
+  const approvals = scenario.approvalWaiting
+    ? [{ requestId: "approval-1", supportsFeedback: false }]
+    : [];
   // Stands in for the composer: it reports the whole draft, as the real one does.
   const composer = {
     getSendContext: () => ({
       answeringPendingUserInput: scenario.questionOpen === true,
-      shownPendingApprovalIds: [],
+      shownPendingApprovalIds: approvals.map((approval) => approval.requestId),
       prompt: draft()?.prompt ?? "",
       images: draft()?.images ?? [],
       files: [],
@@ -160,7 +171,8 @@ function setup(scenario: Scenario = {}) {
     logicalProjectEnvironments: [],
     providerInstanceEntries: [],
     composerRef: { current: composer },
-    composerDraftTarget: THREAD,
+    composerDraftTarget: scenario.editingQueuedMessage ? QUEUED_EDIT : THREAD,
+    threadDraftTarget: THREAD,
     promptRef: { current: TYPED },
     composerImagesRef: { current: [IMAGE] },
     composerFilesRef: { current: [] },
@@ -185,11 +197,11 @@ function setup(scenario: Scenario = {}) {
     needsLoadBalancing: false,
     loadBalancing: { pending: false },
     readPendingEnvironmentChange: () => null,
-    pendingApprovals: [],
+    pendingApprovals: approvals,
     respondingRequestIds: [],
     activePendingProgress: scenario.questionOpen ? { questionIndex: 0 } : null,
     onAdvanceActivePendingUserInput: advanceQuestion,
-    onRespondToApproval: async () => {},
+    onRespondToApproval: respondToApproval,
     beginLocalDispatch: () => {},
     resetLocalDispatch: () => {},
     beginWorktreeSetup: () => {},
@@ -217,6 +229,7 @@ function setup(scenario: Scenario = {}) {
     optimistic,
     saveQueuedEdit,
     advanceQuestion,
+    respondToApproval,
   };
 }
 
@@ -306,19 +319,28 @@ describe("review sends", () => {
       scenario: { questionOpen: true },
       reason: "Answer the agent's question first.",
     },
+    {
+      name: "an approval is waiting",
+      scenario: { approvalWaiting: true },
+      reason: "Answer the pending approval first.",
+    },
   ])("refuses while $name", async ({ scenario, reason }) => {
-    const { input, hook, saveQueuedEdit, advanceQuestion } = setup(scenario);
-    const before = draft();
+    const { input, hook, saveQueuedEdit, advanceQuestion, respondToApproval } = setup(scenario);
     using toast = vi.spyOn(toastManager, "add");
     await using _screen = await render(<Harness input={input} hookRef={hook} />);
 
     await expect(send(hook, ["now"])).resolves.toEqual({ status: "refused", reason });
 
     expect(mocks.startTurn).not.toHaveBeenCalled();
-    // The comment must not land in the queued message, nor answer the question.
+    // The comment must not land in the queued message, answer the question or decline the approval.
     expect(saveQueuedEdit).not.toHaveBeenCalled();
     expect(advanceQuestion).not.toHaveBeenCalled();
-    expect(draft()).toEqual(before);
+    expect(respondToApproval).not.toHaveBeenCalled();
+    // It waits in the thread's own message, beside what was typed there, where no edit discards it.
+    expect(draft()?.reviewComments.map((kept) => kept.id)).toEqual(["now"]);
+    expect(draft()?.prompt).toBe(`${TYPED} ${referenceOf("now")} `);
+    expect(draft()?.images).toHaveLength(1);
+    expect(useComposerDraftStore.getState().getComposerDraft(QUEUED_EDIT)).toBeNull();
     expect(toast).toHaveBeenCalledWith(
       expect.objectContaining({ description: expect.stringContaining(reason) }),
     );

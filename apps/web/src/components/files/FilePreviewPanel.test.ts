@@ -9,6 +9,7 @@ import { buildFileReviewComment } from "~/reviewCommentContext";
 import {
   editorSelectedText,
   fileCommentLineAnnotations,
+  fileCommentStillFits,
   remapFileCommentAnnotations,
   sameFileCommentAnnotations,
 } from "./fileCommentAnnotations";
@@ -125,6 +126,27 @@ describe("file comments from the message draft", () => {
   ])("the viewer gets new annotations after $name: not $same", ({ next, same }) => {
     const shown = fileCommentLineAnnotations([saved("a", 1, 2), open("typing")]);
     expect(sameFileCommentAnnotations(shown, fileCommentLineAnnotations(next))).toBe(same);
+  });
+});
+
+describe("fileCommentStillFits", () => {
+  const comment = buildFileReviewComment({
+    id: "c",
+    filePath: "notes.md",
+    startLine: 2,
+    endLine: 3,
+    text: "note",
+    contents: "a\nb\nc\nd\n",
+  });
+
+  it.each([
+    { name: "the file as it was commented", contents: "a\nb\nc\nd\n", fits: true },
+    { name: "an edit below the comment", contents: "a\nb\nc\nd changed\n", fits: true },
+    { name: "a line added above it on disk", contents: "new\na\nb\nc\nd\n", fits: false },
+    { name: "its last line now longer", contents: "a\nb\ncc\nd\n", fits: false },
+    { name: "a file cut short", contents: "a\n", fits: false },
+  ])("with $name: $fits", ({ contents, fits }) => {
+    expect(fileCommentStillFits(contents, comment)).toBe(fits);
   });
 });
 

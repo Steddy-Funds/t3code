@@ -43,6 +43,7 @@ upstream; a feature can, from its own branch, when Akiva decides.
 | Per-thread Autonomy flag (experimental) in Thread details → Flags; children inherit it                                                        | #71 | 98eee31 |
 | Agent browser tabs on Cloudflare Browser Run: public pages off the host's Chrome; Settings → Browser, off by default                          | #74 | f84a989 |
 | Agent messages queued behind one another on a busy thread start in one turn, each its own message                                             | #73 | 364f161 |
+| Claude auto-compact window per thread, in the model picker and from `delegate_task` and `t3_thread_launch` (`autoCompactWindow`)              | #75 | cabfbbb |
 
 Held: #38 (pods notes in the t3-orchestration skill). It edits
 `.agents/skills/t3-orchestration/`, which exists only on
@@ -65,6 +66,7 @@ The Mac runs this tip, which already has them all.
 - #69 Gamba mode's `nativeSubagentsCompleted` thread shell count (whole branch; the client half is inert on a server)
 - #74 Cloudflare Browser Run for the server browser (`server.checkBrowserRun`, `browserRun` settings): the whole branch, which starts from `main`
 - #73 Queued agent messages start in one turn (`mergedIntoRunId` on a run, followed by `t3_thread_wait`): the whole branch, which starts from `main`
+- #75 Per-thread auto-compact window (the `autoCompactWindow` model option on Claude): the whole branch, which starts from `main`
 
 A feature that changes `apps/server`, or a contract the server reads, is
 merged there too: its branch head with `--no-ff`, never this tip.

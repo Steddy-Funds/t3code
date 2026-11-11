@@ -488,8 +488,12 @@ function missingDefaultInsertIndex(
   for (const [index, entry] of config.entries()) {
     if (entry === null || shortcutPlacementKey(entry.shortcut) !== placementKey) continue;
     const entryOrder = DEFAULT_RULE_ORDER.get(ruleIdentity(entry));
-    // A rule the user wrote does not stop the search: one above a default ranks below it already.
-    if (entryOrder === undefined) continue;
+    if (entryOrder === undefined) {
+      // A rule the user wrote above every earlier default ranks below them already. One after
+      // an earlier default out-ranks it, so the new default must stay below that rule.
+      if (insertIndex > 0) break;
+      continue;
+    }
     if (entryOrder > order) break;
     insertIndex = index + 1;
   }
@@ -498,9 +502,9 @@ function missingDefaultInsertIndex(
 
 /**
  * Adds defaults a config lacks without moving what it holds. The last match wins, so a default
- * goes right after the last unmodified default on its shortcut that precedes it in the default
- * list, as in a fresh config. Rules after that slot, the user's among them, still out-rank it.
- * With no such default before it, it goes first.
+ * goes right after the unmodified defaults on its shortcut that precede it in the default list,
+ * as in a fresh config, and before the first rule the user wrote after one of them: that rule
+ * out-ranked a default and still out-ranks this one. With no such default, it goes first.
  */
 export function insertMissingDefaultKeybindings<Rule>(
   config: ReadonlyArray<Rule>,

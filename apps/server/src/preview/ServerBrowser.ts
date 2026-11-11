@@ -82,6 +82,7 @@ import * as DesktopBrowserChannel from "./DesktopBrowserChannel.ts";
 import * as PreviewAgentActivity from "./PreviewAgentActivity.ts";
 import * as PreviewManager from "./Manager.ts";
 import * as ServerBrowserPage from "./ServerBrowserPage.ts";
+import * as BrowserRun from "./BrowserRun.ts";
 import * as PreviewBrowser from "./PreviewBrowser.ts";
 import * as PreviewBrowserHost from "./PreviewBrowserHost.ts";
 import { presentAsChrome, ServerBrowserContexts } from "./ServerBrowserContexts.ts";
@@ -474,6 +475,7 @@ const make = Effect.gen(function* () {
   const broker = yield* PreviewAutomationBroker.PreviewAutomationBroker;
   const environment = yield* ServerEnvironment.ServerEnvironment;
   const previewBrowser = yield* PreviewBrowser.PreviewBrowser;
+  const browserRun = yield* BrowserRun.BrowserRun;
   const desktopChannel = yield* DesktopBrowserChannel.DesktopBrowserChannel;
   const agentTurns = yield* (yield* PreviewAgentActivity.PreviewAgentActivity).changes;
   const runFork = Effect.runForkWith(yield* Effect.context<never>());
@@ -531,7 +533,33 @@ const make = Effect.gen(function* () {
         if (tab.page.context() === context) dropTab(tab, true);
       }
     },
+    remote: {
+      endpoint: () => runPromise(browserRun.endpoint.pipe(Effect.map(Option.getOrUndefined))),
+      reaches: BrowserRun.reaches,
+      heartbeatMs: BrowserRun.HEARTBEAT_MS,
+      onUnavailable: (cause) =>
+        runFork(
+          Effect.logWarning("Cloudflare Browser Run is unavailable; using the local browser", {
+            reason: BrowserRun.connectFailure(cause),
+          }),
+        ),
+    },
   });
+
+  const onBrowserRun = (tab: Pick<ServerTab, "page">) => contexts.isRemote(tab.page.context());
+
+  /** Why a Browser Run tab cannot load `url`, or null when it can. */
+  const unreachableOnBrowserRun = async (tab: ServerTab, url: string) =>
+    onBrowserRun(tab) && !(await BrowserRun.reaches(url))
+      ? `This tab runs on Cloudflare Browser Run, which cannot reach ${url}. Pages on this machine and its private networks load in the local browser: open it with preview_open and reuseExistingTab=false.`
+      : null;
+
+  /** Whether a new agent tab for `url` goes to Browser Run. The desktop app shows its own tabs. */
+  const opensOnBrowserRun = async (url: string | undefined) =>
+    url !== undefined &&
+    !desktopChannel.available &&
+    Option.isSome(await runPromise(browserRun.endpoint)) &&
+    (await BrowserRun.reaches(url));
 
   const dialogStatus = (tab: ServerTab) =>
     tab.dialog
@@ -843,6 +871,7 @@ const make = Effect.gen(function* () {
       (await contexts.contextFor(
         snapshot.profileId ?? "default",
         isolatedContext ? tabKey(snapshot.threadId, snapshot.tabId) : undefined,
+        snapshot.navStatus._tag === "Idle" ? undefined : snapshot.navStatus.url,
       ));
     if (isolatedContext) opened.push(() => context.close());
     if (adopted?.page.isClosed()) throw new Error("The popup closed before it opened.");
@@ -853,7 +882,7 @@ const make = Effect.gen(function* () {
     await installPdfDocumentNavigation(cdp);
     // The desktop's page is already a normal browser. A popup's first request
     // went out before it became a tab; everything after presents as Chrome.
-    if (!desktop) await presentAsChrome(cdp, host);
+    if (!desktop) await presentAsChrome(cdp, contexts.isRemote(context) ? BrowserRun.HOST : host);
     if (!desktop) await recordCopies(cdp);
     page.setDefaultTimeout(NAVIGATION_TIMEOUT_MS);
     page.setDefaultNavigationTimeout(NAVIGATION_TIMEOUT_MS);
@@ -1685,6 +1714,13 @@ const make = Effect.gen(function* () {
     readiness: "load" | "domContentLoaded" | "none",
     timeout: number,
   ) => {
+    const unreachable = await unreachableOnBrowserRun(tab, url);
+    if (unreachable) {
+      throw new ServerBrowserPage.ServerBrowserOperationError({
+        tag: "PreviewAutomationExecutionError",
+        message: unreachable,
+      });
+    }
     const navigation = tab.page.goto(url, {
       timeout,
       waitUntil:
@@ -1703,7 +1739,9 @@ const make = Effect.gen(function* () {
       if (message.includes("Download is starting")) {
         throw new ServerBrowserPage.ServerBrowserOperationError({
           tag: "PreviewAutomationExecutionError",
-          message: `${url} is a file this browser cannot show, so it was downloaded instead. preview_status lists it under downloads.`,
+          message: onBrowserRun(tab)
+            ? `${url} is a file this browser cannot show. This tab runs on Cloudflare Browser Run, which keeps downloads on Cloudflare's side, so the file was not saved.`
+            : `${url} is a file this browser cannot show, so it was downloaded instead. preview_status lists it under downloads.`,
         });
       }
       if (/ERR_[A-Z_]+/.test(message)) {
@@ -2033,12 +2071,21 @@ const make = Effect.gen(function* () {
           });
         }
         // Reusing another session's tab requires explicit tabId; reading it grants no implicit takeover.
-        const existing =
+        const owned =
           found && (request.tabIdExplicit || found.control.agentId === request.agentSessionId)
             ? found
             : undefined;
+        // A Browser Run tab cannot load a local page, so that page opens in a tab of its own.
+        const existing =
+          owned && url && !request.tabIdExplicit && (await unreachableOnBrowserRun(owned, url))
+            ? undefined
+            : owned;
         const navigationTimeout = Math.min(request.timeoutMs, NAVIGATION_TIMEOUT_MS);
-        const profileId = existing ? undefined : resolveOpenProfile(open.profileId);
+        // A hosted browser holds no profile's logins, so the tab it takes has no profile.
+        const profileId =
+          existing || (open.profileId === undefined && (await opensOnBrowserRun(url)))
+            ? undefined
+            : resolveOpenProfile(open.profileId);
         if (!existing) closeIdleAgentTabs();
         const tab =
           existing ??
@@ -2496,6 +2543,17 @@ const make = Effect.gen(function* () {
       case "navigate":
         if (typeof message.url === "string") {
           const url = normalizePreviewUrl(message.url);
+          const unreachable = await unreachableOnBrowserRun(tab, url);
+          if (unreachable) {
+            report(tab, {
+              _tag: "LoadFailed",
+              url: url.slice(0, 2048),
+              title: "",
+              ...ServerBrowserPage.parseNetError("ERR_ADDRESS_UNREACHABLE"),
+              description: unreachable,
+            });
+            return;
+          }
           tab.control.trackUntilHandoff(tab.page.goto(url, VIEWER_NAVIGATION_OPTIONS));
         }
         return;

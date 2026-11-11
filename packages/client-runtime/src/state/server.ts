@@ -1615,6 +1615,10 @@ export function createServerEnvironmentAtoms<R, E>(
       label: "environment-data:server:check-otlp-endpoint",
       tag: WS_METHODS.serverCheckOtlpEndpoint,
     }),
+    checkBrowserRun: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:check-browser-run",
+      tag: WS_METHODS.serverCheckBrowserRun,
+    }),
     listTextGeneratorModels: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:list-text-generator-models",
       tag: WS_METHODS.serverListTextGeneratorModels,

@@ -315,6 +315,16 @@ export const OtlpEndpointCheckResult = Schema.Union([
 ]);
 export type OtlpEndpointCheckResult = typeof OtlpEndpointCheckResult.Type;
 
+/** Whether Cloudflare takes the saved Browser Run account and token; starts no browser. */
+export const BrowserRunCheckResult = Schema.Union([
+  Schema.TaggedStruct("Accepted", {}),
+  Schema.TaggedStruct("NotConfigured", {}),
+  Schema.TaggedStruct("TokenUnreadable", {}),
+  Schema.TaggedStruct("Rejected", { status: Schema.Number }),
+  Schema.TaggedStruct("Unreachable", {}),
+]);
+export type BrowserRunCheckResult = typeof BrowserRunCheckResult.Type;
+
 /** The client tells the server what it is, so the triage context can name it. */
 export const ServerPrepareTriageInput = Schema.Struct({
   client: AuthClientPresentationMetadata,

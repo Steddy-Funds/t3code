@@ -29,7 +29,23 @@ interface Options {
   /** Closes the shared browser once it has held no context for this long. */
   readonly idleBrowserMs?: number;
   readonly onContextClose?: (context: BrowserContext) => void;
+  /** A hosted browser that takes per-tab contexts for the pages it can reach. */
+  readonly remote?: {
+    /** Where to connect, or undefined while it is off. */
+    readonly endpoint: () => Promise<
+      { readonly url: string; readonly headers: Readonly<Record<string, string>> } | undefined
+    >;
+    readonly reaches: (url: string) => Promise<boolean>;
+    /** It ends a browser that gets no command for a while. */
+    readonly heartbeatMs: number;
+    /** A connection failed; the context opens in the local browser instead. */
+    readonly onUnavailable?: (cause: unknown) => void;
+  };
 }
+
+const REMOTE_CONNECT_TIMEOUT_MS = 10_000;
+/** After a failed connection, how long tabs skip the remote browser rather than each waiting on it. */
+const REMOTE_RETRY_MS = 60_000;
 
 const UA_PLATFORMS: Partial<Record<NodeJS.Platform, string>> = {
   darwin: "macOS",
@@ -69,24 +85,118 @@ const chromeIdentity = (
 
 export const presentAsChrome = async (
   cdp: CDPSession,
-  host: { readonly platform: NodeJS.Platform; readonly arch: string },
+  host: { readonly platform: NodeJS.Platform; readonly arch: string; readonly release?: string },
 ) => {
   const { userAgent } = await cdp.send("Browser.getVersion");
-  const identity = chromeIdentity(userAgent, { ...host, release: NodeOS.release() });
+  const identity = chromeIdentity(userAgent, {
+    ...host,
+    release: host.release ?? NodeOS.release(),
+  });
   if (identity) await cdp.send("Emulation.setUserAgentOverride", identity);
 };
+
+/** One lazily started browser whose contexts come and go; it closes once it has held none for a while. */
+class SharedBrowser {
+  private readonly idleMs: number | undefined;
+  private readonly end: (browser: Browser) => Promise<void>;
+  private readonly open = new Set<BrowserContext>();
+  private browser: Promise<Browser> | undefined;
+  private idleTimer: ReturnType<typeof setTimeout> | undefined;
+  private pending = 0;
+  private closed = false;
+
+  /** `end` stops the browser before the connection to it closes. */
+  constructor(
+    idleMs: number | undefined,
+    end: (browser: Browser) => Promise<void> = async () => {},
+  ) {
+    this.idleMs = idleMs;
+    this.end = end;
+  }
+
+  owns(context: BrowserContext) {
+    return this.open.has(context);
+  }
+
+  async newContext(options: Parameters<Browser["newContext"]>[0], start: () => Promise<Browser>) {
+    clearTimeout(this.idleTimer);
+    this.pending++;
+    const started = this.started(start);
+    try {
+      const context = await (await started).newContext(options);
+      this.open.add(context);
+      context.on("close", () => {
+        this.open.delete(context);
+        this.retireWhenIdle(started);
+      });
+      return context;
+    } finally {
+      this.pending--;
+      this.retireWhenIdle(started);
+    }
+  }
+
+  private started(start: () => Promise<Browser>) {
+    if (!this.browser) {
+      const started = start().then((browser) => {
+        browser.on("disconnected", () => {
+          if (this.browser === started) this.browser = undefined;
+        });
+        return browser;
+      });
+      this.browser = started;
+      void started.catch(() => {
+        if (this.browser === started) this.browser = undefined;
+      });
+    }
+    return this.browser;
+  }
+
+  private retireWhenIdle(started: Promise<Browser>) {
+    if (this.idleMs === undefined || this.closed || this.pending > 0) return;
+    clearTimeout(this.idleTimer);
+    this.idleTimer = setTimeout(() => void this.retire(started), this.idleMs);
+    this.idleTimer.unref();
+  }
+
+  private async retire(started: Promise<Browser>) {
+    const browser = await started.catch(() => undefined);
+    if (!browser || this.browser !== started || this.pending > 0 || this.open.size > 0) return;
+    // Cleared first, so a request during the close starts a fresh browser.
+    this.browser = undefined;
+    await this.stop(browser);
+  }
+
+  private async stop(browser: Browser) {
+    await this.end(browser).catch(constVoid);
+    await browser.close().catch(constVoid);
+  }
+
+  async close() {
+    this.closed = true;
+    clearTimeout(this.idleTimer);
+    const browser = await this.browser?.catch(() => undefined);
+    if (browser) await this.stop(browser);
+  }
+}
 
 export class ServerBrowserContexts {
   private readonly options: Options;
   private readonly contexts = new Map<string, Promise<BrowserContext>>();
   private readonly clearing = new Map<string, Promise<void>>();
-  private browser: Promise<Browser> | undefined;
+  private readonly local: SharedBrowser;
+  private readonly remote: SharedBrowser;
+  private remoteDown = false;
   private closing: Promise<void> | undefined;
-  private idleTimer: ReturnType<typeof setTimeout> | undefined;
-  private pendingSharedContexts = 0;
 
   constructor(options: Options) {
     this.options = options;
+    this.local = new SharedBrowser(options.idleBrowserMs);
+    // Disconnecting leaves a hosted browser running, and billed, until it times out.
+    this.remote = new SharedBrowser(options.idleBrowserMs, async (browser) => {
+      const session = await browser.newBrowserCDPSession();
+      await session.send("Browser.close");
+    });
   }
 
   private async launchOptions() {
@@ -120,65 +230,59 @@ export class ServerBrowserContexts {
     }
   }
 
-  private sharedBrowser() {
-    if (!this.browser) {
-      const launched = this.launchOptions().then(async ({ executable, ...options }) => {
-        const { chromium } = loadPlaywright();
-        const browser = await this.launch(executable, (executablePath) =>
-          chromium.launch({ ...options, executablePath }),
-        );
-        browser.on("disconnected", () => {
-          if (this.browser === launched) this.browser = undefined;
+  private async launchShared() {
+    const { executable, ...options } = await this.launchOptions();
+    const { chromium } = loadPlaywright();
+    return this.launch(executable, (executablePath) =>
+      chromium.launch({ ...options, executablePath }),
+    );
+  }
+
+  /** A context in the remote browser, or undefined when `url` has to load in the local one. */
+  private async remoteContext(options: Parameters<Browser["newContext"]>[0], url: string) {
+    const remote = this.options.remote;
+    if (!remote || this.remoteDown) return undefined;
+    const endpoint = await remote.endpoint();
+    if (!endpoint || !(await remote.reaches(url))) return undefined;
+    try {
+      return await this.remote.newContext(options, async () => {
+        const browser = await loadPlaywright().chromium.connectOverCDP(endpoint.url, {
+          headers: { ...endpoint.headers },
+          timeout: REMOTE_CONNECT_TIMEOUT_MS,
         });
+        const session = await browser.newBrowserCDPSession();
+        const heartbeat = setInterval(
+          () => void session.send("Browser.getVersion").catch(constVoid),
+          remote.heartbeatMs,
+        );
+        heartbeat.unref();
+        browser.on("disconnected", () => clearInterval(heartbeat));
         return browser;
       });
-      this.browser = launched;
-      void launched.catch(() => {
-        if (this.browser === launched) this.browser = undefined;
-      });
-    }
-    return this.browser;
-  }
-
-  private async sharedContext(options?: Parameters<Browser["newContext"]>[0]) {
-    clearTimeout(this.idleTimer);
-    this.pendingSharedContexts++;
-    const launched = this.sharedBrowser();
-    try {
-      const context = await (await launched).newContext(options);
-      context.on("close", () => this.retireWhenIdle(launched));
-      return context;
-    } finally {
-      this.pendingSharedContexts--;
-      this.retireWhenIdle(launched);
+    } catch (cause) {
+      this.remoteDown = true;
+      setTimeout(() => {
+        this.remoteDown = false;
+      }, REMOTE_RETRY_MS).unref();
+      remote.onUnavailable?.(cause);
+      return undefined;
     }
   }
 
-  private retireWhenIdle(launched: Promise<Browser>) {
-    const delay = this.options.idleBrowserMs;
-    if (delay === undefined || this.closing || this.pendingSharedContexts > 0) return;
-    clearTimeout(this.idleTimer);
-    this.idleTimer = setTimeout(() => void this.retire(launched), delay);
-    this.idleTimer.unref();
+  /** Whether the context runs in the remote browser, which reaches public addresses only. */
+  isRemote(context: BrowserContext) {
+    return this.remote.owns(context);
   }
 
-  private async retire(launched: Promise<Browser>) {
-    const browser = await launched.catch(() => undefined);
-    if (!browser || this.browser !== launched || this.pendingSharedContexts > 0) return;
-    if (browser.contexts().length > 0) return;
-    // Cleared first, so a request during the close launches a fresh browser.
-    this.browser = undefined;
-    await browser.close().catch(constVoid);
-  }
-
-  contextFor(profileId: string, isolationKey?: string): Promise<BrowserContext> {
+  /** `url` is the page a per-tab context opens with; it picks the browser that can reach it. */
+  contextFor(profileId: string, isolationKey?: string, url?: string): Promise<BrowserContext> {
     if (this.closing) return Promise.reject(new Error("The preview browser is closed."));
     const key = JSON.stringify([profileId, isolationKey ?? null]);
     const cached = this.contexts.get(key);
     if (cached) return cached;
     const cleared = this.clearing.get(key)?.catch(constVoid) ?? Promise.resolve();
     const pending = cleared
-      .then(() => this.createContext(profileId, isolationKey))
+      .then(() => this.createContext(profileId, isolationKey, url))
       .then(async (context) => {
         context.on("close", () => {
           if (this.contexts.get(key) === pending) this.contexts.delete(key);
@@ -198,10 +302,15 @@ export class ServerBrowserContexts {
     return pending;
   }
 
-  private async createContext(profileId: string, isolationKey?: string) {
+  private async createContext(profileId: string, isolationKey?: string, url?: string) {
     const contextOptions = { viewport: { width: 1280, height: 800 }, deviceScaleFactor: 2 };
     if (isolationKey !== undefined || profileId === INCOGNITO_BROWSER_PROFILE_ID) {
-      return this.sharedContext(contextOptions);
+      // A context without a key would be shared by tabs that may need different browsers.
+      const remote =
+        isolationKey !== undefined && url !== undefined
+          ? await this.remoteContext(contextOptions, url)
+          : undefined;
+      return remote ?? this.local.newContext(contextOptions, () => this.launchShared());
     }
     const directory = this.profileDirectory(profileId);
     await NodeFSP.mkdir(directory, { recursive: true });
@@ -226,7 +335,7 @@ export class ServerBrowserContexts {
 
   async scratchPage() {
     if (this.closing) throw new Error("The preview browser is closed.");
-    const context = await this.sharedContext();
+    const context = await this.local.newContext(undefined, () => this.launchShared());
     const page = await context.newPage();
     page.once("close", () => void context.close().catch(constVoid));
     return page;
@@ -271,12 +380,10 @@ export class ServerBrowserContexts {
   }
 
   private async dispose() {
-    clearTimeout(this.idleTimer);
     await Promise.allSettled(
       [...this.contexts.values()].map(async (pending) => (await pending).close()),
     );
-    const browser = await this.browser?.catch(() => undefined);
-    await browser?.close().catch(constVoid);
+    await Promise.all([this.local.close(), this.remote.close()]);
     this.contexts.clear();
   }
 }

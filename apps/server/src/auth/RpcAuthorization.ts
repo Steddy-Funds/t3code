@@ -159,6 +159,17 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.shellOpenInEditor]: AuthOrchestrationOperateScope,
   [WS_METHODS.filesystemBrowse]: AuthFilesystemReadScope,
   [WS_METHODS.filesystemGetMetadata]: AuthFilesystemReadScope,
+  // Read scope is enough only because the service runs nothing that lives in a workspace.
+  [WS_METHODS.codeIntelStatus]: AuthFilesystemReadScope,
+  [WS_METHODS.codeIntelDefinition]: AuthFilesystemReadScope,
+  [WS_METHODS.codeIntelReferences]: AuthFilesystemReadScope,
+  [WS_METHODS.codeIntelDocumentHighlights]: AuthFilesystemReadScope,
+  [WS_METHODS.codeIntelHover]: AuthFilesystemReadScope,
+  [WS_METHODS.codeIntelDocumentSymbols]: AuthFilesystemReadScope,
+  [WS_METHODS.codeIntelWorkspaceSymbols]: AuthFilesystemReadScope,
+  [WS_METHODS.codeIntelSemanticTokens]: AuthFilesystemReadScope,
+  // A read already starts and evicts language servers; a restart causes nothing more.
+  [WS_METHODS.codeIntelRestart]: AuthFilesystemReadScope,
   [WS_METHODS.agentSessionsScan]: AuthOrchestrationReadScope,
   [WS_METHODS.agentSessionsImport]: AuthOrchestrationOperateScope,
   [WS_METHODS.assetsCreateUrl]: AuthOrchestrationReadScope,

@@ -73,6 +73,7 @@
     "stream-chain": "^4.2.5",
     "stream-json": "3.7.0",
     "transcribe-cpp": "0.4.1",
+    "typescript": "7.0.2",
     "undici": "catalog:",
     "yaml": "catalog:",
     "yauzl": "^3.4.0",
@@ -99,7 +100,8 @@
     "effect-acp": "workspace:*",
     "effect-codex-app-server": "workspace:*",
     "graphql": "16.14.1",
-    "vite-plus": "catalog:"
+    "vite-plus": "catalog:",
+    "vscode-languageserver-protocol": "3.17.5"
   },
   "engines": {
     "node": "^22.16 || ^23.11 || >=24.10"

@@ -343,7 +343,7 @@ export interface QuickReferenceArea {
 }
 
 export interface QuickReferenceView {
-  /** A group that runs into the next column appears in both, under its heading. */
+  /** A group too long for one column appears in each column it fills, under its heading. */
   readonly columns: ReadonlyArray<ReadonlyArray<QuickReferenceGroup>>;
   /** Entries left out because the window is too small to show them without scrolling. */
   readonly hiddenCount: number;
@@ -401,20 +401,26 @@ function trimToLines(
   });
 }
 
-/** Fills columns of at most `lines` lines in reading order. A heading keeps two shortcuts under it. */
+/**
+ * Fills columns of at most `lines` lines in reading order. With `whole`, a group
+ * that fits a column is never split. A split group keeps two shortcuts under
+ * its heading.
+ */
 function fillColumns(
   groups: ReadonlyArray<QuickReferenceGroup>,
   lines: number,
+  whole: boolean,
 ): Array<Array<QuickReferenceGroup>> {
   const columns: Array<Array<QuickReferenceGroup>> = [[]];
   let used = 0;
   for (const group of groups) {
     let entries = group.entries;
+    const unsplit = whole && 1 + entries.length <= lines;
     while (entries.length > 0) {
       const column = columns.at(-1) ?? [];
       const heading = 1 + (column.length > 0 ? GROUP_GAP_LINES : 0);
       const room = Math.floor(lines - used - heading);
-      if (room < Math.min(2, entries.length) && column.length > 0) {
+      if (room < (unsplit ? entries.length : Math.min(2, entries.length)) && column.length > 0) {
         columns.push([]);
         used = 0;
         continue;
@@ -428,17 +434,23 @@ function fillColumns(
   return columns;
 }
 
-/** The shortest columns that hold the groups in `count` of them; `maxLines` is known to do. */
+/**
+ * The shortest columns that hold the groups in `count` of them, with groups
+ * kept whole when that fits. `maxLines` is known to do with groups split.
+ */
 function balanceColumns(
   groups: ReadonlyArray<QuickReferenceGroup>,
   count: number,
   maxLines: number,
 ): QuickReferenceView["columns"] {
-  for (let lines = Math.ceil(lineCount(groups) / count); lines < maxLines; lines += 1) {
-    const columns = fillColumns(groups, lines);
-    if (columns.length <= count) return columns;
+  const shortest = Math.ceil(lineCount(groups) / count);
+  for (const whole of [true, false]) {
+    for (let lines = shortest; lines <= maxLines; lines += 1) {
+      const columns = fillColumns(groups, lines, whole);
+      if (columns.length <= count) return columns;
+    }
   }
-  return fillColumns(groups, maxLines);
+  return fillColumns(groups, maxLines, false);
 }
 
 function layOut(
@@ -446,14 +458,14 @@ function layOut(
   count: number,
   maxLines: number,
 ): QuickReferenceView {
-  if (fillColumns(groups, maxLines).length <= count) {
+  if (fillColumns(groups, maxLines, false).length <= count) {
     return { columns: balanceColumns(groups, count, maxLines), hiddenCount: 0 };
   }
   // The count takes a line of its own below the columns.
   const columnLines = maxLines - 1;
   for (let lines = count * columnLines; lines > 0; lines -= 1) {
     const shown = trimToLines(groups, lines);
-    if (fillColumns(shown, columnLines).length > count) continue;
+    if (fillColumns(shown, columnLines, false).length > count) continue;
     return {
       columns: balanceColumns(shown, count, columnLines),
       hiddenCount: entryCount(groups) - entryCount(shown),

@@ -197,27 +197,39 @@ describe("fitQuickReference", () => {
     const view = fitQuickReference(groups, { widthRem: 64, heightRem: 50 });
 
     expect(view.hiddenCount).toBe(0);
-    expect(view.columns).toHaveLength(4);
+    // No group is split while whole groups fit the 33 lines the height holds.
+    expect(view.columns.map((column) => column.map((entry) => entry.id))).toEqual([
+      ["a", "b"],
+      ["c", "d"],
+      ["e", "f"],
+      ["g"],
+    ]);
     expect(entries(view).map((entry) => entry.id)).toEqual(
       groups.flatMap((entry) => entry.entries.map((row) => row.id)),
     );
-    // 33 lines fit the height; balanced columns stay well under it.
-    expect(tallestColumn(view)).toBeLessThanOrEqual(30);
-    // A group that runs into the next column has its heading there too, over a shortcut.
-    expect(view.columns.map((column) => column[0]?.title)).toEqual(["a", "b", "d", "f"]);
-    const splitTails = view.columns.flatMap((column, index) => {
-      const last = column.at(-1);
-      return last?.id === view.columns[index + 1]?.[0]?.id ? [last?.entries.length] : [];
+    expect(tallestColumn(view)).toBeLessThanOrEqual(33);
+  });
+
+  it("splits only a group too long for one column, with its heading over each part", () => {
+    const view = fitQuickReference([group("x", 40, 0), group("y", 5, 0)], {
+      widthRem: 40,
+      heightRem: 50,
     });
-    expect(splitTails.length).toBeGreaterThan(0);
-    expect(Math.min(...splitTails.map((count) => count ?? 0))).toBeGreaterThanOrEqual(2);
+
+    expect(view.hiddenCount).toBe(0);
+    expect(view.columns.map((column) => column.map((entry) => entry.id))).toEqual([
+      ["x"],
+      ["x", "y"],
+    ]);
+    expect(view.columns.flat().map((entry) => entry.entries.length)).toEqual([24, 16, 5]);
   });
 
   it("uses more columns on a wide window instead of growing tall", () => {
     const view = fitQuickReference(groups, { widthRem: 150, heightRem: 50 });
 
-    expect(view.columns).toHaveLength(7);
-    expect(tallestColumn(view)).toBeLessThanOrEqual(19);
+    expect(view.columns.map((column) => column.map((entry) => entry.id))).toEqual(
+      groups.map((entry) => [entry.id]),
+    );
   });
 
   it("drops dimmed entries first when the window is too small, and counts them", () => {

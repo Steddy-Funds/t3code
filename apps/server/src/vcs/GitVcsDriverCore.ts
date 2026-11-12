@@ -31,6 +31,7 @@ import {
   type ReviewDiffFileStat,
   type ReviewDiffPreviewSource,
   type VcsRef,
+  type VcsWorkingTreeFileChange,
 } from "@t3tools/contracts";
 import { dedupeRemoteBranchesWithLocalMatches } from "@t3tools/shared/git";
 import * as HostProcess from "@t3tools/shared/HostProcess";
@@ -241,6 +242,25 @@ function parsePorcelainPath(record: string): string | null {
   if (fieldsBeforePath === undefined) return null;
   const filePath = record.split(" ").slice(fieldsBeforePath).join(" ");
   return filePath.length > 0 ? filePath : null;
+}
+
+// XY in an ordinary or rename record is the index and worktree status against HEAD.
+function parsePorcelainChange(record: string): VcsWorkingTreeFileChange | null {
+  switch (record[0]) {
+    case "?":
+      return "untracked";
+    case "u":
+      return "modified";
+    case "1":
+    case "2": {
+      const xy = record.slice(2, 4);
+      if (xy.includes("D")) return "deleted";
+      if (xy.includes("A") || xy[0] === "C") return "added";
+      return xy[0] === "R" ? "renamed" : "modified";
+    }
+    default:
+      return null;
+  }
 }
 
 function filterBranchesForListQuery(
@@ -2277,7 +2297,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     let behindCount = 0;
     let aheadOfDefaultCount = 0;
     let hasWorkingTreeChanges = false;
-    const changedFilesWithoutNumstat = new Set<string>();
+    const statusChanges = new Map<string, VcsWorkingTreeFileChange>();
     const untrackedRoots: string[] = [];
 
     const statusRecords = statusStdout.split("\0");
@@ -2303,15 +2323,16 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       if (line.length > 0 && !line.startsWith("#")) {
         hasWorkingTreeChanges = true;
         const pathValue = parsePorcelainPath(line);
-        if (pathValue) {
-          changedFilesWithoutNumstat.add(pathValue);
+        const change = parsePorcelainChange(line);
+        if (pathValue && change) {
+          statusChanges.set(pathValue, change);
           if (line.startsWith("? ")) untrackedRoots.push(pathValue);
         }
         // A rename record is followed by its original path as a separate record. Listing it
         // keeps the deletion selectable when committing only some files.
         if (line.startsWith("2 ")) {
           const originalPath = statusRecords[++index];
-          if (originalPath) changedFilesWithoutNumstat.add(originalPath);
+          if (originalPath && change === "renamed") statusChanges.set(originalPath, "deleted");
         }
       }
     }
@@ -2357,15 +2378,19 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
 
     let insertions = 0;
     let deletions = 0;
+    const fileEntry = (filePath: string, stat: { insertions: number; deletions: number }) => {
+      const change = statusChanges.get(filePath);
+      return { path: filePath, ...stat, ...(change ? { change } : {}) };
+    };
     const files = Array.from(fileStatMap.entries()).map(([filePath, stat]) => {
       insertions += stat.insertions;
       deletions += stat.deletions;
-      return { path: filePath, insertions: stat.insertions, deletions: stat.deletions };
+      return fileEntry(filePath, stat);
     });
 
-    for (const filePath of changedFilesWithoutNumstat) {
+    for (const filePath of statusChanges.keys()) {
       if (fileStatMap.has(filePath)) continue;
-      files.push({ path: filePath, insertions: 0, deletions: 0 });
+      files.push(fileEntry(filePath, { insertions: 0, deletions: 0 }));
     }
     files.sort((a, b) => a.path.localeCompare(b.path));
 

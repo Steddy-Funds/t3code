@@ -216,6 +216,16 @@ const VcsStatusChangeRequest = Schema.Struct({
   updatedAt: Schema.optional(Schema.NullOr(Schema.String)),
 });
 
+// How a working-tree file differs from HEAD, from `git status`. A conflicted file is "modified".
+export const VcsWorkingTreeFileChange = Schema.Literals([
+  "added",
+  "modified",
+  "deleted",
+  "renamed",
+  "untracked",
+]);
+export type VcsWorkingTreeFileChange = typeof VcsWorkingTreeFileChange.Type;
+
 const VcsStatusLocalShape = {
   isRepo: Schema.Boolean,
   sourceControlProvider: Schema.optional(SourceControlProviderInfo),
@@ -232,6 +242,8 @@ const VcsStatusLocalShape = {
         path: GitFilePath,
         insertions: NonNegativeInt,
         deletions: NonNegativeInt,
+        // Absent from older servers.
+        change: Schema.optional(VcsWorkingTreeFileChange),
       }),
     ),
     insertions: NonNegativeInt,

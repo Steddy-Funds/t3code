@@ -167,6 +167,27 @@ export function buildSbsLayout(document: SbsDocument, options: SbsLayoutOptions)
   return { segments, rows, changeSegments };
 }
 
+const layouts = new WeakMap<SbsDocument, Map<string, SbsLayout>>();
+/** Layouts kept per document: a few folds opened one after another, not a history. */
+const MAX_KEPT_LAYOUTS = 16;
+
+/**
+ * The layout of a document under these options, the same object for the same answer. The
+ * panes and everything derived from a layout are kept by its identity, so a scroll, which
+ * changes none of this, reuses them all.
+ */
+export function sbsLayoutOf(document: SbsDocument, options: SbsLayoutOptions): SbsLayout {
+  const key = `${options.collapseUnchanged}:${options.contextLines ?? ""}:${[...options.expandedFolds].toSorted((left, right) => left - right).join(",")}`;
+  let kept = layouts.get(document);
+  if (!kept) layouts.set(document, (kept = new Map()));
+  const cached = kept.get(key);
+  if (cached) return cached;
+  if (kept.size >= MAX_KEPT_LAYOUTS) kept.clear();
+  const layout = buildSbsLayout(document, options);
+  kept.set(key, layout);
+  return layout;
+}
+
 export function sbsRowCount(layout: SbsLayout, side: SbsSide): number {
   return layout.rows[side].at(-1) ?? 0;
 }

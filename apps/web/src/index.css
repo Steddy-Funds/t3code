@@ -2316,6 +2316,11 @@ code {
   tab-size: 4;
 }
 
+/* Rows are swapped under the viewport as it scrolls; anchoring to one would move the pane. */
+.sbs-scroller {
+  overflow-anchor: none;
+}
+
 .sbs-sheet {
   position: relative;
   min-width: max(100%, calc(var(--sbs-content-columns, 0) * 1ch + var(--sbs-gutter-width) + 2rem));

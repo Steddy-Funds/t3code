@@ -1,6 +1,9 @@
 import { DEFAULT_TOKENIZE_MAX_LENGTH, type FileContents } from "@pierre/diffs";
 import { useEffect, useState } from "react";
 
+import { getRenderedAppearance } from "~/hooks/useTheme";
+import { resolveDiffThemeName } from "~/lib/diffRendering";
+
 import { useDiffWorkerPool } from "../../DiffWorkerPoolProvider";
 import type { SbsSide } from "./sbsModel";
 
@@ -48,13 +51,24 @@ export function useSbsHighlight(
       return file && rows ? { file, rows } : null;
     };
     const prime = () => {
+      // A pool still switching to the page's appearance is asked again when it gets there:
+      // a request under the theme it is leaving fails in the worker.
+      if (pool.getFileRenderOptions().theme !== resolveDiffThemeName(getRenderedAppearance())) {
+        return;
+      }
       for (const { file, lines } of sides) {
         if (file === null || lines > DEFAULT_TOKENIZE_MAX_LENGTH) continue;
         // A failed highlight leaves the pane as plain text.
         pool.primeFileHighlightCache(file).then(read, () => undefined);
       }
     };
-    prime();
+    // A request sent before the workers hold the theme fails in the worker.
+    (pool.isInitialized() ? Promise.resolve() : pool.initialize()).then(
+      () => {
+        if (active) prime();
+      },
+      () => undefined,
+    );
     const unsubscribe = pool.subscribeToThemeChanges({ onThemeChange: prime });
     return () => {
       active = false;

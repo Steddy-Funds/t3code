@@ -45,7 +45,15 @@ export interface SbsToolbarProps {
   readonly onHighlightModeChange: (mode: SbsHighlightMode) => void;
 }
 
-export function SbsToolbar(props: SbsToolbarProps) {
+export function SbsToolbar({
+  statusLabel,
+  canStep,
+  onStep,
+  collapseUnchanged,
+  onCollapseUnchangedChange,
+  highlightMode,
+  onHighlightModeChange,
+}: SbsToolbarProps) {
   return (
     <div className="flex shrink-0 items-center gap-0.5">
       {/* First, so its changing width never moves the buttons. */}
@@ -54,7 +62,7 @@ export function SbsToolbar(props: SbsToolbarProps) {
         aria-live="polite"
         data-sbs-status=""
       >
-        {props.statusLabel}
+        {statusLabel}
       </span>
       <Tooltip>
         <TooltipTrigger
@@ -64,8 +72,8 @@ export function SbsToolbar(props: SbsToolbarProps) {
               size="icon-xs"
               variant="ghost"
               aria-label="Previous difference"
-              disabled={!props.canStep}
-              onClick={() => props.onStep("previous")}
+              disabled={!canStep}
+              onClick={() => onStep("previous")}
             />
           }
         >
@@ -81,8 +89,8 @@ export function SbsToolbar(props: SbsToolbarProps) {
               size="icon-xs"
               variant="ghost"
               aria-label="Next difference"
-              disabled={!props.canStep}
-              onClick={() => props.onStep("next")}
+              disabled={!canStep}
+              onClick={() => onStep("next")}
             />
           }
         >
@@ -97,15 +105,15 @@ export function SbsToolbar(props: SbsToolbarProps) {
               aria-label="Collapse unchanged lines"
               variant="ghost"
               size="sm"
-              pressed={props.collapseUnchanged}
-              onPressedChange={(pressed) => props.onCollapseUnchangedChange(Boolean(pressed))}
+              pressed={collapseUnchanged}
+              onPressedChange={(pressed) => onCollapseUnchangedChange(Boolean(pressed))}
             />
           }
         >
           <FoldVerticalIcon className="size-3.5" />
         </TooltipTrigger>
         <TooltipPopup side="top">
-          {props.collapseUnchanged ? "Show unchanged lines" : "Collapse unchanged lines"}
+          {collapseUnchanged ? "Show unchanged lines" : "Collapse unchanged lines"}
         </TooltipPopup>
       </Tooltip>
       <DropdownMenu>
@@ -114,19 +122,19 @@ export function SbsToolbar(props: SbsToolbarProps) {
             render={
               <DropdownMenuTrigger
                 render={<Button type="button" size="icon-xs" variant="ghost" />}
-                aria-label={`Highlighting: ${HIGHLIGHT_MODE_LABELS[props.highlightMode]}`}
+                aria-label={`Highlighting: ${HIGHLIGHT_MODE_LABELS[highlightMode]}`}
               />
             }
           >
             <HighlighterIcon className="size-3.5" />
           </TooltipTrigger>
-          <TooltipPopup side="top">{HIGHLIGHT_MODE_LABELS[props.highlightMode]}</TooltipPopup>
+          <TooltipPopup side="top">{HIGHLIGHT_MODE_LABELS[highlightMode]}</TooltipPopup>
         </Tooltip>
         <DropdownMenuContent align="end">
           <DropdownMenuRadioGroup
-            value={props.highlightMode}
+            value={highlightMode}
             onValueChange={(value) => {
-              if (isHighlightMode(value)) props.onHighlightModeChange(value);
+              if (isHighlightMode(value)) onHighlightModeChange(value);
             }}
           >
             {HIGHLIGHT_MODES.map((mode) => (

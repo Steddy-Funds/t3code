@@ -11,11 +11,12 @@ function foldLinkPath(left: number, right: number): string {
 }
 
 /** The centre strip: one filled band per change, and each fold's wave carried across. */
-export function SbsDivider(
-  props: SbsConnectorInput & { readonly showConnectors: boolean },
-) {
-  const connectors = props.showConnectors ? sbsVisibleConnectors(props) : [];
-  const foldLinks = sbsVisibleFoldLinks(props);
+export function SbsDivider({
+  showConnectors,
+  ...geometry
+}: SbsConnectorInput & { readonly showConnectors: boolean }) {
+  const connectors = showConnectors ? sbsVisibleConnectors(geometry) : [];
+  const foldLinks = sbsVisibleFoldLinks(geometry);
   return (
     <svg
       className="sbs-divider shrink-0"

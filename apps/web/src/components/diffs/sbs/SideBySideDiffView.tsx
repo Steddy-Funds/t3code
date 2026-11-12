@@ -1,5 +1,6 @@
 import { LineDiffRangeCache, type FileContents, type FileDiffMetadata } from "@pierre/diffs";
 import {
+  useLayoutEffect,
   useRef,
   useState,
   type CSSProperties,
@@ -8,7 +9,6 @@ import {
   type PointerEvent,
   type ReactNode,
 } from "react";
-import { flushSync } from "react-dom";
 
 import { useClientSettings } from "~/hooks/useSettings";
 import { useStableCallback } from "~/hooks/useStableCallback";
@@ -19,14 +19,14 @@ import { fileContentRevision } from "../../files/fileContentRevision";
 import { Button } from "../../ui/button";
 import { SbsDivider } from "./SbsDivider";
 import { SbsFindBar, SbsScrollMarks } from "./SbsOverlays";
-import { SbsPane, type SbsPaneAnnotation, type SbsPaneFind } from "./SbsPane";
+import { SbsPane, type SbsPaneAnnotation } from "./SbsPane";
 import { SbsBar, SbsToolbar } from "./SbsToolbar";
-import { sbsFindMatches, sbsFindStep, type SbsFindMatch } from "./sbsFind";
+import { sbsFindMatches, sbsFindMatchesByLine, sbsFindStep } from "./sbsFind";
 import type { SbsHighlightMode } from "./sbsInline";
 import { sbsKeyAction, type SbsKeyAction } from "./sbsKeymap";
 import {
-  buildSbsLayout,
   sbsFoldsCovering,
+  sbsLayoutOf,
   sbsLineRow,
   sbsRangeRows,
   sbsRowCount,
@@ -39,6 +39,7 @@ import {
   sbsGroupRanges,
   sbsLineIndex,
   sbsLineNumber,
+  type SbsDocument,
   type SbsLineRange,
   type SbsSide,
 } from "./sbsModel";
@@ -127,13 +128,12 @@ export interface SideBySideDiffViewProps<T = unknown> {
 const EMPTY_FOLDS: ReadonlySet<number> = new Set();
 const NO_ANNOTATIONS: ReadonlyArray<SbsAnnotation<never>> = [];
 const NO_PANE_ANNOTATIONS: ReadonlyArray<SbsPaneAnnotation> = [];
-const NO_MATCHES: ReadonlyArray<SbsFindMatch> = [];
 const SINGLE_SIDE: Record<SbsSide, ReadonlyArray<SbsSide>> = {
   deletions: ["deletions"],
   additions: ["additions"],
 };
 /** Rows rendered past each edge of the viewport, so a fast scroll does not outrun them. */
-const OVERSCAN_ROWS = 16;
+const OVERSCAN_ROWS = 24;
 /** The window moves in steps of this many rows, so most frames of a scroll render nothing new. */
 const WINDOW_STEP_ROWS = 8;
 /** Pierre's own bound: a longer line gets no word-level tint. */
@@ -153,6 +153,16 @@ interface FindState {
   readonly query: string;
   readonly index: number;
 }
+
+/** Somewhere to scroll to once the rows that hold it are rendered. */
+type PendingReveal =
+  | { readonly kind: "group"; readonly group: number }
+  | {
+      readonly kind: "line";
+      readonly side: SbsSide;
+      readonly line: number;
+      readonly columns?: readonly [start: number, end: number];
+    };
 
 interface GutterSelection {
   readonly side: SbsSide;
@@ -224,27 +234,48 @@ function maxScrollTop(element: HTMLElement | null): number {
   return element ? element.scrollHeight - element.clientHeight : 0;
 }
 
-/** The annotations of one side as line index ranges; one whose lines are not shown is left out. */
+type PaneAnnotations = Readonly<Record<SbsSide, ReadonlyArray<SbsPaneAnnotation>>>;
+
+const paneAnnotations = new WeakMap<
+  ReadonlyArray<SbsAnnotation>,
+  WeakMap<SbsDocument, PaneAnnotations>
+>();
+
+/**
+ * Each side's annotations as line index ranges; one whose lines are not shown is left out.
+ * Kept per annotation list and document: the panes redraw their rows when these change.
+ */
 function paneAnnotationsOf(
   annotations: ReadonlyArray<SbsAnnotation>,
-  model: ReturnType<typeof sbsDocumentOf>,
-  side: SbsSide,
-): ReadonlyArray<SbsPaneAnnotation> {
-  const ranges = annotations.flatMap((annotation) => {
-    if (annotation.side !== side) return [];
-    const start = sbsLineIndex(model, side, annotation.startLine);
-    const end = sbsLineIndex(model, side, annotation.endLine);
-    return start < 0 || end < start ? [] : [{ id: annotation.id, start, end: end + 1 }];
-  });
-  return ranges.length === 0 ? NO_PANE_ANNOTATIONS : ranges;
+  model: SbsDocument,
+): PaneAnnotations {
+  let byModel = paneAnnotations.get(annotations);
+  if (!byModel) paneAnnotations.set(annotations, (byModel = new WeakMap()));
+  const cached = byModel.get(model);
+  if (cached) return cached;
+  const of = (side: SbsSide) => {
+    const ranges = annotations.flatMap((annotation) => {
+      if (annotation.side !== side) return [];
+      const start = sbsLineIndex(model, side, annotation.startLine);
+      const end = sbsLineIndex(model, side, annotation.endLine);
+      return start < 0 || end < start ? [] : [{ id: annotation.id, start, end: end + 1 }];
+    });
+    return ranges.length === 0 ? NO_PANE_ANNOTATIONS : ranges;
+  };
+  const result = { deletions: of("deletions"), additions: of("additions") };
+  byModel.set(model, result);
+  return result;
 }
 
-function selectedLinesOf(selection: GutterSelection | null, side: SbsSide): SbsLineRange | null {
-  if (selection?.side !== side) return null;
-  return {
-    start: Math.min(selection.anchor, selection.head),
-    end: Math.max(selection.anchor, selection.head) + 1,
-  };
+const groupRowsByLayout = new WeakMap<SbsLayout, Partial<Record<SbsSide, SbsLineRange[]>>>();
+
+/** The rows of every difference on one side, kept per layout. */
+function groupRowsOf(layout: SbsLayout, model: SbsDocument, side: SbsSide) {
+  let bySide = groupRowsByLayout.get(layout);
+  if (!bySide) groupRowsByLayout.set(layout, (bySide = {}));
+  return (bySide[side] ??= sbsGroupRanges(model).map((range) =>
+    sbsRangeRows(layout, side, range[side]),
+  ));
 }
 
 export function SideBySideDiffView<T = unknown>(props: SideBySideDiffViewProps<T>) {
@@ -253,7 +284,7 @@ export function SideBySideDiffView<T = unknown>(props: SideBySideDiffViewProps<T
   const lineHeight = Math.round(fontSize * 1.5);
   const model = sbsDocumentOf(fileDiff);
   const [expandedFolds, setExpandedFolds] = useState(EMPTY_FOLDS);
-  const layout = buildSbsLayout(model, { collapseUnchanged, expandedFolds });
+  const layout = sbsLayoutOf(model, { collapseUnchanged, expandedFolds });
   const anchors = sbsScrollAnchors(layout);
   // A new or a deleted file has one side, so it gets one pane and no divider.
   const single: SbsSide | null =
@@ -278,6 +309,7 @@ export function SideBySideDiffView<T = unknown>(props: SideBySideDiffViewProps<T
   const [gutterSelection, setGutterSelection] = useState<GutterSelection | null>(null);
   const [find, setFind] = useState<FindState | null>(null);
   const [cardHeight, setCardHeight] = useState(0);
+  const [revealRequest, setRevealRequest] = useState(0);
 
   const scrollers = useRef<Record<SbsSide, HTMLDivElement | null>>({
     deletions: null,
@@ -293,9 +325,10 @@ export function SideBySideDiffView<T = unknown>(props: SideBySideDiffViewProps<T
   const dragSide = useRef<SbsSide | null>(null);
   const reportedTextSelection = useRef(false);
   const columnProbe = useRef<HTMLSpanElement | null>(null);
+  const pendingReveal = useRef<PendingReveal | null>(null);
 
   const groupRanges = sbsGroupRanges(model);
-  const groupRows = groupRanges.map((range) => sbsRangeRows(layout, lead, range[lead]));
+  const groupRows = groupRowsOf(layout, model, lead);
   const anchorRow = Math.floor((viewport[lead] + Math.floor(viewport.height / 3)) / lineHeight);
   const navigation = { groupRows, anchorRow, steppedGroup };
   const currentGroup = sbsCurrentGroup(navigation);
@@ -314,12 +347,12 @@ export function SideBySideDiffView<T = unknown>(props: SideBySideDiffViewProps<T
         : next,
     );
   };
-  // One render a frame, before it paints: a scroll moves both panes and the divider together.
+  // At most one render a frame, however many scroll events the two panes send in it.
   const scheduleViewport = () => {
     if (frame.current !== null) return;
     frame.current = requestAnimationFrame(() => {
       frame.current = null;
-      flushSync(readViewport);
+      readViewport();
     });
   };
 
@@ -361,18 +394,18 @@ export function SideBySideDiffView<T = unknown>(props: SideBySideDiffViewProps<T
           element.scrollLeft,
         );
       }
-      setSteppedGroup(null);
-      setEdgeHint(null);
+      if (steppedGroup !== null) setSteppedGroup(null);
+      if (edgeHint !== null) setEdgeHint(null);
     }
     scheduleViewport();
   });
 
-  const stepToIn = (targetLayout: SbsLayout, group: number) => {
+  const stepTo = (group: number) => {
     const range = groupRanges[group];
     if (!range) return;
     const rows = {
-      deletions: sbsRangeRows(targetLayout, "deletions", range.deletions),
-      additions: sbsRangeRows(targetLayout, "additions", range.additions),
+      deletions: sbsRangeRows(layout, "deletions", range.deletions),
+      additions: sbsRangeRows(layout, "additions", range.additions),
     };
     const limits = {
       deletions: maxScrollTop(scrollers.current.deletions),
@@ -393,7 +426,7 @@ export function SideBySideDiffView<T = unknown>(props: SideBySideDiffViewProps<T
   const step = (direction: SbsNavigationDirection) => {
     const target = sbsStepTarget(navigation, direction);
     if (target !== null) {
-      stepToIn(layout, target);
+      stepTo(target);
       return;
     }
     if (!props.adjacentFiles?.[direction]) return;
@@ -402,13 +435,16 @@ export function SideBySideDiffView<T = unknown>(props: SideBySideDiffViewProps<T
     else setEdgeHint(direction);
   };
 
+  // The toolbar keeps its rendered controls while these keep one identity across a scroll.
+  const stepFromToolbar = useStableCallback(step);
+
   const jumpToSource = () => {
+    // The file on disk is the new side; a deletion opens it where the lines were.
+    const side: SbsSide = single ?? "additions";
     const range = currentGroup === null ? undefined : groupRanges[currentGroup];
-    const side: SbsSide = single ?? (range && range.additions.end === range.additions.start ? "deletions" : "additions");
-    const line = range
-      ? range[side].start
-      : (sbsRowTarget(layout, side, anchorRow)?.line ?? 0);
-    props.onOpenSource?.({ side, line: sbsLineNumber(model, side, line) });
+    const line = range ? range[side].start : (sbsRowTarget(layout, side, anchorRow)?.line ?? 0);
+    const lastLine = Math.max(0, model.lines[side].length - 1);
+    props.onOpenSource?.({ side, line: sbsLineNumber(model, side, Math.min(line, lastLine)) });
   };
 
   const keyActions: Record<SbsKeyAction, () => void> = {
@@ -424,7 +460,7 @@ export function SideBySideDiffView<T = unknown>(props: SideBySideDiffViewProps<T
     opened.current = true;
     if (props.focusOnOpen) scrollers.current[lead]?.focus({ preventScroll: true });
     if (groupRanges.length > 0) {
-      stepToIn(layout, props.initialDifference === "last" ? groupRanges.length - 1 : 0);
+      stepTo(props.initialDifference === "last" ? groupRanges.length - 1 : 0);
     }
   };
   const attachDeletions = useStableCallback((element: HTMLDivElement | null) =>
@@ -450,72 +486,76 @@ export function SideBySideDiffView<T = unknown>(props: SideBySideDiffViewProps<T
   });
 
   const expandFolds = (folds: ReadonlyArray<number>) => {
-    if (folds.length === 0) return expandedFolds;
+    if (folds.length === 0) return;
     const next = new Set(expandedFolds);
     for (const fold of folds) next.add(fold);
     setExpandedFolds(next);
-    return next;
   };
 
-  const toggleCollapse = (collapse: boolean) => {
-    const group =
-      currentGroup ?? sbsStepTarget(navigation, "next") ?? sbsStepTarget(navigation, "previous");
-    // Committed first: the scroll targets are read from the panes' new heights.
-    flushSync(() => {
-      setExpandedFolds(EMPTY_FOLDS);
-      props.onCollapseUnchangedChange(collapse);
-    });
-    if (group === null) return;
-    stepToIn(
-      buildSbsLayout(model, { collapseUnchanged: collapse, expandedFolds: EMPTY_FOLDS }),
-      group,
-    );
-  };
-
-  const findResult = find ? sbsFindMatches(model.lines[find.side], find.query) : null;
-  const findMatches = findResult?.matches ?? NO_MATCHES;
-  const currentMatch = find && find.index >= 0 ? (findMatches[find.index] ?? null) : null;
-  const findByLine = new Map<number, SbsFindMatch[]>();
-  for (const match of findMatches) {
-    const matches = findByLine.get(match.line);
-    if (matches) matches.push(match);
-    else findByLine.set(match.line, [match]);
-  }
-  const paneFind: SbsPaneFind | null = find ? { byLine: findByLine, current: currentMatch } : null;
-
-  /** Scrolls a match into view as a scroll of the user's, so the other pane follows. */
-  const revealMatch = (side: SbsSide, match: SbsFindMatch, folds: ReadonlySet<number>) => {
-    const element = scrollers.current[side];
+  /** Scrolls a line into view as a scroll of the user's, so the other pane follows. */
+  const revealLine = (reveal: Extract<PendingReveal, { kind: "line" }>) => {
+    const element = scrollers.current[reveal.side];
     if (!element) return;
-    const target = buildSbsLayout(model, { collapseUnchanged, expandedFolds: folds });
-    const row = sbsLineRow(target, side, match.line).row;
-    const top = row * lineHeight;
+    const top = sbsLineRow(layout, reveal.side, reveal.line).row * lineHeight;
     if (top < element.scrollTop || top + lineHeight > element.scrollTop + element.clientHeight) {
       element.scrollTop = Math.max(0, top - Math.floor(element.clientHeight / 3));
     }
+    if (!reveal.columns) return;
     const column = columnProbe.current?.getBoundingClientRect().width ?? 0;
-    const start = match.start * column;
-    if (start < element.scrollLeft || match.end * column > element.scrollLeft + element.clientWidth * 0.8) {
+    const start = reveal.columns[0] * column;
+    const end = reveal.columns[1] * column;
+    if (start < element.scrollLeft || end > element.scrollLeft + element.clientWidth * 0.8) {
       element.scrollLeft = Math.max(0, start - element.clientWidth / 3);
     }
   };
 
-  const stepFind = (direction: 1 | -1, query = find?.query ?? "") => {
+  /** Scrolls there after the next commit: the rows may be behind a fold or not laid out yet. */
+  const revealAfterRender = (reveal: PendingReveal | null) => {
+    pendingReveal.current = reveal;
+    setRevealRequest((request) => request + 1);
+  };
+
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- scrolls the panes to a difference, a match or a note once the rows that hold it are in the DOM
+  useLayoutEffect(() => {
+    const reveal = pendingReveal.current;
+    pendingReveal.current = null;
+    if (reveal?.kind === "group") stepTo(reveal.group);
+    else if (reveal) revealLine(reveal);
+  }, [revealRequest]);
+
+  const toggleCollapse = (collapse: boolean) => {
+    setExpandedFolds(EMPTY_FOLDS);
+    props.onCollapseUnchangedChange(collapse);
+    const group =
+      currentGroup ?? sbsStepTarget(navigation, "next") ?? sbsStepTarget(navigation, "previous");
+    revealAfterRender(group === null ? null : { kind: "group", group });
+  };
+
+  const toggleCollapseFromToolbar = useStableCallback(toggleCollapse);
+
+  const findResult = sbsFindMatches(model.lines[find?.side ?? lead], find?.query ?? "");
+  const findMatches = findResult.matches;
+  const currentMatch = find && find.index >= 0 ? (findMatches[find.index] ?? null) : null;
+  const findByLine = sbsFindMatchesByLine(findResult);
+
+  const stepFind = (direction: 1 | -1, nextQuery?: string) => {
     if (!find) return;
-    const matches = query === find.query ? findMatches : sbsFindMatches(model.lines[find.side], query).matches;
-    const index = query === find.query ? sbsFindStep(find.index, matches.length, direction) : matches.length > 0 ? 0 : -1;
+    const query = nextQuery ?? find.query;
+    const sameQuery = query === find.query;
+    const matches = sameQuery ? findMatches : sbsFindMatches(model.lines[find.side], query).matches;
+    const index = sameQuery
+      ? sbsFindStep(find.index, matches.length, direction)
+      : Math.min(0, matches.length - 1);
     const match = matches[index];
-    let folds = expandedFolds;
-    // Committed first, so the match's row exists where the scroll puts it.
-    flushSync(() => {
-      setFind({ side: find.side, query, index });
-      if (match) {
-        folds = expandFolds(
-          sbsFoldsCovering(layout, find.side, { start: match.line, end: match.line + 1 }),
-        );
-      }
+    setFind({ side: find.side, query, index });
+    if (!match) return;
+    expandFolds(sbsFoldsCovering(layout, find.side, { start: match.line, end: match.line + 1 }));
+    revealAfterRender({
+      kind: "line",
+      side: find.side,
+      line: match.line,
+      columns: [match.start, match.end],
     });
-    if (match) revealMatch(find.side, match, folds);
   };
 
   const closeFind = () => {
@@ -675,20 +715,19 @@ export function SideBySideDiffView<T = unknown>(props: SideBySideDiffViewProps<T
   };
 
   const annotations: ReadonlyArray<SbsAnnotation> = props.annotations ?? NO_ANNOTATIONS;
-  const paneAnnotations = {
-    deletions: paneAnnotationsOf(annotations, model, "deletions"),
-    additions: paneAnnotationsOf(annotations, model, "additions"),
-  };
-  const selectedLines = {
-    deletions: selectedLinesOf(gutterSelection, "deletions"),
-    additions: selectedLinesOf(gutterSelection, "additions"),
-  };
+  const annotationRanges = paneAnnotationsOf(annotations, model);
+  const selectedStart = gutterSelection
+    ? Math.min(gutterSelection.anchor, gutterSelection.head)
+    : -1;
+  const selectedEnd = gutterSelection
+    ? Math.max(gutterSelection.anchor, gutterSelection.head) + 1
+    : -1;
   const openAnnotation =
     props.renderAnnotation && props.openAnnotationId != null
       ? props.annotations?.find((annotation) => annotation.id === props.openAnnotationId)
       : undefined;
   const openAnnotationRange = openAnnotation
-    ? paneAnnotations[openAnnotation.side].find((range) => range.id === openAnnotation.id)
+    ? annotationRanges[openAnnotation.side].find((range) => range.id === openAnnotation.id)
     : undefined;
 
   /** Where an overlay under a range of rows sits in its pane, held inside the viewport. */
@@ -706,16 +745,12 @@ export function SideBySideDiffView<T = unknown>(props: SideBySideDiffViewProps<T
 
   const revealAnnotation = () => {
     if (!openAnnotation || !openAnnotationRange) return;
-    let folds = expandedFolds;
-    // Committed first, so the range's rows exist where the scroll puts them.
-    flushSync(() => {
-      folds = expandFolds(sbsFoldsCovering(layout, openAnnotation.side, openAnnotationRange));
+    expandFolds(sbsFoldsCovering(layout, openAnnotation.side, openAnnotationRange));
+    revealAfterRender({
+      kind: "line",
+      side: openAnnotation.side,
+      line: openAnnotationRange.start,
     });
-    const target = buildSbsLayout(model, { collapseUnchanged, expandedFolds: folds });
-    const element = scrollers.current[openAnnotation.side];
-    if (!element) return;
-    const row = sbsLineRow(target, openAnnotation.side, openAnnotationRange.start).row;
-    element.scrollTop = Math.max(0, row * lineHeight - Math.floor(element.clientHeight / 3));
   };
 
   const hintRows =
@@ -750,7 +785,7 @@ export function SideBySideDiffView<T = unknown>(props: SideBySideDiffViewProps<T
             query={find.query}
             index={find.index}
             count={findMatches.length}
-            truncated={findResult?.truncated ?? false}
+            truncated={findResult.truncated}
             onQueryChange={(query) => stepFind(1, query)}
             onStep={stepFind}
             onClose={closeFind}
@@ -815,6 +850,7 @@ export function SideBySideDiffView<T = unknown>(props: SideBySideDiffViewProps<T
   };
   const deletionsPane =
     single === "additions" ? null : (
+      <div className="relative min-w-0 flex-1" data-sbs-pane="deletions">
       <SbsPane
         {...paneProps}
         side="deletions"
@@ -822,17 +858,20 @@ export function SideBySideDiffView<T = unknown>(props: SideBySideDiffViewProps<T
         firstRow={deletionsWindow.first}
         lastRow={deletionsWindow.last}
         highlightedRows={highlightedRows.deletions}
-        find={find?.side === "deletions" ? paneFind : null}
-        annotations={paneAnnotations.deletions}
-        selectedLines={selectedLines.deletions}
+        findMatches={find?.side === "deletions" ? findByLine : null}
+        findCurrent={find?.side === "deletions" ? currentMatch : null}
+        annotations={annotationRanges.deletions}
+        selectedStart={gutterSelection?.side === "deletions" ? selectedStart : -1}
+        selectedEnd={gutterSelection?.side === "deletions" ? selectedEnd : -1}
         hideScrollbar={single === null}
         scrollerRef={attachDeletions}
-      >
+      />
         {renderOverlays("deletions")}
-      </SbsPane>
+      </div>
     );
   const additionsPane =
     single === "deletions" ? null : (
+      <div className="relative min-w-0 flex-1" data-sbs-pane="additions">
       <SbsPane
         {...paneProps}
         side="additions"
@@ -840,14 +879,16 @@ export function SideBySideDiffView<T = unknown>(props: SideBySideDiffViewProps<T
         firstRow={additionsWindow.first}
         lastRow={additionsWindow.last}
         highlightedRows={highlightedRows.additions}
-        find={find?.side === "additions" ? paneFind : null}
-        annotations={paneAnnotations.additions}
-        selectedLines={selectedLines.additions}
+        findMatches={find?.side === "additions" ? findByLine : null}
+        findCurrent={find?.side === "additions" ? currentMatch : null}
+        annotations={annotationRanges.additions}
+        selectedStart={gutterSelection?.side === "additions" ? selectedStart : -1}
+        selectedEnd={gutterSelection?.side === "additions" ? selectedEnd : -1}
         hideScrollbar={false}
         scrollerRef={attachAdditions}
-      >
+      />
         {renderOverlays("additions")}
-      </SbsPane>
+      </div>
     );
 
   return (
@@ -869,9 +910,9 @@ export function SideBySideDiffView<T = unknown>(props: SideBySideDiffViewProps<T
             props.adjacentFiles?.next === true ||
             props.adjacentFiles?.previous === true
           }
-          onStep={step}
+          onStep={stepFromToolbar}
           collapseUnchanged={collapseUnchanged}
-          onCollapseUnchangedChange={toggleCollapse}
+          onCollapseUnchangedChange={toggleCollapseFromToolbar}
           highlightMode={highlightMode}
           onHighlightModeChange={props.onHighlightModeChange}
         />

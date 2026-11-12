@@ -15,9 +15,40 @@ export interface SbsFindResult {
 
 const NO_MATCHES: SbsFindResult = { matches: [], truncated: false };
 
-/** Every occurrence of the query in the lines, without regard to case, in reading order. */
+let lastSearch: { lines: ReadonlyArray<string>; query: string; result: SbsFindResult } | null =
+  null;
+
+/**
+ * Every occurrence of the query in the lines, without regard to case, in reading order. The
+ * last answer is kept: the view asks again on every render while the find bar is open.
+ */
 export function sbsFindMatches(lines: ReadonlyArray<string>, query: string): SbsFindResult {
   if (query.length === 0) return NO_MATCHES;
+  if (lastSearch?.lines === lines && lastSearch.query === query) return lastSearch.result;
+  const result = searchLines(lines, query);
+  lastSearch = { lines, query, result };
+  return result;
+}
+
+const matchesByLine = new WeakMap<SbsFindResult, ReadonlyMap<number, ReadonlyArray<SbsFindMatch>>>();
+
+/** A result's matches under the line each is on. */
+export function sbsFindMatchesByLine(
+  result: SbsFindResult,
+): ReadonlyMap<number, ReadonlyArray<SbsFindMatch>> {
+  const cached = matchesByLine.get(result);
+  if (cached) return cached;
+  const byLine = new Map<number, SbsFindMatch[]>();
+  for (const match of result.matches) {
+    const matches = byLine.get(match.line);
+    if (matches) matches.push(match);
+    else byLine.set(match.line, [match]);
+  }
+  matchesByLine.set(result, byLine);
+  return byLine;
+}
+
+function searchLines(lines: ReadonlyArray<string>, query: string): SbsFindResult {
   const needle = query.toLowerCase();
   const matches: SbsFindMatch[] = [];
   for (let line = 0; line < lines.length; line += 1) {

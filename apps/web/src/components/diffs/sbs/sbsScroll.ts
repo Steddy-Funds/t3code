@@ -10,7 +10,11 @@ import type { SbsLineRange, SbsSide } from "./sbsModel";
 /** A row on each side that shows the same place: the file ends and both ends of every change. */
 export type SbsScrollAnchor = Readonly<Record<SbsSide, number>>;
 
+const anchorsByLayout = new WeakMap<SbsLayout, ReadonlyArray<SbsScrollAnchor>>();
+
 export function sbsScrollAnchors(layout: SbsLayout): ReadonlyArray<SbsScrollAnchor> {
+  const cached = anchorsByLayout.get(layout);
+  if (cached) return cached;
   const anchors: SbsScrollAnchor[] = [{ deletions: 0, additions: 0 }];
   layout.changeSegments.forEach((_, change) => {
     const deletions = sbsChangeRows(layout, change, "deletions");
@@ -22,6 +26,7 @@ export function sbsScrollAnchors(layout: SbsLayout): ReadonlyArray<SbsScrollAnch
     deletions: sbsRowCount(layout, "deletions"),
     additions: sbsRowCount(layout, "additions"),
   });
+  anchorsByLayout.set(layout, anchors);
   return anchors;
 }
 

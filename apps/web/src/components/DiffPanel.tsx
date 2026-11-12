@@ -25,6 +25,7 @@ import { type MouseEvent, useEffect, useRef, useState } from "react";
 import { useCodeViewFileReveal } from "./diffs/useCodeViewFileReveal";
 import { useFilesystemReadAccess } from "~/state/filesystem";
 import { useOpenInPreferredEditor } from "../editorPreferences";
+import { useRightPanelStore } from "../rightPanelStore";
 import { useFileContextMenuHandler } from "../fileContextMenu";
 import { type DraftId } from "../composerDraftStore";
 import { openDiffFilePrimaryAction } from "../diffFileActions";
@@ -121,7 +122,7 @@ type DiffThemeType = "light" | "dark";
 const AUTOMATIC_BASE_REF = "__automatic_base_ref__";
 const DIFF_FILE_TREE_STORAGE_KEY = "t3code.diffFileTreeOpen";
 /** Narrower than this, two panes and their divider leave too little of each line to read. */
-const SIDE_BY_SIDE_MIN_WIDTH = 560;
+const SIDE_BY_SIDE_MIN_WIDTH = 520;
 const fileEntryCache = new WeakMap<
   FileDiffMetadata,
   { fileDiff: FileDiffMetadata; fileKey: string; fileVersion: number }
@@ -1246,9 +1247,7 @@ export default function DiffPanel({
               <SquareSplitHorizontalIcon className="size-3.5" />
             </TooltipTrigger>
             <TooltipPopup side="top">
-              {settings.diffSideBySide && !sideBySide
-                ? "Side by side needs a wider panel. Showing the stored layout."
-                : "Side by side: whole files, one at a time"}
+              Side by side: whole files, one at a time
             </TooltipPopup>
           </Tooltip>
         </ToggleGroup>
@@ -1375,6 +1374,20 @@ export default function DiffPanel({
                 {selectedPatchError
                   ? "Showing tracked changes. Untracked changes could not be loaded. Refresh to retry."
                   : "Showing tracked changes. Checking untracked files..."}
+              </p>
+            )}
+            {settings.diffSideBySide && !sideBySide && (
+              <p className="flex shrink-0 items-center gap-2 border-b border-border/70 bg-muted/40 px-3 py-1.5 text-2xs text-muted-foreground">
+                Side by side needs a wider panel.
+                {mode !== "sheet" && routeThreadRef ? (
+                  <Button
+                    size="micro"
+                    variant="outline"
+                    onClick={() => useRightPanelStore.getState().setMaximized(routeThreadRef, true)}
+                  >
+                    Maximize panel
+                  </Button>
+                ) : null}
               </p>
             )}
             {isSelectedPatchTruncated && !lazySource && (

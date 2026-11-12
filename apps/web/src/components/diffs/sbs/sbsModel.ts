@@ -179,10 +179,14 @@ export function sbsLineIndex(document: SbsDocument, side: SbsSide, lineNumber: n
   return -1;
 }
 
+type SbsGroupRanges = ReadonlyArray<Readonly<Record<SbsSide, SbsLineRange>>>;
+
+const groupRanges = new WeakMap<SbsDocument, SbsGroupRanges>();
+
 /** Both sides of every difference: from its first change's start to its last change's end. */
-export function sbsGroupRanges(
-  document: SbsDocument,
-): ReadonlyArray<Readonly<Record<SbsSide, SbsLineRange>>> {
+export function sbsGroupRanges(document: SbsDocument): SbsGroupRanges {
+  const cached = groupRanges.get(document);
+  if (cached) return cached;
   const ranges: Record<SbsSide, SbsLineRange>[] = [];
   for (const change of document.changes) {
     const group = ranges[change.group];
@@ -191,5 +195,6 @@ export function sbsGroupRanges(
       additions: { start: group?.additions.start ?? change.additions.start, end: change.additions.end },
     };
   }
+  groupRanges.set(document, ranges);
   return ranges;
 }

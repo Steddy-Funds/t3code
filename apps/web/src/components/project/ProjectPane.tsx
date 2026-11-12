@@ -28,7 +28,7 @@ import { primaryServerKeybindingsAtom } from "~/state/server";
 import { environmentSession, sessionHasScope } from "~/state/session";
 import { vcsEnvironment } from "~/state/vcs";
 
-import { workingTreeChangesAtom, workingTreeStructureToken } from "./projectGitChanges";
+import { workingTreeChangesAtom, workspaceRefreshToken } from "./projectGitChanges";
 import { useProjectPaneStore } from "./projectPaneStore";
 
 export interface ProjectPaneTarget {
@@ -105,6 +105,15 @@ function PaneMessage({ children }: { children: string }) {
   );
 }
 
+/** Null until `token` moves off the first value it had: the listing that mounted with it is current. */
+function useTokenAfterFirst(token: string | null): string | null {
+  const [first, setFirst] = useState(token);
+  const [moved, setMoved] = useState(false);
+  if (!moved && first === null && token !== null) setFirst(token);
+  else if (!moved && first !== null && token !== first) setMoved(true);
+  return moved ? token : null;
+}
+
 function ProjectFiles({ target }: { target: ProjectPaneTarget }) {
   const { environmentId, cwd, threadRef } = target;
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
@@ -112,10 +121,14 @@ function ProjectFiles({ target }: { target: ProjectPaneTarget }) {
   const canRead = useAtomValue(environmentSession.sessionStateAtom(environmentId), (result) =>
     result._tag === "Success" ? sessionHasScope(result, AuthFilesystemReadScope) : true,
   );
-  const changesSnapshot = useAtomValue(
+  const workingTree = useAtomValue(
     workingTreeChangesAtom(vcsEnvironment.status({ environmentId, input: { cwd } })),
   );
-  const gitChanges = workspaceChanges(changesSnapshot, cwd);
+  const gitChanges = workspaceChanges(workingTree.snapshot, cwd);
+  const turnCompletedAt = useQuietThreadShell(threadRef)?.latestRun?.completedAt ?? null;
+  const refreshToken = useTokenAfterFirst(
+    workspaceRefreshToken(workingTree.phase, gitChanges, turnCompletedAt),
+  );
   const openedPath = useRightPanelStore(
     (state) =>
       openedWorkspaceFile(selectActiveRightPanelSurface(state.byThreadKey, threadRef))
@@ -137,7 +150,7 @@ function ProjectFiles({ target }: { target: ProjectPaneTarget }) {
       selectedPath={openedPath}
       selectedPathRevealId={openedRevealId}
       onOpenFile={(relativePath) => useRightPanelStore.getState().openFile(threadRef, relativePath)}
-      workspaceMutationId={workingTreeStructureToken(gitChanges)}
+      workspaceMutationId={refreshToken}
       projectPane={{
         gitChanges,
         focusPending,

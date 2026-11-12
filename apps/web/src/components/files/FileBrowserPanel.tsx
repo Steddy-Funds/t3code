@@ -35,7 +35,7 @@ import { createFileTreeDragMentionController } from "./fileTreeDragMention";
 import { areAllDirectoriesExpanded, setAllDirectoriesExpanded } from "./fileTreeExpansion";
 import { buildFileTreePathUpdates } from "./fileTreePathReconciliation";
 import { loadFileAncestors } from "./loadFileAncestors";
-import { treeGitStatus, type WorkingTreeChangeEntry } from "./treeGitStatus";
+import { treeGitStatus, treePath, type WorkingTreeChangeEntry } from "./treeGitStatus";
 import { useDirectoryEntries } from "./useDirectoryEntries";
 import { useProjectPathSearch } from "~/state/queries";
 
@@ -104,10 +104,6 @@ function isTypingKey(event: KeyboardEvent): boolean {
     !event.altKey &&
     !event.nativeEvent.isComposing
   );
-}
-
-function treePath(entry: ProjectEntry): string {
-  return entry.kind === "directory" ? `${entry.path}/` : entry.path;
 }
 
 function RefreshFilesButton(props: { isPending: boolean; onRefresh: () => void }) {
@@ -536,13 +532,14 @@ export default function FileBrowserPanel({
       handledRevealRef.current = revealRequest;
       return;
     }
+    // The Project pane follows the opened file without closing a search the user is typing; it
+    // reveals the file once the search closes.
+    const follow = projectPane !== undefined;
+    if (follow && query.trim()) return;
     treeSelectionPathRef.current = null;
     handledRevealRef.current = revealRequest;
-    // The Project pane follows the opened file without closing a search the user is typing.
-    const follow = projectPane !== undefined;
-    if (follow && model.isSearchOpen()) return;
     revealInTree(selectedPath, selectedKind, follow);
-  }, [entryKinds, model, projectPane, revealInTree, selectedPath, selectedPathRevealId]);
+  }, [entryKinds, model, projectPane, query, revealInTree, selectedPath, selectedPathRevealId]);
 
   const focusPending = projectPane?.focusPending ?? false;
   const onTreeFocused = projectPane?.onTreeFocused;

@@ -1,6 +1,6 @@
 import type { GitStatus, GitStatusEntry } from "@pierre/trees";
 import type { ProjectEntry, VcsStatusResult } from "@t3tools/contracts";
-import { workspaceRelativeFilePath } from "@t3tools/shared/path";
+import { fileBasename, workspaceRelativeFilePath } from "@t3tools/shared/path";
 
 /**
  * What the working-tree line counts say about a path; the status carries no change kind. Untracked
@@ -41,7 +41,11 @@ export function workspaceChanges(
 ): ReadonlyArray<WorkingTreeChangeEntry> {
   if (!snapshot) return [];
   const workspacePath = workspaceRelativeFilePath(cwd, snapshot.rootPath);
-  if (workspacePath === null) return [];
+  if (workspacePath === null) {
+    // Git resolves symlinks (macOS /tmp is /private/tmp); the status came from `cwd`, so a root
+    // with its name is that same folder.
+    return fileBasename(cwd) === fileBasename(snapshot.rootPath) ? snapshot.changes : [];
+  }
   if (workspacePath === ".") return snapshot.changes;
   const prefix = `${workspacePath.replace(/\/+$/, "")}/`;
   const result: WorkingTreeChangeEntry[] = [];
@@ -53,7 +57,8 @@ export function workspaceChanges(
   return result;
 }
 
-function treePath(entry: ProjectEntry): string {
+/** Pierre's path for an entry: folders end in `/`. */
+export function treePath(entry: ProjectEntry): string {
   return entry.kind === "directory" ? `${entry.path}/` : entry.path;
 }
 

@@ -1,5 +1,6 @@
 import { useImperativeHandle, useRef, useState, useSyncExternalStore, type Ref } from "react";
 import { flushSync } from "react-dom";
+import { isGlintDialogOpen } from "../../lib/glint";
 
 import {
   onWindowControlsOverlayGeometryChange,
@@ -137,7 +138,7 @@ export function ZoomableImage({
     // Trackpad pinch arrives as a ctrlKey wheel; plain wheels pan through native overflow scrolling.
     // React's onWheel is passive and cannot stop the browser's own page zoom.
     const wheel = (event: WheelEvent) => {
-      if (!event.ctrlKey || event.deltaY === 0) return;
+      if (!event.ctrlKey || event.deltaY === 0 || isGlintDialogOpen()) return;
       event.preventDefault();
       const delta =
         event.deltaY *

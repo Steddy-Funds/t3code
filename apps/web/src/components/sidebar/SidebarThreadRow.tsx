@@ -4,6 +4,7 @@ import { ThreadTerminalStatusButton } from "../ThreadStatusIndicators";
 import { PullRequestGlyph } from "../pullRequest/pullRequestIcons";
 import { discardComposerDraft } from "../../lib/discardComposerDraft";
 import { requestCustomSnooze } from "../CustomSnoozeDialog";
+import { glintTriggerAction } from "../../lib/glint";
 import { useSupportsMultiplePullRequests } from "~/hooks/useSupportsMultiplePullRequests";
 import { useDeadlinePassed } from "~/hooks/useDeadline";
 import { resolveThreadCurrentPullRequestLink } from "@t3tools/client-runtime/thread-pull-requests";
@@ -398,8 +399,17 @@ function SnoozeMenuButton(props: {
     ? // oxlint-disable-next-line react/purity -- Presets are resolved only while the menu is open, so each opening reads a fresh time.
       resolveSnoozePresets(new Date(), timestampFormat, environmentId)
     : [];
+  // With Glint's native dialogs, the button opens the Time from now dial; the menu keeps presets.
+  const handleOpenChange = (next: boolean) => {
+    const action = next ? glintTriggerAction(triggerRef.current) : "web";
+    if (action === "web") return onOpenChange(next);
+    if (action === "close") return;
+    void requestCustomSnooze(triggerRef.current ?? undefined).then((choice) => {
+      if (choice) onSnooze(choice);
+    });
+  };
   return (
-    <Menu open={open} onOpenChange={onOpenChange}>
+    <Menu open={open} onOpenChange={handleOpenChange}>
       <Tooltip>
         <TooltipTrigger
           render={

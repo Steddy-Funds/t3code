@@ -100,6 +100,73 @@ type GlintAnchor =
       readonly height?: number;
     };
 
+interface OpenDialog {
+  readonly anchor: GlintAnchor;
+  readonly dismiss: () => void;
+  dismissed: boolean;
+}
+
+/** One dialog shows at a time: presenting another closes the one before. */
+let openDialog: OpenDialog | null = null;
+let lastCancel: { readonly anchor: GlintAnchor; readonly atMs: number } | null = null;
+
+/** How soon after the helper cancels a dialog a click on its trigger still counts as closing it. */
+export const GLINT_TRIGGER_CLOSE_MS = 400;
+
+// The two-finger touches that drive a dialog also reach this window as wheels, so scrolling,
+// swipe to reply, the history swipe and pinch would all move underneath it.
+const swallowWheel = (event: Event) => {
+  event.preventDefault();
+  event.stopImmediatePropagation();
+};
+
+/** True from present until the dialog's result, cancel, dismiss or failure. */
+export function isGlintDialogOpen(): boolean {
+  return openDialog !== null;
+}
+
+/**
+ * Called when `trigger` would open its dialog: true means close it instead. The helper cancels a
+ * dialog on any click outside it, the trigger's own included, and that cancel can land before the
+ * trigger hears the click, so a cancel just before counts as this click's close.
+ */
+function glintTriggerCloses(trigger: Element, nowMs: number = Date.now()): boolean {
+  if (openDialog?.anchor === trigger) {
+    openDialog.dismiss();
+    return true;
+  }
+  const cancel = lastCancel;
+  if (cancel?.anchor !== trigger) return false;
+  lastCancel = null;
+  return nowMs - cancel.atMs < GLINT_TRIGGER_CLOSE_MS;
+}
+
+/** What a click on a Glint trigger does: its web UI, its native dialog, or close that dialog. */
+export function glintTriggerAction(
+  trigger: Element | null,
+  nowMs: number = Date.now(),
+): "web" | "native" | "close" {
+  if (!trigger || !isGlintAvailable()) return "web";
+  return glintTriggerCloses(trigger, nowMs) ? "close" : "native";
+}
+
+function trackOpen(dialog: OpenDialog) {
+  if (!openDialog)
+    window.addEventListener("wheel", swallowWheel, { capture: true, passive: false });
+  openDialog = dialog;
+  lastCancel = null;
+}
+
+function trackClosed(dialog: OpenDialog, outcome: GlintOutcome<GlintKind>["type"]) {
+  if (openDialog !== dialog) return;
+  openDialog = null;
+  window.removeEventListener("wheel", swallowWheel, { capture: true });
+  // Only the helper's own cancel, a click outside or Esc there, races a trigger click.
+  if (outcome === "cancelled" && !dialog.dismissed) {
+    lastCancel = { anchor: dialog.anchor, atMs: Date.now() };
+  }
+}
+
 /** Opens a dialog that can be fed and heard while it is up. Anchors at an element, point or rect. */
 function openGlint<K extends GlintKind>(
   kind: K,
@@ -112,6 +179,8 @@ function openGlint<K extends GlintKind>(
     "getBoundingClientRect" in anchor
       ? (({ x, y, width, height }) => ({ x, y, width, height }))(anchor.getBoundingClientRect())
       : { x: anchor.x, y: anchor.y, width: anchor.width ?? 0, height: anchor.height ?? 0 };
+  const send: GlintDialog<K>["send"] = (message) =>
+    glint ? glint.send({ ...message, id }).catch(() => false) : Promise.resolve(false);
   const outcome = (async (): Promise<GlintOutcome<K>> => {
     if (!glint) return { type: "unavailable" };
     try {
@@ -125,10 +194,21 @@ function openGlint<K extends GlintKind>(
       return { type: "unavailable" };
     }
   })();
+  if (glint) {
+    const dialog: OpenDialog = {
+      anchor,
+      dismissed: false,
+      dismiss: () => {
+        dialog.dismissed = true;
+        void send({ type: "dismiss" });
+      },
+    };
+    trackOpen(dialog);
+    void outcome.then((settled) => trackClosed(dialog, settled.type));
+  }
   return {
     id,
-    send: (message) =>
-      glint ? glint.send({ ...message, id }).catch(() => false) : Promise.resolve(false),
+    send,
     onEvent: (listener) => glint?.onEvent(id, listener) ?? (() => {}),
     outcome,
   };

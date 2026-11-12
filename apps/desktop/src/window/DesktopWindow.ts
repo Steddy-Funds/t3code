@@ -726,10 +726,15 @@ export const make = Effect.gen(function* () {
         window.webContents.send(TRACKPAD_SCROLL_END_CHANNEL);
       }
     });
+    // While a Glint dialog is up, its two-finger touches reach this window too.
+    const unlessGlintOpen = (effect: Effect.Effect<void>) =>
+      Ref.get(desktopState.glintDialogId).pipe(
+        Effect.flatMap((id) => (id === null ? effect : Effect.void)),
+      );
     // Ctrl+wheel bypasses menus; guest contents emit their own zoom-changed event.
     window.webContents.on("zoom-changed", (_event, direction) => {
       if (window.isDestroyed()) return;
-      runFork(zoomWindow(window, direction));
+      runFork(unlessGlintOpen(zoomWindow(window, direction)));
     });
 
     window.on("page-title-updated", (event) => {
@@ -747,9 +752,16 @@ export const make = Effect.gen(function* () {
     if (environment.platform === "darwin") {
       // Mouse drivers can deliver Back/Forward as macOS swipe gestures instead of buttons.
       window.on("swipe", (_event, direction) => {
-        const history = window.webContents.navigationHistory;
-        if (direction === "left" && history.canGoBack()) history.goBack();
-        else if (direction === "right" && history.canGoForward()) history.goForward();
+        runFork(
+          unlessGlintOpen(
+            Effect.sync(() => {
+              if (window.isDestroyed()) return;
+              const history = window.webContents.navigationHistory;
+              if (direction === "left" && history.canGoBack()) history.goBack();
+              else if (direction === "right" && history.canGoForward()) history.goForward();
+            }),
+          ),
+        );
       });
       window.on("enter-full-screen", () => {
         window.webContents.send(WINDOW_FULLSCREEN_STATE_CHANNEL, true);

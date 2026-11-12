@@ -14,6 +14,7 @@ import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
+import * as DesktopState from "../app/DesktopState.ts";
 import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import * as IpcChannels from "../ipc/channels.ts";
 import * as DesktopClientSettings from "../settings/DesktopClientSettings.ts";
@@ -50,6 +51,7 @@ const make = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
   const clientSettings = yield* DesktopClientSettings.DesktopClientSettings;
   const electronWindow = yield* ElectronWindow.ElectronWindow;
+  const { glintDialogId } = yield* DesktopState.DesktopState;
   const helperRef = yield* Ref.make<GlintHelper | null>(null);
   const runFork = Effect.runForkWith(yield* Effect.context<never>());
   const log = (message: string) => void runFork(Effect.logDebug(message));
@@ -87,7 +89,10 @@ const make = Effect.gen(function* () {
       window.value.getContentBounds(),
       window.value.webContents.getZoomFactor(),
     );
-    return yield* Effect.promise(() => helper.present(input.id, input.kind, anchor, input.params));
+    yield* Ref.set(glintDialogId, input.id);
+    return yield* Effect.promise(() =>
+      helper.present(input.id, input.kind, anchor, input.params),
+    ).pipe(Effect.ensuring(Ref.update(glintDialogId, (id) => (id === input.id ? null : id))));
   });
 
   return DesktopGlint.of({

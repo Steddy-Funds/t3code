@@ -17,6 +17,8 @@ export class DesktopState extends Context.Service<
   {
     readonly backendReady: Ref.Ref<boolean>;
     readonly quitting: Ref.Ref<boolean>;
+    /** The Glint dialog on screen, whose two-finger touches the window must not act on too. */
+    readonly glintDialogId: Ref.Ref<string | null>;
     readonly primaryBackendStartup: SubscriptionRef.SubscriptionRef<PrimaryBackendStartup>;
   }
 >()("@t3tools/desktop/app/DesktopState") {}
@@ -24,6 +26,7 @@ export class DesktopState extends Context.Service<
 const make = Effect.all({
   backendReady: Ref.make(false),
   quitting: Ref.make(false),
+  glintDialogId: Ref.make<string | null>(null),
   primaryBackendStartup: SubscriptionRef.make<PrimaryBackendStartup>({ _tag: "Starting" }),
 });
 

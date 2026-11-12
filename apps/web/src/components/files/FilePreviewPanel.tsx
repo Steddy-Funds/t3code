@@ -137,6 +137,7 @@ import {
 import { CodeIntelStatusChip, LibraryCodeNotice } from "../code/CodeIntelChrome";
 import { useCodeIntelFile } from "../code/useCodeIntelFile";
 import { CodeEditorSlotContext, useCodeNavigation } from "../code/useCodeNavigation";
+import { useSemanticHighlighting } from "../code/useSemanticHighlighting";
 
 const NO_FILE_REVISION_ATOM = Atom.make(null);
 
@@ -1158,20 +1159,30 @@ export default function FilePreviewPanel({
   );
   const readOnlySource =
     file.data?.truncated === true || isHostFile || !canWriteFiles || codeIntel.libraryCode;
+  const codeIntelShown =
+    canReadFiles && attachment === undefined && showsRawText && file.data?.truncated === false;
   const codeNavigation = useCodeNavigation({
     environmentId,
     cwd,
     threadRef,
     path: previewPath,
     text: file.data?.contents ?? "",
-    shown:
-      canReadFiles && attachment === undefined && showsRawText && file.data?.truncated === false,
+    shown: codeIntelShown,
     editable: !readOnlySource,
+    intel: codeIntel,
+  });
+  const semanticHighlighting = useSemanticHighlighting({
+    environmentId,
+    cwd,
+    path: previewPath,
+    text: file.data?.contents ?? "",
+    shown: codeIntelShown,
     intel: codeIntel,
   });
   const onFilePostRender: FilePostRender = (fileContainer, instance, phase) => {
     onLineRevealPostRender(fileContainer, instance, phase);
     codeNavigation.onPostRender(fileContainer, phase);
+    semanticHighlighting.onPostRender(fileContainer, phase);
   };
   // Mounting the file read under the workspace mutation id refetches it after each mutation.
   useAtomMount(

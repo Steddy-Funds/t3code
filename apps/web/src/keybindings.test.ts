@@ -983,10 +983,12 @@ function whenVariables(node: KeybindingWhenNode | undefined, names = new Set<str
   return names;
 }
 
-const FIRST_JETBRAINS_RULE = DEFAULT_RESOLVED_KEYBINDINGS.findIndex(
-  (binding) => binding.command === "code.goToDeclaration",
-);
-const EARLIER_DEFAULTS = DEFAULT_RESOLVED_KEYBINDINGS.slice(0, FIRST_JETBRAINS_RULE);
+// What the JetBrains keymap added: its own commands, and three more shortcuts for older ones.
+const isJetBrainsRule = ({ command, shortcut }: ResolvedKeybindingsConfig[number]) =>
+  /^(code|projectPane)\.|^diff\.(nextChange|previousChange|jumpToSource)$/.test(command) ||
+  (command.startsWith("navigation.") && shortcut.altKey) ||
+  (command === "filePicker.toggle" && shortcut.key === "o");
+const EARLIER_DEFAULTS = DEFAULT_RESOLVED_KEYBINDINGS.filter((rule) => !isJetBrainsRule(rule));
 
 describe("JetBrains keymap defaults", () => {
   it("leaves every earlier default as it was wherever no focus scope holds", () => {
@@ -1195,6 +1197,23 @@ describe("JetBrains keymap defaults", () => {
         row.command,
         platform,
       );
+    }
+  });
+
+  it("keeps the older shortcut as the one a command is labelled with", () => {
+    for (const platform of PLATFORMS) {
+      for (const [command, key] of [
+        ["navigation.back", "["],
+        ["navigation.forward", "]"],
+      ] as const) {
+        assert.strictEqual(
+          shortcutLabelForCommand(DEFAULT_RESOLVED_KEYBINDINGS, command, {
+            platform,
+            context: { isDesktop: true },
+          }),
+          formatShortcutLabel(modShortcut(key), platform),
+        );
+      }
     }
   });
 

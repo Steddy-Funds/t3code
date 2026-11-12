@@ -124,6 +124,22 @@ describe("focus scope conditions", () => {
     );
   });
 
+  it("gives every listener of one key press the same scope, though focus moved between them", () => {
+    using focus = setupFocus();
+    const rules = bindings("commandPalette.toggle", "codeFocus");
+    const pressed = keydown(focus.editor);
+    expect(resolveShortcutCommand(pressed, rules, { platform: "Linux" })).toBe(
+      "commandPalette.toggle",
+    );
+
+    // An earlier listener's handler moved focus out of the code before the next one resolved.
+    vi.mocked(focusScopes.readFocusScopes).mockReturnValue(focusScopes.NO_FOCUS_SCOPES);
+    expect(resolveShortcutCommand(pressed, rules, { platform: "Linux" })).toBe(
+      "commandPalette.toggle",
+    );
+    expect(resolveShortcutCommand(keydown(focus.editor), rules, { platform: "Linux" })).toBeNull();
+  });
+
   it("preserves a scope the listener sets itself", () => {
     using focus = setupFocus();
     const rules = bindings("commandPalette.toggle", "codeFocus");

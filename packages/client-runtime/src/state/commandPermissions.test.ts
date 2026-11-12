@@ -10,6 +10,7 @@ import {
   AuthAccessReadScope,
   AuthAccessWriteScope,
   AuthEnvironmentMaintainScope,
+  AuthFilesystemReadScope,
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
   AuthPreviewOperateScope,
@@ -27,6 +28,7 @@ import {
 import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import { Atom, AtomRegistry, AsyncResult } from "effect/reactivity";
@@ -344,6 +346,26 @@ it.effect(
         yield* prepare.authorize(registry, env, input);
       }),
     ),
+);
+
+it.effect.each([
+  { scopes: [], allowed: false },
+  { scopes: [AuthOrchestrationReadScope], allowed: false },
+  { scopes: [AuthFilesystemReadScope], allowed: false },
+  { scopes: [AuthOrchestrationReadScope, AuthFilesystemReadScope], allowed: true },
+])("whole files of a turn's diff with grants [$scopes] are allowed: $allowed", ({ scopes, allowed }) =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const registry = yield* setup;
+      registry.set(sessions(env), AsyncResult.success({ ...grant(false), scopes, permissions: scopes }));
+      const contents = createCommandPermissions(
+        runtime,
+        ORCHESTRATION_V2_WS_METHODS.getTurnDiffFileContents,
+      );
+      expect(registry.get(contents.permissionAtom(env))).toBe(allowed);
+      expect(Exit.isSuccess(yield* contents.authorize(registry, env).pipe(Effect.exit))).toBe(allowed);
+    }),
+  ),
 );
 
 it.effect.each(["commit", "push", "commit_push", "create_pr", "commit_push_pr"] as const)(

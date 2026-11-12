@@ -28,7 +28,8 @@ export function SbsScrollMarks({
     <svg
       className={cn(
         // An explicit height: an absolutely placed svg otherwise takes its viewBox's proportions.
-        "sbs-scroll-marks pointer-events-none absolute top-0 h-full w-1.5",
+        // Above the sticky gutter, which the left pane's marks share an edge with.
+        "sbs-scroll-marks pointer-events-none absolute top-0 z-2 h-full w-1.5",
         side === "deletions" ? "left-0" : "right-0",
       )}
       viewBox={`0 0 1 ${rowCount}`}

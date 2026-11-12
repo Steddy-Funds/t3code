@@ -1,6 +1,6 @@
 import { parsePatchFiles } from "@pierre/diffs/utils/parsePatchFiles";
 import { RunId, TurnItemId } from "@t3tools/contracts";
-import type { ReviewNote } from "@t3tools/shared/reviewNote";
+import type { ReviewCommentThread, ReviewNote } from "@t3tools/shared/reviewNote";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
@@ -217,6 +217,42 @@ describe("anchorReviewNote", () => {
     },
   ])("is $state", ({ fileDiff, expected, overrides, shownLines }) => {
     expect(anchorReviewNote(note(overrides), fileDiff, undefined, shownLines)).toEqual(expected);
+  });
+
+  it.each([
+    {
+      state: "exact on its own lines while they still read what it quoted",
+      fileDiff: changed("2222222", ["@@ -1,4 +1,5 @@", " start", " retry()", " return", "+end"]),
+      expected: { kind: "exact", startLine: 2, endLine: 3 },
+    },
+    {
+      state: "moved where its quoted lines now occur once",
+      fileDiff: changed("2222222", ["@@ -1,3 +1,5 @@", " start", "+added", " retry()", " return"]),
+      expected: { kind: "moved", startLine: 3, endLine: 4 },
+    },
+    {
+      state: "unattached when it quoted only removed lines",
+      overrides: { excerpt: "" },
+      fileDiff: changed("2222222", ["@@ -1,3 +1,3 @@", " start", " retry()", " return"]),
+      expected: { kind: "unattached" },
+    },
+  ])("places a comment thread $state", ({ fileDiff, expected, overrides }) => {
+    const thread: ReviewCommentThread = {
+      kind: "review_comment_thread",
+      id: "ctx_1",
+      sectionId: "review-thread:ctx_1",
+      path: "src/app.ts",
+      pathBase: "diff",
+      startLine: 2,
+      endLine: 3,
+      excerpt: "retry()\nreturn",
+      excerptTruncated: false,
+      contentRevision: null,
+      comment: "Why retry?",
+      rangeLabel: "L2 to L3",
+      ...overrides,
+    };
+    expect(anchorReviewNote(thread, fileDiff)).toEqual(expected);
   });
 });
 

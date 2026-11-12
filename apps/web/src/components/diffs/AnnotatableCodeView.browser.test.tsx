@@ -1,7 +1,12 @@
 import type { CodeViewDiffItem, FileDiffMetadata, SelectedLineRange } from "@pierre/diffs";
 import { parsePatchFiles } from "@pierre/diffs/utils/parsePatchFiles";
 import { RunId, TurnItemId } from "@t3tools/contracts";
-import { type ReviewNote, reviewNoteSectionId } from "@t3tools/shared/reviewNote";
+import {
+  type ReviewCommentThread,
+  type ReviewNote,
+  reviewNoteSectionId,
+  reviewThreadSectionId,
+} from "@t3tools/shared/reviewNote";
 import { StrictMode, type ComponentProps } from "react";
 import { describe, expect, it, vi } from "vite-plus/test";
 
@@ -247,6 +252,7 @@ const notesOn = (
 ): DiffReviewNotes => ({
   placed: [{ note: reviewNote, fileKey: shown.fileKey, anchor }],
   answeredIds: new Set(),
+  conversations: new Map(),
   onDismiss: () => {},
 });
 
@@ -285,6 +291,60 @@ describe("review note replies", () => {
       expect.objectContaining({
         sectionId: reviewNoteSectionId(note.id),
         text: "Only search should retry.",
+      }),
+    ]);
+  });
+
+  it("shows a sent comment's thread on its lines, and a reply follows up that thread", async () => {
+    using _drafts = setup();
+    const shown = file("shared.ts");
+    const thread: ReviewCommentThread = {
+      kind: "review_comment_thread",
+      id: "ctx_root",
+      sectionId: reviewThreadSectionId("ctx_root"),
+      path: "shared.ts",
+      pathBase: "diff",
+      startLine: 1,
+      endLine: 1,
+      excerpt: "new",
+      excerptTruncated: false,
+      contentRevision: null,
+      comment: "Why is this shared?",
+      rangeLabel: "L1",
+    };
+    const notes = (anchor: DiffReviewNotes["placed"][number]["anchor"]): DiffReviewNotes => ({
+      ...notesOn(shown, anchor),
+      placed: [{ note: thread, fileKey: shown.fileKey, anchor }],
+      conversations: new Map([
+        [
+          thread.id,
+          [
+            {
+              kind: "reply",
+              id: TurnItemId.make("turn-item:review-reply:thread-1:abc"),
+              text: "Every caller needs it.",
+            },
+          ],
+        ],
+      ]),
+    });
+    await using screen = await render(
+      view([shown], "initial", [], undefined, notes({ kind: "exact", startLine: 1, endLine: 1 })),
+      { container },
+    );
+    await expect.element(screen.getByText("Why is this shared?")).toBeVisible();
+    await expect.element(screen.getByText("Every caller needs it.")).toBeVisible();
+    expect(container.querySelector('[data-review-entry="reply"]')?.textContent).toContain(
+      "Every caller needs it.",
+    );
+
+    await click("Reply");
+    await typeComment("Then say so in the doc comment.");
+    await screen.rerender(view([shown], "initial", [], undefined, notes({ kind: "unattached" })));
+    expect(savedComments()).toEqual([
+      expect.objectContaining({
+        sectionId: reviewThreadSectionId("ctx_root"),
+        text: "Then say so in the doc comment.",
       }),
     ]);
   });

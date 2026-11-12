@@ -575,21 +575,22 @@ const make = Effect.gen(function* () {
       : { ...tokens, revision: document.revision };
   });
 
-  // A root with nothing to open is searched once a server, not on every keystroke of a picker.
+  // Once a server, not on every keystroke of a picker.
   const seeded = new WeakSet<LanguageServerPool.LiveServer["session"]>();
 
   /**
    * tsc answers a workspace question about loaded projects alone, and loads one only when a file
-   * of it opens. Before the first question, nothing is open: a file of each chosen project is.
+   * of it opens. Before a server's first question a file of each chosen project is: a file already
+   * open may be in no project, or in one of many.
    */
   const loadProjects = Effect.fnUntraced(function* (live: LanguageServerPool.LiveServer) {
     if (live.row.id !== "typescript" || seeded.has(live.session)) return;
-    if (yield* live.session.hasOpenDocument) return;
     const files = yield* typeScriptProjects.seedFiles(live.root);
     yield* Effect.forEach(
       files,
       (file) =>
-        readDocument(live.root, file).pipe(
+        // Relative, so the read rule refuses a file outside the root, through a link too.
+        readDocument(live.root, path.relative(live.root, file)).pipe(
           Effect.flatMap((document) => live.session.withDocument(document, Effect.void)),
           Effect.ignore,
         ),

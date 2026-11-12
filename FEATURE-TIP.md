@@ -46,6 +46,7 @@ upstream; a feature can, from its own branch, when Akiva decides.
 | Claude auto-compact window per thread, in the model picker and from `delegate_task` and `t3_thread_launch` (`autoCompactWindow`)              | #75 | cabfbbb |
 | Sidebar token burn rate (tokens per minute over 5 minutes, agents included) beside the bot count; the Working shelf sorts by it               | #76 | f813ada |
 | Review comments in the diff and the file viewer: Send straight to the agent, Send N, quoted selection                                         | #78 | d4019f5 |
+| JetBrains code keys (Cmd+B, Cmd+O, F7, Alt+F7…) scoped to code, diff and project-tree focus; existing installs migrate                        | #77 | b48cc35 |
 
 Held: #38 (pods notes in the t3-orchestration skill). It edits
 `.agents/skills/t3-orchestration/`, which exists only on
@@ -70,6 +71,7 @@ The Mac runs this tip, which already has them all.
 - #73 Queued agent messages start in one turn (`mergedIntoRunId` on a run, followed by `t3_thread_wait`): the whole branch, which starts from `main`
 - #75 Per-thread auto-compact window (the `autoCompactWindow` model option on Claude): the whole branch, which starts from `main`
 - #76 Token burn rates (`subscribeTokenBurnRates`): server half only (`99713e8`)
+- #77 JetBrains keymap (new default keys, `keybindings.json` migration, Reset to default placement): the whole branch, which starts from `main`
 
 A feature that changes `apps/server`, or a contract the server reads, is
 merged there too: its branch head with `--no-ff`, never this tip.

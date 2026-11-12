@@ -49,7 +49,7 @@ import { mediaFileReference } from "@t3tools/client-runtime/media-reference";
 import { FolderTree, Globe2, WrapTextIcon } from "lucide-react";
 import { Code2, Eye, Table2 } from "lucide";
 import * as Schema from "effect/Schema";
-import { lazy, Suspense, useContext, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useContext, useEffect, useEffectEvent, useRef, useState } from "react";
 
 import { isBrowserPreviewFile, openFileInPreview } from "~/browser/openFileInPreview";
 import { useAssetUrlRefresh, useAssetUrlState } from "~/assets/assetUrls";
@@ -116,6 +116,7 @@ import { resolveCenteredFileLineScrollTop } from "./fileLineReveal";
 import { ReviewCommentBox } from "../diffs/ReviewCommentBox";
 import { ReviewNoteAnnotation } from "../diffs/ReviewNoteAnnotation";
 import {
+  keepDraftWords,
   type SendReviewComments,
   useReviewCommentDrafts,
   withQuotedSelection,
@@ -729,6 +730,20 @@ function EditableFileSurface({
       withQuotedSelection(buildReviewThreadReply({ id, thread: range, text }), selectedText),
     ownsComment: (comment) => threadSections.has(comment.sectionId),
   });
+  const replyDraft = threadReplies.annotations.find((annotation) => annotation.kind === "draft");
+  const strandedReply =
+    replyDraft && !reviewThreads.placed.some(({ thread }) => thread.id === replyDraft.range.id)
+      ? replyDraft
+      : null;
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- a reply whose thread left the file (its lines changed) keeps its words in the composer's draft store
+  useEffect(() => {
+    if (strandedReply) keepDraftWords(threadReplies, strandedReply.text);
+  }, [strandedReply, threadReplies]);
+  const keepOpenReplyWords = useEffectEvent(() => {
+    if (replyDraft && !replyDraft.sending) keepDraftWords(threadReplies, replyDraft.text);
+  });
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- the file closes or another opens with a reply open; its words go to the composer's draft store
+  useEffect(() => () => keepOpenReplyWords(), []);
   const repliesIn = (threadId: string) =>
     threadReplies.annotations.filter((annotation) =>
       annotation.kind === "draft"

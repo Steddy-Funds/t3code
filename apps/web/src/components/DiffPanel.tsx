@@ -1246,7 +1246,10 @@ export default function DiffPanel({
             <TooltipPopup side="top">{sendCommentsLabel} to the agent</TooltipPopup>
           </Tooltip>
         ) : null}
-        {reviewNotes.toolbar ? <ReviewNotesToolbar {...reviewNotes.toolbar} /> : null}
+        {/* Side by side draws no review notes yet, so their stepper would move nothing. */}
+        {reviewNotes.toolbar && !sideBySide ? (
+          <ReviewNotesToolbar {...reviewNotes.toolbar} />
+        ) : null}
         {codeViewFiles.length > 0 || (isGitSelection && selectedGitSource?.files?.length) ? (
           <DiffStatLabel
             additions={diffLineStat.additions}

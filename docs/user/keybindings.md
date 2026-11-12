@@ -86,13 +86,13 @@ keyboard is in. That one is the `diff.find` command, which you can rebind.
 
 Code navigation, the side-by-side diff, and the Project pane use the shortcuts of JetBrains
 IDEs. Each runs only where it applies, and the key keeps its other command everywhere else:
-`mod+b` goes to a declaration while the keyboard is in code, and toggles the sidebar anywhere
-else. The features are described in [Code and the Project pane](./code.md) and
-[Side-by-side diff](./source-control.md#side-by-side-diff).
+`mod+b` goes to a declaration while the keyboard is in code or a turn's side-by-side diff, and
+toggles the sidebar anywhere else. The features are described in
+[Code and the Project pane](./code.md) and [Side-by-side diff](./source-control.md#side-by-side-diff).
 
 | Shortcut                                     | Command                                  | Runs while the keyboard is in        |
 | -------------------------------------------- | ---------------------------------------- | ------------------------------------ |
-| `mod+b`                                      | Go to Declaration or Usages              | code                                 |
+| `mod+b`                                      | Go to Declaration or Usages              | code or a turn's side-by-side diff   |
 | `mod+shift+b`                                | Go to Type Declaration                   | code                                 |
 | `mod+alt+b`                                  | Go to Implementation                     | code                                 |
 | `alt+f7`, `mod+alt+f7`                       | Find Usages                              | code                                 |
@@ -107,7 +107,7 @@ else. The features are described in [Code and the Project pane](./code.md) and
 | `mod+f12`                                    | File Structure                           | code                                 |
 | `ctrl+shift+arrowdown`, `ctrl+shift+arrowup` | Next Method, Previous Method             | code                                 |
 | `f7`, `shift+f7`                             | Next Change, Previous Change             | a side-by-side diff                  |
-| `f4`, `mod+arrowdown`                        | Jump to Source                           | a side-by-side diff                  |
+| `f4`, `mod+arrowdown`                        | Jump to Source                           | a turn's side-by-side diff           |
 | `mod+f`                                      | Find in that side of the diff            | a side-by-side diff                  |
 | `mod+1`                                      | Show the Project pane, or return to code | code or the Project pane, on desktop |
 | `alt+f1`                                     | Select Opened File in the Project pane   | code                                 |

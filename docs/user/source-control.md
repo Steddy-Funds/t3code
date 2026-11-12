@@ -22,14 +22,20 @@ setting in **Settings → Diffs**.
 
 ### Side-by-side diff
 
-On web and desktop, choose the side-by-side layout in the Diff pane's toolbar, or **Side by side**
-in **Settings → Diffs → Diff layout**, to compare one file at a time as two whole files: the old
-version on the left, the new one on the right, scrolling together. Unchanged stretches fold; click
-a fold to open it.
+On web and desktop, choose the side-by-side layout in the toolbar of the Diff pane or a pull
+request's **Code** tab, or **Side by side** in **Settings → Diffs → Diff layout**, to compare one
+file at a time as two whole files: the old version on the left, the new one on the right,
+scrolling together. Unchanged stretches fold; click a fold to open it.
 
 With the keyboard in a pane, `F7` and `Shift+F7` step through the changes. Past the last one, the
-next press opens the next file. `F4` or `Cmd/Ctrl+Down` opens the file at that line, and
-`Cmd/Ctrl+F` finds in that pane. A selection, and `Cmd/Ctrl+A`, stay in one pane.
+next press opens the next file. `Cmd/Ctrl+F` finds in that pane. A selection, and `Cmd/Ctrl+A`,
+stay in one pane.
+
+In the Diff pane, `F4` or `Cmd/Ctrl+Down` opens the file at that line. `Cmd/Ctrl+click` a name, or
+put the caret on it and press `Cmd/Ctrl+B`, to go to its declaration as in an
+[open file](./code.md#code-navigation). That works on the file as it is on disk: on the old side,
+or in a turn's diff of a file changed since, choose **Open file** instead. A pull request's
+**Code** tab doesn't open files, and a comment there starts from lines picked in the gutter.
 
 A panel too narrow for two files shows your stacked or split layout until you widen or maximize
 it. A file over 1 MB offers **Show changed lines only**, and a connection that can't read files

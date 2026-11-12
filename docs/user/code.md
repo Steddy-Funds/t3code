@@ -32,7 +32,8 @@ are none.
 
 ## Code navigation
 
-Python and TypeScript or JavaScript files in the file viewer can be navigated. The environment's
+Python and TypeScript or JavaScript files in the file viewer can be navigated, and so can a turn's
+[side-by-side diff](./source-control.md#side-by-side-diff). The environment's
 server must support code intelligence; on an older server, update it. TypeScript works out of the
 box. For Python, choose the **ty** chip at the top of the file and **Install ty**.
 

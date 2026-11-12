@@ -574,7 +574,7 @@ const make = Effect.gen(function* () {
     );
   });
 
-  /** The languages a workspace-wide question goes to: the running ones, else the ones the root shows. */
+  /** The languages a workspace-wide question goes to: the running ones and the ones the root shows. */
   const workspaceRows = Effect.fnUntraced(function* (root: string, languageId: string | undefined) {
     if (languageId !== undefined) {
       const row = languageRow(languageId);
@@ -586,7 +586,9 @@ const make = Effect.gen(function* () {
     const running = snapshots
       .filter(({ state }) => state === "starting" || state === "indexing" || state === "ready")
       .map(({ row }) => row);
-    return running.length > 0 ? running : yield* detectRows(root);
+    if (running.length === LANGUAGE_ROWS.length) return running;
+    const detected = yield* detectRows(root);
+    return LANGUAGE_ROWS.filter((row) => running.includes(row) || detected.includes(row));
   });
 
   const workspaceSymbols: CodeIntel["Service"]["workspaceSymbols"] = Effect.fn(

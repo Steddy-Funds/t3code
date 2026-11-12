@@ -836,19 +836,25 @@ describe("CodeIntel", () => {
       ),
     );
 
-    it.effect("asks only the servers already running when there are some", () =>
+    it.effect("asks the languages the root shows, not only the one already running", () =>
       inScenario({}, (s) =>
         Effect.gen(function* () {
           const codeIntel = yield* CodeIntel.CodeIntel;
+          const python = s.recordFile("python");
           const typescript = s.recordFile("typescript");
-          s.flagsByLanguage.set("typescript", [`--record=${typescript}`]);
-          const cwd = yield* makeWorkspace({ "a.py": "def alpha\n", "b.ts": "def alpha\n" });
+          s.flagsByLanguage.set("python", [`--record=${python}`, "--extensions=py"]);
+          s.flagsByLanguage.set("typescript", [`--record=${typescript}`, "--extensions=ts"]);
+          const cwd = yield* makeWorkspace({ "a.py": "def alpha_py\n", "b.ts": "def alpha_ts\n" });
 
-          yield* hoverAt(cwd, "a.py");
+          yield* hoverAt(cwd, "b.ts");
           const result = yield* codeIntel.workspaceSymbols({ cwd, query: "alpha", limit: 10 });
 
-          expect(result.symbols.length).toBeGreaterThan(0);
-          expect(noWorkspaceStarted(typescript)).toBe(true);
+          expect(result.symbols.map((symbol) => symbol.name).toSorted()).toEqual([
+            "alpha_py",
+            "alpha_ts",
+          ]);
+          expect(startedPids(python)).toHaveLength(1);
+          expect(startedPids(typescript)).toHaveLength(1);
         }),
       ),
     );

@@ -25,8 +25,6 @@ export interface LanguageRow {
   readonly watches: (fileName: string) => boolean;
   /** A changed file that means third-party code moved: the server restarts. */
   readonly restartsOn: (fileName: string) => boolean;
-  /** The server ranks fuzzily; exact and prefix matches are moved first. */
-  readonly rerankWorkspaceSymbols: boolean;
 }
 
 const hasExtension = (fileName: string, extensions: ReadonlyArray<string>) =>
@@ -56,7 +54,6 @@ const python: LanguageRow = {
     fileName === "pyproject.toml" ||
     fileName === "pyrightconfig.json" ||
     /^requirements.*\.txt$/.test(fileName),
-  rerankWorkspaceSymbols: true,
 };
 
 // Type acquisition installs packages from npm; both switches are answered because an
@@ -96,7 +93,6 @@ const typescript: LanguageRow = {
     fileName === "yarn.lock" ||
     fileName === "jsconfig.json" ||
     /^tsconfig.*\.json$/.test(fileName),
-  rerankWorkspaceSymbols: false,
 };
 
 export const LANGUAGE_ROWS: ReadonlyArray<LanguageRow> = [python, typescript];

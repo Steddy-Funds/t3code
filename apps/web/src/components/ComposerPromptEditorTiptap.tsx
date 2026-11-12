@@ -110,7 +110,7 @@ import {
   markAsClipboardEdit,
 } from "~/composer-undo-grouping";
 import { collectInlineContextIds } from "~/lib/composerContextReferences";
-import { resolveDiffThemeName } from "~/lib/diffRendering";
+import { getDiffThemeName } from "~/hooks/useDiffThemeName";
 import { cn, isMacPlatform } from "~/lib/utils";
 import { basenameOfPath } from "~/pierre-icons";
 import { WorkspaceEntryTooltip } from "./chat/WorkspaceEntryIcon";
@@ -842,7 +842,7 @@ function createComposerExtensions(richText: boolean) {
           }),
           composerCodeBlockHighlight({
             resolveTheme: () =>
-              resolveDiffThemeName(
+              getDiffThemeName(
                 document.documentElement.classList.contains("dark") ? "dark" : "light",
               ),
           }),

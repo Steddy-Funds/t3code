@@ -8,6 +8,7 @@ import { mixThemePreviewBase, THEME_PREVIEW_RENDER_SPECS } from "@t3tools/shared
 import { SymbolView } from "../../../../components/ui/AppSymbol";
 import { AppText as Text } from "../../../../components/ui/AppText";
 import {
+  getMobileThemeAppearances,
   getMobileThemePreviewColors,
   MOBILE_THEME_OPTIONS,
   type MobileThemeAppearance,
@@ -122,12 +123,15 @@ function ThemeCard(props: {
   readonly onSelect: (appearance: MobileThemeAppearance) => void;
   readonly themeId: MobileThemeId;
 }) {
+  const appearances = getMobileThemeAppearances(props.themeId);
+  const selectedByAppearance = { light: props.lightSelected, dark: props.darkSelected };
   const choice = (appearance: MobileThemeAppearance, selected: boolean) => (
     <Pressable
       accessibilityHint={`Sets the ${appearance} appearance only`}
       accessibilityLabel={`${props.label} ${appearance} theme`}
       accessibilityRole="button"
       accessibilityState={{ disabled: props.disabled, selected }}
+      key={appearance}
       className={cn(
         "size-[66px] items-center justify-center rounded-full border-[3px] active:scale-[0.94]",
         selected ? "border-primary" : "border-transparent",
@@ -153,20 +157,23 @@ function ThemeCard(props: {
   return (
     <View className="min-w-36 flex-1 basis-[47%] gap-3 rounded-[24px] border border-border bg-grouped-card px-2 py-4">
       <Pressable
-        accessibilityHint="Sets both light and dark appearances"
+        accessibilityHint={
+          appearances.length === 1
+            ? `Sets the ${appearances[0]} appearance`
+            : "Sets both light and dark appearances"
+        }
         accessibilityLabel={`${props.label} theme`}
         accessibilityRole="button"
         accessibilityState={{
           disabled: props.disabled,
-          selected: props.lightSelected && props.darkSelected,
+          selected: appearances.every((appearance) => selectedByAppearance[appearance]),
         }}
         className="absolute inset-0 rounded-[24px] active:bg-subtle"
         disabled={props.disabled}
         onPress={props.onSelectBoth}
       />
       <View className="flex-row items-center justify-center gap-2 py-1" pointerEvents="box-none">
-        {choice("light", props.lightSelected)}
-        {choice("dark", props.darkSelected)}
+        {appearances.map((appearance) => choice(appearance, selectedByAppearance[appearance]))}
       </View>
       <Text
         className="min-w-0 flex-1 px-1 text-lg font-t3-medium"

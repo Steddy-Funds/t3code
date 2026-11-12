@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vite-plus/test";
-import { getMobileThemeVariables, MOBILE_THEME_OPTIONS } from "./mobileTheme";
+import {
+  getMobileThemeAppearances,
+  getMobileThemeVariables,
+  MOBILE_THEME_OPTIONS,
+} from "./mobileTheme";
 import { createNativeThemeColors } from "./nativeTheme";
 
 function luminance(hex: string) {
@@ -18,7 +22,7 @@ function contrast(a: string, b: string) {
 const cases = MOBILE_THEME_OPTIONS.flatMap((theme) => {
   if (theme.id === "material-you") return [];
   const themeId = theme.id;
-  return (["light", "dark"] as const).map((appearance) => ({
+  return getMobileThemeAppearances(themeId).map((appearance) => ({
     label: theme.label,
     themeId,
     appearance,

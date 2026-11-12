@@ -53,8 +53,8 @@ function ProjectPaneLabel({ target }: { target: ProjectPaneTarget }) {
         <TooltipPopup>{target.cwd}</TooltipPopup>
       </Tooltip>
       {remoteLabel ? (
-        <Badge size="sm" variant="secondary" className="max-w-24 shrink-0 truncate">
-          {remoteLabel}
+        <Badge size="sm" variant="secondary" className="max-w-24 shrink-0">
+          <span className="truncate">{remoteLabel}</span>
         </Badge>
       ) : null}
       {readOnly ? (
@@ -66,7 +66,9 @@ function ProjectPaneLabel({ target }: { target: ProjectPaneTarget }) {
           >
             <LockIcon className="size-3.5" />
           </TooltipTrigger>
-          <TooltipPopup>Read only: this connection can browse files but not change them.</TooltipPopup>
+          <TooltipPopup>
+            Read only: this connection can browse files but not change them.
+          </TooltipPopup>
         </Tooltip>
       ) : null}
     </div>
@@ -139,7 +141,7 @@ export function SidebarModes({
   return (
     <>
       {header}
-      <div className="flex h-9 shrink-0 items-center gap-2 px-[var(--sidebar-content-inset)]">
+      <div className="flex h-9 shrink-0 items-center gap-2 px-(--sidebar-content-inset)">
         <ToggleGroup
           aria-label="Sidebar view"
           className="shrink-0"

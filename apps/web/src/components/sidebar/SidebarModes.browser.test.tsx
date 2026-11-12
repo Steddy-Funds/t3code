@@ -49,7 +49,6 @@ vi.mock("~/components/project/ProjectPane", () => ({
 function FakeProjectPane() {
   const focusPending = useProjectPaneStore((state) => state.treeFocusPending);
   const row = useRef<HTMLButtonElement>(null);
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- stands in for the tree taking a requested focus
   useEffect(() => {
     if (!focusPending) return;
     row.current?.focus();

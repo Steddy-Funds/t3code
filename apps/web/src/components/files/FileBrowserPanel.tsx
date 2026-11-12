@@ -538,6 +538,7 @@ export default function FileBrowserPanel({
     if (follow && query.trim()) return;
     treeSelectionPathRef.current = null;
     handledRevealRef.current = revealRequest;
+    // oxlint-disable-next-line react/set-state-in-effect -- a selection made outside the tree closes its search, whose text this state mirrors
     revealInTree(selectedPath, selectedKind, follow);
   }, [entryKinds, model, projectPane, query, revealInTree, selectedPath, selectedPathRevealId]);
 
@@ -556,10 +557,11 @@ export default function FileBrowserPanel({
     const selectedKind = selectedPath ? entryKinds.get(selectedPath) : undefined;
     // The selected file's folders are still loading; the reveal waits for them.
     if (selectedPath && selectedKind === undefined && loadingDirectories.size > 0) return;
-    const revealed =
-      selectedPath && selectedKind !== undefined
-        ? revealInTree(selectedPath, selectedKind, false)
-        : null;
+    let revealed: string | null = null;
+    if (selectedPath && selectedKind !== undefined) {
+      // oxlint-disable-next-line react/set-state-in-effect -- a focus request from a shortcut closes the tree's search, whose text this state mirrors
+      revealed = revealInTree(selectedPath, selectedKind, false);
+    }
     if (selectedPath && revealed)
       handledRevealRef.current = { path: selectedPath, revealId: selectedPathRevealId };
     const target =

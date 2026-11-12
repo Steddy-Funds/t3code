@@ -66,6 +66,7 @@ upstream; a feature can, from its own branch, when Akiva decides.
 | Glint dialogs own the trackpad: snooze button opens the dial, gestures pause while a dialog is up, triggers toggle                                | #96 | a8d5243 |
 | Code stitch: External Libraries, a Python environment field, the quick reference by focus, Mod+B in side-by-side diffs, user docs                 | #91 | a143e08 |
 | Sidebar branch names are plain text again (no click to copy); Copy branch stays in the thread menu                                                | #97 | 74c14e8 |
+| Burn rate flame flickers faster toward 500K/m; Machines page and machine card show burn; lineage keeps agents winding down                        | #99 | 022ce5e |
 
 Held: #38 (pods notes in the t3-orchestration skill). It edits
 `.agents/skills/t3-orchestration/`, which exists only on

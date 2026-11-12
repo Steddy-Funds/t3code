@@ -1,16 +1,25 @@
-import type { EnvironmentId, ProjectEntry } from "@t3tools/contracts";
+import {
+  type EnvironmentId,
+  type ProjectEntriesFailure,
+  type ProjectEntry,
+  ProjectListEntriesError,
+} from "@t3tools/contracts";
 import { useAtomMount, useAtomSubscribe } from "@effect/atom-react";
 import { executeAtomQuery } from "@t3tools/client-runtime/state/runtime";
 import * as Cause from "effect/Cause";
+import * as Schema from "effect/Schema";
 import { useEffect, useRef, useState } from "react";
 
 import { environmentCatalog } from "~/connection/catalog";
 import { appAtomRegistry } from "~/rpc/atomRegistry";
 import { projectEnvironment } from "~/state/projects";
 
+const isProjectListEntriesError = Schema.is(ProjectListEntriesError);
+
 export function useDirectoryEntries(environmentId: EnvironmentId, cwd: string) {
   const [directories, setDirectories] = useState(new Map<string, readonly ProjectEntry[]>());
   const [errors, setErrors] = useState(new Map<string, string>());
+  const [rootFailure, setRootFailure] = useState<ProjectEntriesFailure | null>(null);
   const [pending, setPending] = useState(1);
   const [loadingDirectories, setLoadingDirectories] = useState<ReadonlySet<string>>(
     () => new Set([""]),
@@ -59,9 +68,12 @@ export function useDirectoryEntries(environmentId: EnvironmentId, cwd: string) {
             next.delete(directoryPath);
             return next;
           });
+          if (directoryPath === "") setRootFailure(null);
         } else {
           loaded.current.delete(directoryPath);
           const cause = Cause.squash(result.cause);
+          if (directoryPath === "")
+            setRootFailure(isProjectListEntriesError(cause) ? (cause.failure ?? null) : null);
           setErrors((previous) =>
             new Map(previous).set(
               directoryPath,
@@ -153,5 +165,7 @@ export function useDirectoryEntries(environmentId: EnvironmentId, cwd: string) {
     loadingDirectories,
     ready: directories.has(""),
     error: [...errors].find(([path]) => reachableDirectories.has(path))?.[1] ?? null,
+    /** Why the workspace root itself could not be listed, when the server said. */
+    rootFailure: errors.has("") ? rootFailure : null,
   };
 }

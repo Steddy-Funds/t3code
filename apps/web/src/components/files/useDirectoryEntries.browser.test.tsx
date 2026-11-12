@@ -3,7 +3,7 @@ import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import { AsyncResult, Atom } from "effect/reactivity";
 import { appAtomRegistry } from "~/rpc/atomRegistry";
-import { EnvironmentId, type ProjectEntry } from "@t3tools/contracts";
+import { EnvironmentId, type ProjectEntry, ProjectListEntriesError } from "@t3tools/contracts";
 import { useEffect } from "react";
 import { act, render } from "../../../test/render";
 import { expect, it, vi } from "vite-plus/test";
@@ -12,6 +12,7 @@ const { listEntries, mocks } = vi.hoisted(() => ({
   listEntries: vi.fn(),
   mocks: {
     reconnect: false,
+    failure: null as Error | null,
     reachable: null as unknown as Atom.Writable<boolean>,
     connectedSession: null as unknown as Atom.Writable<number>,
   },
@@ -31,7 +32,9 @@ vi.mock("~/state/projects", () => ({
                   entries: [{ path: "README.md", kind: "file" }],
                   truncated: false,
                 })
-              : AsyncResult.failure(Cause.fail(new Error("Environment is reconnecting."))),
+              : AsyncResult.failure(
+                  Cause.fail(mocks.failure ?? new Error("Environment is reconnecting.")),
+                ),
           )
         : Atom.make(Effect.promise(() => listEntries(request))),
   },
@@ -41,6 +44,7 @@ import { useDirectoryEntries } from "./useDirectoryEntries";
 
 function setup() {
   mocks.reconnect = false;
+  mocks.failure = null;
   mocks.reachable = Atom.make(false);
   mocks.connectedSession = Atom.make(1);
   let view!: ReturnType<typeof useDirectoryEntries>;
@@ -193,7 +197,10 @@ it("does not start a queued follow-up after unmount", async () => {
 function ReconnectProbe() {
   const directory = useDirectoryEntries(EnvironmentId.make("env-files"), "/repo");
   return (
-    <output>{directory.error ?? directory.entries.map((entry) => entry.path).join(",")}</output>
+    <>
+      <output>{directory.error ?? directory.entries.map((entry) => entry.path).join(",")}</output>
+      <output aria-label="Root failure">{directory.rootFailure ?? "none"}</output>
+    </>
   );
 }
 
@@ -213,4 +220,28 @@ it("reads a folder that failed while unreachable again once a new session is up"
     appAtomRegistry.set(mocks.connectedSession, 2);
   });
   await expect.element(screen.getByText("README.md")).toBeInTheDocument();
+});
+
+it("says why the workspace root could not be listed until a listing succeeds", async () => {
+  setup();
+  mocks.reconnect = true;
+  mocks.failure = new ProjectListEntriesError({
+    cwd: "/repo",
+    failure: "workspace_root_not_found",
+  });
+  await using screen = await render(
+    <RegistryContext.Provider value={appAtomRegistry}>
+      <ReconnectProbe />
+    </RegistryContext.Provider>,
+    // The hook probe does not navigate.
+    { router: false },
+  );
+  const rootFailure = screen.getByLabelText("Root failure");
+  await expect.element(rootFailure).toHaveTextContent("workspace_root_not_found");
+  await act(() => {
+    appAtomRegistry.set(mocks.reachable, true);
+    appAtomRegistry.set(mocks.connectedSession, 2);
+  });
+  await expect.element(screen.getByText("README.md")).toBeInTheDocument();
+  await expect.element(rootFailure).toHaveTextContent("none");
 });

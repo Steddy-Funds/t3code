@@ -48,8 +48,9 @@ describe("findDiffMoves", () => {
     const indented = PARSE.map((line) => `    ${line}`);
     const moves = findDiffMoves([
       file("importer.py", [run(1, [...AMOUNT, "", ...PARSE], 0)], []),
-      file("parsers/amounts.py", [], [run(5, AMOUNT, 0)]),
-      file("parsers/dates.py", [], [run(9, indented, 0)]),
+      // Both pieces carry the blank line between them.
+      file("parsers/amounts.py", [], [run(5, [...AMOUNT, ""], 0)]),
+      file("parsers/dates.py", [], [run(8, ["", ...indented], 0)]),
     ]);
     expect(moves.map((move) => [move.from.startLine, move.from.endLine, move.to.path])).toEqual([
       [1, 3, "parsers/amounts.py"],
@@ -62,7 +63,7 @@ describe("findDiffMoves", () => {
     expect(findDiffMoves([file("a.py", [run(10, PARSE, 0)], [run(10, indented, 0)])])).toEqual([]);
   });
 
-  it("leaves out blocks too small to mean anything, and a block that fits two places", () => {
+  it("leaves out blocks too small to mean anything, a block that fits two places, and huge diffs", () => {
     const braces = ["}", "", "}"];
     expect(
       findDiffMoves([file("a.ts", [run(1, braces, 0)], []), file("b.ts", [], [run(1, braces, 0)])]),
@@ -80,6 +81,20 @@ describe("findDiffMoves", () => {
         file("b.py", [run(1, PARSE, 0)], []),
         file("c.py", [], [run(1, PARSE, 0)]),
         file("d.py", [], [run(1, PARSE, 0)]),
+      ]),
+    ).toEqual([]);
+    expect(
+      findDiffMoves([
+        file("a.py", [run(1, ["", ...PARSE], 0)], []),
+        file("b.py", [], [run(1, ["", ...PARSE], 0)]),
+        file("c.py", [], [run(1, PARSE, 0)]),
+      ]),
+    ).toEqual([]);
+    const filler = Array.from({ length: 20_000 }, (_, index) => `generated_${index} = ${index}`);
+    expect(
+      findDiffMoves([
+        file("a.py", [run(1, [...PARSE, ...filler], 0)], []),
+        file("b.py", [], [run(1, PARSE, 0)]),
       ]),
     ).toEqual([]);
   });

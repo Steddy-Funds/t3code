@@ -232,7 +232,9 @@ export const make = Effect.fn("LanguageServerBinaries.make")(function* (
   const locateTypeScript =
     options.locateTypeScript ??
     ((): BundledTypeScript => {
-      const manifestPath = requireFromServer.resolve("typescript/package.json");
+      // An alias, with `typescript` itself a 6 dev dependency: pnpm matches vite-plus's peer by
+      // package name, and a 7 there makes a second vite-plus variant with its own vitest.
+      const manifestPath = requireFromServer.resolve("typescript-lsp/package.json");
       // The package's own resolver finds `@typescript/typescript-<platform>-<arch>`. It is not in
       // the package's exports, so it is loaded by path.
       const getExePath = requireFromServer(

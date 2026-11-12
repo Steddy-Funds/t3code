@@ -25,7 +25,7 @@ const CLI_RUNTIME_EXTERNAL_PREFIXES = [
 
 // Its getExePath.js finds the platform binary beside the package on disk. An exact name, so
 // typescript-legacy and the other typescript-* packages stay bundled.
-const TYPESCRIPT_RUNTIME_PACKAGE = "typescript";
+const TYPESCRIPT_RUNTIME_PACKAGE = "typescript-lsp";
 
 // Match Cursor dependency boundaries so zod does not externalize zod-to-json-schema.
 const CURSOR_RUNTIME_DEPENDENCIES = [

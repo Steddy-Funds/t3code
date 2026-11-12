@@ -747,8 +747,10 @@ function EditableFileSurface({
     onAttach: (editor) => {
       editorRef.current = editor;
       setCodeEditor?.(editor);
+      const wasFocused = editorFocusedRef.current;
+      editorFocusedRef.current = false;
       const focused = document.activeElement;
-      if (editorFocusedRef.current && (focused === null || focused === document.body)) {
+      if (wasFocused && (focused === null || focused === document.body)) {
         editor.focus({ preventScroll: true, lineNumber: "first-visible" });
       }
     },

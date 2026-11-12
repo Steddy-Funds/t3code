@@ -206,6 +206,8 @@ export function CodeIntelStatusChip(props: {
           ) : null}
           {server.languageId === "python" && canWriteSettings && !turnedOff ? (
             <PythonEnvironmentField
+              // Settings can load after the popover opens; a stale draft would unset them.
+              key={savedEnvironment}
               saved={savedEnvironment}
               detected={server.interpreter?.path}
               busy={pending !== null}

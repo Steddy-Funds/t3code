@@ -53,17 +53,25 @@ const makeThreads = (shells: Record<string, Record<string, unknown>> = {}): Thre
   runEnded: Deferred.makeUnsafe<void>(),
   deleted: Deferred.makeUnsafe<string>(),
 });
-/** An idle auto-buckets thread in the scratch project. */
+/** An auto-buckets thread in the scratch project whose run completed. */
 const bucketsThread = (id: string, overrides: Record<string, unknown> = {}) => ({
   id,
   projectId: SCRATCH,
+  status: "completed",
   activeRunId: null,
+  lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: id },
   tags: ["backgrounded", "machine-buckets"],
+  pendingRuntimeRequest: null,
+  loadPause: null,
+  limitRecovery: null,
   pinnedAt: null,
+  archivedAt: null,
   latestUserAuthoredMessageAt: null,
   deletedAt: null,
   ...overrides,
 });
+const withWorking = (shell: Record<string, unknown>, working: ReadonlySet<string>) =>
+  working.has(shell.id as string) ? { ...shell, status: "running", activeRunId: "run:1" } : shell;
 
 /** The service, recording every thread command in order; threads in `working` are mid-run. */
 const serviceLayer = (
@@ -100,17 +108,16 @@ const serviceLayer = (
       waitForThread: () =>
         Deferred.await(threads.runEnded).pipe(Effect.as({ timedOut: false } as never)),
       getThreadShell: (threadId) =>
-        Effect.succeed({
-          ...threads.shells.get(threadId),
-          activeRunId: working.has(threadId) ? "run:1" : null,
-        } as never),
-      listProjectThreads: () =>
         Effect.succeed(
-          [...threads.shells.values()].map((shell) => ({
-            ...shell,
-            activeRunId: working.has(shell.id as string) ? "run:1" : null,
-          })) as never,
+          withWorking(
+            { id: threadId, activeRunId: null, ...threads.shells.get(threadId) },
+            working,
+          ) as never,
         ),
+      getShellSnapshot: () =>
+        Effect.succeed({
+          threads: [...threads.shells.values()].map((shell) => withWorking(shell, working)),
+        } as never),
     }),
     Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
       namedProjectsRoot: "/projects",
@@ -623,15 +630,54 @@ it.effect("sweeps finished auto-buckets threads left behind, at startup and befo
         working.add("thread:running");
         yield* service.ensureBuiltInTasks(settings({ providers: true }));
         yield* service.triggerLoad(BUILT_IN, "1000");
-        assert.sameMembers([...new Set(deletes(commands))], ["thread:stale", "thread:stale-later"]);
+        assert.sameMembers(
+          [...new Set(deletes(commands))],
+          ["thread:stale", "thread:failed", "thread:stale-later"],
+        );
       }),
     undefined,
     undefined,
     makeThreads({
       "thread:stale": bucketsThread("thread:stale"),
+      "thread:failed": bucketsThread("thread:failed", { status: "failed" }),
+      // A user's Stop and a load pause both leave the run interrupted.
+      "thread:interrupted": bucketsThread("thread:interrupted", { status: "interrupted" }),
+      "thread:load-paused": bucketsThread("thread:load-paused", {
+        status: "interrupted",
+        loadPause: { pausedAt: "2026-11-12T00:00:00Z" },
+      }),
+      "thread:limit-recovery": bucketsThread("thread:limit-recovery", {
+        status: "failed",
+        limitRecovery: { resumeAt: "2026-11-12T00:00:00Z" },
+      }),
+      "thread:queued": bucketsThread("thread:queued", { status: "queued" }),
+      "thread:asking": bucketsThread("thread:asking", {
+        status: "waiting",
+        pendingRuntimeRequest: { id: "request:1" },
+      }),
       "thread:pinned": bucketsThread("thread:pinned", { pinnedAt: "2026-11-12T00:00:00Z" }),
+      "thread:archived": bucketsThread("thread:archived", { archivedAt: "2026-11-12T00:00:00Z" }),
       "thread:user-wrote": bucketsThread("thread:user-wrote", {
         latestUserAuthoredMessageAt: "2026-11-12T00:00:00Z",
+      }),
+      "thread:side-chatted": bucketsThread("thread:side-chatted"),
+      "thread:side-chat": bucketsThread("thread:side-chat", {
+        tags: [],
+        lineage: {
+          parentThreadId: "thread:side-chatted",
+          relationshipToParent: "fork",
+          rootThreadId: "thread:side-chatted",
+          sideChat: true,
+        },
+      }),
+      // Tags carry over to a fork, so the fork is tagged too.
+      "thread:forked": bucketsThread("thread:forked"),
+      "thread:fork": bucketsThread("thread:fork", {
+        lineage: {
+          parentThreadId: "thread:forked",
+          relationshipToParent: "fork",
+          rootThreadId: "thread:forked",
+        },
       }),
       "thread:untagged": bucketsThread("thread:untagged", { tags: ["backgrounded"] }),
       "thread:elsewhere": bucketsThread("thread:elsewhere", {

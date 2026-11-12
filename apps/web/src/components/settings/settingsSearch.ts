@@ -471,7 +471,7 @@ export const SETTINGS_SEARCH_ITEMS = [
     id: "native-trackpad-dialogs",
     title: "Native trackpad dialogs (macOS, experimental)",
     to: "/settings/labs",
-    searchTerms: ["beta glint native dialog trackpad dial snooze model picker colour color helper"],
+    searchTerms: ["beta glint native dialog trackpad dial snooze model picker color color helper"],
     desktopOnly: true,
     macOnly: true,
   },

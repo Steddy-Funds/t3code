@@ -103,7 +103,7 @@ export function useComposerMenuItems({
     readonly modelOptionsByInstance: ReadonlyMap<ProviderInstanceId, ReadonlyArray<ModelEsque>>;
   };
 }) {
-  // Glint's native colour die; there is no web picker to fall back to.
+  // Glint's native color die; there is no web picker to fall back to.
   const colorPickerAvailable =
     useClientSettings((settings) => settings.glintEnabled) &&
     window.desktopBridge?.glint !== undefined;
@@ -268,7 +268,7 @@ export function useComposerMenuItems({
                 type: "slash-command",
                 command: "color",
                 label: "/color",
-                description: "Pick a colour and insert its hex code",
+                description: "Pick a color and insert its hex code",
               },
             ] as const)
           : []),

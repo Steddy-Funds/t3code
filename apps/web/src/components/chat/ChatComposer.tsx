@@ -1848,12 +1848,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     };
   };
 
-  /** `/color`: Glint's colour die inserts `#RRGGBB` at the cursor, or copies it. */
+  /** `/color`: Glint's color die inserts `#RRGGBB` at the cursor, or copies it. */
   const insertPickedColor = async (anchor: Element) => {
     const outcome = await presentGlint("color", anchor, {});
     if (outcome.type === "cancelled") return;
     if (outcome.type === "unavailable") {
-      toastManager.add({ type: "warning", title: "The native colour picker is unavailable" });
+      toastManager.add({ type: "warning", title: "The native color picker is unavailable" });
       return;
     }
     const { hex, action } = outcome.value;

@@ -45,7 +45,7 @@ function blockBounds(doc: ProseMirrorNode, from: number, to: number) {
   };
 }
 
-/** A colour swatch before each `#RRGGBB` in the draft, while `isEnabled` says so. */
+/** A color swatch before each `#RRGGBB` in the draft, while `isEnabled` says so. */
 export function composerColorChips(options: { readonly isEnabled: () => boolean }): Extension {
   const full = (doc: ProseMirrorNode): ChipState => {
     const enabled = options.isEnabled();

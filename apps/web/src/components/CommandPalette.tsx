@@ -55,6 +55,8 @@ import {
 import { useLocation, useNavigate } from "@tanstack/react-router";
 import {
   ArrowLeftIcon,
+  AtSignIcon,
+  BoxIcon,
   BugIcon,
   ChartNoAxesColumnIcon,
   CheckIcon,
@@ -65,6 +67,7 @@ import {
   FolderGit2Icon,
   FolderIcon,
   FolderPlusIcon,
+  HistoryIcon,
   MessageSquareDashedIcon,
   LinkIcon,
   MessageSquareIcon,
@@ -215,6 +218,8 @@ import {
   getEnvironmentBrowsePlatform,
   remoteProjectInputPlaceholder,
   reduceCommandPaletteSearchState,
+  type ChildSearchMode,
+  escapeGoesBack,
   type SearchOverlayMode,
 } from "./CommandPalette.logic";
 import { resolveEnvironmentOptionLabel } from "./BranchToolbar.logic";
@@ -247,6 +252,11 @@ import {
 import { EnvironmentMachineIcon } from "./EnvironmentMachineIcon";
 import { Checkbox } from "./ui/checkbox";
 import { ProjectFilePicker } from "./files/ProjectFilePicker";
+import { useCodeSymbolCommands, useCodeSymbolsAvailable } from "./code/pickers/codeSymbolCommands";
+import { FileStructurePicker } from "./code/pickers/FileStructurePicker";
+import { RecentFilesPicker } from "./code/pickers/RecentFilesPicker";
+import { WorkspaceSymbolPicker } from "./code/pickers/WorkspaceSymbolPicker";
+import { useActiveProjectTarget } from "../hooks/useActiveProjectTarget";
 import { openLinkPullRequestDialog } from "./pullRequest/LinkPullRequestDialog";
 import { canShareWithGuestAtom } from "./chat/guestShareAvailability";
 import { openGuestShareDialog } from "./chat/guestShareDialogState";
@@ -303,7 +313,7 @@ export function CommandPalette({ children }: { children: ReactNode }) {
   useCommandPaletteMount();
   const state = useCommandPaletteStore();
   const setOpen = (open: boolean) => dispatchCommandPalette({ _tag: "SetOpen", open });
-  const openChildSearch = (mode: "files" | "content", context: CommandPaletteReturnContext) =>
+  const openChildSearch = (mode: ChildSearchMode, context: CommandPaletteReturnContext) =>
     dispatchCommandPalette({ _tag: "OpenChildSearch", mode, context });
   const composerHandleRef = useRef<ChatComposerHandle | null>(null);
 
@@ -312,7 +322,7 @@ export function CommandPalette({ children }: { children: ReactNode }) {
       <CommandDialog
         open={state.open}
         onOpenChange={(open, eventDetails) => {
-          if (!open && eventDetails.reason === "escape-key" && state.mode !== "command") {
+          if (!open && eventDetails.reason === "escape-key" && escapeGoesBack(state)) {
             eventDetails.cancel();
             dispatchCommandPalette({ _tag: "BackToCommand" });
             return;
@@ -323,8 +333,10 @@ export function CommandPalette({ children }: { children: ReactNode }) {
         <div className="contents" inert={state.open}>
           {children}
         </div>
+        <CodeSymbolShortcuts />
         <CommandPaletteDialog
           mode={state.mode}
+          escapeLabel={escapeGoesBack(state) ? "Back" : "Close"}
           session={state.session}
           openIntent={state.openIntent}
           setOpen={setOpen}
@@ -336,28 +348,36 @@ export function CommandPalette({ children }: { children: ReactNode }) {
   );
 }
 
+/** Mounted with the palette; kept apart so the active project it follows re-renders only this. */
+function CodeSymbolShortcuts() {
+  useCodeSymbolCommands(useActiveProjectTarget());
+  return null;
+}
+
+const MODE_LABELS: Record<SearchOverlayMode, string> = {
+  command: "Command palette",
+  files: "File picker",
+  content: "Search project contents",
+  classes: "Go to class",
+  symbols: "Go to symbol",
+  structure: "File structure",
+  recentFiles: "Recent files",
+};
+
 function CommandPaletteDialog(props: {
   readonly mode: SearchOverlayMode;
+  readonly escapeLabel: "Back" | "Close";
   readonly session: number;
   readonly openIntent: CommandPaletteOpenIntent | null;
   readonly setOpen: (open: boolean) => void;
-  readonly openChildSearch: (
-    mode: "files" | "content",
-    context: CommandPaletteReturnContext,
-  ) => void;
+  readonly openChildSearch: (mode: ChildSearchMode, context: CommandPaletteReturnContext) => void;
   readonly initialContext: CommandPaletteReturnContext | undefined;
 }) {
   const composerHandleRef = useComposerHandleContext();
 
   return (
     <CommandDialogPopup
-      aria-label={
-        props.mode === "files"
-          ? "File picker"
-          : props.mode === "content"
-            ? "Search project contents"
-            : "Command palette"
-      }
+      aria-label={MODE_LABELS[props.mode]}
       className={cn("overflow-hidden", props.mode === "content" && "h-105")}
       data-command-palette="true"
       data-palette-mode={props.mode}
@@ -378,6 +398,17 @@ function CommandPaletteDialog(props: {
     >
       {props.mode === "files" ? (
         <ProjectFilePicker setOpen={props.setOpen} />
+      ) : props.mode === "classes" || props.mode === "symbols" ? (
+        <WorkspaceSymbolPicker
+          key={props.mode}
+          scope={props.mode}
+          escapeLabel={props.escapeLabel}
+          setOpen={props.setOpen}
+        />
+      ) : props.mode === "structure" ? (
+        <FileStructurePicker setOpen={props.setOpen} />
+      ) : props.mode === "recentFiles" ? (
+        <RecentFilesPicker escapeLabel={props.escapeLabel} setOpen={props.setOpen} />
       ) : props.mode === "content" ? (
         <ProjectContentSearchDialog onOpenChange={props.setOpen} />
       ) : (
@@ -396,15 +427,13 @@ function CommandPaletteDialog(props: {
 function OpenCommandPaletteDialog(props: {
   readonly openIntent: CommandPaletteOpenIntent | null;
   readonly setOpen: (open: boolean) => void;
-  readonly openChildSearch: (
-    mode: "files" | "content",
-    context: CommandPaletteReturnContext,
-  ) => void;
+  readonly openChildSearch: (mode: ChildSearchMode, context: CommandPaletteReturnContext) => void;
   readonly initialContext: CommandPaletteReturnContext | undefined;
 }) {
   const navigate = useNavigate();
   const pathname = useLocation({ select: (location) => location.pathname });
   const { openChildSearch, setOpen } = props;
+  const codeSymbolsAvailable = useCodeSymbolsAvailable(useActiveProjectTarget());
   // Keyed by palette session: the intent and restored search only seed this
   // mount, and closing must not change what the closing palette shows.
   const [initialSearch] = useState(
@@ -1525,6 +1554,47 @@ function OpenCommandPaletteDialog(props: {
       openChildSearch("files", { query, linkedThreadSearch });
     },
   });
+
+  if (codeSymbolsAvailable) {
+    actionItems.push(
+      {
+        kind: "action",
+        value: "action:go-to-class",
+        searchTerms: ["go to class", "find class", "type", "interface", "navigate class"],
+        title: "Go to class",
+        icon: <BoxIcon className={ITEM_ICON_CLASS} />,
+        keepOpen: true,
+        shortcutCommand: "code.goToClass",
+        run: async () => {
+          openChildSearch("classes", { query, linkedThreadSearch });
+        },
+      },
+      {
+        kind: "action",
+        value: "action:go-to-symbol",
+        searchTerms: ["go to symbol", "find symbol", "function", "method", "workspace symbol"],
+        title: "Go to symbol",
+        icon: <AtSignIcon className={ITEM_ICON_CLASS} />,
+        keepOpen: true,
+        shortcutCommand: "code.goToSymbol",
+        run: async () => {
+          openChildSearch("symbols", { query, linkedThreadSearch });
+        },
+      },
+      {
+        kind: "action",
+        value: "action:recent-files",
+        searchTerms: ["recent files", "recently opened", "switch file", "previous file"],
+        title: "Recent files",
+        icon: <HistoryIcon className={ITEM_ICON_CLASS} />,
+        keepOpen: true,
+        shortcutCommand: "code.recentFiles",
+        run: async () => {
+          openChildSearch("recentFiles", { query, linkedThreadSearch });
+        },
+      },
+    );
+  }
 
   actionItems.push({
     kind: "action",

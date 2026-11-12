@@ -88,6 +88,8 @@ export function scrollCommandPaletteRowIntoView(list: LegendListRef | null, rowI
 interface CommandPaletteVirtualizedResultsProps extends Omit<CommandPaletteResultsProps, "groups"> {
   rows: ReadonlyArray<CommandPaletteRow>;
   listRef: RefObject<LegendListRef | null>;
+  /** The row the list opens centred on; read when the list first has rows. */
+  initialRowIndex?: number;
 }
 
 /** Pass flat items with virtualized to Command, scroll highlights via listRef, and handle Enter for
@@ -115,7 +117,9 @@ export function CommandPaletteVirtualizedResults(props: CommandPaletteVirtualize
       <LegendList<CommandPaletteRow>
         ref={scrollRef}
         data={props.rows}
-        initialScrollOffset={0}
+        {...(props.initialRowIndex === undefined
+          ? { initialScrollOffset: 0 }
+          : { initialScrollIndex: { index: props.initialRowIndex, viewPosition: 0.5 } })}
         keyExtractor={(row) => row.key}
         getItemType={(row) => row.kind}
         extraData={props.highlightedItemValue}

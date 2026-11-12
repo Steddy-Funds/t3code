@@ -43,6 +43,7 @@ import { cn } from "../../lib/utils";
 import { serverEnvironment } from "../../state/server";
 import { useSettingsScope } from "./SettingsScopeContext";
 import { useScopedSettings, useUpdateScopedSettings } from "./useScopedSettings";
+import { snapShotUsesShiftPair } from "../code/pickers/doubleShift";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
@@ -1356,6 +1357,10 @@ export function KeybindingsSettingsPanel() {
   const shortcutQuickReferenceEnabled = useScopedSettings(
     (settings) => settings.shortcutQuickReferenceEnabled,
   );
+  const doubleShiftSearchEnabled = useScopedSettings(
+    (settings) => settings.doubleShiftSearchEnabled,
+  );
+  const snapShotTakesShift = useScopedSettings(snapShotUsesShiftPair);
   const updateSettings = useUpdateScopedSettings();
   const whenVariables = buildWhenVariableOptions();
   const { commandOptions, allRows } = useKeybindingCatalog();
@@ -1537,6 +1542,36 @@ export function KeybindingsSettingsPanel() {
                 updateSettings({ shortcutQuickReferenceEnabled: Boolean(checked) })
               }
               aria-label={searchableSetting("shortcut-quick-reference").title}
+            />
+          }
+        />
+        <SettingsRow
+          {...searchableSetting("double-shift-search")}
+          description={
+            snapShotTakesShift
+              ? "Off while SnapShot captures with both Shift keys."
+              : "Tap Shift twice, outside a text field, to search everything."
+          }
+          resetAction={
+            doubleShiftSearchEnabled !== DEFAULT_UNIFIED_SETTINGS.doubleShiftSearchEnabled ? (
+              <SettingResetButton
+                label="double Shift"
+                onClick={() =>
+                  updateSettings({
+                    doubleShiftSearchEnabled: DEFAULT_UNIFIED_SETTINGS.doubleShiftSearchEnabled,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Switch
+              checked={doubleShiftSearchEnabled && !snapShotTakesShift}
+              disabled={snapShotTakesShift}
+              onCheckedChange={(checked) =>
+                updateSettings({ doubleShiftSearchEnabled: Boolean(checked) })
+              }
+              aria-label={searchableSetting("double-shift-search").title}
             />
           }
         />

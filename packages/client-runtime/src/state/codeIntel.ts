@@ -111,7 +111,9 @@ export function createCodeIntelEnvironmentAtoms<R, E>(
     }),
     workspaceSymbols: createEnvironmentQueryAtomFamily(runtime, {
       label: "environment-data:code-intel:workspace-symbols",
-      ...POSITION_QUERY,
+      // A search typed past is cancelled on the server at once, not answered for a cache.
+      staleTimeMs: POSITION_QUERY.staleTimeMs,
+      idleTtlMs: 0,
       execute: (input: EnvironmentRpcInput<typeof WS_METHODS.codeIntelWorkspaceSymbols>) =>
         whenSupported(request(WS_METHODS.codeIntelWorkspaceSymbols, input)),
     }),

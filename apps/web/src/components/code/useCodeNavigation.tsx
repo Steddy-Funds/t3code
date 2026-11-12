@@ -647,6 +647,19 @@ export function useCodeNavigation(options: CodeNavigationOptions) {
     return position === null || path === null ? null : { path, position };
   });
 
+  const getDocument = useEffectEvent(() =>
+    path === null
+      ? null
+      : {
+          environmentId,
+          cwd,
+          path,
+          text: currentText(),
+          unsaved: getUnsavedProjectFileQueryData(environmentId, cwd, path) !== null,
+          position: currentPosition(),
+        },
+  );
+
   const releaseHighlights = useEffectEvent(() => {
     linkRef.current?.token.removeAttribute("data-code-nav-link");
     linkRef.current = null;
@@ -663,7 +676,12 @@ export function useCodeNavigation(options: CodeNavigationOptions) {
     const element = surfaceRef.current;
     if (!active || element === null) return;
     const isFocused = () => element.contains(document.activeElement);
-    const releaseViewer = registerCodeViewer({ element, threadRef, location: getLocation });
+    const releaseViewer = registerCodeViewer({
+      element,
+      threadRef,
+      location: getLocation,
+      document: getDocument,
+    });
     const handlers = Object.fromEntries(
       CODE_COMMANDS.map(([command, codeCommand]) => [
         command,

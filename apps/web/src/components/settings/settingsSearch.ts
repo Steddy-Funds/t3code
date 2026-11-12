@@ -950,6 +950,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/keybindings",
     searchTerms: ["quick reference cheat sheet hold command control overlay hints"],
   },
+  {
+    id: "double-shift-search",
+    title: "Double Shift opens the command palette",
+    to: "/settings/keybindings",
+    searchTerms: ["search everywhere shift shift tap twice jetbrains"],
+  },
   ...KEYBINDING_SEARCH_ITEMS,
   {
     id: "snap-shot-enabled",

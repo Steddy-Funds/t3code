@@ -549,6 +549,9 @@ export function useSettingsRestore(onRestored?: () => void) {
     DEFAULT_UNIFIED_SETTINGS.shortcutQuickReferenceEnabled
       ? ["Shortcut quick reference"]
       : []),
+    ...(settings.doubleShiftSearchEnabled !== DEFAULT_UNIFIED_SETTINGS.doubleShiftSearchEnabled
+      ? ["Double Shift search"]
+      : []),
     ...(settings.composerRichTextEnabled !== DEFAULT_UNIFIED_SETTINGS.composerRichTextEnabled
       ? ["Rich text composer"]
       : []),
@@ -676,6 +679,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       proactivePanelsEnabled: DEFAULT_UNIFIED_SETTINGS.proactivePanelsEnabled,
       showSkillsInSlashMenu: DEFAULT_UNIFIED_SETTINGS.showSkillsInSlashMenu,
       shortcutQuickReferenceEnabled: DEFAULT_UNIFIED_SETTINGS.shortcutQuickReferenceEnabled,
+      doubleShiftSearchEnabled: DEFAULT_UNIFIED_SETTINGS.doubleShiftSearchEnabled,
       composerRichTextEnabled: DEFAULT_UNIFIED_SETTINGS.composerRichTextEnabled,
       sendShortcut: DEFAULT_UNIFIED_SETTINGS.sendShortcut,
       swipeReplyTarget: DEFAULT_UNIFIED_SETTINGS.swipeReplyTarget,

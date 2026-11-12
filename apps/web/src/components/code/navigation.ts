@@ -1,5 +1,10 @@
 import { scopedThreadKey } from "@t3tools/client-runtime/environment";
-import type { CodeLocation, ScopedThreadRef } from "@t3tools/contracts";
+import type {
+  CodeLocation,
+  CodePosition,
+  EnvironmentId,
+  ScopedThreadRef,
+} from "@t3tools/contracts";
 import type { AnyRouter } from "@tanstack/react-router";
 
 import {
@@ -17,11 +22,23 @@ export interface NavigateToCodeLocationOptions {
   readonly pushHistory?: boolean;
 }
 
+/** The file a viewer shows, as the text it shows now. */
+export interface CodeViewerDocument {
+  readonly environmentId: EnvironmentId;
+  readonly cwd: string;
+  readonly path: string;
+  readonly text: string;
+  /** The buffer has edits not yet on disk. */
+  readonly unsaved: boolean;
+  readonly position: CodePosition | null;
+}
+
 /** A code viewer mounted in a thread's panel, so jumps know where they leave from. */
 export interface CodeViewer {
   readonly element: HTMLElement;
   readonly threadRef: ScopedThreadRef;
   readonly location: () => CodeHistoryEntry | null;
+  readonly document: () => CodeViewerDocument | null;
 }
 
 /** History is the panel's: a side chat shares its parent thread's panel. */
@@ -74,9 +91,14 @@ export function startCodeJumpExpiry(router: AnyRouter): () => void {
   return router.subscribe("onResolved", expireCodeJump);
 }
 
-function historyThreadRef(): ScopedThreadRef | null {
+/** The viewer holding focus, if any. */
+export function focusedCodeViewer(): CodeViewer | undefined {
   const focused = document.activeElement;
-  const focusedViewer = viewers.findLast((viewer) => viewer.element.contains(focused));
+  return viewers.findLast((viewer) => viewer.element.contains(focused));
+}
+
+function historyThreadRef(): ScopedThreadRef | null {
+  const focusedViewer = focusedCodeViewer();
   if (focusedViewer) return focusedViewer.threadRef;
   const { lastJump } = useCodeNavigationStore.getState();
   // Any app navigation since the jump changed the location; then back is the app's again.

@@ -753,24 +753,34 @@ describe("LanguageServerPool", () => {
       ),
     );
 
-    it.effect("stops one server for requests that arrive together at a fifth root", () =>
+    it.effect("stops one server for requests that arrive together at a fifth root, however their fibers interleave", () =>
       inScenario({}, (s) =>
         Effect.gen(function* () {
-          const [r1, r2, r3, r4, r5] = yield* roots(5);
-          for (const root of [r1!, r2!, r3!, r4!]) {
+          for (const root of yield* roots(4)) {
             yield* hoverAt(root);
             yield* TestClock.adjust(1);
           }
-          const first = startedPids(s.record);
-          const from = s.mark();
-          yield* Effect.all([hoverAt(r5!), hoverAt(r5!), hoverAt(r5!)], {
-            concurrency: "unbounded",
-            discard: true,
-          });
+          // Each round is a new root over a full cap; each limit moves where a turn ends.
+          const limits = Array.from({ length: 29 }, (_, index) => index + 3);
+          for (const limit of limits) {
+            const [root] = yield* roots(1);
+            const from = s.mark();
+            const gate = makeGate(3);
+            s.resolveGate = gate;
+            const requests = yield* Effect.forEach([1, 2, 3], () =>
+              forkRequest(hoverAt(root!).pipe(Effect.provideService(Scheduler.MaxOpsBeforeYield, limit))),
+            );
+            yield* Deferred.await(gate.began);
+            s.resolveGate = undefined;
+            yield* Deferred.succeed(gate.letGo, undefined);
+            for (const request of requests) {
+              expect((yield* request.outcome)._tag).toBe("Success");
+            }
 
-          expect(s.history.slice(from).filter((entry) => entry.fields.reason === "evicted")).toHaveLength(1);
-          expect(first.filter(isAlive)).toHaveLength(3);
-          expect(startedPids(s.record)).toHaveLength(5);
+            expect(s.history.slice(from).filter((entry) => entry.fields.reason === "evicted")).toHaveLength(1);
+            expect(startedPids(s.record).filter(isAlive)).toHaveLength(4);
+            yield* TestClock.adjust(1);
+          }
         }),
       ),
     );

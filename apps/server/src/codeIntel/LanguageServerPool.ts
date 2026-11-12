@@ -176,35 +176,46 @@ const make = Effect.gen(function* () {
   };
 
   /**
-   * `starting | ready -> stopping -> stopped` (or `failed`). The kill runs in the pool's scope,
-   * so an interrupted request cannot leave a slot stopping forever.
+   * `starting | ready -> stopping -> stopped` (or `failed`). Marks the slot without yielding;
+   * `finish` forks the kill into the pool's scope, so an interrupted request cannot leave a slot
+   * stopping forever.
    */
-  const beginStop = (
+  const markStop = (
     slot: Slot,
     reason: StopReason,
     after: Phase = { _tag: "stopped" },
+  ): { readonly stopped: Deferred.Deferred<void>; readonly finish: Effect.Effect<void> } | undefined => {
+    const phase = slot.phase;
+    if (phase._tag === "stopping") return { stopped: phase.stopped, finish: Effect.void };
+    if (phase._tag !== "starting" && phase._tag !== "ready") return undefined;
+    const stopped = Deferred.makeUnsafe<void>();
+    const fiber = slot.fiber;
+    slot.fiber = undefined;
+    slot.generation += 1;
+    slot.phase = { _tag: "stopping", stopped };
+    if (phase._tag === "ready") phase.live.stopReason = reason;
+    const finish = Effect.gen(function* () {
+      // Interrupts a start, the backoff before one, or the wait for a running server's exit.
+      if (fiber !== undefined) yield* Fiber.interrupt(fiber);
+      yield* Scope.close(phase.scope, Exit.void);
+      slot.phase = after;
+      if (phase._tag === "starting") {
+        yield* Deferred.fail(phase.ready, unavailable("The language server was stopped."));
+      }
+      yield* Deferred.succeed(stopped, undefined);
+      yield* Effect.logInfo("Language server stopped", { ...annotations(slot), reason });
+    }).pipe(Effect.forkIn(poolScope), Effect.asVoid);
+    return { stopped, finish };
+  };
+
+  const beginStop = (
+    slot: Slot,
+    reason: StopReason,
+    after?: Phase,
   ): Effect.Effect<Deferred.Deferred<void> | undefined> =>
     Effect.suspend(() => {
-      const phase = slot.phase;
-      if (phase._tag === "stopping") return Effect.succeed(phase.stopped);
-      if (phase._tag !== "starting" && phase._tag !== "ready") return Effect.undefined;
-      const stopped = Deferred.makeUnsafe<void>();
-      const fiber = slot.fiber;
-      slot.fiber = undefined;
-      slot.generation += 1;
-      slot.phase = { _tag: "stopping", stopped };
-      if (phase._tag === "ready") phase.live.stopReason = reason;
-      return Effect.gen(function* () {
-        // Interrupts a start, the backoff before one, or the wait for a running server's exit.
-        if (fiber !== undefined) yield* Fiber.interrupt(fiber);
-        yield* Scope.close(phase.scope, Exit.void);
-        slot.phase = after;
-        if (phase._tag === "starting") {
-          yield* Deferred.fail(phase.ready, unavailable("The language server was stopped."));
-        }
-        yield* Deferred.succeed(stopped, undefined);
-        yield* Effect.logInfo("Language server stopped", { ...annotations(slot), reason });
-      }).pipe(Effect.forkIn(poolScope), Effect.as(stopped));
+      const marked = markStop(slot, reason, after);
+      return marked === undefined ? Effect.undefined : Effect.as(marked.finish, marked.stopped);
     }).pipe(Effect.uninterruptible);
 
   const stopMatching = Effect.fnUntraced(function* (
@@ -415,10 +426,12 @@ const make = Effect.gen(function* () {
       const victim = alive
         .filter((other) => other.phase._tag !== "stopping")
         .toSorted((left, right) => left.lastUsedAt - right.lastUsedAt)[0];
-      if (victim !== undefined) {
-        const stopped = yield* beginStop(victim, "evicted");
-        slot.evicting = stopped;
-        return stopped === undefined ? { _tag: "start" } : { _tag: "wait", stopped };
+      // Marked before anything yields: a request that runs in between would stop a second server.
+      const marked = victim === undefined ? undefined : markStop(victim, "evicted");
+      if (marked !== undefined) {
+        slot.evicting = marked.stopped;
+        yield* marked.finish;
+        return { _tag: "wait", stopped: marked.stopped };
       }
       const stopping = alive.find((other) => other.phase._tag === "stopping")?.phase;
       return stopping?._tag === "stopping"

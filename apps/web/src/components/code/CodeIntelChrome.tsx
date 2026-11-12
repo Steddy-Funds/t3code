@@ -1,12 +1,21 @@
 import { useAtomValue } from "@effect/atom-react";
-import type { CodeLibraryRoot, CodeServerStatus, EnvironmentId } from "@t3tools/contracts";
+import {
+  AuthSettingsWriteScope,
+  type CodeLibraryRoot,
+  type CodeServerStatus,
+  type EnvironmentId,
+} from "@t3tools/contracts";
 import { useState } from "react";
 
 import { Button } from "~/components/ui/button";
 import { Popover, PopoverPopup, PopoverTrigger } from "~/components/ui/popover";
 import { cn } from "~/lib/utils";
 import { codeIntelEnvironment } from "~/state/codeIntel";
+import { serverEnvironment } from "~/state/server";
+import { useEnvironmentScope } from "~/state/session";
 import { useAtomCommand } from "~/state/use-atom-command";
+
+const SHOWN_LIBRARY_ROOTS = 4;
 
 const STATE_LABEL: Record<CodeServerStatus["state"], string | null> = {
   ready: null,
@@ -31,26 +40,43 @@ export function CodeIntelStatusChip(props: {
   readonly environmentId: EnvironmentId;
   readonly cwd: string;
   readonly server: CodeServerStatus;
+  /** Turned off in the environment's settings. */
+  readonly turnedOff: boolean;
   readonly onChanged: () => void;
 }) {
-  const { server } = props;
+  const { server, turnedOff } = props;
   const restart = useAtomCommand(codeIntelEnvironment.restart);
   const install = useAtomCommand(codeIntelEnvironment.installServer);
+  const updateSettings = useAtomCommand(serverEnvironment.updateSettings);
   const canRestart = useAtomValue(codeIntelEnvironment.restart.permissionAtom(props.environmentId));
   const canInstall = useAtomValue(
     codeIntelEnvironment.installServer.permissionAtom(props.environmentId),
   );
-  const [pending, setPending] = useState<"restart" | "install" | null>(null);
-  const stateLabel = STATE_LABEL[server.state];
+  const canTurnOn = useEnvironmentScope(props.environmentId, AuthSettingsWriteScope);
+  const [pending, setPending] = useState<"restart" | "install" | "turnOn" | null>(null);
+  const [allLibraries, setAllLibraries] = useState(false);
+  const stateLabel = turnedOff ? "off" : STATE_LABEL[server.state];
+  const libraryRoots = allLibraries
+    ? server.libraryRoots
+    : server.libraryRoots.slice(0, SHOWN_LIBRARY_ROOTS);
 
-  const run = async (action: "restart" | "install") => {
+  const actions = {
+    restart: () =>
+      restart({
+        environmentId: props.environmentId,
+        input: { cwd: props.cwd, languageId: server.languageId },
+      }),
+    install: () =>
+      install({ environmentId: props.environmentId, input: { languageId: server.languageId } }),
+    turnOn: () =>
+      updateSettings({
+        environmentId: props.environmentId,
+        input: { patch: { codeIntel: { enabled: true } } },
+      }),
+  };
+  const run = async (action: keyof typeof actions) => {
     setPending(action);
-    await (action === "restart"
-      ? restart({
-          environmentId: props.environmentId,
-          input: { cwd: props.cwd, languageId: server.languageId },
-        })
-      : install({ environmentId: props.environmentId, input: { languageId: server.languageId } }));
+    await actions[action]();
     setPending(null);
     props.onChanged();
   };
@@ -68,7 +94,10 @@ export function CodeIntelStatusChip(props: {
           />
         }
       >
-        <span className={cn("size-1.5 rounded-full", STATE_DOT[server.state])} aria-hidden />
+        <span
+          className={cn("size-1.5 rounded-full", STATE_DOT[turnedOff ? "stopped" : server.state])}
+          aria-hidden
+        />
         <span>{server.name}</span>
         {stateLabel ? <span className="text-muted-foreground">{stateLabel}</span> : null}
       </PopoverTrigger>
@@ -81,7 +110,28 @@ export function CodeIntelStatusChip(props: {
             ) : null}
             <span className="ms-auto text-muted-foreground">{stateLabel ?? server.state}</span>
           </div>
-          {server.message ? <p className="text-muted-foreground">{server.message}</p> : null}
+          {turnedOff ? (
+            <div className="flex items-center gap-2">
+              <p className="flex-1 text-muted-foreground">
+                {canTurnOn
+                  ? "Code intelligence is turned off in this environment's settings."
+                  : "Code intelligence is turned off in this environment's settings, and this connection can't change them."}
+              </p>
+              {canTurnOn ? (
+                <Button
+                  type="button"
+                  size="xs"
+                  className="shrink-0"
+                  disabled={pending !== null}
+                  onClick={() => void run("turnOn")}
+                >
+                  {pending === "turnOn" ? "Turning on…" : "Turn on"}
+                </Button>
+              ) : null}
+            </div>
+          ) : server.message ? (
+            <p className="text-muted-foreground">{server.message}</p>
+          ) : null}
           {server.interpreter ? (
             <p className="break-all text-muted-foreground">
               Interpreter{" "}
@@ -92,15 +142,24 @@ export function CodeIntelStatusChip(props: {
           {server.libraryRoots.length > 0 ? (
             <div className="flex flex-col gap-0.5">
               <span className="text-muted-foreground">Libraries</span>
-              {server.libraryRoots.map((root) => (
+              {libraryRoots.map((root) => (
                 <span key={root.path} className="truncate font-mono text-2xs">
                   {root.label}
                 </span>
               ))}
+              {libraryRoots.length < server.libraryRoots.length ? (
+                <button
+                  type="button"
+                  className="self-start text-2xs text-muted-foreground hover:text-foreground"
+                  onClick={() => setAllLibraries(true)}
+                >
+                  {server.libraryRoots.length - libraryRoots.length} more
+                </button>
+              ) : null}
             </div>
           ) : null}
           <div className="flex justify-end gap-2">
-            {server.state === "unavailable" && canInstall ? (
+            {server.state === "unavailable" && !turnedOff && canInstall ? (
               <Button
                 type="button"
                 size="xs"

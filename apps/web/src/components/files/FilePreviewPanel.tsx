@@ -1353,6 +1353,7 @@ export default function FilePreviewPanel({
               environmentId={environmentId}
               cwd={cwd}
               server={codeIntel.server}
+              turnedOff={codeIntel.turnedOff}
               onChanged={codeIntel.refreshStatus}
             />
           ) : null}

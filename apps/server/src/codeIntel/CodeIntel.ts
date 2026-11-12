@@ -51,6 +51,7 @@ import { pathToUri, uriToPath } from "./LanguageServerProcess.ts";
 import type { LspError } from "./LspConnection.ts";
 import * as LspResults from "./lspResults.ts";
 import * as PythonEnvironment from "./PythonEnvironment.ts";
+import * as TypeScriptProject from "./TypeScriptProject.ts";
 import { IGNORED_DIRECTORIES } from "./WorkspaceWatcher.ts";
 
 /** A hung child cannot hold a request: definition, hover and highlights get this long. */
@@ -165,6 +166,7 @@ const make = Effect.gen(function* () {
   const binaries = yield* LanguageServerBinaries.LanguageServerBinaries;
   const pythonEnvironment = yield* PythonEnvironment.PythonEnvironment;
   const isServerInternalPath = yield* makeIsServerInternalPath;
+  const typeScriptProjects = yield* TypeScriptProject.make;
   const home = yield* HostProcess.HomeDirectory;
   const hostEnvironment = yield* HostProcess.Environment;
   const knownRoots = new Map<string, { readonly root: string; readonly expiresAt: number }>();
@@ -187,14 +189,13 @@ const make = Effect.gen(function* () {
    * The document as it is on disk, through the rule `projects.readFile` applies. No client text
    * is ever read here, so two clients cannot give a server different contents for one file.
    */
-  const resolveDocument = Effect.fnUntraced(function* (document: CodeDocument) {
-    const root = yield* resolveRoot(document.cwd);
-    const language = languageForPath(document.path);
+  const readDocument = Effect.fnUntraced(function* (root: string, relativePath: string) {
+    const language = languageForPath(relativePath);
     if (language === undefined) {
       return yield* fail("unsupported_language", "No language server handles this kind of file.");
     }
     const { file, realPath } = yield* workspaceFileSystem
-      .readFileWithRealPath({ cwd: root, relativePath: document.path })
+      .readFileWithRealPath({ cwd: root, relativePath })
       .pipe(
         Effect.catchTags({
           WorkspacePathOutsideRootError: () =>
@@ -213,18 +214,23 @@ const make = Effect.gen(function* () {
     if (file.truncated) {
       return yield* fail("file_too_large", "This file is too large to analyse.");
     }
-    const revision = fileContentRevision(file.contents);
-    if (document.ifRevision !== undefined && document.ifRevision !== revision) {
-      return yield* fail("stale_document", "The file on disk differs from the text shown.");
-    }
     return {
       root,
       row: language.row,
       documentLanguageId: language.documentLanguageId,
       realPath,
       text: file.contents,
-      revision,
+      revision: fileContentRevision(file.contents),
     } satisfies ResolvedDocument;
+  });
+
+  const resolveDocument = Effect.fnUntraced(function* (document: CodeDocument) {
+    const root = yield* resolveRoot(document.cwd);
+    const resolved = yield* readDocument(root, document.path);
+    if (document.ifRevision !== undefined && document.ifRevision !== resolved.revision) {
+      return yield* fail("stale_document", "The file on disk differs from the text shown.");
+    }
+    return resolved;
   });
 
   type Send = (method: string, params: unknown) => Effect.Effect<unknown, LspError>;
@@ -348,13 +354,18 @@ const make = Effect.gen(function* () {
    * Maps server locations to what a client may open, one result an input (`undefined` for a
    * dropped one). A location in a server-internal path is dropped, and a preview line is read
    * through the same rule as any file read. Each file is read once and only its asked-for lines
-   * are kept, so a wide answer never holds hundreds of files at a time.
+   * are kept, so a wide answer never holds hundreds of files at a time. `names` narrows ranges.
    */
   const locateEach = Effect.fnUntraced(function* (
     live: LanguageServerPool.LiveServer,
     locations: ReadonlyArray<LspResults.LspLocation>,
-    withLineText: boolean,
+    options: { readonly lineText: boolean; readonly names?: ReadonlyArray<string> },
   ) {
+    const rangeOf = (index: number) => (locations[index] as LspResults.LspLocation).range;
+    const needsName = (index: number) => {
+      const name = options.names?.[index];
+      return name !== undefined && !LspResults.isNameRange(rangeOf(index), name);
+    };
     const libraryRoots = libraryRootPaths(live);
     const byFile = new Map<string, Array<number>>();
     locations.forEach((location, index) => {
@@ -372,12 +383,13 @@ const make = Effect.gen(function* () {
           .realPath(lexical)
           .pipe(Effect.orElseSucceed(() => path.resolve(lexical)));
         if (yield* isServerInternalPath(real)) return;
-        const lines = withLineText
-          ? yield* workspaceFileSystem.readFile({ cwd: live.root, relativePath: real }).pipe(
-              Effect.map((file) => file.contents.split(/\r?\n/)),
-              Effect.orElseSucceed((): Array<string> => []),
-            )
-          : [];
+        const lines =
+          options.lineText || indexes.some(needsName)
+            ? yield* workspaceFileSystem.readFile({ cwd: live.root, relativePath: real }).pipe(
+                Effect.map((file) => file.contents.split(/\r?\n/)),
+                Effect.orElseSucceed((): Array<string> => []),
+              )
+            : [];
         // A symlink inside the root that leaves it is shown by its real path, which a read allows.
         const inside =
           KnownWorkspaces.isWithinRoot(path, lexical, live.root) &&
@@ -392,8 +404,10 @@ const make = Effect.gen(function* () {
           ? path.relative(live.root, lexical).split(path.sep).join("/")
           : real;
         for (const index of indexes) {
-          const range = (locations[index] as LspResults.LspLocation).range;
-          const lineText = lines[range.start.line];
+          const name = options.names?.[index];
+          const range =
+            name === undefined ? rangeOf(index) : LspResults.nameRange(lines, rangeOf(index), name);
+          const lineText = options.lineText ? lines[range.start.line] : undefined;
           located[index] = {
             path: shownPath,
             external,
@@ -413,7 +427,7 @@ const make = Effect.gen(function* () {
     live: LanguageServerPool.LiveServer,
     locations: ReadonlyArray<LspResults.LspLocation>,
   ) =>
-    locateEach(live, locations, true).pipe(
+    locateEach(live, locations, { lineText: true }).pipe(
       Effect.map((located) => located.filter((location) => location !== undefined)),
     );
 
@@ -561,6 +575,30 @@ const make = Effect.gen(function* () {
       : { ...tokens, revision: document.revision };
   });
 
+  // Once a server, not on every keystroke of a picker.
+  const seeded = new WeakSet<LanguageServerPool.LiveServer["session"]>();
+
+  /**
+   * tsc answers a workspace question about loaded projects alone, and loads one only when a file
+   * of it opens. Before a server's first question a file of each chosen project is: a file already
+   * open may be in no project, or in one of many.
+   */
+  const loadProjects = Effect.fnUntraced(function* (live: LanguageServerPool.LiveServer) {
+    if (live.row.id !== "typescript" || seeded.has(live.session)) return;
+    const files = yield* typeScriptProjects.seedFiles(live.root);
+    yield* Effect.forEach(
+      files,
+      (file) =>
+        // Relative, so the read rule refuses a file outside the root, through a link too.
+        readDocument(live.root, path.relative(live.root, file)).pipe(
+          Effect.flatMap((document) => live.session.withDocument(document, Effect.void)),
+          Effect.ignore,
+        ),
+      { discard: true },
+    );
+    seeded.add(live.session);
+  });
+
   // A row whose files or manifests sit in the root or one folder down.
   const detectRows = Effect.fnUntraced(function* (root: string) {
     const names = yield* fileSystem.readDirectory(root).pipe(Effect.orElseSucceed(() => []));
@@ -610,6 +648,7 @@ const make = Effect.gen(function* () {
         withServer(row, root, deadline, (live, send) =>
           Effect.gen(function* () {
             if (!supports(live, "workspaceSymbolProvider")) return [];
+            yield* loadProjects(live);
             const answer = yield* askUntilLoaded(
               live,
               send("workspace/symbol", { query: input.query }),
@@ -626,7 +665,7 @@ const make = Effect.gen(function* () {
             const locations = yield* locateEach(
               live,
               ranked.map((symbol) => symbol.location),
-              false,
+              { lineText: false, names: ranked.map((symbol) => symbol.name) },
             );
             const located = ranked.map((symbol, index) => {
               const location = locations[index];
@@ -691,9 +730,10 @@ const make = Effect.gen(function* () {
         }
       }
     } else {
-      const nodeModules = path.join(root, "node_modules");
-      if (yield* existingDirectory(nodeModules)) {
-        libraryRoots.push({ path: nodeModules, label: "node_modules", kind: "node_modules" });
+      // A package's own `node_modules` resolves before the root's, so each is a library root.
+      for (const nodeModules of yield* typeScriptProjects.nodeModulesRoots(root)) {
+        const label = path.relative(root, nodeModules).split(path.sep).join("/");
+        libraryRoots.push({ path: nodeModules, label, kind: "node_modules" });
       }
     }
     if (
@@ -720,9 +760,16 @@ const make = Effect.gen(function* () {
     } satisfies CodeServerStatus;
   });
 
+  const statusOf = Effect.fnUntraced(function* (root: string) {
+    return {
+      enabled: yield* pool.isEnabled,
+      servers: yield* Effect.forEach(LANGUAGE_ROWS, (row) => serverStatus(row, root)),
+    };
+  });
+
   const status: CodeIntel["Service"]["status"] = Effect.fn("CodeIntel.status")(function* (input) {
     const root = yield* resolveRoot(input.cwd);
-    return { servers: yield* Effect.forEach(LANGUAGE_ROWS, (row) => serverStatus(row, root)) };
+    return yield* statusOf(root);
   }, boundedBy(POSITION_DEADLINE));
 
   const installServer: CodeIntel["Service"]["installServer"] = Effect.fn("CodeIntel.installServer")(
@@ -752,7 +799,7 @@ const make = Effect.gen(function* () {
       return yield* fail("unsupported_language", "No language server handles this language.");
     }
     yield* pool.restart(root, input.languageId);
-    return { servers: yield* Effect.forEach(LANGUAGE_ROWS, (row) => serverStatus(row, root)) };
+    return yield* statusOf(root);
   }, boundedBy(POSITION_DEADLINE));
 
   return CodeIntel.of({

@@ -540,22 +540,43 @@ const refreshOnSignalWhileRead =
     );
   };
 
+const MAX_FAILING_REFRESH_MS = 60_000;
+
+/** Each failure in a row doubles the wait, up to a minute, so a broken query never polls fast. */
 const refreshEveryUntilFinal =
-  <V>(intervalMs: number, isFinal: (value: V) => boolean) =>
-  <A extends V>(self: Atom.Atom<A>): Atom.Atom<A> =>
-    Atom.transform(
+  <V extends AsyncResult.AsyncResult<unknown, unknown>>(
+    intervalMs: number,
+    isFinal: (value: V) => boolean,
+  ) =>
+  <A extends V>(self: Atom.Atom<A>): Atom.Atom<A> => {
+    const failures = new WeakMap<
+      AtomRegistry.AtomRegistry,
+      { readonly last: V; readonly inARow: number }
+    >();
+    return Atom.transform(
       self,
       (get) => {
         const value = get(self);
+        const seen = failures.get(get.registry);
+        if (!value.waiting && !AsyncResult.isFailure(value)) failures.delete(get.registry);
+        if (!value.waiting && AsyncResult.isFailure(value) && seen?.last !== value) {
+          failures.set(get.registry, { last: value, inARow: (seen?.inARow ?? 0) + 1 });
+        }
         if (!isFinal(value)) {
+          const inARow = failures.get(get.registry)?.inARow ?? 0;
+          const delay = Math.min(
+            intervalMs * 2 ** inARow,
+            Math.max(intervalMs, MAX_FAILING_REFRESH_MS),
+          );
           // @effect-diagnostics-next-line globalTimers:off - Mirrors `Atom.withRefresh`, outside an Effect runtime.
-          const handle = setTimeout(() => get.refresh(self), intervalMs);
+          const handle = setTimeout(() => get.refresh(self), delay);
           get.addFinalizer(() => clearTimeout(handle));
         }
         return value;
       },
       { initialValueTarget: self },
     );
+  };
 
 /**
  * A query result's data alone. A refetch always publishes a new result (a new

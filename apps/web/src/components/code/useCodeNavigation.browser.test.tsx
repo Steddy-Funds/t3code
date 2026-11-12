@@ -110,6 +110,7 @@ function Viewer(props: {
     intel: {
       supported: true,
       servers: [server],
+      turnedOff: false,
       server,
       libraryRoot: null,
       libraryCode: false,

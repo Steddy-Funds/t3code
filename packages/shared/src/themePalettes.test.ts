@@ -7,7 +7,7 @@ import {
   getThemeEditorColors,
   semanticTokenStyle,
   type ThemeEditorColors,
-} from "./themePalettes";
+} from "./themePalettes.ts";
 
 const HEX = /^#[0-9a-f]{6}$/i;
 
@@ -85,9 +85,10 @@ describe("material-ocean editor block", () => {
     for (const colour of ansi) expect(colour).toMatch(HEX);
   });
 
-  it("has hex line number, diff and find colours", () => {
-    const { lineNumber, diff, find } = materialOceanEditor!;
+  it("has hex line number, caret row, diff and find colours", () => {
+    const { lineNumber, caretRow, diff, find } = materialOceanEditor!;
     expect(lineNumber).toMatch(HEX);
+    expect(caretRow).toMatch(HEX);
     for (const kind of [diff.inserted, diff.deleted, diff.modified, diff.conflict]) {
       expect(kind.line).toMatch(HEX);
       expect(kind.muted).toMatch(HEX);

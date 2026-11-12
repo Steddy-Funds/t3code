@@ -13,6 +13,7 @@ import {
   DIFF_THEME_NAMES,
   DIFF_SURFACE_THEME_UNSAFE_CSS,
   resolveDiffThemeName,
+  themeEditorSurfaceCss,
   buildFileDiffContentVersion,
   buildFileDiffIdentityKey,
   buildFileDiffRenderKey,
@@ -458,18 +459,86 @@ describe("ALL_DIFF_THEME_NAMES", () => {
 });
 
 describe("DIFF_SURFACE_THEME_UNSAFE_CSS", () => {
-  it("falls back to the stock tint wherever it reads an editor variable", () => {
-    const reads = [
-      ...DIFF_SURFACE_THEME_UNSAFE_CSS.matchAll(/var\(\s*(--app-theme-editor-[\w-]+)(\s*,)?/g),
-    ];
-    expect(new Set(reads.map((read) => read[1]))).toEqual(
-      new Set([
-        "--app-theme-editor-diff-addition",
-        "--app-theme-editor-diff-addition-word",
-        "--app-theme-editor-diff-deletion",
-        "--app-theme-editor-diff-deletion-word",
-      ]),
+  it("carries no theme's editor colours, so every other theme paints from the stock tints", () => {
+    expect(DIFF_SURFACE_THEME_UNSAFE_CSS).not.toContain("--app-theme-editor-");
+    expect(DIFF_SURFACE_THEME_UNSAFE_CSS).not.toContain("data-diff-span");
+    expect(DIFF_SURFACE_THEME_UNSAFE_CSS).not.toContain("--diffs-computed-");
+    expect(DIFF_SURFACE_THEME_UNSAFE_CSS).not.toContain("--diffs-fg-number-override");
+    expect(DIFF_SURFACE_THEME_UNSAFE_CSS).not.toContain("search-match");
+  });
+});
+
+describe("themeEditorSurfaceCss", () => {
+  const sentinel: ThemeEditorColors = {
+    ...getThemeEditorColors(MATERIAL_OCEAN_THEME, "dark")!,
+    lineNumber: "#010101",
+    caretRow: "#020202",
+    diff: {
+      inserted: { line: "#030303", muted: "#040404", word: "#050505" },
+      deleted: { line: "#060606", muted: "#070707", word: "#080808" },
+      modified: { line: "#090909", muted: "#0a0a0a", word: "#0b0b0b" },
+      conflict: { line: "#0c0c0c", muted: "#0d0d0d", word: "#0e0e0e" },
+    },
+    find: { match: "#0f0f0f", currentMatch: "#101010", foreground: "#111111" },
+  };
+  const css = themeEditorSurfaceCss(sentinel);
+  const declaration = (property: string, value: string) =>
+    expect(css, `${property}: ${value}`).toMatch(
+      new RegExp(`${property.replace(/[()[\]-]/g, "\\$&")}:\\s*${value};`),
     );
-    for (const read of reads) expect(read[2], `${read[1]} has no fallback`).toBeDefined();
+
+  it("is empty without editor colours", () => {
+    expect(themeEditorSurfaceCss(null)).toBe("");
+  });
+
+  it("is the same text for the same colours", () => {
+    expect(themeEditorSurfaceCss(sentinel)).toBe(css);
+  });
+
+  it("is not empty for Material Ocean, and never reads an editor variable off the root", () => {
+    const own = themeEditorSurfaceCss(getThemeEditorColors(MATERIAL_OCEAN_THEME, "dark"));
+    expect(own.length).toBeGreaterThan(0);
+    expect(own).not.toContain("--app-theme-editor-");
+    expect(own).not.toContain("undefined");
+  });
+
+  it("paints the gutter with the scheme's line number and its inserted and deleted line colours", () => {
+    declaration("--diffs-fg-number-override", "#010101");
+    declaration("--diffs-bg-addition-number-override", "#030303");
+    declaration("--diffs-bg-deletion-number-override", "#060606");
+  });
+
+  it("paints find matches with the scheme's colours", () => {
+    declaration("--diffs-bg-search-match-override", "#0f0f0f");
+    declaration("--diffs-bg-search-match-current-override", "#101010");
+    declaration("--diffs-fg-search-match-override", "#111111");
+  });
+
+  it("paints a changed line at the exact inserted or deleted colour, not a mix", () => {
+    expect(css).toMatch(
+      /\[data-line-type="change-addition"\]\s*\{\s*--diffs-computed-diff-line-bg:\s*#030303;/,
+    );
+    expect(css).toMatch(
+      /\[data-line-type="change-deletion"\]\s*\{\s*--diffs-computed-diff-line-bg:\s*#060606;/,
+    );
+    expect(css).not.toContain("color-mix");
+  });
+
+  it("paints a changed line that holds changed words as a modified line", () => {
+    expect(css).toMatch(
+      /:has\(\[data-diff-span\]\)\s*\{\s*--diffs-computed-diff-line-bg:\s*#0a0a0a;/,
+    );
+    expect(css).toMatch(/\[data-diff-span\]\s*\{\s*background-color:\s*#090909;/);
+  });
+
+  it("never paints the inserted, deleted or conflict word colours onto a modified line", () => {
+    expect(css).not.toContain("#0b0b0b");
+    for (const unused of ["#0c0c0c", "#0d0d0d", "#0e0e0e"]) expect(css).not.toContain(unused);
+  });
+
+  it("paints the caret row", () => {
+    expect(css).toMatch(
+      /\[data-editor-active-line\]\s*\{\s*--diffs-computed-editor-active-line-bg:\s*#020202;/,
+    );
   });
 });

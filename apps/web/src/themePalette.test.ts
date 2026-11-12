@@ -778,19 +778,8 @@ describe("stored theme preferences", () => {
   });
 });
 
-describe("per-theme editor colours on the root", () => {
+describe("material-ocean on the root", () => {
   const EDITOR_PREFIX = "--app-theme-editor-";
-  const editor = MATERIAL_OCEAN_THEME.editor!.dark!;
-  const expectedEditorVariables = {
-    "--app-theme-editor-line-number": editor.lineNumber,
-    "--app-theme-editor-diff-addition": editor.diff.inserted.line,
-    "--app-theme-editor-diff-addition-word": editor.diff.inserted.word,
-    "--app-theme-editor-diff-deletion": editor.diff.deleted.line,
-    "--app-theme-editor-diff-deletion-word": editor.diff.deleted.word,
-    "--app-theme-editor-find-match": editor.find.match,
-    "--app-theme-editor-find-current-match": editor.find.currentMatch,
-    "--app-theme-editor-find-foreground": editor.find.foreground,
-  };
 
   function withRoot(
     run: (root: { properties: Map<string, string>; dataset: Record<string, string> }) => void,
@@ -827,9 +816,9 @@ describe("per-theme editor colours on the root", () => {
   }
 
   const editorVariables = (properties: ReadonlyMap<string, string>) =>
-    Object.fromEntries([...properties].filter(([name]) => name.startsWith(EDITOR_PREFIX)));
+    [...properties.keys()].filter((name) => name.startsWith(EDITOR_PREFIX));
 
-  it("sets chrome, code and terminal variables and the eight editor variables for material-ocean", () => {
+  it("sets chrome, code and terminal variables from its palette", () => {
     withRoot(({ properties, dataset }) => {
       applyThemePalette("material-ocean", "dark");
       expect(dataset.themeId).toBe("material-ocean");
@@ -845,60 +834,10 @@ describe("per-theme editor colours on the root", () => {
           MATERIAL_OCEAN_THEME.colors[role],
         );
       }
-      expect(editorVariables(properties)).toEqual(expectedEditorVariables);
     });
   });
 
-  it("paints material-ocean the same when no appearance is passed", () => {
-    withRoot(({ properties }) => {
-      applyThemePalette("material-ocean");
-      expect(editorVariables(properties)).toEqual(expectedEditorVariables);
-    });
-  });
-
-  it("sets no editor variable under any other built-in, in either appearance", () => {
-    withRoot(({ properties }) => {
-      const others = BUILT_IN_THEMES.filter((theme) => theme.id !== "material-ocean");
-      expect(others.length).toBeGreaterThan(0);
-      for (const theme of others) {
-        for (const appearance of ["light", "dark"] as const) {
-          applyThemePalette(theme.id, appearance);
-          expect(editorVariables(properties), `${theme.id} ${appearance}`).toEqual({});
-        }
-      }
-    });
-  });
-
-  it("sets no editor variable under the stock themes", () => {
-    withRoot(({ properties }) => {
-      for (const preference of ["system", "light", "dark"] as const) {
-        for (const appearance of ["light", "dark"] as const) {
-          applyThemePalette(preference, appearance);
-          expect(editorVariables(properties), `${preference} ${appearance}`).toEqual({});
-        }
-      }
-    });
-  });
-
-  it("sets no editor variable under a custom theme", () => {
-    const custom = parseThemeFile({
-      version: THEME_FILE_VERSION,
-      id: "midnight",
-      name: "Midnight",
-      appearance: "dark",
-      colors: { canvas: "#101820" },
-    });
-    withRoot(
-      ({ properties, dataset }) => {
-        applyThemePalette("midnight", "dark");
-        expect(dataset.themeId).toBe("midnight");
-        expect(editorVariables(properties)).toEqual({});
-      },
-      [custom],
-    );
-  });
-
-  it("removes the editor variables when switching away from material-ocean", () => {
+  it("sets no editor variable under any theme, in either appearance, or in a preview", () => {
     const custom = parseThemeFile({
       version: THEME_FILE_VERSION,
       id: "midnight",
@@ -908,40 +847,47 @@ describe("per-theme editor colours on the root", () => {
     });
     withRoot(
       ({ properties }) => {
-        for (const next of ["t3-chat", "grove", "system", "dark", "midnight"] as const) {
-          applyThemePalette("material-ocean", "dark");
-          expect(Object.keys(editorVariables(properties)), next).toHaveLength(8);
-          applyThemePalette(next, "dark");
-          expect(editorVariables(properties), next).toEqual({});
+        for (const id of [
+          "system",
+          "light",
+          "dark",
+          "midnight",
+          ...BUILT_IN_THEMES.map((theme) => theme.id),
+        ]) {
+          for (const appearance of ["light", "dark"] as const) {
+            applyThemePalette(id, appearance);
+            expect(editorVariables(properties), `${id} ${appearance}`).toEqual([]);
+          }
         }
+        applyThemeColorPreview(getThemeColorsForMode(GROVE_THEME, "dark")!, "dark");
+        expect(editorVariables(properties)).toEqual([]);
       },
       [custom],
     );
   });
 
-  it("sets none when material-ocean is asked for in light, where it has no editor block", () => {
-    withRoot(({ properties }) => {
+  it("is the same painted roles in either appearance it is asked for", () => {
+    withRoot(({ properties, dataset }) => {
       applyThemePalette("material-ocean", "dark");
+      const dark = new Map(properties);
       applyThemePalette("material-ocean", "light");
-      expect(editorVariables(properties)).toEqual({});
+      expect(dataset.themeId).toBe("material-ocean");
+      expect(new Map(properties)).toEqual(dark);
+      applyThemePalette("material-ocean");
+      expect(new Map(properties)).toEqual(dark);
     });
   });
 
-  it("removes the editor variables while a theme editor preview is open, and sets them again after", () => {
-    withRoot(({ properties, dataset }) => {
+  it("marks a theme editor preview over material-ocean with the reserved preview id", () => {
+    withRoot(({ dataset }) => {
       applyThemePalette("material-ocean", "dark");
-      applyThemeColorPreview(getThemeColorsForMode(GROVE_THEME, "dark")!, "dark");
+      expect(dataset.themeId).toBe("material-ocean");
+      applyThemeColorPreview(MATERIAL_OCEAN_THEME.colors, "dark");
       expect(dataset.themeId).toBe(THEME_PREVIEW_ID);
       expect(getThemePreviewAppearance()).toBe("dark");
-      expect(editorVariables(properties)).toEqual({});
-
-      // A preview of material-ocean's own colours is still a draft: no editor colours.
-      applyThemeColorPreview(MATERIAL_OCEAN_THEME.colors, "dark");
-      expect(editorVariables(properties)).toEqual({});
-
       applyThemePalette("material-ocean", "dark");
+      expect(dataset.themeId).toBe("material-ocean");
       expect(getThemePreviewAppearance()).toBeNull();
-      expect(editorVariables(properties)).toEqual(expectedEditorVariables);
     });
   });
 
@@ -955,22 +901,17 @@ describe("per-theme editor colours on the root", () => {
       editor: { dark: MATERIAL_OCEAN_THEME.editor!.dark },
     });
     expect(parsed.editor).toBeUndefined();
-    withRoot(
-      ({ properties }) => {
-        expect(getCustomThemes()[0]?.editor).toBeUndefined();
-        applyThemePalette("sneaky", "dark");
-        expect(editorVariables(properties)).toEqual({});
+    withRoot(() => {
+      expect(getCustomThemes()[0]?.editor).toBeUndefined();
+    }, [
+      {
+        id: "sneaky",
+        label: "Sneaky",
+        appearance: "dark",
+        colors: { canvas: "#101820" },
+        editor: { dark: MATERIAL_OCEAN_THEME.editor!.dark },
       },
-      [
-        {
-          id: "sneaky",
-          label: "Sneaky",
-          appearance: "dark",
-          colors: { canvas: "#101820" },
-          editor: { dark: MATERIAL_OCEAN_THEME.editor!.dark },
-        },
-      ],
-    );
+    ]);
   });
 
   it("reserves the built-in id against a custom theme", () => {

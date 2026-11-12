@@ -30,6 +30,20 @@ export interface ThreadReviewNotes extends ReviewThreads {
  */
 export function useThreadReviewNotes(ref: ScopedThreadRef | null): ThreadReviewNotes {
   const rows = useQuietThreadVisibleTurnItems(ref);
+  let built = reviewNotesByRows.get(rows);
+  if (built === undefined) {
+    built = buildThreadReviewNotes(rows);
+    reviewNotesByRows.set(rows, built);
+  }
+  return built;
+}
+
+type VisibleRows = ReturnType<typeof useQuietThreadVisibleTurnItems>;
+
+// Every card and view of a thread asks for these; they are built once per loaded timeline.
+const reviewNotesByRows = new WeakMap<VisibleRows, ThreadReviewNotes>();
+
+function buildThreadReviewNotes(rows: VisibleRows): ThreadReviewNotes {
   const notes: ReviewNote[] = [];
   const timeline: ReviewTimelineEntry[] = [];
   for (const { item } of rows) {

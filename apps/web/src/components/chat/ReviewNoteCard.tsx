@@ -35,6 +35,26 @@ export function ReviewNoteText({ note, className }: { note: ReviewNote; classNam
   );
 }
 
+const EXCERPT_LINES = 6;
+
+/** The lines the agent flagged as it saw them, so a note reads without its diff. */
+export function ReviewNoteExcerpt({ note, className }: { note: ReviewNote; className?: string }) {
+  if (note.excerpt.trim().length === 0) return null;
+  const lines = note.excerpt.split(/\r?\n/u);
+  const clipped = lines.length > EXCERPT_LINES || note.excerptTruncated;
+  return (
+    <pre
+      className={cn(
+        "min-w-0 whitespace-pre-wrap break-words border-border border-s-2 ps-2 font-mono text-muted-foreground text-xs leading-relaxed",
+        className,
+      )}
+    >
+      {lines.slice(0, EXCERPT_LINES).join("\n")}
+      {clipped ? "\n…" : null}
+    </pre>
+  );
+}
+
 function IconAction({
   label,
   wideLabel,
@@ -116,7 +136,8 @@ function ReviewNoteFrame({
           {actions}
         </div>
       </div>
-      <ReviewNoteText note={note} className="px-3 pt-1 pb-3" />
+      <ReviewNoteExcerpt note={note} className="mx-3 mt-1.5" />
+      <ReviewNoteText note={note} className="px-3 pt-1.5 pb-3" />
       {children}
     </div>
   );

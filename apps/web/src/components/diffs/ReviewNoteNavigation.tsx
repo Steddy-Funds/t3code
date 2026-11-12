@@ -7,7 +7,7 @@ import { type ReactNode, useEffect, useState } from "react";
 
 import { useReviewNoteRevealStore, useThreadReviewNotes } from "~/reviewNotes";
 
-import { ReviewNoteText } from "../chat/ReviewNoteCard";
+import { ReviewNoteExcerpt, ReviewNoteText } from "../chat/ReviewNoteCard";
 import { Button } from "../ui/button";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
@@ -185,6 +185,7 @@ function ReviewNoteListRow({ placed, action }: { placed: PlacedReviewNote; actio
           </Tooltip>
           <span className="shrink-0 text-muted-foreground">{reviewNoteRangeLabel(note)}</span>
         </div>
+        <ReviewNoteExcerpt note={note} className="my-1" />
         <ReviewNoteText note={note} className="text-xs" />
       </div>
       {action}

@@ -179,8 +179,8 @@ and the note then shows as answered. **Show in diff** opens the change at the no
 file changed since, the note moves with its lines when they can still be found, and otherwise waits
 in the diff's notes list. On mobile, notes show in the conversation; reply from web or desktop.
 
-Notes are on by default. Turn off **Agent review notes** in Settings > Labs to keep new agent
-sessions from leaving them.
+Notes are on by default. Turn off **Agent review notes** in Settings > Labs to stop agents leaving
+them.
 
 ## Edit an earlier prompt
 

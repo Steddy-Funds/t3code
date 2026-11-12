@@ -74,6 +74,24 @@ describe("findDiffMoves", () => {
         file("c.py", [], [run(1, PARSE, 0)]),
       ]),
     ).toEqual([]);
+    expect(
+      findDiffMoves([
+        file("a.py", [run(1, PARSE, 0)], []),
+        file("b.py", [run(1, PARSE, 0)], []),
+        file("c.py", [], [run(1, PARSE, 0)]),
+        file("d.py", [], [run(1, PARSE, 0)]),
+      ]),
+    ).toEqual([]);
+  });
+
+  it("keeps lines rewritten in place from pointing at a copy elsewhere", () => {
+    const wrapped = ["if ready:", ...PARSE.map((line) => `    ${line}`)];
+    expect(
+      findDiffMoves([
+        file("a.py", [run(10, PARSE, 0)], [run(10, wrapped, 0)]),
+        file("b.py", [], [run(1, PARSE, 0)]),
+      ]),
+    ).toEqual([]);
   });
 
   it("prefers the longest match when a shorter one shares its lines", () => {

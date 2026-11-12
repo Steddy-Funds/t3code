@@ -101,9 +101,9 @@ else.
 A comment box or a find field inside code or a diff is a text field, so these shortcuts leave
 its typing alone. Where a feature does not work, such as code navigation in a thread on a
 machine whose server lacks it, its keys keep their other command. In a browser tab, `mod+1`
-and `mod+alt+arrowleft` / `mod+alt+arrowright` stay with the browser. To use one of these keys
-for its other command everywhere, give that command a shortcut of your own in
-**Settings → Keybindings**: your rule wins.
+and `mod+alt+arrowleft` / `mod+alt+arrowright` stay with the browser. To keep one of these
+keys for its other command everywhere, give the command in this table another shortcut in
+**Settings → Keybindings**.
 
 Shortcuts come from your primary environment. If its server is older than this app,
 `mod+shift+o` and `mod+alt+arrowleft` / `mod+alt+arrowright` are missing until you update it;

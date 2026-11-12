@@ -1,4 +1,11 @@
-export const BUILT_IN_THEME_IDS = ["t3-chat", "grove", "ocean", "ember", "iris"] as const;
+export const BUILT_IN_THEME_IDS = [
+  "t3-chat",
+  "grove",
+  "ocean",
+  "ember",
+  "iris",
+  "material-ocean",
+] as const;
 
 export const MOBILE_DEFAULT_THEME_ID = "t3-code";
 
@@ -94,12 +101,77 @@ export const THEME_COLOR_ROLES = [
 export type ThemeColorRole = (typeof THEME_COLOR_ROLES)[number];
 export type ThemeColors = Readonly<Record<ThemeColorRole, string>>;
 export type ThemeVariants = Readonly<Partial<Record<ThemeAppearance, ThemeColors>>>;
+
+export const THEME_SYNTAX_THEME_NAMES = ["material-deep-ocean"] as const;
+export type ThemeSyntaxThemeName = (typeof THEME_SYNTAX_THEME_NAMES)[number];
+
+export type ThemeSyntaxSetting = Readonly<{
+  color: string;
+  font_style?: "italic";
+  font_weight?: 700;
+}>;
+
+/** A Zed-format theme, the shape the web highlighter registers as is. */
+export type ThemeSyntaxTheme = Readonly<{
+  name: ThemeSyntaxThemeName;
+  appearance: ThemeAppearance;
+  style: Readonly<{
+    [key: string]: unknown;
+    syntax: Readonly<Record<string, ThemeSyntaxSetting>>;
+  }>;
+}>;
+
+export type ThemeTokenStyle = Readonly<{ color: string; italic?: true; bold?: true }>;
+
+export type ThemeAnsiColors = readonly [
+  string,
+  string,
+  string,
+  string,
+  string,
+  string,
+  string,
+  string,
+  string,
+  string,
+  string,
+  string,
+  string,
+  string,
+  string,
+  string,
+];
+
+/** A theme's own colours for code surfaces and the terminal. Themes without one use the stock syntax pair. */
+export type ThemeEditorColors = Readonly<{
+  syntax: ThemeSyntaxTheme;
+  /** Keyed by a language server's token type, `type.modifier` or `*.modifier`. */
+  semantic: Readonly<Record<string, ThemeTokenStyle>>;
+  /** Colours 0 to 15, in SGR order. */
+  ansi: ThemeAnsiColors;
+  lineNumber: string;
+  /** The line the caret is on, in an editable file. */
+  caretRow: string;
+  diff: Readonly<{
+    /** A wholly added line. */
+    inserted: string;
+    /** A wholly deleted line. */
+    deleted: string;
+    /** The changed words of a line that changed on both sides. */
+    modified: string;
+    /** That line itself, under its changed words. */
+    modifiedMuted: string;
+  }>;
+  find: Readonly<{ match: string; currentMatch: string; foreground: string }>;
+}>;
+
 export type ThemeDefinition = Readonly<{
   id: string;
   label: string;
   appearance: ThemeAppearance;
   colors: ThemeColors;
   variants?: ThemeVariants;
+  editor?: Readonly<Partial<Record<ThemeAppearance, ThemeEditorColors>>>;
   collection?: Readonly<{ id: string; label: string }>;
   sidebarArtwork?: boolean;
   managed?: boolean;
@@ -908,12 +980,237 @@ export const IRIS_THEME: ThemeDefinition = {
   sidebarArtwork: true,
 };
 
+const MATERIAL_KEYWORD: ThemeSyntaxSetting = { color: "#c792ea", font_style: "italic" };
+const MATERIAL_FLOW_KEYWORD: ThemeSyntaxSetting = { color: "#89ddff", font_style: "italic" };
+const MATERIAL_COMMENT: ThemeSyntaxSetting = { color: "#717cb4", font_style: "italic" };
+const MATERIAL_PUNCTUATION: ThemeSyntaxSetting = { color: "#89ddff" };
+const MATERIAL_FUNCTION: ThemeSyntaxSetting = { color: "#82aaff" };
+const MATERIAL_CLASS: ThemeSyntaxSetting = { color: "#ffcb6b" };
+const MATERIAL_TAG: ThemeSyntaxSetting = { color: "#f07178" };
+const MATERIAL_TEXT: ThemeSyntaxSetting = { color: "#c3cee3" };
+
+// Colour values from Material Theme UI Lite (MIT, Elior Boukhobza): chrome is Material Oceanic,
+// code and the terminal are Material Deep Ocean. Keys it leaves out are IntelliJ's Darcula.
+export const MATERIAL_OCEAN_THEME: ThemeDefinition = {
+  id: "material-ocean",
+  label: "Material Ocean",
+  appearance: "dark",
+  colors: {
+    canvas: "#263238",
+    chrome: "#263238",
+    toolbar: "#263238",
+    toolbarForeground: "#b0bec5",
+    toolbarBorder: "#2a373e",
+    toolbarControl: "#2e3c43",
+    toolbarControlForeground: "#b0bec5",
+    toolbarControlHover: "#32424a",
+    surface: "#2e3c43",
+    surfaceRaised: "#32424a",
+    surfaceOverlay: "#1e272c",
+    text: "#b0bec5",
+    textMuted: "#607d8b",
+    border: "#2a373e",
+    input: "#425b67",
+    focus: "#009688",
+    accent: "#009688",
+    accentForeground: "#0f111a",
+    secondary: "#2e3c43",
+    secondaryForeground: "#b0bec5",
+    muted: "#2e3c43",
+    mutedForeground: "#607d8b",
+    placeholder: "#607d8b",
+    secondaryLabel: "#607d8b",
+    iconMuted: "#607d8b",
+    error: "#ff5370",
+    errorForeground: "#ff5370",
+    errorSurface: "#35262a",
+    warning: "#ffcb6b",
+    warningForeground: "#ffcb6b",
+    warningSurface: "#354039",
+    update: "#82aaff",
+    updateForeground: "#82aaff",
+    updateSurface: "#293f45",
+    accentSurface: "#30454d",
+    accentSurfaceForeground: "#ffffff",
+    messageSurface: "#314549",
+    messageForeground: "#eeffff",
+    messageAction: "#009688",
+    messageActionForeground: "#0f111a",
+    messageActionHover: "#009c88",
+    codeBackground: "#0f111a",
+    codeForeground: "#c3cee3",
+    searchMatchBackground: "#f8e71c",
+    searchMatchForeground: "#292d3e",
+    searchMatchActiveBackground: "#84ffff",
+    searchMatchActiveForeground: "#0f111a",
+    sidebar: "#263238",
+    sidebarForeground: "#b0bec5",
+    sidebarMutedForeground: "#607d8b",
+    sidebarControlSurface: "#2e3c43",
+    sidebarRowHover: "#2e3c43",
+    sidebarRowActive: "#30454d",
+    sidebarRowSelected: "#30454d",
+    sidebarBorder: "#2a373e",
+    terminalBackground: "#0f111a",
+    terminalForeground: "#c3cee3",
+    terminalCursor: "#ffcc00",
+    terminalSelection: "#3b3f51",
+    terminalScrollbar: "#3b3f51",
+    terminalScrollbarHover: "#525975",
+  },
+  editor: {
+    dark: {
+      syntax: {
+        name: "material-deep-ocean",
+        appearance: "dark",
+        style: {
+          background: "#0f111a",
+          text: "#c3cee3",
+          "editor.background": "#0f111a",
+          "editor.foreground": "#c3cee3",
+          "editor.active_line.background": "#1b2529",
+          "editor.document_highlight.bracket_background": "#3b3f51",
+          "search.match_background": "#f8e71c",
+          players: [{ cursor: "#ffcc00", selection: "#3b3f51" }],
+          created: "#c3e88d",
+          modified: "#80cbc4",
+          deleted: "#f07178",
+          error: "#ff5370",
+          warning: "#ffcb6b",
+          syntax: {
+            attribute: MATERIAL_FUNCTION,
+            "attribute.jsx": { color: "#ffcb6b", font_style: "italic" },
+            boolean: { color: "#ff9cac" },
+            comment: MATERIAL_COMMENT,
+            "comment.doc": MATERIAL_COMMENT,
+            constant: { color: "#f78c6c" },
+            "constant.builtin": { color: "#f78c6c", font_style: "italic" },
+            constructor: MATERIAL_FUNCTION,
+            "diff.minus": MATERIAL_TAG,
+            "diff.plus": { color: "#c3e88d" },
+            embedded: MATERIAL_TEXT,
+            emphasis: { color: "#f07178", font_style: "italic" },
+            "emphasis.strong": { color: "#f07178", font_weight: 700 },
+            enum: MATERIAL_CLASS,
+            function: MATERIAL_FUNCTION,
+            "function.definition": MATERIAL_FUNCTION,
+            "function.method": MATERIAL_FUNCTION,
+            hint: { color: "#717cb4" },
+            keyword: MATERIAL_KEYWORD,
+            "keyword.control": MATERIAL_FLOW_KEYWORD,
+            "keyword.declaration": MATERIAL_KEYWORD,
+            "keyword.import": MATERIAL_FLOW_KEYWORD,
+            "keyword.jsdoc": { color: "#c792ea", font_style: "italic", font_weight: 700 },
+            "keyword.operator": MATERIAL_KEYWORD,
+            label: { color: "#c3d3de" },
+            link_text: MATERIAL_FUNCTION,
+            link_uri: { color: "#f78c6c" },
+            namespace: { color: "#c3e88d", font_style: "italic" },
+            number: { color: "#f78c6c" },
+            operator: MATERIAL_PUNCTUATION,
+            predictive: { color: "#717cb4" },
+            preproc: MATERIAL_FUNCTION,
+            primary: MATERIAL_TEXT,
+            property: { color: "#eeffff" },
+            "property.json_key": { color: "#c792ea" },
+            punctuation: MATERIAL_PUNCTUATION,
+            "punctuation.bracket": MATERIAL_PUNCTUATION,
+            "punctuation.bracket.html": MATERIAL_PUNCTUATION,
+            "punctuation.bracket.jsx": MATERIAL_PUNCTUATION,
+            "punctuation.delimiter": MATERIAL_PUNCTUATION,
+            "punctuation.delimiter.html": MATERIAL_PUNCTUATION,
+            "punctuation.delimiter.jsx": MATERIAL_PUNCTUATION,
+            "punctuation.list_marker": { color: "#f07178", font_style: "italic" },
+            "punctuation.markup": { color: "#82aaff", font_style: "italic" },
+            "punctuation.special": MATERIAL_PUNCTUATION,
+            selector: MATERIAL_CLASS,
+            "selector.class": { color: "#ffcb6b", font_style: "italic" },
+            "selector.id": { color: "#c792ea" },
+            "selector.pseudo": { color: "#c792ea", font_style: "italic" },
+            string: { color: "#c3e88d" },
+            "string.escape": MATERIAL_PUNCTUATION,
+            "string.regex": { color: "#c3e88d" },
+            "string.special": MATERIAL_PUNCTUATION,
+            "string.special.symbol": { color: "#c3e88d" },
+            tag: MATERIAL_TAG,
+            "tag.component.jsx": MATERIAL_TAG,
+            "tag.doctype": MATERIAL_TEXT,
+            "tag.jsx": MATERIAL_TAG,
+            "text.jsx": MATERIAL_TEXT,
+            "text.literal": { color: "#c792ea", font_style: "italic" },
+            title: { color: "#c3e88d" },
+            type: MATERIAL_CLASS,
+            "type.builtin": { color: "#b2ccd6" },
+            "type.class": MATERIAL_CLASS,
+            "type.jsdoc": MATERIAL_CLASS,
+            variable: { color: "#c3d3de" },
+            "variable.jsdoc": { color: "#c3cee3", font_style: "italic", font_weight: 700 },
+            "variable.parameter": { color: "#f78c6c" },
+            "variable.special": { color: "#ff4965" },
+            variant: { color: "#f78c6c" },
+          },
+        },
+      },
+      semantic: {
+        parameter: { color: "#f78c6c" },
+        selfParameter: { color: "#ff5370", italic: true },
+        clsParameter: { color: "#ff5370", italic: true },
+        property: { color: "#eeffff" },
+        "property.static": { color: "#eeffff", italic: true },
+        variable: { color: "#eeffe3" },
+        function: { color: "#82aaff" },
+        "function.declaration": { color: "#82aaff" },
+        method: { color: "#82aaff" },
+        "method.declaration": { color: "#82aaff" },
+        "method.static": { color: "#82aaff", italic: true },
+        class: { color: "#ffcb6b" },
+        interface: { color: "#c3e88d", italic: true },
+        enum: { color: "#ffcb6b" },
+        enumMember: { color: "#f78c6c" },
+        type: { color: "#ffcb6b" },
+        typeParameter: { color: "#ffcb6b" },
+        namespace: { color: "#c3e88d", italic: true },
+        decorator: { color: "#82aaff" },
+        "*.builtin": { color: "#82aaff", italic: true },
+      },
+      ansi: [
+        "#000000",
+        "#ff5370",
+        "#c3e88d",
+        "#ffcb6b",
+        "#82aaff",
+        "#c792ea",
+        "#89ddff",
+        "#717cb4",
+        "#595959",
+        "#ff4050",
+        "#4fc414",
+        "#e5bf00",
+        "#1fb0ff",
+        "#ed7eed",
+        "#00e5e5",
+        "#f8f8f0",
+      ],
+      lineNumber: "#475f63",
+      caretRow: "#1b2529",
+      diff: {
+        inserted: "#264b33",
+        deleted: "#41454b",
+        modified: "#12404b",
+        modifiedMuted: "#10242e",
+      },
+      find: { match: "#f8e71c", currentMatch: "#84ffff", foreground: "#292d3e" },
+    },
+  },
+};
+
 export const BUILT_IN_THEMES: ReadonlyArray<ThemeDefinition> = [
   T3_CHAT_THEME,
   GROVE_THEME,
   OCEAN_THEME,
   EMBER_THEME,
   IRIS_THEME,
+  MATERIAL_OCEAN_THEME,
 ];
 
 export function getThemeColorsForAppearance(
@@ -922,4 +1219,34 @@ export function getThemeColorsForAppearance(
 ): ThemeColors | null {
   if (theme.appearance === appearance) return theme.colors;
   return theme.variants?.[appearance] ?? null;
+}
+
+export function getThemeEditorColors(
+  theme: ThemeDefinition | null,
+  appearance: ThemeAppearance,
+): ThemeEditorColors | null {
+  return theme?.editor?.[appearance] ?? null;
+}
+
+/**
+ * The colour a theme gives a language server's semantic token, or null when it has none.
+ * A `type.modifier` entry wins over a `*.modifier` entry, which wins over the bare type.
+ * @public
+ */
+export function semanticTokenStyle(
+  theme: ThemeEditorColors | null,
+  type: string,
+  modifiers: ReadonlyArray<string> = [],
+): ThemeTokenStyle | null {
+  if (!theme) return null;
+  // Own entries only: a server's token type may be named like an Object.prototype member.
+  const styleOf = (key: string) =>
+    Object.hasOwn(theme.semantic, key) ? theme.semantic[key] : null;
+  for (const prefix of [type, "*"]) {
+    for (const modifier of modifiers) {
+      const style = styleOf(`${prefix}.${modifier}`);
+      if (style) return style;
+    }
+  }
+  return styleOf(type) ?? null;
 }

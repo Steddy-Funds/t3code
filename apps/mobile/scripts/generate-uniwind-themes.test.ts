@@ -37,4 +37,32 @@ describe("generate mobile Uniwind themes", () => {
       });
     }
   });
+
+  it("emits a dark-only built-in's dark theme alone", () => {
+    expect(customThemeNames).toContain("material-ocean-dark");
+    expect(customThemeNames).not.toContain("material-ocean-light");
+    for (const themeId of ["t3-chat", "grove", "ocean", "ember", "iris"]) {
+      expect(customThemeNames).toContain(`${themeId}-light`);
+      expect(customThemeNames).toContain(`${themeId}-dark`);
+    }
+    expect(new Set(customThemeNames).size).toBe(customThemeNames.length);
+
+    const css = renderUniwindThemesCSS();
+    const emitted = [...css.matchAll(/@variant ([\w-]+) \{/gu)].map((match) => match[1]);
+    expect(emitted).toContain("material-ocean-dark");
+    expect(emitted).not.toContain("material-ocean-light");
+    expect(css).not.toContain("material-ocean-light");
+    for (const name of customThemeNames) expect(emitted, name).toContain(name);
+  });
+
+  it("matches the checked-in theme name list", () => {
+    expect(
+      JSON.parse(
+        NodeFS.readFileSync(
+          NodePath.resolve(import.meta.dirname, "../generated-uniwind-theme-names.json"),
+          "utf8",
+        ),
+      ),
+    ).toEqual(customThemeNames);
+  });
 });

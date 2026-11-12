@@ -4,6 +4,7 @@ import { contextChipAccent, contextChipPresentation } from "./composerChipPresen
 import {
   flattenThemeColor,
   getMobileThemeVariables,
+  getMobileThemeAppearances,
   MOBILE_THEME_IDS,
   type MobileThemeVariables,
 } from "./mobileTheme";
@@ -64,7 +65,7 @@ function chipSurfaces(theme: MobileThemeVariables) {
 }
 
 const BUILT_IN_THEMES = MOBILE_THEME_IDS.filter((id) => id !== "material-you").flatMap((id) =>
-  (["light", "dark"] as const).map((appearance) => ({
+  getMobileThemeAppearances(id).map((appearance) => ({
     name: `${id} ${appearance}`,
     theme: getMobileThemeVariables(id, appearance),
   })),

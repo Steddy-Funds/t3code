@@ -1,6 +1,11 @@
 import { parsePatchFiles } from "@pierre/diffs/utils/parsePatchFiles";
 import { parseDiffFromFile } from "@pierre/diffs";
 import type { FileDiffMetadata } from "@pierre/diffs/types";
+import {
+  THEME_SYNTAX_THEME_NAMES,
+  type ThemeAppearance,
+  type ThemeEditorColors,
+} from "@t3tools/shared/themePalettes";
 import { READABLE_LIGHT_THEME_NAME } from "./readableSyntaxTheme";
 
 // Light mode uses a darker pierre-light so syntax stays readable on every code surface.
@@ -9,10 +14,22 @@ export const DIFF_THEME_NAMES = {
   dark: "pierre-dark",
 } as const;
 
-export type DiffThemeName = (typeof DIFF_THEME_NAMES)[keyof typeof DIFF_THEME_NAMES];
+/** Every syntax theme a code surface can be asked for: the stock pair and the themes' own. */
+export const ALL_DIFF_THEME_NAMES = [
+  ...Object.values(DIFF_THEME_NAMES),
+  ...THEME_SYNTAX_THEME_NAMES,
+] as const;
 
-export function resolveDiffThemeName(theme: "light" | "dark"): DiffThemeName {
-  return DIFF_THEME_NAMES[theme];
+export type DiffThemeName = (typeof ALL_DIFF_THEME_NAMES)[number];
+
+/** The painted theme's syntax theme when it has one for this appearance, else the stock pair's. */
+export function resolveDiffThemeName(
+  appearance: ThemeAppearance,
+  editorColors: ThemeEditorColors | null = null,
+): DiffThemeName {
+  return editorColors?.syntax.appearance === appearance
+    ? editorColors.syntax.name
+    : DIFF_THEME_NAMES[appearance];
 }
 
 const FNV_OFFSET_BASIS_32 = 0x811c9dc5;
@@ -350,3 +367,49 @@ export const DIFF_SURFACE_THEME_UNSAFE_CSS = `
   ) !important;
 }
 `;
+
+const DIFF_SURFACE_ROOTS =
+  ":host, [data-diffs-header], [data-diff], [data-file], [data-error-wrapper], [data-virtualizer-buffer]";
+const CHANGED_LINE =
+  ':is([data-line], [data-no-newline]):is([data-line-type="change-addition"], [data-line-type="change-deletion"])';
+
+/**
+ * A theme's own line number, caret row, diff and find colours for Pierre's surfaces. Appended
+ * to a surface's CSS only under such a theme, so every other theme gets the CSS it always had.
+ */
+export function themeEditorSurfaceCss(editorColors: ThemeEditorColors | null): string {
+  if (!editorColors) return "";
+  const { lineNumber, caretRow, diff, find } = editorColors;
+  return `
+${DIFF_SURFACE_ROOTS} {
+  --diffs-fg-number-override: ${lineNumber};
+  --diffs-bg-addition-override: ${diff.inserted};
+  --diffs-bg-addition-number-override: ${diff.inserted};
+  --diffs-bg-deletion-override: ${diff.deleted};
+  --diffs-bg-deletion-number-override: ${diff.deleted};
+  --diffs-bg-search-match-override: ${find.match};
+  --diffs-bg-search-match-current-override: ${find.currentMatch};
+  --diffs-fg-search-match-override: ${find.foreground};
+}
+
+/* Pierre mixes a tint into the surface; an IDE scheme's diff colour is the painted colour. */
+:is([data-line], [data-no-newline])[data-line-type="change-addition"] {
+  --diffs-computed-diff-line-bg: ${diff.inserted};
+}
+:is([data-line], [data-no-newline])[data-line-type="change-deletion"] {
+  --diffs-computed-diff-line-bg: ${diff.deleted};
+}
+
+/* A line with changed words is a modified line: muted, its words at the full colour. */
+${CHANGED_LINE}:has([data-diff-span]) {
+  --diffs-computed-diff-line-bg: ${diff.modifiedMuted};
+}
+${CHANGED_LINE} [data-diff-span] {
+  background-color: ${diff.modified};
+}
+
+:is([data-line], [data-column-number])[data-editor-active-line] {
+  --diffs-computed-editor-active-line-bg: ${caretRow};
+}
+`;
+}

@@ -26,6 +26,7 @@ import {
   EMBER_THEME,
   GROVE_THEME,
   IRIS_THEME,
+  MATERIAL_OCEAN_THEME,
   OCEAN_THEME,
 } from "../../themePalette";
 import {
@@ -60,6 +61,7 @@ const MAINTAINER_THEMES: ReadonlyArray<ThemeDefinition> = [
   OCEAN_THEME,
   EMBER_THEME,
   IRIS_THEME,
+  MATERIAL_OCEAN_THEME,
 ];
 
 function collectionVariantLabels(themes: ReadonlyArray<ThemeDefinition>): ReadonlyArray<string> {
@@ -755,7 +757,11 @@ export function ThemeLibrary({
                   initialAppearance,
                 })
               }
-              onUse={() => persistTheme(maintainerTheme.id)}
+              onUse={() => {
+                const half = singleAppearanceOf(maintainerTheme);
+                if (half === null) persistTheme(maintainerTheme.id);
+                else assignHalf(half, maintainerTheme.id);
+              }}
               onUseMode={handlePairPick(maintainerTheme.id)}
               theme={card}
             />

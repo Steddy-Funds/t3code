@@ -32,6 +32,7 @@ import {
   createMobileThemePairPatch,
   createMobileThemeSelectionPatch,
   normalizeMobileThemeMode,
+  getMobileThemeAppearances,
   resolveMobileThemeIds,
   type MobileThemeAppearance,
   type MobileThemeId,
@@ -243,6 +244,11 @@ export function AppearancePreferencesProvider(props: { readonly children: ReactN
   };
 
   const setThemeIdForBothAppearances = (value: MobileThemeId) => {
+    const appearances = getMobileThemeAppearances(value);
+    if (appearances.length === 1) {
+      setThemeIdForAppearance(appearances[0]!, value);
+      return;
+    }
     updateThemePreferences(createMobileThemePairPatch(value));
   };
 

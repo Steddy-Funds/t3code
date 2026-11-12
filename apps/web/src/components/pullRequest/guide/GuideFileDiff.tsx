@@ -1,3 +1,4 @@
+import { useDiffThemeName, useThemeEditorSurfaceCss } from "~/hooks/useDiffThemeName";
 import {
   cloneFileDiffMetadata,
   type FileDiffContentsLoader,
@@ -6,7 +7,6 @@ import {
 import { FileDiff } from "@pierre/diffs/react";
 
 import { useRenderedAppearance } from "~/hooks/useTheme";
-import { resolveDiffThemeName } from "~/lib/diffRendering";
 import { PREFERRED_HIGHLIGHTER } from "~/lib/syntaxHighlighting";
 
 import { DIFF_VIEW_UNSAFE_CSS } from "../../diffs/StyledDiffCodeView";
@@ -19,6 +19,8 @@ export function GuideFileDiff({
   loadDiffFiles: FileDiffContentsLoader;
 }) {
   const resolvedTheme = useRenderedAppearance();
+  const diffThemeName = useDiffThemeName(resolvedTheme);
+  const themeCss = useThemeEditorSurfaceCss();
   // Loading the unchanged lines rewrites the diff it is given; the excerpts read the same file
   // as a patch, so this view expands a copy of its own.
   const expandable = cloneFileDiffMetadata(file);
@@ -27,10 +29,10 @@ export function GuideFileDiff({
     lineDiffType: "none" as const,
     overflow: "scroll" as const,
     disableFileHeader: true,
-    theme: resolveDiffThemeName(resolvedTheme),
+    theme: diffThemeName,
     themeType: resolvedTheme,
     preferredHighlighter: PREFERRED_HIGHLIGHTER,
-    unsafeCSS: DIFF_VIEW_UNSAFE_CSS,
+    unsafeCSS: `${DIFF_VIEW_UNSAFE_CSS}${themeCss}`,
     loadDiffFiles,
   };
   return (

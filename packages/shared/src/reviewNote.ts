@@ -153,7 +153,9 @@ function commentLines(comment: SentComment) {
   const match =
     (comment.fenceLanguage ?? "diff") === "diff" ? DIFF_HEADER.exec(header ?? "") : null;
   if (match) {
-    const lines = body.filter((line) => !line.startsWith("-")).map((line) => line.slice(1));
+    const lines = body
+      .filter((line) => !line.startsWith("-"))
+      .map((line) => line.slice(1).replace(/\r$/u, ""));
     const startLine = Number(match[1]);
     return {
       pathBase: "diff" as const,
@@ -169,7 +171,8 @@ function commentLines(comment: SentComment) {
         : ("diff" as const),
     startLine: comment.startIndex + 1,
     endLine: comment.endIndex + 1,
-    excerpt: comment.diff.replace(/\n+$/u, ""),
+    // The views compare against lines without their CRLF ending.
+    excerpt: comment.diff.replace(/(?:\r?\n)+$/u, "").replace(/\r$/gmu, ""),
   };
 }
 

@@ -134,7 +134,7 @@ describe("buildReviewThreads", () => {
           filePath: "server/src/app.ts",
           startIndex: 2,
           endIndex: 3,
-          diff: "const a = 1;\nconst b = 2;\n",
+          diff: "const a = 1;\r\nconst b = 2;\r\n",
           fenceLanguage: "ts",
         }),
         // A comment only on removed lines quotes nothing it can sit on.

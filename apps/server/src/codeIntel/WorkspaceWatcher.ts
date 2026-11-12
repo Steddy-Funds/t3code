@@ -98,6 +98,8 @@ class TreeWatcher {
   private readonly knownFiles = new Set<string>();
   private readonly knownDirectories = new Set<string>();
   private timer: NodeJS.Timeout | undefined;
+  /** One flush at a time: the next waits for the lstats of the one before. */
+  private flushing: Promise<void> = Promise.resolve();
   private closed = false;
   private overflowed = false;
   private readonly options: TreeWatcherOptions;
@@ -142,7 +144,16 @@ class TreeWatcher {
       const watcher = NodeFS.watch(directory, { persistent: false, recursive }, (type, name) =>
         this.note(directory, type, name),
       );
-      watcher.on("error", () => this.unwatch(directory));
+      // A watch that broke on a directory still there would miss its changes from now on.
+      watcher.on("error", () => {
+        this.unwatch(directory);
+        void NodeFSP.lstat(directory).then(
+          () => {
+            if (!this.closed) this.fallBack();
+          },
+          () => undefined,
+        );
+      });
       this.watchers.set(directory, watcher);
       return true;
     } catch (error) {
@@ -198,14 +209,17 @@ class TreeWatcher {
     this.schedule();
   }
 
+  // Timed from a batch's first change, so a steady stream of writes still reaches the server.
   private schedule(): void {
-    if (this.timer !== undefined) clearTimeout(this.timer);
-    this.timer = setTimeout(() => void this.flush(), DEBOUNCE_MS);
+    if (this.timer !== undefined) return;
+    this.timer = setTimeout(() => {
+      this.timer = undefined;
+      this.flushing = this.flushing.then(() => this.flush());
+    }, DEBOUNCE_MS);
     this.timer.unref();
   }
 
   private async flush(): Promise<void> {
-    this.timer = undefined;
     if (this.closed) return;
     const batch = [...this.pending];
     this.pending.clear();

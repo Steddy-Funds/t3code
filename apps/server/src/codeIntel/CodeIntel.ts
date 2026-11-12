@@ -120,6 +120,31 @@ const DEFINITION_METHODS = {
 const fail = (reason: CodeIntelError["reason"], message: string) =>
   new CodeIntelError({ reason, message });
 
+const timedOut = () => fail("timeout", "The language server did not answer in time.");
+
+/** One deadline a request, from its start: finding the file counts toward it. */
+interface Deadline {
+  readonly at: number;
+}
+
+const startDeadline = (duration: Duration.Duration) =>
+  Effect.map(Clock.currentTimeMillis, (now): Deadline => ({ at: now + Duration.toMillis(duration) }));
+
+const remaining = (deadline: Deadline) =>
+  Effect.map(Clock.currentTimeMillis, (now) => Duration.millis(Math.max(0, deadline.at - now)));
+
+const within =
+  (deadline: Deadline) =>
+  <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+    Effect.flatMap(remaining(deadline), (duration) =>
+      Effect.timeoutOrElse(effect, { duration, orElse: () => Effect.fail(timedOut()) }),
+    );
+
+const boundedBy =
+  (duration: Duration.Duration) =>
+  <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+    Effect.timeoutOrElse(effect, { duration, orElse: () => Effect.fail(timedOut()) });
+
 interface ResolvedDocument {
   readonly root: string;
   readonly row: LanguageRow;
@@ -210,7 +235,7 @@ const make = Effect.gen(function* () {
   const withServer = <A>(
     row: LanguageRow,
     root: string,
-    deadline: Duration.Duration,
+    deadline: Deadline,
     use: (
       live: LanguageServerPool.LiveServer,
       send: Send,
@@ -223,7 +248,7 @@ const make = Effect.gen(function* () {
       if (hung !== undefined && !(yield* hung.server.isLoading)) {
         yield* pool.reportOutcome(hung, "timeout");
       }
-      return yield* fail("timeout", "The language server did not answer in time.");
+      return yield* timedOut();
     });
     const attempt = (retried: boolean): Effect.Effect<A, CodeIntelError> =>
       Effect.gen(function* () {
@@ -260,8 +285,8 @@ const make = Effect.gen(function* () {
           }),
         );
       });
-    return attempt(false).pipe(
-      Effect.timeoutOrElse({ duration: deadline, orElse: expire }),
+    return Effect.flatMap(remaining(deadline), (duration) =>
+      attempt(false).pipe(Effect.timeoutOrElse({ duration, orElse: expire })),
     );
   };
 
@@ -296,7 +321,7 @@ const make = Effect.gen(function* () {
   /** Opens the document with its text from disk and asks about it under one lock. */
   const askDocument = <A>(
     document: ResolvedDocument,
-    deadline: Duration.Duration,
+    deadline: Deadline,
     ask: (
       live: LanguageServerPool.LiveServer,
       send: Send,
@@ -404,9 +429,10 @@ const make = Effect.gen(function* () {
 
   const definition: CodeIntel["Service"]["definition"] = Effect.fn("CodeIntel.definition")(
     function* (input) {
-      const document = yield* resolveDocument(input.document);
+      const deadline = yield* startDeadline(POSITION_DEADLINE);
+      const document = yield* resolveDocument(input.document).pipe(within(deadline));
       const { method, capability } = DEFINITION_METHODS[input.kind];
-      const locations = yield* askDocument(document, POSITION_DEADLINE, (live, send, uri) =>
+      const locations = yield* askDocument(document, deadline, (live, send, uri) =>
         supports(live, capability)
           ? askLocations(
               live,
@@ -420,8 +446,9 @@ const make = Effect.gen(function* () {
 
   const references: CodeIntel["Service"]["references"] = Effect.fn("CodeIntel.references")(
     function* (input) {
-      const document = yield* resolveDocument(input.document);
-      const found = yield* askDocument(document, SEARCH_DEADLINE, (live, send, uri) =>
+      const deadline = yield* startDeadline(SEARCH_DEADLINE);
+      const document = yield* resolveDocument(input.document).pipe(within(deadline));
+      const found = yield* askDocument(document, deadline, (live, send, uri) =>
         supports(live, "referencesProvider")
           ? askLocations(
               live,
@@ -446,8 +473,9 @@ const make = Effect.gen(function* () {
   const documentHighlights: CodeIntel["Service"]["documentHighlights"] = Effect.fn(
     "CodeIntel.documentHighlights",
   )(function* (input) {
-    const document = yield* resolveDocument(input.document);
-    const ranges = yield* askDocument(document, POSITION_DEADLINE, (live, send, uri) =>
+    const deadline = yield* startDeadline(POSITION_DEADLINE);
+    const document = yield* resolveDocument(input.document).pipe(within(deadline));
+    const ranges = yield* askDocument(document, deadline, (live, send, uri) =>
       supports(live, "documentHighlightProvider")
         ? askUntilLoaded(
             live,
@@ -462,9 +490,12 @@ const make = Effect.gen(function* () {
     return { ranges, revision: document.revision };
   });
 
+  // A hover carries text only from files a server loads as modules. The server's own files
+  // (`secrets/*.bin`, `*.sqlite`) never are; a secret with a module extension would need a filter here.
   const hover: CodeIntel["Service"]["hover"] = Effect.fn("CodeIntel.hover")(function* (input) {
-    const document = yield* resolveDocument(input.document);
-    const answer = yield* askDocument(document, POSITION_DEADLINE, (live, send, uri) =>
+    const deadline = yield* startDeadline(POSITION_DEADLINE);
+    const document = yield* resolveDocument(input.document).pipe(within(deadline));
+    const answer = yield* askDocument(document, deadline, (live, send, uri) =>
       supports(live, "hoverProvider")
         ? askUntilLoaded(
             live,
@@ -488,14 +519,15 @@ const make = Effect.gen(function* () {
   const documentSymbols: CodeIntel["Service"]["documentSymbols"] = Effect.fn(
     "CodeIntel.documentSymbols",
   )(function* (input) {
-    const document = yield* resolveDocument(input.document);
-    const symbols = yield* askDocument(document, SEARCH_DEADLINE, (live, send, uri) =>
+    const deadline = yield* startDeadline(SEARCH_DEADLINE);
+    const document = yield* resolveDocument(input.document).pipe(within(deadline));
+    const symbols = yield* askDocument(document, deadline, (live, send, uri) =>
       supports(live, "documentSymbolProvider")
         ? askUntilLoaded(
             live,
             send("textDocument/documentSymbol", { textDocument: { uri } }),
             isEmptyAnswer,
-          ).pipe(Effect.map(LspResults.toDocumentSymbols))
+          ).pipe(Effect.map((result) => LspResults.toDocumentSymbols(result, uri)))
         : Effect.succeed([]),
     );
     return { symbols, revision: document.revision };
@@ -504,8 +536,9 @@ const make = Effect.gen(function* () {
   const semanticTokens: CodeIntel["Service"]["semanticTokens"] = Effect.fn(
     "CodeIntel.semanticTokens",
   )(function* (input) {
-    const document = yield* resolveDocument(input.document);
-    const tokens = yield* askDocument(document, SEARCH_DEADLINE, (live, send, uri) => {
+    const deadline = yield* startDeadline(SEARCH_DEADLINE);
+    const document = yield* resolveDocument(input.document).pipe(within(deadline));
+    const tokens = yield* askDocument(document, deadline, (live, send, uri) => {
       const provider = live.server.capabilities.semanticTokensProvider;
       const legend = LspResults.toSemanticTokensLegend(provider);
       if (legend === undefined) return Effect.undefined;
@@ -559,13 +592,16 @@ const make = Effect.gen(function* () {
   const workspaceSymbols: CodeIntel["Service"]["workspaceSymbols"] = Effect.fn(
     "CodeIntel.workspaceSymbols",
   )(function* (input) {
-    const root = yield* resolveRoot(input.cwd);
-    const rows = yield* workspaceRows(root, input.languageId);
+    const deadline = yield* startDeadline(SEARCH_DEADLINE);
+    const { root, rows } = yield* Effect.gen(function* () {
+      const root = yield* resolveRoot(input.cwd);
+      return { root, rows: yield* workspaceRows(root, input.languageId) };
+    }).pipe(within(deadline));
     const kinds = input.kinds === undefined ? undefined : new Set(input.kinds);
     const perRow = yield* Effect.forEach(
       rows,
       (row) =>
-        withServer(row, root, SEARCH_DEADLINE, (live, send) =>
+        withServer(row, root, deadline, (live, send) =>
           Effect.gen(function* () {
             if (!supports(live, "workspaceSymbolProvider")) return [];
             const answer = yield* askUntilLoaded(
@@ -601,10 +637,14 @@ const make = Effect.gen(function* () {
             });
             return located.filter((symbol) => symbol !== undefined);
           }),
-        ),
+        ).pipe(Effect.result),
       { concurrency: "unbounded" },
     );
-    const merged = LspResults.rankWorkspaceSymbols(perRow.flat(), input.query);
+    const answered = perRow.flatMap((result) => (result._tag === "Success" ? [result.success] : []));
+    // A language that cannot answer leaves the others' answers; the status chip says why.
+    const failure = perRow.find((result) => result._tag === "Failure");
+    if (answered.length === 0 && failure !== undefined) return yield* failure.failure;
+    const merged = LspResults.rankWorkspaceSymbols(answered.flat(), input.query);
     return { symbols: merged.slice(0, input.limit), truncated: merged.length > input.limit };
   });
 
@@ -672,7 +712,7 @@ const make = Effect.gen(function* () {
   const status: CodeIntel["Service"]["status"] = Effect.fn("CodeIntel.status")(function* (input) {
     const root = yield* resolveRoot(input.cwd);
     return { servers: yield* Effect.forEach(LANGUAGE_ROWS, (row) => serverStatus(row, root)) };
-  });
+  }, boundedBy(POSITION_DEADLINE));
 
   const installServer: CodeIntel["Service"]["installServer"] = Effect.fn(
     "CodeIntel.installServer",
@@ -680,6 +720,7 @@ const make = Effect.gen(function* () {
     if (languageRow(input.languageId) === undefined) {
       return yield* fail("unsupported_language", "No language server handles this language.");
     }
+    yield* pool.assertEnabled;
     return yield* binaries.install(input.languageId).pipe(
       Effect.match({
         onSuccess: (): CodeIntelInstallServerResult => ({ state: "stopped" }),
@@ -701,6 +742,7 @@ const make = Effect.gen(function* () {
       yield* pool.restart(root, input.languageId);
       return { servers: yield* Effect.forEach(LANGUAGE_ROWS, (row) => serverStatus(row, root)) };
     },
+    boundedBy(POSITION_DEADLINE),
   );
 
   return CodeIntel.of({

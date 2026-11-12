@@ -54,6 +54,30 @@ export interface ScenarioOptions {
   readonly baseDir?: string;
 }
 
+/** Holds an effect at one point: it says it got there, then waits to be let go. */
+export interface Gate {
+  /** Done once `expected` callers are held. */
+  readonly began: Deferred.Deferred<void>;
+  readonly letGo: Deferred.Deferred<void>;
+  readonly expected: number;
+  arrived: number;
+}
+
+export const makeGate = (expected = 1): Gate => ({
+  began: Deferred.makeUnsafe<void>(),
+  letGo: Deferred.makeUnsafe<void>(),
+  expected,
+  arrived: 0,
+});
+
+const passGate = (gate: Gate | undefined) =>
+  gate === undefined
+    ? Effect.void
+    : Effect.suspend(() => {
+        gate.arrived += 1;
+        return gate.arrived >= gate.expected ? Deferred.succeed(gate.began, undefined) : Effect.void;
+      }).pipe(Effect.andThen(Deferred.await(gate.letGo)));
+
 export const isAlive = (pid: number) => {
   try {
     NodeProcess.kill(pid, 0);
@@ -187,6 +211,12 @@ export const makeScenario = Effect.fn("makeScenario")(function* (options: Scenar
     resolved,
     knownChecks: 0,
     openWatchers: new Map<string, number>(),
+    /** Set, a watch handle's release says it began, then waits to be let go. */
+    watcherRelease: undefined as Gate | undefined,
+    /** Set, the pool's binary lookup says it began, then waits to be let go. */
+    resolveGate: undefined as Gate | undefined,
+    /** Set, the known-workspace check says it began, then waits to be let go. */
+    knownGate: undefined as Gate | undefined,
     history: [] as Array<LogEntry>,
     waiters: new Set<{
       readonly match: (entry: LogEntry) => boolean;
@@ -225,7 +255,7 @@ export const makeScenario = Effect.fn("makeScenario")(function* (options: Scenar
     LanguageServerBinaries.LanguageServerBinaries,
     LanguageServerBinaries.LanguageServerBinaries.of({
       resolve: (languageId) =>
-        Effect.sync(() => {
+        Effect.suspend(() => passGate(state.resolveGate)).pipe(Effect.andThen(Effect.sync(() => {
           Queue.offerUnsafe(resolved, languageId);
           return state.missing.has(languageId)
             ? ({
@@ -237,7 +267,7 @@ export const makeScenario = Effect.fn("makeScenario")(function* (options: Scenar
                 message: "fake is not installed. Install it to navigate this language.",
               } as const)
             : launchSpec(languageId);
-        }),
+        }))),
       install: (languageId) =>
         Effect.suspend(() => {
           state.installs.push(languageId);
@@ -269,7 +299,7 @@ export const makeScenario = Effect.fn("makeScenario")(function* (options: Scenar
     assertContains: (cwd) =>
       Effect.suspend(() => {
         state.knownChecks += 1;
-        return refusal(cwd);
+        return passGate(state.knownGate).pipe(Effect.andThen(refusal(cwd)));
       }),
   });
   const knownForFiles = Layer.mock(KnownWorkspaces.KnownWorkspaces)({ assertContains: refusal });
@@ -280,7 +310,7 @@ export const makeScenario = Effect.fn("makeScenario")(function* (options: Scenar
     Layer.provide(knownForFiles),
   );
 
-  // Settings whose changes reach `streamChanges`, as the live service's do.
+  // Settings whose changes reach `subscribeChanges`, as the live service's do. One reader: the pool.
   const settings = Layer.effect(
     ServerSettings.ServerSettingsService,
     Effect.gen(function* () {
@@ -289,7 +319,7 @@ export const makeScenario = Effect.fn("makeScenario")(function* (options: Scenar
         ...base,
         updateSettings: (patch) =>
           base.updateSettings(patch).pipe(Effect.tap((next) => Queue.offer(changes, next))),
-        streamChanges: Stream.fromQueue(changes),
+        subscribeChanges: Effect.succeed(Stream.fromQueue(changes)),
       } satisfies ServerSettings.ServerSettingsService["Service"];
     }),
   ).pipe(Layer.provide(ServerSettings.ServerSettingsService.layerTest(options.settings)));
@@ -303,7 +333,13 @@ export const makeScenario = Effect.fn("makeScenario")(function* (options: Scenar
         Effect.acquireRelease(
           Effect.sync(() => state.openWatchers.set(key, (state.openWatchers.get(key) ?? 0) + 1)),
           () =>
-            Effect.sync(() => state.openWatchers.set(key, (state.openWatchers.get(key) ?? 1) - 1)),
+            Effect.suspend(() => passGate(state.watcherRelease)).pipe(
+              Effect.andThen(
+                Effect.sync(() =>
+                  state.openWatchers.set(key, (state.openWatchers.get(key) ?? 1) - 1),
+                ),
+              ),
+            ),
         );
       return WorkspaceWatcher.WorkspaceWatcher.of({
         watchTree: (root) => Effect.andThen(hold(root), real.watchTree(root)),

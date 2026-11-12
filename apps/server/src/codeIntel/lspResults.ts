@@ -89,8 +89,14 @@ export const toLocations = (result: unknown): ReadonlyArray<LspLocation> =>
 export const toSymbolKind = (kind: unknown): CodeSymbolKind =>
   (isIndex(kind) ? SYMBOL_KINDS[kind] : undefined) ?? "other";
 
-/** `DocumentSymbol[]` (a tree) or `SymbolInformation[]` (flat), bounded in size and depth. */
-export const toDocumentSymbols = (result: unknown): ReadonlyArray<CodeSymbol> => {
+/**
+ * `DocumentSymbol[]` (a tree) or `SymbolInformation[]` (flat), bounded in size and depth. A flat
+ * symbol names its own file: one in another file has no range in this one.
+ */
+export const toDocumentSymbols = (
+  result: unknown,
+  documentUri: string,
+): ReadonlyArray<CodeSymbol> => {
   let remaining = MAX_DOCUMENT_SYMBOLS;
   const convert = (values: unknown, depth: number): Array<CodeSymbol> => {
     if (!Array.isArray(values) || depth > MAX_SYMBOL_DEPTH) return [];
@@ -98,7 +104,9 @@ export const toDocumentSymbols = (result: unknown): ReadonlyArray<CodeSymbol> =>
     for (const value of values) {
       if (remaining <= 0) break;
       if (!isRecord(value) || typeof value.name !== "string") continue;
-      const range = toRange(value.range) ?? toLocation(value.location)?.range;
+      const flat = toLocation(value.location);
+      if (flat !== undefined && flat.uri !== documentUri) continue;
+      const range = toRange(value.range) ?? flat?.range;
       if (range === undefined) continue;
       remaining -= 1;
       symbols.push({

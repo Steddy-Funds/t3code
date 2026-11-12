@@ -78,17 +78,18 @@ export const make = Effect.fn("ServerSession.make")(function* (
   const documents = new Map<string, OpenDocument>();
   const answerFileStats = new Map<string, string>();
 
+  const closeHeld = (document: OpenDocument) =>
+    Effect.suspend(() => {
+      if (documents.get(document.uri) === document) documents.delete(document.uri);
+      if (!document.open) return Effect.void;
+      document.open = false;
+      return Effect.ignore(
+        server.notify("textDocument/didClose", { textDocument: { uri: document.uri } }),
+      );
+    });
+
   const close = (document: OpenDocument) =>
-    document.lock.withPermits(DOCUMENT_PERMITS)(
-      Effect.suspend(() => {
-        if (!document.open) return Effect.void;
-        document.open = false;
-        if (documents.get(document.uri) === document) documents.delete(document.uri);
-        return Effect.ignore(
-          server.notify("textDocument/didClose", { textDocument: { uri: document.uri } }),
-        );
-      }),
-    );
+    document.lock.withPermits(DOCUMENT_PERMITS)(closeHeld(document));
 
   const closeLeastRecentlyUsed = (keep: OpenDocument) =>
     Effect.suspend(() => {
@@ -124,38 +125,52 @@ export const make = Effect.fn("ServerSession.make")(function* (
     open.revision = document.revision;
   });
 
-  const withDocument: ServerSession["withDocument"] = Effect.fnUntraced(function* (document, use) {
-    const uri = pathToUri(document.realPath);
-    let open = documents.get(uri);
-    if (open === undefined) {
-      open = {
+  const entryFor = (uri: string) => {
+    let entry = documents.get(uri);
+    if (entry === undefined) {
+      entry = {
         uri,
-        lock: yield* Semaphore.make(DOCUMENT_PERMITS),
+        lock: Semaphore.makeUnsafe(DOCUMENT_PERMITS),
         open: false,
         version: 1,
         revision: "",
         lastUsedAt: 0,
       };
-      documents.set(uri, open);
+      documents.set(uri, entry);
     }
-    const current = open;
-    current.lastUsedAt = yield* Clock.currentTimeMillis;
-    const holdsRevision = () => current.open && current.revision === document.revision;
+    return entry;
+  };
 
-    if (holdsRevision()) {
-      const shared = yield* current.lock.withPermits(1)(
+  const withDocument: ServerSession["withDocument"] = Effect.fnUntraced(function* (document, use) {
+    const uri = pathToUri(document.realPath);
+    // A close can remove the entry while a request waits on its lock: that request starts over
+    // on the entry that replaced it, so the server never holds two copies of one document.
+    while (true) {
+      const current = entryFor(uri);
+      current.lastUsedAt = yield* Clock.currentTimeMillis;
+      const owned = () => documents.get(uri) === current;
+      const holdsRevision = () => owned() && current.open && current.revision === document.revision;
+
+      if (holdsRevision()) {
+        const shared = yield* current.lock.withPermits(1)(
+          Effect.suspend(() =>
+            holdsRevision() ? Effect.asSome(use) : Effect.succeed(Option.none<never>()),
+          ),
+        );
+        if (Option.isSome(shared)) return shared.value;
+      }
+      const exclusive = yield* current.lock.withPermits(DOCUMENT_PERMITS)(
         Effect.suspend(() =>
-          holdsRevision() ? Effect.asSome(use) : Effect.succeed(Option.none<never>()),
+          owned()
+            ? sync(current, document).pipe(
+                Effect.andThen(Effect.forkIn(closeLeastRecentlyUsed(current), sessionScope)),
+                Effect.andThen(Effect.asSome(use)),
+              )
+            : Effect.succeed(Option.none<never>()),
         ),
       );
-      if (Option.isSome(shared)) return shared.value;
+      if (Option.isSome(exclusive)) return exclusive.value;
     }
-    return yield* current.lock.withPermits(DOCUMENT_PERMITS)(
-      sync(current, document).pipe(
-        Effect.andThen(Effect.forkIn(closeLeastRecentlyUsed(current), sessionScope)),
-        Effect.andThen(use),
-      ),
-    );
   });
 
   const notifyChanged = (changes: ReadonlyArray<{ readonly uri: string; readonly type: number }>) =>
@@ -164,12 +179,16 @@ export const make = Effect.fn("ServerSession.make")(function* (
       : Effect.ignore(server.notify("workspace/didChangeWatchedFiles", { changes }));
 
   // An open document hides the file on disk from the server: closing it makes the disk the
-  // truth again. Forked, since a request in flight on the document holds its lock.
+  // truth again. A document a request holds is closed after it: that request read its text from
+  // disk, and waiting here could wait on a request that waits on this one.
   const closeIfOpen = (uri: string) => {
     const open = documents.get(uri);
-    return open === undefined
-      ? Effect.void
-      : Effect.asVoid(Effect.forkIn(close(open), sessionScope));
+    if (open === undefined) return Effect.void;
+    return open.lock.withPermitsIfAvailable(DOCUMENT_PERMITS)(closeHeld(open)).pipe(
+      Effect.flatMap((closed) =>
+        Option.isSome(closed) ? Effect.void : Effect.asVoid(Effect.forkIn(close(open), sessionScope)),
+      ),
+    );
   };
 
   const onBatch = Effect.fnUntraced(function* (batch: WorkspaceWatcher.WatchBatch) {
@@ -206,7 +225,12 @@ export const make = Effect.fn("ServerSession.make")(function* (
         const known = answerFileStats.get(filePath);
         if (answerFileStats.size >= MAX_REMEMBERED_ANSWER_FILES) answerFileStats.clear();
         answerFileStats.set(filePath, signature);
-        if (known === undefined || known === signature) continue;
+        // A file first seen here may have changed after the server last read it.
+        const unchanged =
+          known === undefined
+            ? stat !== undefined && stat.mtimeMs < server.startedAt
+            : known === signature;
+        if (unchanged) continue;
         const uri = pathToUri(filePath);
         yield* closeIfOpen(uri);
         changes.push({ uri, type: stat === undefined ? FILE_DELETED : FILE_CHANGED });

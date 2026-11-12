@@ -17,6 +17,7 @@ import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
 
 import * as ServerConfig from "../config.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import * as KnownWorkspaces from "../workspace/KnownWorkspaces.ts";
 
 const TY = { languageId: "python", name: "ty", args: ["server"] } as const;
 const TYPESCRIPT = {
@@ -88,6 +89,7 @@ export interface Unavailable {
     | "not_installed"
     | "unsupported_platform"
     | "setting_path_missing"
+    | "setting_path_in_project"
     | "unknown_language";
   /** True when `install(languageId)` can fix it. */
   readonly installable: boolean;
@@ -207,6 +209,7 @@ export const make = Effect.fn("LanguageServerBinaries.make")(function* (
   const arch = yield* HostProcess.Architecture;
   const libc = yield* HostProcess.LinuxLibc;
   const home = yield* HostProcess.HomeDirectory;
+  const knownWorkspaces = yield* KnownWorkspaces.KnownWorkspaces;
 
   const tyRoot = path.join(config.stateDir, "language-servers", "ty");
   const tyDirectory = path.join(tyRoot, TY_VERSION);
@@ -256,13 +259,24 @@ export const make = Effect.fn("LanguageServerBinaries.make")(function* (
       Effect.orElseSucceed(() => undefined),
     );
     if (!setting) return undefined;
-    const command = expandHomePath(setting, home);
+    const configured = expandHomePath(setting, home);
     // A relative path would resolve against the server's working directory, which can be a workspace.
-    if (!path.isAbsolute(command) || (yield* statFile(command)) === undefined) {
+    const command = path.isAbsolute(configured)
+      ? yield* fileSystem.realPath(configured).pipe(Effect.orElseSucceed(() => undefined))
+      : undefined;
+    if (command === undefined || (yield* statFile(command)) === undefined) {
       return unavailable(
         language,
         "setting_path_missing",
         `The ${language.name} language server path in settings is not an absolute path to a file that exists.`,
+      );
+    }
+    // A workspace's own files are never run, even by a path the user set (or a link to one).
+    if (yield* knownWorkspaces.contains(command)) {
+      return unavailable(
+        language,
+        "setting_path_in_project",
+        `The ${language.name} language server path in settings is inside a project. T3 Code never runs a project's files: install the server outside it.`,
       );
     }
     return {

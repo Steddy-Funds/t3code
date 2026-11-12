@@ -14,8 +14,10 @@
 //   --exit-on-initialize=N exit with code N instead of answering `initialize`
 //   --exit-after-initialize=N  answer `initialize`, then exit with code N
 //   --crash-on=METHOD      exit with code 7 when METHOD arrives
+//   --bad-frame-on=METHOD  answer METHOD with a frame that has no length, and keep running
+//                          after the pipe closes
 //   --ignore=METHOD        never answer METHOD
-//   --once-file=FILE       makes --crash-on and --ignore apply to the first process that gets to
+//   --once-file=FILE       makes --crash-on, --bad-frame-on and --ignore apply to the first process that gets to
 //                          create FILE only, so a server started after it answers normally
 //   --ignore-shutdown      never answer `shutdown` and ignore `exit` and a closed pipe: only a signal ends it
 //   --encoding=NAME        claim this position encoding
@@ -322,6 +324,12 @@ const handle = (message) => {
   record(message);
   if (message.method === undefined) return; // an answer to one of our requests
   if (flag("crash-on") === message.method && misbehaves()) process.exit(7);
+  if (flag("bad-frame-on") === message.method && misbehaves()) {
+    process.stdout.write("Content-Type: broken\r\n\r\n");
+    process.stdin.removeAllListeners("end");
+    setInterval(() => {}, 60_000);
+    return;
+  }
   if (flag("ignore-shutdown") && (message.method === "shutdown" || message.method === "exit")) return;
   if (message.id === undefined) return notified(message.method, message.params ?? {});
   if (message.method === "initialize") {

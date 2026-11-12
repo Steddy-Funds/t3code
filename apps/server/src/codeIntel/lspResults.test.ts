@@ -14,6 +14,8 @@ import {
   toWorkspaceSymbols,
 } from "./lspResults.ts";
 
+const FILE = "file:///a.py";
+
 const range = (line: number, start: number, end: number) => ({
   start: { line, character: start },
   end: { line, character: end },
@@ -103,7 +105,8 @@ describe("lspResults", () => {
   describe("toDocumentSymbols", () => {
     it("keeps the tree and fills the selection range from the range when absent", () => {
       expect(
-        toDocumentSymbols([
+        toDocumentSymbols(
+          [
           {
             name: "Greeter",
             kind: 5,
@@ -112,7 +115,9 @@ describe("lspResults", () => {
             selectionRange: range(0, 6, 13),
             children: [{ name: "greet", kind: 6, range: range(1, 2, 8) }],
           },
-        ]),
+          ],
+          FILE,
+        ),
       ).toEqual([
         {
           name: "Greeter",
@@ -133,11 +138,15 @@ describe("lspResults", () => {
       ]);
     });
 
-    it("reads the flat form by its location range and omits an empty detail", () => {
+    it("reads the flat form by its location range, omits an empty detail, and keeps only this file's", () => {
       expect(
-        toDocumentSymbols([
-          { name: "f", kind: 12, detail: "", location: { uri: "file:///a.py", range: range(3, 0, 4) } },
-        ]),
+        toDocumentSymbols(
+          [
+            { name: "f", kind: 12, detail: "", location: { uri: FILE, range: range(3, 0, 4) } },
+            { name: "g", kind: 12, location: { uri: "file:///opt/t3/lib.py", range: range(0, 0, 1) } },
+          ],
+          FILE,
+        ),
       ).toEqual([
         {
           name: "f",
@@ -151,10 +160,10 @@ describe("lspResults", () => {
 
     it("skips an entry without a name or a range, and anything that is not a list", () => {
       expect(
-        toDocumentSymbols([{ kind: 12, range: range(0, 0, 1) }, { name: "x", kind: 12 }, 5, null]),
+        toDocumentSymbols([{ kind: 12, range: range(0, 0, 1) }, { name: "x", kind: 12 }, 5, null], FILE),
       ).toEqual([]);
-      expect(toDocumentSymbols(null)).toEqual([]);
-      expect(toDocumentSymbols({ name: "x" })).toEqual([]);
+      expect(toDocumentSymbols(null, FILE)).toEqual([]);
+      expect(toDocumentSymbols({ name: "x" }, FILE)).toEqual([]);
     });
 
     it("stops at 5000 symbols", () => {
@@ -163,7 +172,7 @@ describe("lspResults", () => {
         kind: 12,
         range: range(index, 0, 1),
       }));
-      expect(toDocumentSymbols(many)).toHaveLength(5_000);
+      expect(toDocumentSymbols(many, FILE)).toHaveLength(5_000);
     });
 
     it("stops descending at depth 32", () => {
@@ -172,7 +181,7 @@ describe("lspResults", () => {
         node = { name: `n${depth}`, kind: 12, range: range(0, 0, 1), children: [node] };
       }
       let levels = 0;
-      let current: ReadonlyArray<{ children: ReadonlyArray<unknown> }> = toDocumentSymbols([node]) as never;
+      let current: ReadonlyArray<{ children: ReadonlyArray<unknown> }> = toDocumentSymbols([node], FILE) as never;
       while (current.length > 0) {
         levels += 1;
         current = current[0]!.children as never;

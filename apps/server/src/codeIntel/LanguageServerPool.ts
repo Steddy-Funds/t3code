@@ -1,6 +1,7 @@
 import { CodeIntelError, type CodeServerState } from "@t3tools/contracts";
 import { AgentScope } from "@t3tools/shared/AgentScope";
 import * as HostProcess from "@t3tools/shared/HostProcess";
+import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
@@ -90,6 +91,8 @@ interface Slot {
   latched: boolean;
   startFailuresInARow: number;
   timeoutsInARow: number;
+  /** The stop of a server evicted for this slot: requests that come meanwhile wait on it, not evict another. */
+  evicting: Deferred.Deferred<void> | undefined;
 }
 
 type Decision =
@@ -114,6 +117,9 @@ const withStderr = (message: string, excerpt: string | undefined) =>
 
 const describeExit = (exit: LanguageServerProcess.LanguageServerExit, memoryKilled: boolean) => {
   if (memoryKilled) return "The language server was stopped: it ran out of memory.";
+  if (exit.connection !== undefined) {
+    return `The language server's connection broke (${exit.connection}), so it was stopped.`;
+  }
   return exit.signal === undefined
     ? `The language server exited (code ${exit.code ?? "unknown"}).`
     : `The language server exited (signal ${exit.signal}).`;
@@ -129,6 +135,8 @@ export class LanguageServerPool extends Context.Service<
       live: LiveServer,
       outcome: "answered" | "timeout",
     ) => Effect.Effect<void>;
+    /** `server_unavailable` while code intelligence is turned off in settings. */
+    readonly assertEnabled: Effect.Effect<void, CodeIntelError>;
     /** Never starts anything. */
     readonly snapshot: (row: LanguageRow, root: string) => Effect.Effect<ServerSnapshot>;
     /** Stops this root's servers and forgets their failures; the next request starts them. */
@@ -148,11 +156,14 @@ const make = Effect.gen(function* () {
   const platform = yield* HostProcess.Platform;
   const hostEnvironment = yield* HostProcess.Environment;
   const slots = new Map<string, Slot>();
-  let followsSettings = false;
 
   const isEnabled = settings.getSettings.pipe(
     Effect.map((current) => current.codeIntel.enabled),
     Effect.orElseSucceed(() => true),
+  );
+  const TURNED_OFF = "Code intelligence is turned off in settings.";
+  const assertEnabled = Effect.flatMap(isEnabled, (enabled) =>
+    enabled ? Effect.void : Effect.fail(unavailable(TURNED_OFF)),
   );
 
   const annotations = (slot: Slot) => ({ languageId: slot.row.id, root: slot.root });
@@ -327,37 +338,42 @@ const make = Effect.gen(function* () {
 
     const exit = yield* server.exited;
     if (slot.generation !== generation) return;
-    // An exit nobody asked for: `ready -> failed`.
+    // An exit nobody asked for: `ready -> stopping -> failed`. The slot keeps its place under
+    // the cap, and its scope key, until the child is reaped.
     slot.generation += 1;
-    const memoryKilled = yield* agentScope.oomKilled(scopeKey);
-    const excerpt = yield* server.stderrExcerpt;
-    recordFailure(
-      slot,
-      withStderr(describeExit(exit, memoryKilled), excerpt),
-      yield* Clock.currentTimeMillis,
-    );
-    yield* Scope.close(scope, Exit.void);
-    yield* Effect.logWarning("Language server exited", {
-      ...annotations(slot),
-      pid: server.pid,
-      exitCode: exit.code,
-      signal: exit.signal,
-      memoryKilled,
-    });
+    slot.fiber = undefined;
+    const stopped = Deferred.makeUnsafe<void>();
+    slot.phase = { _tag: "stopping", stopped };
+    yield* Effect.gen(function* () {
+      const memoryKilled = yield* agentScope.oomKilled(scopeKey);
+      const excerpt = yield* server.stderrExcerpt;
+      yield* Scope.close(scope, Exit.void);
+      recordFailure(
+        slot,
+        withStderr(describeExit(exit, memoryKilled), excerpt),
+        yield* Clock.currentTimeMillis,
+      );
+      yield* Effect.logWarning("Language server exited", {
+        ...annotations(slot),
+        pid: server.pid,
+        exitCode: exit.code,
+        signal: exit.signal,
+        connection: exit.connection,
+        memoryKilled,
+      });
+      yield* Deferred.succeed(stopped, undefined);
+    }).pipe(Effect.uninterruptible);
   });
 
   // The off switch stops live servers when it flips, not only when the next request reads it.
-  const followSettings = Effect.suspend(() => {
-    if (followsSettings) return Effect.void;
-    followsSettings = true;
-    return settings.streamChanges.pipe(
-      Stream.runForEach((current) =>
-        current.codeIntel.enabled ? Effect.void : stopMatching("off", () => true, true),
-      ),
-      Effect.forkIn(poolScope),
-      Effect.asVoid,
-    );
-  });
+  // Subscribed now, so a flip between a request's check and its start is never missed.
+  const settingsChanges = yield* settings.subscribeChanges;
+  yield* settingsChanges.pipe(
+    Stream.runForEach((current) =>
+      current.codeIntel.enabled ? Effect.void : stopMatching("off", () => true, true),
+    ),
+    Effect.forkIn(poolScope),
+  );
 
   const decide = (slot: Slot, now: number): Decision => {
     const phase = slot.phase;
@@ -391,6 +407,9 @@ const make = Effect.gen(function* () {
   ): Effect.fn.Return<Decision> {
     const again = decide(slot, now);
     if (again._tag !== "start") return again;
+    if (slot.evicting !== undefined && !Deferred.isDoneUnsafe(slot.evicting)) {
+      return { _tag: "wait", stopped: slot.evicting };
+    }
     const alive = [...slots.values()].filter(isAlive);
     if (alive.length >= MAX_LIVE_SERVERS) {
       const victim = alive
@@ -398,6 +417,7 @@ const make = Effect.gen(function* () {
         .toSorted((left, right) => left.lastUsedAt - right.lastUsedAt)[0];
       if (victim !== undefined) {
         const stopped = yield* beginStop(victim, "evicted");
+        slot.evicting = stopped;
         return stopped === undefined ? { _tag: "start" } : { _tag: "wait", stopped };
       }
       const stopping = alive.find((other) => other.phase._tag === "stopping")?.phase;
@@ -405,20 +425,39 @@ const make = Effect.gen(function* () {
         ? { _tag: "wait", stopped: stopping.stopped }
         : { _tag: "start" };
     }
-    const scope = yield* Scope.fork(poolScope, "sequential");
-    const ready = yield* Deferred.make<LiveServer, CodeIntelError>();
+    // From `decide` to here nothing yields: a request that runs in between would start a second server.
+    const scope = Scope.forkUnsafe(poolScope, "sequential");
+    const ready = Deferred.makeUnsafe<LiveServer, CodeIntelError>();
     // After two failed starts in a row the next one waits; a stop interrupts the wait.
     const backoffMs =
       slot.startFailuresInARow < 2
         ? 0
         : Math.min(START_BACKOFF_BASE_MS * 2 ** (slot.startFailuresInARow - 2), START_BACKOFF_MAX_MS);
     slot.generation += 1;
+    const generation = slot.generation;
     slot.lastUsedAt = now;
+    slot.evicting = undefined;
     slot.phase = { _tag: "starting", scope, ready };
-    slot.fiber = yield* run(slot, slot.generation, spec, scope, ready, backoffMs).pipe(
+    const fiber = yield* run(slot, generation, spec, scope, ready, backoffMs).pipe(
+      // A defect would leave the slot starting, and every request waiting on it, until a restart.
+      Effect.catchCauseIf(
+        (cause) => !Cause.hasInterruptsOnly(cause) && slot.generation === generation,
+        (cause) =>
+          Effect.gen(function* () {
+            slot.generation += 1;
+            slot.fiber = undefined;
+            yield* Scope.close(scope, Exit.void);
+            const message = "The language server stopped on an internal error.";
+            recordFailure(slot, message, yield* Clock.currentTimeMillis);
+            yield* Deferred.fail(ready, failed(message));
+            yield* Effect.logError("Language server run failed", { ...annotations(slot), cause });
+          }).pipe(Effect.uninterruptible),
+      ),
       Effect.forkIn(poolScope),
     );
-    yield* followSettings;
+    // A stop that came before the fiber was recorded had nothing to interrupt.
+    if (slot.generation === generation) slot.fiber = fiber;
+    else yield* Fiber.interrupt(fiber);
     return { _tag: "join", ready };
   }, Effect.uninterruptible);
 
@@ -426,7 +465,7 @@ const make = Effect.gen(function* () {
     function* (row, root) {
       if (!(yield* isEnabled)) {
         yield* stopMatching("off", () => true, true).pipe(Effect.forkIn(poolScope));
-        return yield* unavailable("Code intelligence is turned off in settings.");
+        return yield* unavailable(TURNED_OFF);
       }
       const key = slotKey(row.id, root);
       let slot = slots.get(key);
@@ -443,6 +482,7 @@ const make = Effect.gen(function* () {
           latched: false,
           startFailuresInARow: 0,
           timeoutsInARow: 0,
+          evicting: undefined,
         };
         slots.set(key, slot);
       }
@@ -453,6 +493,8 @@ const make = Effect.gen(function* () {
           // Probed on every start: a binary installed since the last answer is found here.
           const spec = yield* binaries.resolve(row.id);
           if (spec._tag === "Unavailable") return yield* unavailable(spec.message);
+          // The switch may have flipped during the lookup, after the settings stream stopped all.
+          yield* assertEnabled;
           decision = yield* claim(slot, spec, now);
         }
         switch (decision._tag) {
@@ -507,7 +549,7 @@ const make = Effect.gen(function* () {
       return {
         ...identity,
         state: "unavailable",
-        message: "Code intelligence is turned off in settings.",
+        message: TURNED_OFF,
       };
     }
     if (phase?._tag === "ready") {
@@ -561,7 +603,7 @@ const make = Effect.gen(function* () {
     ),
   );
 
-  return LanguageServerPool.of({ acquire, reportOutcome, snapshot, restart });
+  return LanguageServerPool.of({ acquire, reportOutcome, assertEnabled, snapshot, restart });
 });
 
 export const layer = Layer.effect(LanguageServerPool, make);

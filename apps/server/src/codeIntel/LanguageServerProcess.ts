@@ -8,6 +8,7 @@ import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import type * as Scope from "effect/Scope";
@@ -27,8 +28,12 @@ const KILL_GRACE = "2 seconds";
 const STDERR_TAIL_MAX_CHARS = 4_096;
 const STDERR_EXCERPT_MAX_CHARS = 300;
 const STDERR_DRAIN_GRACE = "250 millis";
+// How long a server whose output ended gets to exit by itself.
+const CONNECTION_END_GRACE = "2 seconds";
 // Bridges the gap between opening a document and the server's first progress report.
 const DOCUMENT_OPEN_SETTLE_MS = 3_000;
+// Past this, a progress report that never ended no longer excuses timeouts.
+const PROGRESS_GRACE_MS = 5 * 60_000;
 // Above the agents' own score, so the kernel picks a language server before a provider CLI.
 const LANGUAGE_SERVER_OOM_SCORE_ADJ = 900;
 const RAISE_OOM_SCORE_SCRIPT = `{ echo ${LANGUAGE_SERVER_OOM_SCORE_ADJ} >/proc/self/oom_score_adj; } 2>/dev/null\nexec "$@"`;
@@ -98,6 +103,8 @@ const SEMANTIC_TOKEN_MODIFIERS = [
 export interface LanguageServerExit {
   readonly code: number | undefined;
   readonly signal: string | undefined;
+  /** Set when the process outlived its broken connection: the pool's kill ends it. */
+  readonly connection?: LspConnection.LspConnectionClosedError["reason"];
 }
 
 export class LanguageServerStartError extends Schema.TaggedError<LanguageServerStartError>()(
@@ -155,12 +162,14 @@ export interface RunningLanguageServer {
   readonly name: string;
   readonly version: string | undefined;
   readonly capabilities: ServerCapabilities;
+  /** Clock millis just before the spawn: the server may not know of a file changed after it. */
+  readonly startedAt: number;
   readonly request: LspConnection.LspConnection["request"];
   readonly notify: LspConnection.LspConnection["notify"];
-  /** True while the server reports work in progress, or a document was just opened. */
+  /** True while the server reports work begun in the last five minutes, or a document was just opened. */
   readonly isLoading: Effect.Effect<boolean>;
   readonly noteDocumentOpened: Effect.Effect<void>;
-  /** Completes when the process is gone. */
+  /** Completes when the process is gone, or can no longer be talked to. */
   readonly exited: Effect.Effect<LanguageServerExit>;
   /** The last line the child wrote to stderr, bounded: for the status message, never logged. */
   readonly stderrExcerpt: Effect.Effect<string | undefined>;
@@ -284,6 +293,7 @@ export const spawn = Effect.fn("LanguageServerProcess.spawn")(function* (
       ...(detail.cause === undefined ? {} : { cause: detail.cause }),
     });
 
+  const startedAt = yield* Clock.currentTimeMillis;
   const handle = yield* spawner
     .spawn(
       ChildProcess.make(wrapped.command, wrapped.args, {
@@ -321,7 +331,7 @@ export const spawn = Effect.fn("LanguageServerProcess.spawn")(function* (
     Effect.forkScoped,
   );
 
-  const activeProgress = new Set<string | number>();
+  const activeProgress = new Map<string | number, number>();
   let settlesAt = 0;
   const rootUri = pathToUri(context.root);
   const rootName = path.basename(context.root);
@@ -346,11 +356,11 @@ export const spawn = Effect.fn("LanguageServerProcess.spawn")(function* (
         return null;
       }),
     onNotification: (method, params) =>
-      Effect.sync(() => {
+      Effect.map(Clock.currentTimeMillis, (now) => {
         if (method !== "$/progress" || !isRecord(params) || !isRecord(params.value)) return;
         const { token } = params;
         if (typeof token !== "string" && typeof token !== "number") return;
-        if (params.value.kind === "begin") activeProgress.add(token);
+        if (params.value.kind === "begin") activeProgress.set(token, now);
         if (params.value.kind === "end") activeProgress.delete(token);
       }),
   });
@@ -414,16 +424,39 @@ export const spawn = Effect.fn("LanguageServerProcess.spawn")(function* (
       version:
         spec.version ?? (typeof serverInfo.version === "string" ? serverInfo.version : undefined),
       capabilities,
+      startedAt,
       request: connection.request,
       notify: connection.notify,
       isLoading: Effect.map(
         Clock.currentTimeMillis,
-        (now) => activeProgress.size > 0 || now < settlesAt,
+        (now) =>
+          now < settlesAt ||
+          [...activeProgress.values()].some((beganAt) => now - beganAt < PROGRESS_GRACE_MS),
       ),
       noteDocumentOpened: Effect.map(Clock.currentTimeMillis, (now) => {
         settlesAt = now + DOCUMENT_OPEN_SETTLE_MS;
       }),
-      exited: Deferred.await(exited),
+      exited: Effect.raceFirst(
+        Deferred.await(exited),
+        connection.closed.pipe(
+          Effect.flatMap((closed) =>
+            (closed.reason === "ended"
+              ? Deferred.await(exited).pipe(Effect.timeoutOption(CONNECTION_END_GRACE))
+              : Effect.succeedNone
+            ).pipe(
+              Effect.map(
+                Option.getOrElse(
+                  (): LanguageServerExit => ({
+                    code: undefined,
+                    signal: undefined,
+                    connection: closed.reason,
+                  }),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
       stderrExcerpt,
     } satisfies RunningLanguageServer;
   });

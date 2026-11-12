@@ -3,10 +3,19 @@ import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 
 import { describe, expect, it } from "@effect/vitest";
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import { fileContentRevision } from "@t3tools/shared/fileContentRevision";
+import * as Clock from "effect/Clock";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as TestClock from "effect/testing/TestClock";
 
 import * as CodeIntel from "./CodeIntel.ts";
+import { languageRow } from "./LanguageRegistry.ts";
+import type { RunningLanguageServer } from "./LanguageServerProcess.ts";
+import * as ServerSession from "./ServerSession.ts";
+import * as WorkspaceWatcher from "./WorkspaceWatcher.ts";
 import {
   countOf,
   forkRequest,
@@ -48,7 +57,141 @@ const waitForChange = (file: string, uri: string, type: number) =>
     watchedChanges(messages).some((change) => change.uri === uri && change.type === type),
   );
 
+/** A session over an in-process server that records what it is told, and a watcher the test drives. */
+const makeLocalSession = Effect.fnUntraced(function* (
+  root: string,
+  mode: WorkspaceWatcher.WatchState["mode"] = "watching",
+) {
+  const told: Array<{ readonly method: string; readonly params: any }> = [];
+  const listeners: Array<(batch: WorkspaceWatcher.WatchBatch) => Effect.Effect<void>> = [];
+  const watch: WorkspaceWatcher.WorkspaceWatch = {
+    state: Effect.succeed({ mode, directories: 0 }),
+    listen: (listener) => Effect.sync(() => void listeners.push(listener)),
+  };
+  const server: RunningLanguageServer = {
+    pid: 0,
+    name: "local",
+    version: undefined,
+    capabilities: {},
+    startedAt: yield* Clock.currentTimeMillis,
+    request: () => Effect.succeed(null),
+    notify: (method, params) => Effect.sync(() => void told.push({ method, params })),
+    isLoading: Effect.succeed(false),
+    noteDocumentOpened: Effect.void,
+    exited: Effect.never,
+    stderrExcerpt: Effect.undefined,
+  };
+  const session = yield* ServerSession.make({
+    server,
+    row: languageRow("python")!,
+    context: { root },
+    requestRestart: Effect.void,
+  }).pipe(
+    Effect.provideService(
+      WorkspaceWatcher.WorkspaceWatcher,
+      WorkspaceWatcher.WorkspaceWatcher.of({
+        watchTree: () => Effect.succeed(watch),
+        watchDirectory: () => Effect.succeed(watch),
+      }),
+    ),
+  );
+  return {
+    session,
+    told,
+    changed: (path: string) =>
+      Effect.forEach(listeners, (listener) =>
+        listener({ _tag: "events", events: [{ path, kind: "changed", directory: false }] }),
+      ),
+  };
+});
+
+const documentAt = (realPath: string, text: string): ServerSession.SessionDocument => ({
+  realPath,
+  documentLanguageId: "python",
+  text,
+  revision: fileContentRevision(text),
+});
+
 describe("ServerSession", () => {
+  describe("one lock a document", () => {
+    it.effect("keeps one open copy when a change on disk closes a document that requests wait on", () =>
+      Effect.gen(function* () {
+        const local = yield* makeLocalSession("/repo");
+        const entered = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        const first = yield* local.session
+          .withDocument(
+            documentAt("/repo/app.py", "one\n"),
+            Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release))),
+          )
+          .pipe(Effect.forkChild);
+        yield* Deferred.await(entered);
+
+        // The close queues behind the first request; the next request finds the document before
+        // the close removes it, and queues behind the close.
+        yield* local.changed("/repo/app.py");
+        yield* Effect.yieldNow;
+        const second = yield* local.session
+          .withDocument(documentAt("/repo/app.py", "two\n"), Effect.void)
+          .pipe(Effect.forkChild({ startImmediately: true }));
+        yield* Deferred.succeed(release, undefined);
+        yield* Fiber.join(first);
+        yield* Fiber.join(second);
+        yield* local.session.withDocument(documentAt("/repo/app.py", "two\n"), Effect.void);
+
+        const lifecycle = local.told
+          .filter(({ method }) => method === "textDocument/didOpen" || method === "textDocument/didClose")
+          .map(({ method, params }) =>
+            params.textDocument.text === undefined ? method : `${method} ${params.textDocument.text}`,
+          );
+        expect(lifecycle).toEqual([
+          "textDocument/didOpen one\n",
+          "textDocument/didClose",
+          "textDocument/didOpen two\n",
+        ]);
+      }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    );
+  });
+
+  describe("without a watcher", () => {
+    it.effect("tells the server about a file first seen in an answer if it changed after the server started", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeWorkspace({ "lib.py": "def lib\n" });
+        const lib = NodePath.join(cwd, "lib.py");
+        const modifiedAt = NodeFS.statSync(lib).mtimeMs;
+
+        yield* TestClock.setTime(modifiedAt - 1_000);
+        const local = yield* makeLocalSession(cwd, "fallback");
+        yield* local.session.withDocument(documentAt(lib, "def lib\n"), Effect.void);
+
+        // Closed before the answer is asked again, so the server reads the file from disk.
+        expect(yield* local.session.refreshChangedFiles([lib])).toBe(true);
+        expect(local.told.map(({ method }) => method).slice(-2)).toEqual([
+          "textDocument/didClose",
+          "workspace/didChangeWatchedFiles",
+        ]);
+        expect(local.told.find(({ method }) => method === "workspace/didChangeWatchedFiles")?.params).toEqual({
+          changes: [{ uri: uriOf(cwd, "lib.py"), type: 2 }],
+        });
+        expect(yield* local.session.refreshChangedFiles([lib])).toBe(false);
+      }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    );
+
+    it.effect("trusts a file first seen in an answer that last changed before the server started", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeWorkspace({ "lib.py": "def lib\n" });
+        const lib = NodePath.join(cwd, "lib.py");
+
+        yield* TestClock.setTime(NodeFS.statSync(lib).mtimeMs + 1_000);
+        const local = yield* makeLocalSession(cwd, "fallback");
+
+        expect(yield* local.session.refreshChangedFiles([lib])).toBe(false);
+        NodeFS.writeFileSync(lib, "def lib\ndef more\n");
+        expect(yield* local.session.refreshChangedFiles([lib])).toBe(true);
+      }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    );
+  });
+
   describe("syncing documents", () => {
     it.effect("opens a document once with the text on disk and reuses it at the same revision", () =>
       inScenario({}, (s) =>

@@ -6,6 +6,7 @@ import * as NodeProcess from "node:process";
 import { describe, expect, it } from "@effect/vitest";
 import type { CodeIntelError } from "@t3tools/contracts";
 import { fileContentRevision } from "@t3tools/shared/fileContentRevision";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as TestClock from "effect/testing/TestClock";
@@ -14,8 +15,10 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as CodeIntel from "./CodeIntel.ts";
 import {
   countOf,
+  forkRequest,
   inScenario,
   isAlive,
+  makeGate,
   makeScenario,
   makeWorkspace,
   methodsOf,
@@ -331,6 +334,22 @@ describe("CodeIntel", () => {
   });
 
   describe("documents", () => {
+    it.effect("counts the deadline from the request, so a slow workspace check times it out too", () =>
+      inScenario({}, (s) => {
+        const gate = makeGate();
+        return Effect.gen(function* () {
+          const cwd = yield* makeWorkspace({ "app.py": "greet\n" });
+          s.knownGate = gate;
+          const hover = yield* forkRequest(hoverAt(cwd, "app.py"));
+          yield* Deferred.await(gate.began);
+          yield* TestClock.adjust(10_000);
+
+          expect(yield* hover.outcome).toMatchObject({ _tag: "Failure", error: { reason: "timeout" } });
+          expect(noWorkspaceStarted(s.record)).toBe(true);
+        }).pipe(Effect.ensuring(Deferred.succeed(gate.letGo, undefined)));
+      }),
+    );
+
     it.effect("answers stale_document, before any server starts, whatever the call", () =>
       inScenario({}, (s) =>
         Effect.gen(function* () {
@@ -772,6 +791,12 @@ describe("CodeIntel", () => {
           ]);
           expect(startedPids(python)).toHaveLength(1);
           expect(startedPids(typescript)).toHaveLength(1);
+
+          // One language that cannot answer leaves the others' answers.
+          s.missing.add("python");
+          yield* codeIntel.restart({ cwd });
+          const typescriptOnly = yield* codeIntel.workspaceSymbols({ cwd, query: "alpha", limit: 10 });
+          expect(typescriptOnly.symbols.map((symbol) => symbol.name)).toEqual(["alpha_ts"]);
         }),
       ),
     );

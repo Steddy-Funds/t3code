@@ -21,6 +21,7 @@ import * as HttpClientError from "effect/http/HttpClientError";
 
 import * as ServerConfig from "../config.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import * as KnownWorkspaces from "../workspace/KnownWorkspaces.ts";
 import * as LanguageServerBinaries from "./LanguageServerBinaries.ts";
 import { forkRequest, makeWorkspace } from "./testing/harness.ts";
 import { gzip, sha256Hex, tar, tarGz, type TarMember } from "./testing/tarball.ts";
@@ -82,6 +83,8 @@ interface RigOptions {
   /** Left out, the module's own table row for the platform is used. */
   readonly tyRelease?: TyRelease;
   readonly serverPaths?: Readonly<Record<string, string>>;
+  /** Known workspace roots, as real paths. */
+  readonly projects?: ReadonlyArray<string>;
   readonly home?: string;
   readonly environment?: NodeJS.ProcessEnv;
   readonly workingDirectory?: string;
@@ -113,6 +116,14 @@ const rigLayer = (rig: Rig, options: RigOptions) => {
     Layer.succeed(HostProcess.WorkingDirectory, options.workingDirectory ?? NodeProcess.cwd()),
     ServerConfig.ServerConfig.layerTest(NodeProcess.cwd(), { prefix: "t3-code-intel-binaries-" }),
     NodeCrypto.layer,
+    Layer.mock(KnownWorkspaces.KnownWorkspaces)({
+      contains: (realPath) =>
+        Effect.succeed(
+          (options.projects ?? []).some(
+            (root) => realPath === root || realPath.startsWith(root + NodePath.sep),
+          ),
+        ),
+    }),
   );
   return Layer.effect(
     LanguageServerBinaries.LanguageServerBinaries,
@@ -342,6 +353,29 @@ describe("LanguageServerBinaries", () => {
               });
             }),
           );
+        })),
+      );
+
+      it.effect("refuses a file inside a project, also through a link from outside it", () =>
+        inScratch((dir) => Effect.gen(function* () {
+          const project = NodePath.join(dir, "project");
+          const inside = NodePath.join(project, "bin", "ty");
+          const link = NodePath.join(dir, "ty-link");
+          yield* putExecutable(inside);
+          NodeFS.symlinkSync(inside, link);
+          for (const configured of [inside, link]) {
+            yield* inRig(
+              { serverPaths: { python: configured }, projects: [NodeFS.realpathSync(project)] },
+              ({ binaries }) =>
+                Effect.gen(function* () {
+                  expect(yield* binaries.resolve("python")).toMatchObject({
+                    _tag: "Unavailable",
+                    reason: "setting_path_in_project",
+                    installable: false,
+                  });
+                }),
+            );
+          }
         })),
       );
 

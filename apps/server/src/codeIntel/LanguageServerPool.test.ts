@@ -1,7 +1,9 @@
 import { describe, expect, it } from "@effect/vitest";
 import type { CodeIntelError } from "@t3tools/contracts";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Queue from "effect/Queue";
+import * as Scheduler from "effect/Scheduler";
 import * as TestClock from "effect/testing/TestClock";
 
 import * as CodeIntel from "./CodeIntel.ts";
@@ -10,6 +12,7 @@ import {
   forkRequest,
   inScenario,
   isAlive,
+  makeGate,
   makeWorkspace,
   noWorkspaceStarted,
   startedPids,
@@ -76,6 +79,31 @@ describe("LanguageServerPool", () => {
           expect((yield* stateOf(cwd)).state).toBe("indexing");
           yield* TestClock.adjust(1);
           expect((yield* stateOf(cwd)).state).toBe("ready");
+        }),
+      ),
+    );
+
+    it.effect("starts one server for requests that arrive together, however their fibers interleave", () =>
+      inScenario({}, (s) =>
+        Effect.gen(function* () {
+          // Released together, the requests take turns in step; each limit moves where a turn ends.
+          const limits = Array.from({ length: 29 }, (_, index) => index + 3);
+          for (const [index, limit] of limits.entries()) {
+            const cwd = yield* makeWorkspace({ "app.py": "greet\n" });
+            const gate = makeGate(3);
+            s.resolveGate = gate;
+            const requests = yield* Effect.forEach([1, 2, 3], () =>
+              forkRequest(hoverAt(cwd).pipe(Effect.provideService(Scheduler.MaxOpsBeforeYield, limit))),
+            );
+            yield* Deferred.await(gate.began);
+            s.resolveGate = undefined;
+            yield* Deferred.succeed(gate.letGo, undefined);
+            for (const request of requests) {
+              expect((yield* request.outcome)._tag).toBe("Success");
+            }
+            expect(startedPids(s.record)).toHaveLength(index + 1);
+            yield* restart(cwd);
+          }
         }),
       ),
     );
@@ -270,6 +298,49 @@ describe("LanguageServerPool", () => {
           expect((yield* hoverAt(cwd)).markdown).toBe("**greet**");
           expect(startedPids(s.record)).toHaveLength(2);
           expect((yield* stateOf(cwd)).state).toBe("indexing");
+        }),
+      ),
+    );
+
+    it.effect("holds a crashed server's place until its child is cleaned up", () =>
+      inScenario({}, (s) => {
+        const gate = makeGate();
+        return Effect.gen(function* () {
+          misbehaveOnce(s, "--crash-on=textDocument/hover");
+          const cwd = yield* makeWorkspace({ "app.py": "greet\n" });
+          s.watcherRelease = gate;
+          const from = s.mark();
+          expect((yield* hoverAt(cwd).pipe(Effect.flip)).reason).toBe("server_failed");
+          yield* Deferred.await(gate.began);
+
+          // Not `failed` yet: a request now would start a second server beside the first.
+          expect((yield* stateOf(cwd)).state).toBe("stopped");
+          const next = yield* forkRequest(hoverAt(cwd));
+          yield* Deferred.succeed(gate.letGo, undefined);
+
+          expect(yield* next.outcome).toMatchObject({ _tag: "Success", value: { markdown: "**greet**" } });
+          const exitAt = s.history.findIndex((entry, index) => index >= from && isExit(entry));
+          const restartAt = s.history.findLastIndex((entry) => entry.text === "Language server started");
+          expect(exitAt).toBeGreaterThan(-1);
+          expect(restartAt).toBeGreaterThan(exitAt);
+          expect(startedPids(s.record)).toHaveLength(2);
+        }).pipe(Effect.ensuring(Deferred.succeed(gate.letGo, undefined)));
+      }),
+    );
+
+    it.effect("kills a server whose connection broke, and starts a new one for the next", () =>
+      inScenario({}, (s) =>
+        Effect.gen(function* () {
+          misbehaveOnce(s, "--bad-frame-on=textDocument/hover");
+          const cwd = yield* makeWorkspace({ "app.py": "greet\n" });
+
+          const error = yield* crashingHover(s, cwd);
+
+          expect(error.reason).toBe("server_failed");
+          expect((yield* stateOf(cwd)).message).toContain("connection broke");
+          expect(isAlive(startedPids(s.record)[0]!)).toBe(false);
+          expect((yield* hoverAt(cwd)).markdown).toBe("**greet**");
+          expect(startedPids(s.record)).toHaveLength(2);
         }),
       ),
     );
@@ -561,6 +632,22 @@ describe("LanguageServerPool", () => {
         }),
       ),
     );
+
+    it.effect("counts timeouts of a server whose progress has run for five minutes", () =>
+      inScenario({ flags: ["--ignore=textDocument/hover", "--progress"] }, (s) =>
+        Effect.gen(function* () {
+          const cwd = yield* makeWorkspace({ "app.py": "def LOADED\n" });
+          const from = s.mark();
+          yield* timeOut(s, cwd, 1);
+          yield* TestClock.adjust(5 * MINUTE);
+          expect((yield* stateOf(cwd)).state).toBe("ready");
+          for (let nth = 2; nth <= 4; nth += 1) yield* timeOut(s, cwd, nth);
+
+          yield* s.waitForStop("timeouts", from);
+          expect((yield* stateOf(cwd)).state).toBe("failed");
+        }),
+      ),
+    );
   });
 
   describe("idle servers", () => {
@@ -662,6 +749,28 @@ describe("LanguageServerPool", () => {
           expect(isAlive(first[2]!)).toBe(false);
           expect([first[1]!, first[3]!, afterFifth[4]!, all[5]!].every(isAlive)).toBe(true);
           expect(all.filter(isAlive)).toHaveLength(4);
+        }),
+      ),
+    );
+
+    it.effect("stops one server for requests that arrive together at a fifth root", () =>
+      inScenario({}, (s) =>
+        Effect.gen(function* () {
+          const [r1, r2, r3, r4, r5] = yield* roots(5);
+          for (const root of [r1!, r2!, r3!, r4!]) {
+            yield* hoverAt(root);
+            yield* TestClock.adjust(1);
+          }
+          const first = startedPids(s.record);
+          const from = s.mark();
+          yield* Effect.all([hoverAt(r5!), hoverAt(r5!), hoverAt(r5!)], {
+            concurrency: "unbounded",
+            discard: true,
+          });
+
+          expect(s.history.slice(from).filter((entry) => entry.fields.reason === "evicted")).toHaveLength(1);
+          expect(first.filter(isAlive)).toHaveLength(3);
+          expect(startedPids(s.record)).toHaveLength(5);
         }),
       ),
     );
@@ -866,15 +975,43 @@ describe("LanguageServerPool", () => {
             codeIntel.workspaceSymbols({ cwd, query: "greet", limit: 5 }).pipe(Effect.flip),
           ]);
 
+          const install = yield* codeIntel.installServer({ languageId: "python" }).pipe(Effect.flip);
+
           expect(states).toEqual(["unavailable", "unavailable"]);
           expect(errors.map((error) => error.reason)).toEqual([
             "server_unavailable",
             "server_unavailable",
             "server_unavailable",
           ]);
+          expect(install.reason).toBe("server_unavailable");
+          expect(s.installs).toEqual([]);
           expect(noWorkspaceStarted(s.record)).toBe(true);
         }),
       ),
+    );
+
+    it.effect("starts nothing for a request that was looking for its binary when it was turned off", () =>
+      inScenario({}, (s) => {
+        const gate = makeGate();
+        return Effect.gen(function* () {
+          const cwd = yield* makeWorkspace({ "app.py": "greet\n", "app.ts": "greet\n" });
+          yield* hoverAt(cwd, "app.ts");
+          s.resolveGate = gate;
+          const hover = yield* forkRequest(hoverAt(cwd));
+          yield* Deferred.await(gate.began);
+
+          const from = s.mark();
+          yield* s.setEnabled(false);
+          yield* s.waitForStop("off", from);
+          yield* Deferred.succeed(gate.letGo, undefined);
+
+          expect(yield* hover.outcome).toMatchObject({
+            _tag: "Failure",
+            error: { reason: "server_unavailable" },
+          });
+          expect(startedPids(s.record)).toHaveLength(1);
+        }).pipe(Effect.ensuring(Deferred.succeed(gate.letGo, undefined)));
+      }),
     );
 
     it.effect("answers a request in flight when it is turned off with server_unavailable", () =>

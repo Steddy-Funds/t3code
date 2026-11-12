@@ -250,6 +250,7 @@ describe("anchorReviewNote", () => {
       contentRevision: null,
       comment: "Why retry?",
       rangeLabel: "L2 to L3",
+      runId: null,
       ...overrides,
     };
     expect(anchorReviewNote(thread, fileDiff)).toEqual(expected);

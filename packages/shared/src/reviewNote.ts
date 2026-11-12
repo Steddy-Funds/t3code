@@ -7,6 +7,7 @@ import {
   REVIEW_REPLY_TURN_ITEM_PREFIX,
   type OrchestrationMessageContext,
   type ReviewCommentContextRecord,
+  RunId,
   type TurnItemId,
 } from "@t3tools/contracts";
 import * as Option from "effect/Option";
@@ -121,6 +122,8 @@ export interface ReviewCommentThread {
   readonly contentRevision: null;
   readonly comment: string;
   readonly rangeLabel: string;
+  /** The turn whose diff the comment was written on, when it was on one. */
+  readonly runId: RunId | null;
 }
 
 /** What a diff places on lines: an agent's note, or a thread the user's comment opened. */
@@ -139,6 +142,8 @@ type SentComment = Pick<
   ReviewCommentContextRecord,
   "sectionId" | "filePath" | "rangeLabel" | "startIndex" | "endIndex" | "text" | "diff"
 > & { readonly fenceLanguage?: string | undefined };
+
+const TURN_SECTION_PREFIX = "turn:";
 
 const DIFF_HEADER = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/u;
 
@@ -179,6 +184,9 @@ function threadOf(id: string, comment: SentComment): ReviewCommentThread {
     contentRevision: null,
     comment: comment.text,
     rangeLabel: comment.rangeLabel,
+    runId: comment.sectionId.startsWith(TURN_SECTION_PREFIX)
+      ? RunId.make(comment.sectionId.slice(TURN_SECTION_PREFIX.length))
+      : null,
   };
 }
 

@@ -281,7 +281,7 @@ export function ReviewReplyCard({ reply }: { reply: ReviewReply }) {
               wideLabel
               onClick={() => {
                 showInDiff(
-                  reply.runId,
+                  reviewThread.runId ?? reply.runId,
                   reviewThread.pathBase === "diff"
                     ? reviewThread.path
                     : diffPathForWorkspaceFile({

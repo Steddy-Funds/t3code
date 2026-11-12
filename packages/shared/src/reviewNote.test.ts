@@ -142,7 +142,7 @@ describe("buildReviewThreads", () => {
       ],
     );
     expect(
-      threads.map(({ id, path, pathBase, startLine, endLine, excerpt, sectionId }) => ({
+      threads.map(({ id, path, pathBase, startLine, endLine, excerpt, sectionId, runId }) => ({
         id,
         path,
         pathBase,
@@ -150,6 +150,7 @@ describe("buildReviewThreads", () => {
         endLine,
         excerpt,
         sectionId,
+        runId,
       })),
     ).toEqual([
       {
@@ -160,6 +161,7 @@ describe("buildReviewThreads", () => {
         endLine: 9,
         excerpt: "context\nnew\ntail",
         sectionId: reviewThreadSectionId("ctx_diff"),
+        runId: "1",
       },
       {
         id: "ctx_file",
@@ -169,6 +171,7 @@ describe("buildReviewThreads", () => {
         endLine: 4,
         excerpt: "const a = 1;\nconst b = 2;",
         sectionId: reviewThreadSectionId("ctx_file"),
+        runId: null,
       },
       expect.objectContaining({ id: "ctx_removed", excerpt: "" }),
     ]);

@@ -311,6 +311,7 @@ describe("review note replies", () => {
       contentRevision: null,
       comment: "Why is this shared?",
       rangeLabel: "L1",
+      runId: null,
     };
     const notes = (anchor: DiffReviewNotes["placed"][number]["anchor"]): DiffReviewNotes => ({
       ...notesOn(shown, anchor),

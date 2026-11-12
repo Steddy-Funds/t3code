@@ -6,7 +6,6 @@ import { type DraftId, useComposerDraftStore } from "~/composerDraftStore";
 import type { ReviewCommentContext } from "~/reviewCommentContext";
 
 import type { ReviewSendOutcome } from "../chat/composerSend.logic";
-import { stackedThreadToast, toastManager } from "../ui/toast";
 
 /** Sends one message holding these comments and nothing else. Settles with how it ended. */
 export type SendReviewComments = (
@@ -203,15 +202,8 @@ export function useReviewCommentDrafts<TRange = SelectedLineRange>({
       ? async (text) => {
           const comment = buildOpenComment(text);
           if (!comment) {
-            const reason = "These lines are no longer in view.";
-            toastManager.add(
-              stackedThreadToast({
-                type: "warning",
-                title: "Comment not sent",
-                description: `${reason} Your words are still in the box.`,
-              }),
-            );
-            return { status: "refused", reason };
+            // The box stays open with its words; a surface that can reach this says why.
+            return { status: "refused", reason: "These lines are no longer in view." };
           }
           setOpen((current) =>
             current?.id === comment.id ? { ...current, sending: true } : current,

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "@effect/vitest";
 
 import {
+  nameRange,
   rankWorkspaceSymbols,
   supportsRange,
   toDocumentSymbols,
@@ -303,6 +304,86 @@ describe("lspResults", () => {
       const symbols = named("b_x", "x");
       rankWorkspaceSymbols(symbols, "x");
       expect(symbols.map((symbol) => symbol.name)).toEqual(["b_x", "x"]);
+    });
+  });
+
+  describe("nameRange", () => {
+    // ty 0.0.94's workspace symbol ranges: the whole declaration, from its first decorator.
+    const SOURCE = [
+      '@register("Ledger")',
+      "@dataclass(",
+      "    frozen=True,",
+      '    name="Ledger",',
+      ")",
+      "class Ledger(LedgerBase):",
+      "    @property",
+      "    def balance(self) -> int:",
+      "        return 0",
+      "",
+      "def ledger_total(ledger: Ledger) -> int:",
+      "    return ledger.balance",
+      "LEDGER_LIMIT = 10",
+      "export default class {}",
+      '@route("/receipt(")',
+      "class Receipt(Base):",
+      "    total = 0",
+      "@dataclass",
+      "# Payout rows, newest first",
+      "class Payout:",
+    ];
+    const span = (
+      startLine: number,
+      startCharacter: number,
+      endLine: number,
+      endCharacter: number,
+    ) => ({
+      start: { line: startLine, character: startCharacter },
+      end: { line: endLine, character: endCharacter },
+    });
+
+    it.each([
+      [
+        "a class past decorators that name it, one spanning lines",
+        "Ledger",
+        span(0, 0, 8, 16),
+        range(5, 6, 12),
+      ],
+      ["a decorated method", "balance", span(6, 4, 8, 16), range(7, 8, 15)],
+      [
+        "a function at its keyword, not its parameter's type",
+        "ledger_total",
+        span(10, 0, 11, 25),
+        range(10, 4, 16),
+      ],
+      [
+        "a constant whose range starts at its name",
+        "LEDGER_LIMIT",
+        span(12, 0, 12, 17),
+        range(12, 0, 12),
+      ],
+      [
+        "a class past a decorator whose string holds a bracket",
+        "Receipt",
+        span(14, 0, 16, 13),
+        range(15, 6, 13),
+      ],
+      ["a class past a comment that names it", "Payout", span(17, 0, 19, 13), range(19, 6, 12)],
+    ])("finds %s", (_name, name, given, expected) => {
+      expect(nameRange(SOURCE, given, name)).toEqual(expected);
+    });
+
+    it.each([
+      ["already exactly the name", SOURCE, "Ledger", range(5, 6, 12)],
+      ["for a name that is not in the range", SOURCE, "Missing", span(13, 0, 13, 23)],
+      [
+        "for a name only a longer word holds before the range ends",
+        SOURCE,
+        "ledger",
+        span(10, 0, 10, 16),
+      ],
+      ["for a file that could not be read", [], "Ledger", span(0, 0, 8, 16)],
+    ])("keeps the range %s", (_label, lines, name, given) => {
+      expect(nameRange(lines, given, name)).toEqual(given);
     });
   });
 

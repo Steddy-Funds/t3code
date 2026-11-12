@@ -125,7 +125,6 @@ import { shouldShowInstanceBadge, type ProviderInstanceEntry } from "../../provi
 import { useThreadRunningTerminalIds } from "../../state/terminalSessions";
 import { useClientSettings } from "../../hooks/useSettings";
 import { resolveSidebarDetailsVisibility } from "./sidebarDetailsItems";
-import { SidebarBranchName } from "./SidebarBranchName";
 import { SidebarAgentBadge, showsAgentBadge } from "./SidebarAgentBadge";
 import { SidebarBurnRate } from "./SidebarBurnRate";
 import { useTreeBurnRate } from "../../state/tokenBurnRates";
@@ -1262,7 +1261,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
         <>
           <ThreadWorktreeIndicator thread={thread} />
           <span className="flex min-w-0 flex-1">
-            <SidebarBranchName branch={branch} />
+            <MiddleTruncate value={branch} showTitle={false} />
           </span>
         </>
       ) : showsScratchMachine ? (
@@ -1763,7 +1762,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                     <span className="hidden min-w-0 flex-1 items-center gap-1 group-any-hover/sidebar-row:flex">
                       <GitBranchIcon aria-hidden className="size-3 shrink-0 text-icon-muted" />
                       <span className="flex min-w-0 flex-1">
-                        <SidebarBranchName branch={hoverBranch} />
+                        <MiddleTruncate value={hoverBranch} showTitle={false} />
                       </span>
                     </span>
                   ) : null}

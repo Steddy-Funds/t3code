@@ -254,9 +254,11 @@ function parsePorcelainChange(record: string): VcsWorkingTreeFileChange | null {
     case "1":
     case "2": {
       const xy = record.slice(2, 4);
+      // Staged as new, then deleted: in neither HEAD nor the worktree, so nothing to commit.
+      if ("ARC".includes(xy[0]!) && xy[1] === "D") return null;
       if (xy.includes("D")) return "deleted";
-      if (xy.includes("A") || xy[0] === "C") return "added";
-      return xy[0] === "R" ? "renamed" : "modified";
+      if (xy.includes("R")) return "renamed";
+      return xy.includes("A") || xy.includes("C") ? "added" : "modified";
     }
     default:
       return null;
@@ -2332,7 +2334,9 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         // keeps the deletion selectable when committing only some files.
         if (line.startsWith("2 ")) {
           const originalPath = statusRecords[++index];
-          if (originalPath && change === "renamed") statusChanges.set(originalPath, "deleted");
+          if (originalPath && line.slice(2, 4).includes("R")) {
+            statusChanges.set(originalPath, "deleted");
+          }
         }
       }
     }

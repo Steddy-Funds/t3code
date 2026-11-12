@@ -120,30 +120,6 @@ export function isPointerOverCodeScope(root: Document | ShadowRoot = document): 
   return false;
 }
 
-function parentAcrossShadowRoots(element: Element): Element | null {
-  if (element.parentElement) return element.parentElement;
-  const root = element.getRootNode();
-  return root instanceof ShadowRoot ? root.host : null;
-}
-
-/**
- * The `when` variables of the focus scopes around the focused element:
- * `data-focus-scope="code diff"` gives `codeFocus` and `diffFocus`.
- */
-export function readFocusScopeContext(): Record<string, boolean> {
-  const context: Record<string, boolean> = {};
-  let element = document.activeElement;
-  while (element?.shadowRoot?.activeElement) element = element.shadowRoot.activeElement;
-  for (; element; element = parentAcrossShadowRoots(element)) {
-    for (const scope of element.getAttribute(FOCUS_SCOPE_ATTRIBUTE)?.split(/\s+/) ?? []) {
-      if (scope.length === 0) continue;
-      const name = scope.replace(/-(.)/g, (_, letter: string) => letter.toUpperCase());
-      context[`${name}Focus`] = true;
-    }
-  }
-  return context;
-}
-
 export interface QuickReferenceCommand {
   readonly command: KeybindingCommand;
   readonly shortcuts: ReadonlyArray<KeybindingShortcut>;

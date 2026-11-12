@@ -540,6 +540,18 @@ describe("opening the source", () => {
     expect(onOpenSource).not.toHaveBeenCalled();
   });
 
+  it("opens the last line from the bottom of the file", async () => {
+    const onOpenSource = vi.fn();
+    await using screen = await mount({ fileDiff: threeChanges(), onOpenSource });
+    await vi.waitFor(() => expect(statusOf(screen)).toBe("1 of 3"));
+
+    const right = scrollerOf(screen, "additions");
+    right.scrollTop = right.scrollHeight;
+    await vi.waitFor(() => expect(rowByNumber(screen, "additions", 200)).toBeDefined());
+    await press(screen, "additions", "{F4}");
+    expect(onOpenSource).toHaveBeenLastCalledWith({ side: "additions", line: 200 });
+  });
+
   it("opens a pure deletion at the line where the lines were", async () => {
     const before = base(80);
     const onOpenSource = vi.fn();
@@ -1857,21 +1869,25 @@ describe("copy", () => {
     );
   });
 
-  it("selects one pane's whole file with Mod+A and copies it", async () => {
+  it("selects one pane's whole file with Mod+A and copies it with Mod+C", async () => {
     await using screen = await mount({ fileDiff: threeChanges() });
     await vi.waitFor(() => expect(statusOf(screen)).toBe("1 of 3"));
+    const mod = (key: string) =>
+      isMacPlatform(navigator.platform) ? `{Meta>}${key}{/Meta}` : `{Control>}${key}{/Control}`;
+    // Runs after the view's handler, so it reads what the view put on the clipboard.
+    const copied: string[] = [];
+    const listen = (event: ClipboardEvent) =>
+      copied.push(event.clipboardData?.getData("text/plain") ?? "");
+    document.addEventListener("copy", listen);
+    using _listener = { [Symbol.dispose]: () => document.removeEventListener("copy", listen) };
 
-    await press(
-      screen,
-      "additions",
-      isMacPlatform(navigator.platform) ? "{Meta>}a{/Meta}" : "{Control>}a{/Control}",
-    );
-
-    expect(window.getSelection()?.toString() ?? "").toBe("");
+    await press(screen, "additions", mod("a"));
     expect(
       one(screen.container, '[data-sbs-pane="additions"][data-sbs-all-selected]'),
     ).not.toBeNull();
-    expect(copyFrom(scrollerOf(screen, "additions"))).toBe(threeChangesAfter().join("\n"));
+    await userEvent.keyboard(mod("c"));
+
+    expect(copied).toEqual([threeChangesAfter().join("\n")]);
   });
 
   it("keeps a selection dragged into the other pane in the pane it started in", async () => {

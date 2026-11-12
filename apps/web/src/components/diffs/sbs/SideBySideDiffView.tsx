@@ -418,8 +418,12 @@ export function SideBySideDiffView<T = unknown>(props: SideBySideDiffViewProps<T
   const dragSide = useRef<SbsSide | null>(null);
   const reportedTextSelection = useRef(false);
   const selectionStart = useRef<SbsTextPoint | null>(null);
-  // Mod+A in a pane: its whole file, which is more rows than the window draws.
-  const [allSelected, setAllSelected] = useState<SbsSide | null>(null);
+  // Mod+A in a pane: its whole file, which is more rows than the window draws. Another file
+  // drops it.
+  const [selectedAll, setSelectedAll] = useState<{ side: SbsSide; model: SbsDocument } | null>(
+    null,
+  );
+  const allSelected = selectedAll?.model === model ? selectedAll.side : null;
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- follows the document's selection, which the browser owns
   useEffect(() => {
     const note = () => {
@@ -552,7 +556,8 @@ export function SideBySideDiffView<T = unknown>(props: SideBySideDiffViewProps<T
     // The file on disk is the new side; a deletion opens it where the lines were.
     const side: SbsSide = single ?? "additions";
     const range = currentGroup === null ? undefined : groupRanges[currentGroup];
-    const target = sbsRowTarget(layout, side, anchorRow);
+    // Scrolled into the room past the end, the level row is below the last one.
+    const target = sbsRowTarget(layout, side, Math.min(anchorRow, sbsRowCount(layout, side) - 1));
     // A fold's row opens at the first line it hides.
     const line =
       range?.[side].start ??
@@ -771,7 +776,7 @@ export function SideBySideDiffView<T = unknown>(props: SideBySideDiffViewProps<T
   };
 
   const handlePointerDown = (event: PointerEvent<HTMLDivElement>) => {
-    setAllSelected(null);
+    setSelectedAll(null);
     if (event.button !== 0) return;
     const gutter = elementOf(event.target)?.closest("[data-sbs-gutter]");
     const side = paneSideOf(event.target);
@@ -876,7 +881,7 @@ export function SideBySideDiffView<T = unknown>(props: SideBySideDiffViewProps<T
     const plainMod = mod && !event.altKey && !event.shiftKey;
     const key = event.key.toLowerCase();
     if (allSelected && !(plainMod && (key === "a" || key === "c"))) {
-      setAllSelected(null);
+      setSelectedAll(null);
       reportRange(null);
       if (event.key === "Escape") {
         event.preventDefault();
@@ -899,7 +904,7 @@ export function SideBySideDiffView<T = unknown>(props: SideBySideDiffViewProps<T
     if (plainMod && key === "a" && pane && !editable) {
       event.preventDefault();
       window.getSelection()?.removeAllRanges();
-      setAllSelected(pane);
+      setSelectedAll({ side: pane, model });
       const end = Math.max(0, model.lines[pane].length - 1);
       reportRange({
         side: pane,

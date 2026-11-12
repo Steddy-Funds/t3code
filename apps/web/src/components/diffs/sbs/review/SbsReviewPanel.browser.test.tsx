@@ -1161,6 +1161,27 @@ describe("showing a note that was asked for", () => {
     expect(cardOf(screen)).toBeNull();
   });
 
+  it("calls onNoteUnplaced for a note on lines the shown file lacks, and other cards still open", async () => {
+    using _drafts = setup();
+    const lost = noteOf(1, 500);
+    const other = noteOf(2, 12);
+    const onNoteRevealed = vi.fn();
+    const onNoteUnplaced = vi.fn();
+    await using screen = await mount({
+      files: [A],
+      reviewNotes: notesOf([exact(lost), exact(other)]),
+      noteReveal: { noteId: lost.id },
+      onNoteRevealed,
+      onNoteUnplaced,
+    });
+
+    await vi.waitFor(() => expect(onNoteUnplaced).toHaveBeenCalledOnce());
+    expect(onNoteRevealed).not.toHaveBeenCalled();
+    expect(markersOf(screen)).toEqual([other.id]);
+    await userEvent.click(markerOf(screen, other.id));
+    await vi.waitFor(() => expect(cardOf(screen)?.dataset.sbsAnnotationCard).toBe(other.id));
+  });
+
   it("gives up on a note in another file than the one shown", async () => {
     using _drafts = setup();
     const note = noteOf(1, 12, 12, "b.ts");
@@ -1606,7 +1627,7 @@ describe("the card is not the panes", () => {
     expect(copyFrom(label)).toEqual({ text: "", prevented: false });
     // The same copy from a pane gives the picked lines.
     expect(copyFrom(scrollerOf(screen, "additions"))).toEqual({
-      text: `${base().slice(11, 13).join("\n")}\n`.replace(value(12), value(12)),
+      text: `${base().slice(11, 13).join("\n")}\n`,
       prevented: true,
     });
   });

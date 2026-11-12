@@ -2,7 +2,14 @@ import type { FileDiffMetadata } from "@pierre/diffs";
 import type { EnvironmentId, ProjectId, ScopedThreadRef, TurnItemId } from "@t3tools/contracts";
 import { type ReviewNote, reviewNoteSectionId } from "@t3tools/shared/reviewNote";
 import { MessageSquarePlusIcon } from "lucide-react";
-import { type ReactNode, type SyntheticEvent, useEffect, useLayoutEffect, useState } from "react";
+import {
+  type ReactNode,
+  type SyntheticEvent,
+  useEffect,
+  useEffectEvent,
+  useLayoutEffect,
+  useState,
+} from "react";
 
 import type { DraftId } from "~/composerDraftStore";
 import { buildDiffReviewComment, type ReviewCommentContext } from "~/reviewCommentContext";
@@ -124,7 +131,12 @@ export function SbsReviewPanel({
         sectionTitle,
         filePath: range.filePath,
         fileDiff: range.fileDiff,
-        range: { start: range.startLine, side: range.side, end: range.endLine, endSide: range.side },
+        range: {
+          start: range.startLine,
+          side: range.side,
+          end: range.endLine,
+          endSide: range.side,
+        },
         text,
       });
       return comment && withQuotedSelection(comment, selectedText);
@@ -153,7 +165,8 @@ export function SbsReviewPanel({
     : undefined;
   // Another file is shown, or the note lost its lines. A reloading file holds its notes as
   // pending, and the reply waits for it.
-  const strandedDraft = draft && !draft.sending && draft.range.fileKey !== shownFileKey ? draft : null;
+  const strandedDraft =
+    draft && !draft.sending && draft.range.fileKey !== shownFileKey ? draft : null;
   const strandedReply =
     replyDraft &&
     !replyDraft.sending &&
@@ -167,6 +180,12 @@ export function SbsReviewPanel({
     if (strandedDraft) keepDraftWords(comments, strandedDraft.text);
     if (strandedReply) keepDraftWords(noteReplies, strandedReply.text);
   }, [strandedDraft, strandedReply, comments, noteReplies]);
+  const keepOpenBoxWords = useEffectEvent(() => {
+    if (draft && !draft.sending) keepDraftWords(comments, draft.text);
+    if (replyDraft && !replyDraft.sending) keepDraftWords(noteReplies, replyDraft.text);
+  });
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- the view goes with a box open (side by side turned off, the panel narrowed, another section shown); its words go to the composer's draft store
+  useEffect(() => () => keepOpenBoxWords(), []);
 
   const revealPlaced = noteReveal
     ? reviewNotes.placed.find(({ note }) => note.id === noteReveal.noteId)
@@ -188,7 +207,11 @@ export function SbsReviewPanel({
 
   // One box at a time: it keeps its card open until it is sent, saved or cancelled.
   const boxOpen = draft !== undefined || replyDraft !== undefined;
-  const openId = draft ? draft.id : replyDraft ? replyDraft.range.id : (revealNoteId ?? openEntryId);
+  const openId = draft
+    ? draft.id
+    : replyDraft
+      ? replyDraft.range.id
+      : (revealNoteId ?? openEntryId);
 
   const selectLines = (
     selection: SbsLineSelection | null,
@@ -243,7 +266,8 @@ export function SbsReviewPanel({
           note={note}
           moved={placed.anchor.kind === "moved"}
           answered={reviewNotes.answeredIds.has(note.id)}
-          replying={replies.some((reply) => reply.kind === "draft")}
+          // One box at a time: an open comment box sharing this card hides Reply too.
+          replying={boxOpen}
           onReply={() => {
             noteReplies.beginComment(note, pick?.selectedText);
             setPick(null);
@@ -407,10 +431,12 @@ function SbsReviewView({
   }, [revealGroup, onRevealed]);
 
   const count = unplacedComments.length;
+  // A patch-only view lacks the lines between its hunks; the file still has them.
+  const where = fileDiff.isPartial ? "outside the changes shown here" : "this file no longer has";
   const notice =
     count > 0 ? (
       <SbsNotice>
-        {`${count === 1 ? "A comment" : `${count} comments`} in the message ${count === 1 ? "is" : "are"} on lines this file no longer has: ${unplacedComments.map((comment) => comment.rangeLabel).join(", ")}`}
+        {`${count === 1 ? "A comment" : `${count} comments`} in the message ${count === 1 ? "is" : "are"} on lines ${where}: ${unplacedComments.map((comment) => comment.rangeLabel).join(", ")}`}
       </SbsNotice>
     ) : null;
 

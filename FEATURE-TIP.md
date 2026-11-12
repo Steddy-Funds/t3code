@@ -54,6 +54,7 @@ upstream; a feature can, from its own branch, when Akiva decides.
 | JetBrains side-by-side diff: two whole files with connectors, word highlights, F7/F4 and per-pane find, select and copy                       | #82 | 02d6762 |
 | Project pane: a Threads/Project switch on the left sidebar; the workspace tree in git colours, Select Opened File (Alt+F1), Cmd+1             | #86 | 9a28024 |
 | Code navigation in the file viewer: Cmd+B and Cmd+click to the declaration (library code too), usages, quick doc and definition, back/forward | #84 | b04708b |
+| Review in the side-by-side diff: comment on lines in either pane and send; draft comments as markers; agent notes with Reply, Dismiss, Next   | #85 | b0088d1 |
 | Snooze reasons: a "why?" prompt after each snooze, a per-thread snooze log, Settings → Snooze history with CSV/JSON export                    | #87 | pending |
 
 Held: #38 (pods notes in the t3-orchestration skill). It edits

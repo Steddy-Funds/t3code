@@ -106,8 +106,11 @@ export function useDiffReviewNotes({
   workspaceRoot: string | undefined;
   /** Set when the diff names files from a repository root above the workspace. */
   repositoryRoot: string | undefined;
-  /** Set while another view than the code view shows the diff: it takes the note there. */
-  onShowNote?: ((placed: PlacedReviewNote) => void) | undefined;
+  /**
+   * Hears each note shown on its lines, for another view than the code view. True when that view
+   * shows the diff now and takes the note there.
+   */
+  onShowNote?: ((placed: PlacedReviewNote) => boolean) | undefined;
 }) {
   const { notes, answeredIds } = useThreadReviewNotes(threadRef);
   const { dismissedIds, dismiss, restore } = useReviewNoteDismissals(threadRef);
@@ -136,10 +139,7 @@ export function useDiffReviewNotes({
       setListOpen(true);
       return;
     }
-    if (onShowNote) {
-      onShowNote(placedNote);
-      return;
-    }
+    if (onShowNote?.(placedNote)) return;
     unfoldFile(fileKey);
     const file = files.find((candidate) => candidate.fileKey === fileKey);
     if (file && anchor.kind === "pending") requestFile(file.filePath);

@@ -625,8 +625,8 @@ export default function DiffPanel({
     return currentLoadWholeFiles(fileDiff);
   });
   const sideBySide = settings.diffSideBySide && !diffAreaNarrow;
-  // A reveal left over when side by side went away must not jump the view when it comes back.
-  if (!sideBySide && sideBySideNoteReveal) setSideBySideNoteReveal(null);
+  // A reveal left over when side by side was turned off must not jump the view when it is back on.
+  if (!settings.diffSideBySide && sideBySideNoteReveal) setSideBySideNoteReveal(null);
   const observeDiffArea = useStableCallback((element: HTMLDivElement | null) => {
     if (!element) return;
     return observeResize(element, ([entry]) => {
@@ -879,10 +879,13 @@ export default function DiffPanel({
     },
     workspaceRoot: activeCwd,
     repositoryRoot: activeRepositoryRoot,
-    onShowNote: sideBySide
+    // Side by side opens on the last note asked for, also one asked for while the panel was too
+    // narrow for it, as it is for a moment while the panel opens.
+    onShowNote: settings.diffSideBySide
       ? ({ note, fileKey }) => {
           setSideBySideFile({ scopeKey: collapseScopeKey, fileKey });
           setSideBySideNoteReveal({ scopeKey: collapseScopeKey, noteId: note.id });
+          return sideBySide;
         }
       : undefined,
   });

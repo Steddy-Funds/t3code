@@ -360,6 +360,7 @@ export function SbsReviewPanel({
           if (revealNoteId) setOpenEntryId(revealNoteId);
           onNoteRevealed();
         }}
+        onRevealUnplaced={onNoteUnplaced}
         onDraftLinesGone={() => {
           if (draft && !draft.sending) keepDraftWords(comments, draft.text);
         }}
@@ -385,6 +386,7 @@ function SbsReviewView({
   onSelectRange,
   revealId,
   onRevealed,
+  onRevealUnplaced,
   onDraftLinesGone,
   renderCard,
 }: {
@@ -400,6 +402,8 @@ function SbsReviewView({
   /** An entry to bring into view. */
   revealId: string | null;
   onRevealed: () => void;
+  /** The entry to bring into view is on lines this view lacks. */
+  onRevealUnplaced: () => void;
   /** The file reloaded without the lines under the open box. */
   onDraftLinesGone: () => void;
   renderCard: (entries: ReadonlyArray<SbsReviewEntry>) => ReactNode;
@@ -436,6 +440,11 @@ function SbsReviewView({
   useLayoutEffect(() => {
     if (revealGroup) onRevealed();
   }, [revealGroup, onRevealed]);
+  const revealLacksLines = revealId !== null && revealGroup === undefined;
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- a note asked for on lines this view lacks (a patch-only view, a file that changed) goes to the notes list instead of holding the open card
+  useEffect(() => {
+    if (revealLacksLines) onRevealUnplaced();
+  }, [revealLacksLines, onRevealUnplaced]);
 
   const count = unplacedComments.length;
   // A patch-only view lacks the lines between its hunks; the file still has them.

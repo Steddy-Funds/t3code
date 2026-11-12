@@ -1051,12 +1051,22 @@ describe("CodeIntel", () => {
         [],
         ["apps/web/main.ts", "packages/ui/index.ts"],
       ],
+      [
+        "the declaration file of a project with no other",
+        { "tsconfig.json": '{ "include": ["src"] }\n', "src/types.d.ts": ALPHA },
+        [],
+        ["src/types.d.ts"],
+      ],
       ["nothing for a root without a project", { "a.ts": ALPHA }, [], []],
       [
-        "nothing more while a document is open",
-        { "tsconfig.json": "{}\n", "a.ts": ALPHA, "b.ts": ALPHA },
-        ["b.ts"],
-        ["b.ts"],
+        "the project's file while a file outside its include is open",
+        {
+          "tsconfig.json": '{ "include": ["src"] }\n',
+          "src/invoice.ts": ALPHA,
+          "scripts/scratch.ts": ALPHA,
+        },
+        ["scripts/scratch.ts"],
+        ["scripts/scratch.ts", "src/invoice.ts"],
       ],
     ] as const)("opens %s before tsc's first workspace answer", ([, files, openFirst, opened]) =>
       inScenario({}, (s) =>
@@ -1075,6 +1085,39 @@ describe("CodeIntel", () => {
           });
 
           expect(openedPaths(typescript, cwd)).toEqual(opened);
+        }),
+      ),
+    );
+
+    it.effect("opens no file outside the root that a project names, through a link either", () =>
+      inScenario({}, (s) =>
+        Effect.gen(function* () {
+          const codeIntel = yield* CodeIntel.CodeIntel;
+          const typescript = s.recordFile("typescript");
+          s.flagsByLanguage.set("typescript", [`--record=${typescript}`]);
+          const other = NodePath.join(s.scratch, "other");
+          NodeFS.mkdirSync(other, { recursive: true });
+          NodeFS.writeFileSync(NodePath.join(other, "tsconfig.json"), '{ "files": ["other.ts"] }\n');
+          NodeFS.writeFileSync(NodePath.join(other, "other.ts"), ALPHA);
+          const cwd = yield* makeWorkspace({
+            "packages/b/tsconfig.json": '{ "include": ["src"] }\n',
+            "packages/b/src/b.ts": ALPHA,
+          });
+          NodeFS.symlinkSync(other, NodePath.join(cwd, "linked"));
+          const references = [NodePath.relative(cwd, other), "./linked", "./packages/b"];
+          NodeFS.writeFileSync(
+            NodePath.join(cwd, "tsconfig.json"),
+            JSON.stringify({ files: [], references: references.map((path) => ({ path })) }),
+          );
+
+          yield* codeIntel.workspaceSymbols({
+            cwd,
+            languageId: "typescript",
+            query: "alpha",
+            limit: 10,
+          });
+
+          expect(openedPaths(typescript, cwd)).toEqual(["packages/b/src/b.ts"]);
         }),
       ),
     );

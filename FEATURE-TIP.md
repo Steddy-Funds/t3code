@@ -45,6 +45,7 @@ upstream; a feature can, from its own branch, when Akiva decides.
 | Agent messages queued behind one another on a busy thread start in one turn, each its own message                                                 | #73 | 364f161 |
 | Claude auto-compact window per thread, in the model picker and from `delegate_task` and `t3_thread_launch` (`autoCompactWindow`)                  | #75 | cabfbbb |
 | Sidebar token burn rate (tokens per minute over 5 minutes, agents included) beside the bot count; the Working shelf sorts by it                   | #76 | f813ada |
+| Burn rate counts Claude subagents, shows per agent in the lineage card, and totals at the sidebar's top right; it sits left of the bot count      | #95 | e2eea4d |
 | Review comments in the diff and the file viewer: Send straight to the agent, Send N, quoted selection                                             | #78 | d4019f5 |
 | JetBrains code keys (Cmd+B, Cmd+O, F7, Alt+F7…) scoped to code, diff and project-tree focus; existing installs migrate                            | #77 | b48cc35 |
 | Material Ocean theme (Settings → Appearance): Material Oceanic chrome; Deep Ocean code, terminal, diffs and syntax colours                        | #81 | 5f49f37 |
@@ -86,6 +87,7 @@ The Mac runs this tip, which already has them all.
 - #73 Queued agent messages start in one turn (`mergedIntoRunId` on a run, followed by `t3_thread_wait`): the whole branch, which starts from `main`
 - #75 Per-thread auto-compact window (the `autoCompactWindow` model option on Claude): the whole branch, which starts from `main`
 - #76 Token burn rates (`subscribeTokenBurnRates`): server half only (`99713e8`)
+- #95 Burn rate counts Claude subagent requests: server half only (`36aa2df`)
 - #77 JetBrains keymap (new default keys, `keybindings.json` migration, Reset to default placement): the whole branch, which starts from `main`
 - #80 Code intelligence (`codeIntel.*` RPCs, ty and `tsc --lsp` by the `typescript-lsp` alias, `codeIntel.enabled` off switch): the whole branch, which starts from `main`
 - #83 Agent review notes (`flag_for_review` MCP tool, `review_note.record`, `agentReviewNotesEnabled`): server half only (`fbdb8e8`, 4 picks), since the branch also carries #78

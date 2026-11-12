@@ -263,6 +263,7 @@ import {
 } from "./ui/combobox";
 import { SidebarContent, SidebarGroup, useSidebar } from "./ui/sidebar";
 import { SidebarChromeFooter, SidebarChromeHeader } from "./sidebar/SidebarChrome";
+import { SidebarModes } from "./sidebar/SidebarModes";
 import { SidebarHeaderIconButton, SidebarThreadHeader } from "./sidebar/SidebarThreadHeader";
 import { TooltipProvider } from "./ui/tooltip";
 import { composerDraftHasUserContent, DraftId, useComposerDraftStore } from "../composerDraftStore";
@@ -3171,9 +3172,15 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       : undefined);
   const newThreadInProjectShortcutLabel = shortcutLabelForCommand(keybindings, "chat.newLocal");
   return (
-    <>
-      <ThreadContextDragGhost />
-      <SidebarChromeHeader isElectron={isElectron} />
+    <SidebarModes
+      header={
+        <>
+          <ThreadContextDragGhost />
+          <SidebarChromeHeader isElectron={isElectron} />
+        </>
+      }
+      footer={<SidebarChromeFooter />}
+    >
       <SidebarContent
         ref={sidebarContentRef}
         className="min-h-full"
@@ -3905,7 +3912,6 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
           ) : null}
         </SidebarGroup>
       </SidebarContent>
-      <SidebarChromeFooter />
-    </>
+    </SidebarModes>
   );
 }

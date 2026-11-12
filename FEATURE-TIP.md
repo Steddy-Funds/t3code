@@ -52,6 +52,7 @@ upstream; a feature can, from its own branch, when Akiva decides.
 | Code intelligence server: ty and `tsc --lsp` answer typed, read-only `codeIntel.*` RPCs (hover, definition, symbols); no UI yet               | #80 | 401fbc8 |
 | Agent review notes: the agent flags lines for your review (`flag_for_review`); a timeline card and an in-diff note with Reply (Labs)          | #83 | 64d7d75 |
 | JetBrains side-by-side diff: two whole files with connectors, word highlights, F7/F4 and per-pane find, select and copy                       | #82 | 02d6762 |
+| Project pane: a Threads/Project switch on the left sidebar; the workspace tree in git colours, Select Opened File (Alt+F1), Cmd+1             | #86 | 9a28024 |
 
 Held: #38 (pods notes in the t3-orchestration skill). It edits
 `.agents/skills/t3-orchestration/`, which exists only on

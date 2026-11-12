@@ -52,6 +52,7 @@ import {
   codeIntelOutcome,
   definitionExcerpt,
   fencedCode,
+  isLineUnchanged,
   isOwnDeclaration,
   isSameFile,
   textMatchLocations,
@@ -310,6 +311,7 @@ export function useCodeNavigation(options: CodeNavigationOptions) {
     request.controller = controller;
     const anchor = anchorAt(position);
     const server = intel.server;
+    const askedText = currentText();
     const waiting = window.setTimeout(() => {
       if (requestRef.current.seq !== seq) return;
       setPopup({ kind: "hint", anchor, message: waitingMessage(server) });
@@ -317,7 +319,7 @@ export function useCodeNavigation(options: CodeNavigationOptions) {
     }, WAITING_HINT_DELAY_MS);
     const result = await executeAtomQuery(
       appAtomRegistry,
-      query({ cwd, path, ifRevision: fileContentRevision(currentText()) }),
+      query({ cwd, path, ifRevision: fileContentRevision(askedText) }),
       { refresh: true, reportFailure: false, reportDefect: false, signal: controller.signal },
     );
     window.clearTimeout(waiting);
@@ -348,6 +350,11 @@ export function useCodeNavigation(options: CodeNavigationOptions) {
           if (!retried) {
             await reloadFile(path);
             if (request.seq !== seq) return null;
+            // Lines moved under the caret: asking again would answer for another name.
+            if (!isLineUnchanged(askedText, currentText(), position.line)) {
+              setPopup({ kind: "hint", anchor, message: "The file changed on disk. Try again." });
+              return null;
+            }
             return ask(position, query, onFailure, true);
           }
         }

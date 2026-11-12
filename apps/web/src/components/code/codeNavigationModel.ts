@@ -37,6 +37,12 @@ function lineOf(text: string, line: number): string | null {
   return text.slice(start, end === -1 ? text.length : end).replace(/\r$/, "");
 }
 
+/** Whether a position asked against `before` still means the same line in `after`. */
+export function isLineUnchanged(before: string, after: string, line: number): boolean {
+  const kept = lineOf(before, line);
+  return kept !== null && kept === lineOf(after, line);
+}
+
 /** The word at a caret, which may sit just after it. */
 export function wordAtPosition(text: string, position: CodePosition): string | null {
   const line = lineOf(text, position.line);

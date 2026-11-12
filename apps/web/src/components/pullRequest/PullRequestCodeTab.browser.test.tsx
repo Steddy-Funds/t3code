@@ -43,6 +43,7 @@ const { diffAtom, pagedDiffAtom } = await vi.hoisted(async () => {
       truncated: true,
       nextCursor: "page-2",
     },
+    lone: { patch: filePatch("lone.ts"), truncated: true, nextCursor: "page-2" },
     "page-2": { patch: filePatch("late.ts"), truncated: false, nextCursor: null },
   };
   return {
@@ -57,6 +58,7 @@ const { diffAtom, pagedDiffAtom } = await vi.hoisted(async () => {
 
 const mocks = vi.hoisted(() => ({
   paged: false,
+  firstPage: "first",
   diffCommits: [] as Array<string | undefined>,
   diffCursors: [] as Array<string | undefined>,
   fileContents: vi.fn(),
@@ -78,7 +80,7 @@ vi.mock(import("~/state/pullRequests"), async (original) => {
       diff: (({ input }: { input: { cursor?: string; commit?: string } }) => {
         mocks.diffCommits.push(input.commit);
         mocks.diffCursors.push(input.cursor);
-        return mocks.paged ? pagedDiffAtom(input.cursor ?? "first") : diffAtom;
+        return mocks.paged ? pagedDiffAtom(input.cursor ?? mocks.firstPage) : diffAtom;
       }) as never,
     },
   };
@@ -175,8 +177,9 @@ const OLD_CONTENTS = [
 ].join("\n");
 const NEW_CONTENTS = OLD_CONTENTS.replace("before()", "after()");
 
-function setup({ paged }: { paged: boolean }) {
+function setup({ paged, firstPage = "first" }: { paged: boolean; firstPage?: "first" | "lone" }) {
   mocks.paged = paged;
+  mocks.firstPage = firstPage;
   mocks.diffCommits = [];
   mocks.diffCursors = [];
   mocks.updateClientSettings.mockReset();
@@ -704,6 +707,18 @@ it("selects the file a click in the file tree names, and pages forward from the 
 
   await expect.element(pick("late.ts")).toBeInTheDocument();
   expect(mocks.diffCursors).toContain("page-2");
+});
+
+it("pages forward in side by side when the one file shown is the last loaded, with the tree closed", async () => {
+  setup({ paged: true, firstPage: "lone" });
+  using _settings = withSettings({ diffSideBySide: true });
+  await using screen = await render(sbsTab(), { container: areaOf(1000) });
+  await vi.waitFor(() => expect(titleOf(screen)).toBe("lone.ts"));
+
+  await expect.element(screen.getByRole("button", { name: "Next file" })).toBeEnabled();
+  expect(mocks.diffCursors).toContain("page-2");
+  await userEvent.click(screen.getByRole("button", { name: "Next file" }));
+  await vi.waitFor(() => expect(titleOf(screen)).toBe("late.ts"));
 });
 
 it("selects the file a reveal request names, paging forward to one not loaded yet", async () => {

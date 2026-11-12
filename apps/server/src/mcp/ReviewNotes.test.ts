@@ -689,10 +689,12 @@ describe("reply_to_review_comment", () => {
       Effect.gen(function* () {
         const a = yield* makeHarness();
         const diff = ["@@ -1,400 +1,400 @@", ...Array(400).fill(`+${'"é'.repeat(20)}`)].join("\n");
-        yield* a.sendComments([record("ctx_long", { text: "x".repeat(2_000), diff })]);
+        // Long enough that the comment as sent would not fit beside any of its code.
+        yield* a.sendComments([record("ctx_long", { text: "x".repeat(12_000), diff })]);
         replyIdOf(yield* a.reply({ commentId: "ctx_long", reply: '"'.repeat(2_000) }));
         const [reply] = yield* a.replies;
         expect(reply!.comment.text.length).toBeLessThanOrEqual(600);
+        expect(reply!.comment.diff.length).toBeGreaterThan(0);
         expect(reply!.comment.diff.length).toBeLessThan(diff.length);
         expect(diff.startsWith(reply!.comment.diff)).toBe(true);
         expect(diff.split("\n")).toContain(reply!.comment.diff.split("\n").at(-1));
@@ -713,6 +715,16 @@ describe("reply_to_review_comment", () => {
           code: "invalid_request",
           message: expect.stringMatching(/No review comment ctx_9/),
         });
+        expect(yield* a.replies).toEqual([]);
+
+        // Escaped, this reply and path pass the wire's bound with no code at all.
+        yield* a.sendComments([
+          record("ctx_1"),
+          record("ctx_wide", { filePath: "é".repeat(2_000) }),
+        ]);
+        expect(
+          errorOf(yield* a.reply({ commentId: "ctx_wide", reply: "\u0001".repeat(2_000) })),
+        ).toMatchObject({ code: "invalid_request", message: expect.stringMatching(/too long/) });
         expect(yield* a.replies).toEqual([]);
 
         const off = yield* makeHarness({ agentReviewNotesEnabled: false });

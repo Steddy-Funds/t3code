@@ -8,6 +8,7 @@ import {
   REVIEW_NOTE_TURN_ITEM_PREFIX,
   REVIEW_REPLY_TURN_ITEM_PREFIX,
   TurnItemId,
+  type OrchestrationV2ReviewReply,
   type OrchestrationV2Run,
   type OrchestratorMcpFlagForReviewInput,
   type OrchestratorMcpFlagForReviewResult,
@@ -113,22 +114,36 @@ const noteIdsFor = (
 const REPLY_RUN_WINDOW = 20;
 const MAX_REPLY_COMMENT_CHARS = 600;
 
-/** The comment as the reply copies it, its code cut to whole lines so the record fits the wire. */
-const replyCommentOf = (record: ReviewCommentContextRecord, fits: (diff: string) => boolean) => {
-  const text = Array.from(record.text.trim()).slice(0, MAX_REPLY_COMMENT_CHARS).join("");
+type ReplyComment = OrchestrationV2ReviewReply["comment"];
+
+/**
+ * The comment as the reply copies it, its code cut to whole lines so the record fits the wire.
+ * Undefined when it would not fit even without code.
+ */
+const replyCommentOf = (
+  record: ReviewCommentContextRecord,
+  fits: (comment: ReplyComment) => boolean,
+): ReplyComment | undefined => {
+  const text = Array.from(record.text.trim());
   const lines = record.diff.split("\n");
-  let count = Math.min(lines.length, MAX_EXCERPT_LINES);
-  while (count > 0 && !fits(lines.slice(0, count).join("\n"))) count -= 1;
-  return {
+  const copyOf = (count: number): ReplyComment => ({
     sectionId: record.sectionId,
     filePath: record.filePath,
     rangeLabel: record.rangeLabel,
     startIndex: record.startIndex,
     endIndex: record.endIndex,
-    text,
+    text:
+      text.length > MAX_REPLY_COMMENT_CHARS
+        ? `${text.slice(0, MAX_REPLY_COMMENT_CHARS - 1).join("")}…`
+        : text.join(""),
     diff: lines.slice(0, count).join("\n"),
     ...(record.fenceLanguage === undefined ? {} : { fenceLanguage: record.fenceLanguage }),
-  };
+  });
+  for (let count = Math.min(lines.length, MAX_EXCERPT_LINES); count >= 0; count -= 1) {
+    const copy = copyOf(count);
+    if (fits(copy)) return copy;
+  }
+  return undefined;
 };
 
 const make = Effect.gen(function* () {
@@ -336,18 +351,24 @@ const make = Effect.gen(function* () {
       }
       const replyComment = replyCommentOf(
         comment,
-        (diff) =>
+        (copy) =>
           Buffer.byteLength(
             JSON.stringify({
               kind: "review_reply",
               commentId: input.commentId,
               reply: input.reply,
-              comment: { ...comment, diff },
+              comment: copy,
               runId: run.id,
-            }),
+            } satisfies OrchestrationV2ReviewReply),
             "utf8",
           ) <= REVIEW_NOTE_MAX_INPUT_BYTES,
       );
+      if (replyComment === undefined) {
+        return yield* failure(
+          "invalid_request",
+          "The reply is too long to record beside its comment. Shorten it.",
+        );
+      }
       const replyId = noteIdOf(
         threadId,
         [threadId, input.commentId, input.reply],

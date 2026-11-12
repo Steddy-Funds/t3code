@@ -56,6 +56,12 @@ export interface ReviewCommentDrafts<TRange> {
   readonly removeComment: (commentId: string) => void;
 }
 
+/** Settles a box whose lines are gone from view: its words go to the message, an empty one closes. */
+export function keepDraftWords<TRange>(drafts: ReviewCommentDrafts<TRange>, text: string) {
+  if (text.trim() === "") drafts.cancel();
+  else drafts.addToMessage(text);
+}
+
 const EMPTY_REVIEW_COMMENTS: ReadonlyArray<ReviewCommentContext> = [];
 
 /**

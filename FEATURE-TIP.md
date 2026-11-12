@@ -58,6 +58,7 @@ upstream; a feature can, from its own branch, when Akiva decides.
 | Semantic highlighting in the file viewer (Material Ocean): the language server's parameter, property, decorator and call colours over the lexer's | #89 | 57910cc |
 | Symbols and pickers: Go to class and symbol (Cmd+O), File structure, Recent files (Cmd+E), next/previous method, double Shift for search          | #88 | 95f8ea3 |
 | Code intelligence follow-ups: Go to class on a cold TS server, decorated Python names, all packages' libraries, an off state                      | #90 | 744c067 |
+| Diff and review stitch: Cmd+B and Cmd+click from side-by-side panes, the PR Code tab side by side, a fork's notes get their own ids               | #92 | 1dbc8a7 |
 | Snooze reasons: a "why?" prompt after each snooze, a per-thread snooze log, Settings → Snooze history with CSV/JSON export                        | #87 | pending |
 
 Held: #38 (pods notes in the t3-orchestration skill). It edits
@@ -89,6 +90,7 @@ The Mac runs this tip, which already has them all.
 - #82 Side-by-side diff (`orchestration.getTurnDiffFileContents` behind the thread and file read grants, `diff.find` in the default keys): server half only (`a73408b`, 5 picks), since the branch carries #81 and the tip
 - #87 Snooze log (`threads.snoozeLog`, `threads.recordSnooze`, `t3 thread snoozes`, fork-only `thread_snooze_log` table): the whole branch, which starts from `main`
 - #90 Code intelligence follow-ups (cold `tsc` seeding, ty name ranges, libraryRoots per package, status backoff, optional `enabled` on status): server half only (11 picks), since the branch carries the tip
+- #92 Diff and review stitch (a fork's review notes get their own ids and reply sections; a note stored before keeps its id): server half only (3 picks), with the shared `reviewNote` module its test reads
 
 A feature that changes `apps/server`, or a contract the server reads, is
 merged there too: its branch head with `--no-ff`, never this tip.

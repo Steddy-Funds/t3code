@@ -477,6 +477,11 @@ describe("themeEditorSurfaceCss", () => {
       deleted: "#060606",
       modified: "#090909",
       modifiedMuted: "#0a0a0a",
+      insertedMuted: "#040404",
+      deletedMuted: "#070707",
+      insertedMarker: "#050505",
+      deletedMarker: "#080808",
+      modifiedMarker: "#0b0b0b",
     },
     find: { match: "#0f0f0f", currentMatch: "#101010", foreground: "#111111" },
   };
@@ -522,11 +527,27 @@ describe("themeEditorSurfaceCss", () => {
     expect(css).not.toContain("color-mix");
   });
 
-  it("paints a changed line that holds changed words as a modified line", () => {
+  it("paints a changed line that holds changed words as a modified line, and a stacked one by its side", () => {
     expect(css).toMatch(
       /:has\(\[data-diff-span\]\)\s*\{\s*--diffs-computed-diff-line-bg:\s*#0a0a0a;/,
     );
     expect(css).toMatch(/\[data-diff-span\]\s*\{\s*background-color:\s*#090909;/);
+
+    // Stacked, the line takes its side's muted tint and the words its full one.
+    const stacked = (lineType: string, tail: string, property: string, value: string) =>
+      expect(css, `${lineType}${tail}`).toMatch(
+        new RegExp(
+          `\\[data-diff-type="single"\\][^{}]*\\[data-line-type="${lineType}"\\]${tail}\\s*\\{\\s*${property}:\\s*${value};`,
+        ),
+      );
+    const words = ":has\\(\\[data-diff-span\\]\\)";
+    const word = " \\[data-diff-span\\]";
+    stacked("change-addition", words, "--diffs-computed-diff-line-bg", "#040404");
+    stacked("change-addition", word, "background-color", "#030303");
+    stacked("change-deletion", words, "--diffs-computed-diff-line-bg", "#070707");
+    stacked("change-deletion", word, "background-color", "#060606");
+    // The split view's modified tints are not stacked ones.
+    expect(css).not.toMatch(/data-diff-type="single"[^{}]*\{[^}]*#(0a0a0a|090909)/);
   });
 
   it("paints the caret row", () => {

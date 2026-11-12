@@ -161,6 +161,14 @@ export type ThemeEditorColors = Readonly<{
     modified: string;
     /** That line itself, under its changed words. */
     modifiedMuted: string;
+    /** An added line with changed words, in a one-column diff; the words take `inserted`. */
+    insertedMuted: string;
+    /** A deleted line with changed words, in a one-column diff; the words take `deleted`. */
+    deletedMuted: string;
+    /** The scrollbar's marks and the line where the other side's lines belong. */
+    insertedMarker: string;
+    deletedMarker: string;
+    modifiedMarker: string;
   }>;
   find: Readonly<{ match: string; currentMatch: string; foreground: string }>;
   /** A file name's colour in a file tree, by its working-tree change. */
@@ -1207,6 +1215,11 @@ export const MATERIAL_OCEAN_THEME: ThemeDefinition = {
         deleted: "#41454b",
         modified: "#12404b",
         modifiedMuted: "#10242e",
+        insertedMuted: "#182824",
+        deletedMuted: "#23262e",
+        insertedMarker: "#447152",
+        deletedMarker: "#656e76",
+        modifiedMarker: "#43698d",
       },
       find: { match: "#f8e71c", currentMatch: "#84ffff", foreground: "#292d3e" },
       // JetBrains has no renamed status: a moved file reads as modified.

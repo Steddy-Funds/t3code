@@ -27,6 +27,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import { McpSchema, McpServer } from "effect/ai";
+import { reviewNoteFromToolItem, reviewNoteSectionId } from "@t3tools/shared/reviewNote";
 import type * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 import * as ProviderContinuationRequests from "@t3tools/provider-core/server/ProviderContinuationRequests";
 
@@ -98,14 +99,15 @@ const mcpClient = McpSchema.McpServerClient.of({
   getClient: Effect.die("unused"),
 });
 
+const caller: McpInvocationContext.McpThreadCaller = {
+  threadId,
+  providerSessionId: "provider-session:review-notes",
+  providerInstanceId: instanceId,
+};
 const scope: McpInvocationContext.McpInvocationScope = {
   environmentId: EnvironmentId.make("environment:review-notes"),
   requestNamespace: "provider-session:review-notes",
-  thread: {
-    threadId,
-    providerSessionId: "provider-session:review-notes",
-    providerInstanceId: instanceId,
-  },
+  thread: caller,
   client: undefined,
   capabilities: new Set(["orchestration"]),
   issuedAt: 1,
@@ -197,9 +199,74 @@ const makeHarness = (settings: Parameters<typeof ServerSettings.layerTest>[0] = 
     const orchestrator = Context.get(here, Orchestrator.OrchestratorV2);
     const sink = Context.get(here, EventSink.EventSinkV2);
 
-    // The thread, mid-turn when its agent calls.
+    // A run on a thread: mid-turn when its agent calls, or completed so a fork can start from it.
     const now = yield* DateTime.now;
-    const providerThreadId = ProviderThreadId.make("provider-thread:review-notes");
+    const seedRun = (
+      on: { readonly threadId: ThreadId; readonly runId: RunId; readonly rootNode: NodeId },
+      status: "running" | "completed",
+    ) =>
+      Effect.gen(function* () {
+        const providerThreadId = ProviderThreadId.make(`provider-thread:${on.threadId}`);
+        const completedAt = status === "completed" ? now : null;
+        yield* sink.write({
+          commandId: CommandId.make(`command:seed:${on.runId}:${status}`),
+          events: [
+            {
+              id: EventId.make(`event:seed-node:${on.runId}:${status}`),
+              type: "node.updated",
+              threadId: on.threadId,
+              runId: on.runId,
+              nodeId: on.rootNode,
+              driver,
+              providerInstanceId: instanceId,
+              occurredAt: now,
+              payload: {
+                id: on.rootNode,
+                threadId: on.threadId,
+                runId: on.runId,
+                parentNodeId: null,
+                rootNodeId: on.rootNode,
+                kind: "root_turn",
+                status,
+                countsForRun: true,
+                providerThreadId,
+                providerTurnId: null,
+                nativeItemRef: null,
+                runtimeRequestId: null,
+                checkpointScopeId: null,
+                startedAt: now,
+                completedAt,
+              },
+            },
+            {
+              id: EventId.make(`event:seed-run:${on.runId}:${status}`),
+              type: "run.updated",
+              threadId: on.threadId,
+              runId: on.runId,
+              nodeId: on.rootNode,
+              providerInstanceId: instanceId,
+              occurredAt: now,
+              payload: {
+                id: on.runId,
+                threadId: on.threadId,
+                ordinal: 1,
+                providerInstanceId: instanceId,
+                modelSelection,
+                providerThreadId,
+                userMessageId: MessageId.make(`message:seed-user:${on.runId}`),
+                rootNodeId: on.rootNode,
+                activeAttemptId: null,
+                status,
+                requestedAt: now,
+                startedAt: now,
+                completedAt,
+                checkpointId: null,
+                contextHandoffId: null,
+              },
+            },
+          ],
+        });
+      });
     yield* orchestrator.dispatch({
       type: "thread.create",
       createdBy: "user",
@@ -214,91 +281,40 @@ const makeHarness = (settings: Parameters<typeof ServerSettings.layerTest>[0] = 
       branch: null,
       worktreePath: null,
     });
-    yield* sink.write({
-      commandId: CommandId.make("command:seed:review-notes"),
-      events: [
-        {
-          id: EventId.make("event:seed-node"),
-          type: "node.updated",
-          threadId,
-          runId,
-          nodeId: rootNode,
-          driver,
-          providerInstanceId: instanceId,
-          occurredAt: now,
-          payload: {
-            id: rootNode,
-            threadId,
-            runId,
-            parentNodeId: null,
-            rootNodeId: rootNode,
-            kind: "root_turn",
-            status: "running",
-            countsForRun: true,
-            providerThreadId,
-            providerTurnId: null,
-            nativeItemRef: null,
-            runtimeRequestId: null,
-            checkpointScopeId: null,
-            startedAt: now,
-            completedAt: null,
-          },
-        },
-        {
-          id: EventId.make("event:seed-run"),
-          type: "run.updated",
-          threadId,
-          runId,
-          nodeId: rootNode,
-          providerInstanceId: instanceId,
-          occurredAt: now,
-          payload: {
-            id: runId,
-            threadId,
-            ordinal: 1,
-            providerInstanceId: instanceId,
-            modelSelection,
-            providerThreadId,
-            userMessageId: MessageId.make("message:seed-user"),
-            rootNodeId: rootNode,
-            activeAttemptId: null,
-            status: "running",
-            requestedAt: now,
-            startedAt: now,
-            completedAt: null,
-            checkpointId: null,
-            contextHandoffId: null,
-          },
-        },
-      ],
-    });
+    yield* seedRun({ threadId, runId, rootNode }, "running");
 
-    const notes = orchestrator
-      .getThreadProjection(threadId)
-      .pipe(
-        Effect.map((projection) =>
-          projection.turnItems.filter(
-            (item): item is Note =>
-              item.type === "dynamic_tool" && item.toolName === REVIEW_NOTE_TOOL_NAME,
+    const notesOf = (of: ThreadId) =>
+      orchestrator
+        .getThreadProjection(of)
+        .pipe(
+          Effect.map((projection) =>
+            projection.turnItems.filter(
+              (item): item is Note =>
+                item.type === "dynamic_tool" && item.toolName === REVIEW_NOTE_TOOL_NAME,
+            ),
           ),
-        ),
-      );
+        );
+    const flagAs =
+      (caller: McpInvocationContext.McpInvocationScope) => (args: Record<string, unknown>) =>
+        server
+          .callTool({ name: REVIEW_NOTE_TOOL_NAME, arguments: args })
+          .pipe(
+            Effect.provideService(McpInvocationContext.McpInvocationContext, caller),
+            Effect.provideService(McpSchema.McpServerClient, mcpClient),
+          );
     return {
       workspace,
       outside,
       path,
       orchestrator,
-      notes,
+      notes: notesOf(threadId),
+      notesOf,
+      seedRun,
+      flagAs,
       write,
       symlink: (target: string, link: string) =>
         fileSystem.symlink(target, link).pipe(Effect.orDie),
-      flag: (args: Record<string, unknown>) =>
-        server
-          .callTool({ name: REVIEW_NOTE_TOOL_NAME, arguments: args })
-          .pipe(
-            Effect.provideService(McpInvocationContext.McpInvocationContext, scope),
-            Effect.provideService(McpSchema.McpServerClient, mcpClient),
-          ),
+      flag: flagAs(scope),
     };
   });
 
@@ -371,6 +387,29 @@ describe("flag_for_review", () => {
         expect((yield* a.notes).map((note) => note.input)).toEqual([
           expect.objectContaining({ note: args.note }),
         ]);
+
+        // A note stored before the thread joined the hash, under the id it got then, is the same
+        // note when the agent sends it again.
+        const before = { path: FILE, startLine: 4, endLine: 4, note: "Refunds retry too." };
+        const beforeId = TurnItemId.make(
+          `${REVIEW_NOTE_TURN_ITEM_PREFIX}${encodeURIComponent(threadId)}:ffef5a3fa384e56f44a29f109188b61e`,
+        );
+        yield* a.orchestrator.dispatch({
+          type: "review_note.record",
+          commandId: CommandId.make("command:review-note:before"),
+          threadId,
+          runId,
+          nodeId: rootNode,
+          turnItemId: beforeId,
+          note: {
+            ...before,
+            excerpt: "four",
+            excerptTruncated: false,
+            contentRevision: FILE_BLOB,
+          },
+        });
+        expect(noteIdOf(yield* a.flag(before))).toBe(beforeId);
+        expect((yield* a.notes).map((note) => note.id)).toEqual([noteId, beforeId]);
 
         // The blob id is of the file's bytes, a byte order mark included.
         yield* a.write(a.workspace, "src/bom.ts", "\uFEFFone\n");
@@ -453,6 +492,74 @@ describe("flag_for_review", () => {
           });
         }
         expect(yield* a.notes).toEqual([]);
+      }),
+    ).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("gives a fork's note its own id and reply section, beside its source's", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const a = yield* makeHarness();
+        const args = { path: FILE, startLine: 2, endLine: 3, note: "Charges now retry." };
+        const sourceNoteId = noteIdOf(yield* a.flag(args));
+
+        // The fork copies no rows: it starts from the source's completed run. (`latest_stable`
+        // needs a checkpoint the seeded run has none of.)
+        const forkId = ThreadId.make("thread:review-notes:fork");
+        const fork = {
+          threadId: forkId,
+          runId: RunId.make("run:fork"),
+          rootNode: NodeId.make("node:fork"),
+        };
+        yield* a.seedRun({ threadId, runId, rootNode }, "completed");
+        yield* a.orchestrator.dispatch({
+          type: "thread.fork",
+          commandId: CommandId.make("command:fork:review-notes"),
+          sourceThreadId: threadId,
+          targetThreadId: forkId,
+          sourcePoint: { type: "run", runId },
+          createdBy: "user",
+          creationSource: "web",
+        });
+        yield* a.seedRun(fork, "running");
+
+        const visibleNotes = (of: ThreadId) =>
+          a.orchestrator.getThreadProjection(of).pipe(
+            Effect.map((projection) =>
+              projection.visibleTurnItems.flatMap((row) => {
+                const note = reviewNoteFromToolItem(row.item);
+                return note === undefined ? [] : [{ note, row }];
+              }),
+            ),
+          );
+        expect(yield* visibleNotes(forkId)).toEqual([
+          expect.objectContaining({
+            row: expect.objectContaining({
+              visibility: "inherited",
+              sourceThreadId: threadId,
+              sourceItemId: sourceNoteId,
+            }),
+          }),
+        ]);
+
+        // The fork's agent flags the same note on the same lines.
+        const forkNoteId = noteIdOf(
+          yield* a.flagAs({ ...scope, thread: { ...caller, threadId: forkId } })(args),
+        );
+        expect(forkNoteId).not.toBe(sourceNoteId);
+        expect(
+          forkNoteId.startsWith(`${REVIEW_NOTE_TURN_ITEM_PREFIX}${encodeURIComponent(forkId)}:`),
+        ).toBe(true);
+        expect(reviewNoteSectionId(forkNoteId)).not.toBe(reviewNoteSectionId(sourceNoteId));
+
+        expect((yield* visibleNotes(forkId)).map(({ note }) => note.id)).toEqual([
+          sourceNoteId,
+          forkNoteId,
+        ]);
+
+        // The source gains nothing from the fork.
+        expect((yield* a.notesOf(threadId)).map((note) => note.id)).toEqual([sourceNoteId]);
+        expect((yield* a.notesOf(forkId)).map((note) => note.id)).toEqual([forkNoteId]);
       }),
     ).pipe(Effect.provide(NodeServices.layer)),
   );

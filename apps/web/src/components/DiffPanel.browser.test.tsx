@@ -42,6 +42,7 @@ const state = vi.hoisted(() => ({
   turnItems: [] as ReadonlyArray<{ readonly item: unknown }>,
   contentsCommand: {},
   contents: null as { readonly oldContents: string; readonly newContents: string } | null,
+  contentsUnreadable: false,
 }));
 
 vi.mock("~/state/server", async () => {
@@ -99,7 +100,10 @@ vi.mock("~/state/queries", () => ({
 vi.mock("~/state/use-atom-command", () => ({
   useAtomCommand: (command: unknown) =>
     command === state.contentsCommand
-      ? async () => ({ _tag: "Success", value: state.contents })
+      ? async () => {
+          if (state.contentsUnreadable) throw new Error("The file could not be read.");
+          return { _tag: "Success", value: state.contents };
+        }
       : async () => {},
 }));
 vi.mock("~/editorPreferences", () => ({ useOpenInPreferredEditor: () => async () => {} }));
@@ -108,6 +112,10 @@ vi.mock("~/browser/useOpenLink", () => ({ useOpenLink: () => async () => {} }));
 vi.mock("./diffs/DiffCommentAnnotation", () => ({ DiffCommentAnnotation: () => null }));
 vi.mock("./diffs/DiffFileTree", () => ({ DiffFileTree: () => null }));
 vi.mock("./DiffFilePathCopyButton", () => ({ DiffFilePathCopyButton: () => null }));
+// Go to Declaration reaches the router and server state this file mocks only in part.
+vi.mock("./diffs/sbs/useSbsCodeNavigation", () => ({
+  useSbsCodeNavigation: () => ({ onTokenActivate: undefined, popup: null }),
+}));
 
 import DiffPanel from "./DiffPanel";
 import { useDiffPanelSessionStore, useDiffPanelStore } from "~/diffPanelStore";
@@ -151,6 +159,7 @@ function setup(failedBaseRef: string | null) {
   state.settings = {};
   state.turnItems = [];
   state.contents = null;
+  state.contentsUnreadable = false;
   const patch = Atom.make<AsyncResult.AsyncResult<ReviewDiffPreviewSource, Error>>(
     AsyncResult.initial(),
   );
@@ -383,4 +392,77 @@ it.each([
   );
 
   await expect.element(screen.getByText("Alpha replaced value ten.")).toBeVisible();
+});
+
+it("lists a note side by side cannot show when its whole file could not be loaded", async () => {
+  using context = setup("origin/orphan");
+  const viewport = { width: window.innerWidth, height: window.innerHeight };
+  await using _viewport = {
+    [Symbol.asyncDispose]: () => page.viewport(viewport.width, viewport.height),
+  };
+  await page.viewport(1600, 900);
+  state.settings = { diffSideBySide: true };
+  state.contentsUnreadable = true;
+  const path = "unreadable.ts";
+  const noteId = TurnItemId.make("turn-item:review-note:thread:fedcba9876543210fedcba9876543210");
+  state.turnItems = [
+    {
+      item: {
+        id: noteId,
+        type: "dynamic_tool",
+        toolName: REVIEW_NOTE_TOOL_NAME,
+        input: {
+          kind: "review_note",
+          path,
+          startLine: 30,
+          endLine: 30,
+          note: "Thirty is far from the change.",
+          excerpt: "const value30 = 30;",
+          excerptTruncated: false,
+          contentRevision: "a".repeat(40),
+          runId: RunId.make("run-1"),
+        },
+      },
+    },
+  ];
+  const metadata = preview();
+  const source = {
+    ...metadata.sources[0]!,
+    files: [{ path, previousPath: null, additions: 1, deletions: 1 }],
+  };
+  state.previews.set("main", Atom.make(AsyncResult.success({ ...metadata, sources: [source] })));
+  useDiffPanelStore.getState().selectBranchBaseRef(context.threadRef, "main");
+  await using screen = await render(
+    <RegistryContext.Provider value={context.registry}>
+      <div style={{ height: 600, display: "flex", flexDirection: "column" }}>
+        <DiffPanel composerDraftTarget={context.threadRef} workspaceMutationId={null} visible />
+      </div>
+    </RegistryContext.Provider>,
+  );
+  await expect.element(screen.getByText("Loading file...")).toBeVisible();
+  // The new side is the blob the note was pinned on, so the note anchors as the whole file shows.
+  await act(() =>
+    context.registry.set(
+      context.patch,
+      AsyncResult.success({
+        ...source,
+        diff: `diff --git a/${path} b/${path}\nindex 1111111..aaaaaaa 100644\n--- a/${path}\n+++ b/${path}\n@@ -7,7 +7,7 @@\n${[
+          " const value7 = 7;",
+          " const value8 = 8;",
+          " const value9 = 9;",
+          "-const value10 = 10;",
+          "+const alpha = 1;",
+          " const value11 = 11;",
+          " const value12 = 12;",
+          " const value13 = 13;",
+        ].join("\n")}\n`,
+      }),
+    ),
+  );
+  await expect.element(screen.getByText(/^The whole file could not be loaded\./)).toBeVisible();
+
+  await act(() => useReviewNoteRevealStore.getState().request(context.threadRef, noteId));
+
+  await expect.element(page.getByText("Not placed in this diff")).toBeVisible();
+  await expect.element(page.getByText("Thirty is far from the change.")).toBeVisible();
 });

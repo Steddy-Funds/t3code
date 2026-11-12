@@ -111,6 +111,8 @@ import {
 import { observeResize } from "~/lib/observeResize";
 import { orchestrationEnvironment } from "../state/orchestration";
 import { SbsReviewPanel, type SbsNoteReveal } from "./diffs/sbs/review/SbsReviewPanel";
+import { SIDE_BY_SIDE_MIN_WIDTH } from "./diffs/sbs/SideBySideDiffPanel";
+import { useSbsCodeNavigation } from "./diffs/sbs/useSbsCodeNavigation";
 
 import { observeIntersection } from "~/lib/observeIntersection";
 import { useReviewFilePatches } from "./diffs/useReviewFilePatches";
@@ -123,8 +125,6 @@ import { useOpenLink } from "../browser/useOpenLink";
 type DiffThemeType = "light" | "dark";
 const AUTOMATIC_BASE_REF = "__automatic_base_ref__";
 const DIFF_FILE_TREE_STORAGE_KEY = "t3code.diffFileTreeOpen";
-/** Narrower than this, two panes and their divider leave too little of each line to read. */
-const SIDE_BY_SIDE_MIN_WIDTH = 520;
 const fileEntryCache = new WeakMap<
   FileDiffMetadata,
   { fileDiff: FileDiffMetadata; fileKey: string; fileVersion: number }
@@ -743,9 +743,11 @@ export default function DiffPanel({
   const shownFileEntries = renderableFileEntries.filter(({ fileDiff }) => isFileShown(fileDiff));
   const sideBySideFileKey =
     sideBySideFile?.scopeKey === collapseScopeKey ? sideBySideFile.fileKey : null;
+  const sideBySideShownFile = sideBySide
+    ? (shownFileEntries.find((file) => file.fileKey === sideBySideFileKey) ?? shownFileEntries[0])
+    : undefined;
   const treeSelectedPath = sideBySide
-    ? ((shownFileEntries.find((file) => file.fileKey === sideBySideFileKey) ?? shownFileEntries[0])
-        ?.fileDiff.name ?? null)
+    ? (sideBySideShownFile?.fileDiff.name ?? null)
     : selectedFilePath;
   const shownFileKeys = shownFileEntries.map((file) => file.fileKey);
   const defaultCollapsedDiffFileKeys = settings.diffFilesCollapsed
@@ -847,6 +849,18 @@ export default function DiffPanel({
       },
     });
   };
+  const sbsCodeNavigation = useSbsCodeNavigation(
+    routeThreadRef && activeCwd
+      ? {
+          environmentId: routeThreadRef.environmentId,
+          cwd: activeCwd,
+          repositoryRoot: activeRepositoryRoot,
+          threadRef: routeThreadRef,
+        }
+      : null,
+    sideBySideShownFile ? `${collapseScopeKey}:${sideBySideShownFile.fileKey}` : null,
+    openDiffFile,
+  );
   const toggleDiffFileCollapsed = useStableCallback((fileKey: string) => {
     const file = renderableFileEntries.find((file) => file.fileKey === fileKey);
     if (lazySource && file) requestFile(resolveFileDiffPath(file.fileDiff));
@@ -879,6 +893,7 @@ export default function DiffPanel({
     },
     workspaceRoot: activeCwd,
     repositoryRoot: activeRepositoryRoot,
+    shownLines: sideBySide && currentLoadWholeFiles ? "whole-file" : "hunks",
     // Side by side opens on the last note asked for, also one asked for while the panel was too
     // narrow for it, as it is for a moment while the panel opens.
     onShowNote: settings.diffSideBySide
@@ -1562,7 +1577,7 @@ export default function DiffPanel({
                       onNoteRevealed={() => setSideBySideNoteReveal(null)}
                       onNoteUnplaced={() => {
                         setSideBySideNoteReveal(null);
-                        reviewNotes.toolbar?.onListOpenChange(true);
+                        reviewNotes.onNoteUnplaced();
                       }}
                       files={shownFileEntries.map(({ fileDiff, fileKey }) => ({
                         fileDiff,
@@ -1591,7 +1606,10 @@ export default function DiffPanel({
                       onRequestPatch={requestFilePatch}
                       onRetryPatch={retry}
                       onOpenFile={openDiffFile}
+                      workspaceRoot={activeCwd}
+                      onTokenActivate={sbsCodeNavigation.onTokenActivate}
                     />
+                    {sbsCodeNavigation.popup}
                   </div>
                 ) : (
                   <div

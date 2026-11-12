@@ -17,6 +17,7 @@ import {
   cachedReviewNoteAnchor,
   type PlacedReviewNote,
   placeReviewNotes,
+  type ReviewNoteShownLines,
   stepReviewNote,
 } from "./reviewNoteAnchoring";
 import { useReviewNoteDismissals } from "./reviewNoteDismissals";
@@ -96,6 +97,7 @@ export function useDiffReviewNotes({
   requestFile,
   workspaceRoot,
   repositoryRoot,
+  shownLines,
   onShowNote,
 }: {
   threadRef: ScopedThreadRef | null;
@@ -106,6 +108,8 @@ export function useDiffReviewNotes({
   workspaceRoot: string | undefined;
   /** Set when the diff names files from a repository root above the workspace. */
   repositoryRoot: string | undefined;
+  /** Whole files where the shown view reads them whole, so a note on an unchanged line sits there. */
+  shownLines: ReviewNoteShownLines;
   /**
    * Hears each note shown on its lines, for another view than the code view. True when that view
    * shows the diff now and takes the note there.
@@ -116,6 +120,9 @@ export function useDiffReviewNotes({
   const { dismissedIds, dismiss, restore } = useReviewNoteDismissals(threadRef);
   const [listOpen, setListOpen] = useState(false);
   const [currentNoteId, setCurrentNoteId] = useState<string | null>(null);
+  // The note last asked for that the view showing it lacks the lines for (a whole file that could
+  // not load shows only its patch), though its anchor says it sits there.
+  const [unplacedNoteId, setUnplacedNoteId] = useState<string | null>(null);
   const [reveal] = useState(() => createReviewNoteReveal(() => setListOpen(true)));
 
   const placed = placeReviewNotes(
@@ -126,15 +133,19 @@ export function useDiffReviewNotes({
       pending: isPendingFileDiff(fileDiff),
     })),
     { workspaceRoot, repositoryRoot },
+    shownLines,
   );
   const shown = placed.filter(({ note }) => !dismissedIds.has(note.id));
   const dismissed = placed.filter(({ note }) => dismissedIds.has(note.id));
   const steps = shown.filter(({ anchor }) => anchor.kind !== "unattached");
-  const unattached = shown.filter(({ anchor }) => anchor.kind === "unattached");
+  const unattached = shown.filter(
+    ({ note, anchor }) => anchor.kind === "unattached" || note.id === unplacedNoteId,
+  );
 
   const showNote = (placedNote: PlacedReviewNote) => {
     const { note, fileKey, anchor } = placedNote;
     setCurrentNoteId(note.id);
+    setUnplacedNoteId(null);
     if (dismissedIds.has(note.id) || anchor.kind === "unattached") {
       setListOpen(true);
       return;
@@ -174,6 +185,11 @@ export function useDiffReviewNotes({
   return {
     reveal,
     codeView,
+    /** The view asked to show the current note lacks its lines: the list shows it instead. */
+    onNoteUnplaced: () => {
+      setUnplacedNoteId(currentNoteId);
+      setListOpen(true);
+    },
     toolbar:
       placed.length === 0
         ? null

@@ -59,7 +59,9 @@ import {
   type OrchestrationV2StoredEvent,
   type OrchestrationV2Subagent,
   type OrchestrationV2ThreadProjection,
+  type OrchestrationV2ReviewNote,
   type OrchestrationV2TurnItem,
+  REVIEW_NOTE_TOOL_NAME,
   latestProviderTurnForAttempt,
   parseGoalCommand,
   orchestrationV2RunWorkStartedAt,
@@ -631,6 +633,7 @@ function commandThreadId(command: OrchestrationV2ServerCommand): ThreadId {
     case "link_request.record":
     case "thread.load-pause.set":
     case "thread.load-pause.clear":
+    case "review_note.record":
       return command.threadId;
     case "thread.fork":
     case "thread.merge_back":
@@ -9648,6 +9651,80 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
   );
 
   /**
+   * Records an agent's review note as a completed `dynamic_tool` item, so a
+   * build without notes shows it as a plain tool row. A retry of the same note
+   * finds its item and records nothing.
+   */
+  const dispatchReviewNoteRecord = Effect.fn("orchestrationV2.dispatch.reviewNoteRecord")(
+    function* (
+      command: Extract<OrchestrationV2InternalCommand, { readonly type: "review_note.record" }>,
+      events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
+    ) {
+      const existing = yield* projectionStore
+        .getTurnItem({ threadId: command.threadId, itemId: command.turnItemId })
+        .pipe(
+          Effect.mapError(
+            (cause) => new OrchestratorProjectionError({ threadId: command.threadId, cause }),
+          ),
+        );
+      if (existing !== null) return;
+      const projection = yield* projectionStore
+        .getThreadRecords(command.threadId, ["runs", "attempts", "providerTurns"], {
+          messageRoles: [],
+        })
+        .pipe(
+          Effect.mapError(
+            (cause) => new OrchestratorProjectionError({ threadId: command.threadId, cause }),
+          ),
+        );
+      const run = projection.runs.find((candidate) => candidate.id === command.runId);
+      if (run === undefined) {
+        return yield* new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause: `Run ${command.runId} was not found.`,
+        });
+      }
+      const now = yield* DateTime.now;
+      const input: OrchestrationV2ReviewNote = {
+        kind: "review_note",
+        ...command.note,
+        runId: command.runId,
+      };
+      yield* emit(
+        events,
+        command,
+      )({
+        type: "turn-item.updated",
+        threadId: command.threadId,
+        runId: command.runId,
+        nodeId: command.nodeId,
+        providerInstanceId: run.providerInstanceId,
+        occurredAt: now,
+        payload: {
+          id: command.turnItemId,
+          threadId: command.threadId,
+          runId: command.runId,
+          nodeId: command.nodeId,
+          providerThreadId: run.providerThreadId,
+          providerTurnId: providerTurnForRun(projection, run)?.id ?? null,
+          nativeItemRef: null,
+          parentItemId: null,
+          ordinal: yield* nextTurnItemOrdinal(projection),
+          status: "completed",
+          title: "Review note",
+          startedAt: now,
+          completedAt: now,
+          updatedAt: now,
+          type: "dynamic_tool",
+          toolName: REVIEW_NOTE_TOOL_NAME,
+          input,
+        },
+      });
+    },
+  );
+
+  /**
    * Closes the link cards still waiting for the user. Their agent stopped
    * waiting long ago, so nobody is woken: stopping or archiving the thread
    * means the user is done with it.
@@ -14229,6 +14306,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       case "link_request.record":
         yield* dispatchLinkRequestRecord(command, events, effects);
         break;
+      case "review_note.record":
+        yield* dispatchReviewNoteRecord(command, events);
+        break;
       default:
         return yield* dispatchUnsupported(command);
     }
@@ -14339,6 +14419,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           command.type === "subagent.stop" ||
           // Closing a share again, or after it ended, is not an error.
           command.type === "thread.guest-share.close" ||
+          // A note the thread already has is recorded.
+          command.type === "review_note.record" ||
           (command.type === "thread.delete" && command.onlyIfUnused === true),
         (_planned) =>
           new OrchestratorDispatchError({

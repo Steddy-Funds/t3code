@@ -2755,7 +2755,7 @@ code {
   border: 1px solid color-mix(in srgb, var(--sbs-marker-moved) 55%, transparent);
   border-radius: 999px;
   background: var(--code-background);
-  color: var(--diff-moved);
+  color: var(--sbs-marker-moved);
   font-family: var(--font-sans);
   font-size: 0.6875rem;
   line-height: calc(var(--sbs-line-height) - 4px);

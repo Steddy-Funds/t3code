@@ -37,8 +37,12 @@ const MAX_SEED_CANDIDATES = 64;
 /** Past this many changed lines the diff is a rewrite or generated code; matching it says little. */
 const MAX_MOVE_DETECTION_LINES = 20_000;
 
+/** Blank lines share this key. One never starts a match, though a match may cross it. */
+const BLANK = 0;
+
 interface FlatLine {
-  readonly key: string;
+  /** The trimmed text as a number: equal lines share one. */
+  readonly key: number;
   readonly weight: number;
   readonly file: number;
   /** Unique across the diff: a match never runs from one run into the next. */
@@ -47,16 +51,25 @@ interface FlatLine {
   readonly lineNumber: number;
 }
 
-function flatten(files: ReadonlyArray<DiffMoveFile>, side: "removed" | "added"): FlatLine[] {
+function flatten(
+  files: ReadonlyArray<DiffMoveFile>,
+  side: "removed" | "added",
+  keys: Map<string, number>,
+): FlatLine[] {
   const lines: FlatLine[] = [];
   let run = 0;
   files.forEach((file, fileIndex) => {
     for (const lineRun of file[side]) {
-      lineRun.lines.forEach((text, offset) => {
-        const key = text.trim();
+      lineRun.lines.forEach((raw, offset) => {
+        const text = raw.trim();
+        let key = text.length === 0 ? BLANK : keys.get(text);
+        if (key === undefined) {
+          key = keys.size + 1;
+          keys.set(text, key);
+        }
         lines.push({
           key,
-          weight: key.replace(/\s/g, "").length,
+          weight: text.replace(/\s/g, "").length,
           file: fileIndex,
           run,
           block: lineRun.block,
@@ -74,6 +87,8 @@ interface Segment {
   readonly added: number;
   readonly length: number;
   readonly weight: number;
+  /** Lines one change rewrote where they stood: they claim their lines, but moved nowhere. */
+  readonly inPlace: boolean;
 }
 
 function continues(removed: FlatLine[], added: FlatLine[], r: number, a: number, step: 1 | -1) {
@@ -90,38 +105,40 @@ function continues(removed: FlatLine[], added: FlatLine[], r: number, a: number,
 
 /** Every longest run of equal lines between a removed and an added run. */
 function matchingSegments(removed: FlatLine[], added: FlatLine[]): Segment[] {
-  const addedByKey = new Map<string, number[]>();
+  const addedByKey = new Map<number, number[]>();
   added.forEach((line, index) => {
-    if (line.key.length === 0) return;
+    if (line.key === BLANK) return;
     const indices = addedByKey.get(line.key);
     if (indices) indices.push(index);
     else addedByKey.set(line.key, [index]);
   });
-  const covered = new Set<number>();
-  const pair = (r: number, a: number) => r * added.length + a;
+  const seedsOf = (r: number) => {
+    const key = removed[r]?.key ?? BLANK;
+    const candidates = key === BLANK ? undefined : addedByKey.get(key);
+    return candidates && candidates.length <= MAX_SEED_CANDIDATES ? candidates : undefined;
+  };
   const segments: Segment[] = [];
-  removed.forEach((line, seed) => {
-    const candidates = addedByKey.get(line.key);
-    if (!candidates || candidates.length > MAX_SEED_CANDIDATES) return;
-    for (const candidate of candidates) {
-      if (covered.has(pair(seed, candidate))) continue;
+  removed.forEach((_, seed) => {
+    for (const candidate of seedsOf(seed) ?? []) {
       let r = seed;
       let a = candidate;
-      while (continues(removed, added, r, a, -1)) {
+      let walked = false;
+      while (!walked && continues(removed, added, r, a, -1)) {
         r -= 1;
         a -= 1;
+        // A seed further up this diagonal walks all of it.
+        walked = seedsOf(r) !== undefined;
       }
+      if (walked) continue;
       let length = 0;
       let weight = 0;
-      for (;;) {
-        covered.add(pair(r + length, a + length));
+      do {
         weight += removed[r + length]!.weight;
         length += 1;
-        if (!continues(removed, added, r + length - 1, a + length - 1, 1)) break;
-      }
-      const inPlace = removed[r]!.file === added[a]!.file && removed[r]!.block === added[a]!.block;
-      if (length >= MIN_MOVE_LINES && weight >= MIN_MOVE_CHARACTERS && !inPlace) {
-        segments.push({ removed: r, added: a, length, weight });
+      } while (continues(removed, added, r + length - 1, a + length - 1, 1));
+      if (length >= MIN_MOVE_LINES && weight >= MIN_MOVE_CHARACTERS) {
+        const inPlace = removed[r]!.file === added[a]!.file && removed[r]!.block === added[a]!.block;
+        segments.push({ removed: r, added: a, length, weight, inPlace });
       }
     }
   });
@@ -143,32 +160,34 @@ function take(taken: Uint8Array, start: number, length: number) {
  * since no pointer beats a wrong one.
  */
 export function findDiffMoves(files: ReadonlyArray<DiffMoveFile>): DiffMove[] {
-  const removed = flatten(files, "removed");
-  const added = flatten(files, "added");
+  const keys = new Map<string, number>();
+  const removed = flatten(files, "removed", keys);
+  const added = flatten(files, "added", keys);
   if (removed.length + added.length > MAX_MOVE_DETECTION_LINES) return [];
   const segments = matchingSegments(removed, added).sort(
     (left, right) => right.weight - left.weight || left.removed - right.removed,
   );
   const takenRemoved = new Uint8Array(removed.length);
   const takenAdded = new Uint8Array(added.length);
+  const free = (segment: Segment) =>
+    !overlaps(takenRemoved, segment.removed, segment.length) &&
+    !overlaps(takenAdded, segment.added, segment.length);
   const moves: DiffMove[] = [];
-  const isRival = (segment: Segment, other: Segment | undefined) =>
-    other !== undefined &&
-    other.weight === segment.weight &&
-    (other.removed === segment.removed || other.added === segment.added) &&
-    !overlaps(takenRemoved, other.removed, other.length) &&
-    !overlaps(takenAdded, other.added, other.length);
   segments.forEach((segment, index) => {
-    if (overlaps(takenRemoved, segment.removed, segment.length)) return;
-    if (overlaps(takenAdded, segment.added, segment.length)) return;
+    if (!free(segment)) return;
     // Sorted by weight, so a rival sits among the neighbours of equal weight.
-    let rival = false;
-    for (let other = index + 1; !rival && segments[other]?.weight === segment.weight; other += 1) {
-      rival = isRival(segment, segments[other]);
+    const claimed = [segment];
+    for (let other = index + 1; segments[other]?.weight === segment.weight; other += 1) {
+      const rival = segments[other]!;
+      const shares = rival.removed === segment.removed || rival.added === segment.added;
+      if (shares && free(rival)) claimed.push(rival);
     }
-    take(takenRemoved, segment.removed, segment.length);
-    take(takenAdded, segment.added, segment.length);
-    if (rival) return;
+    // A tie claims every end it touches, so no leftover pairing of them reads as unique.
+    for (const { removed: r, added: a, length } of claimed) {
+      take(takenRemoved, r, length);
+      take(takenAdded, a, length);
+    }
+    if (claimed.length > 1 || segment.inPlace) return;
     const end = (lines: FlatLine[], start: number): DiffMoveEnd => ({
       path: files[lines[start]!.file]!.path,
       startLine: lines[start]!.lineNumber,

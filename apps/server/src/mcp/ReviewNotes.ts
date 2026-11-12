@@ -73,7 +73,11 @@ const excerptOf = (lines: ReadonlyArray<string>, fits: (excerpt: string) => bool
   return { excerpt, excerptTruncated: excerpt !== lines.join("\n") };
 };
 
-/** The same note on the same lines of a thread is one note, whichever turn sends it again. */
+/**
+ * The same note on the same lines of a thread is one note, whichever turn sends it again. The
+ * hash holds the thread too: a reply finds its note by the hash alone (`reviewNoteSectionId`),
+ * and a fork shows its source's notes beside its own.
+ */
 const noteIdFor = (
   threadId: string,
   relativePath: string,
@@ -85,6 +89,7 @@ const noteIdFor = (
     )
       .update(
         JSON.stringify([
+          threadId,
           relativePath,
           input.startLine,
           input.endLine,

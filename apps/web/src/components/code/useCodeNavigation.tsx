@@ -768,8 +768,9 @@ export function useCodeNavigation(options: CodeNavigationOptions) {
     });
   };
 
+  // A list kept open with Cmd+Enter stays up, filter and all, while the next file loads.
   const popupNode: ReactNode =
-    active && popup !== null ? (
+    popup !== null && (active || popup.kind === "locations") ? (
       <CodeNavigationPopup
         popup={popup}
         cwd={cwd}

@@ -166,6 +166,19 @@ describe("anchorReviewNote", () => {
       fileDiff: changed("2222222", ["@@ -1,3 +1,4 @@", " start", "+added", "+retry()", " end"]),
       expected: { kind: "moved", startLine: 3, endLine: 3 },
     },
+    {
+      state:
+        "unattached when a longer note kept only its whole first line, which only starts a line",
+      overrides: { endLine: 3, excerpt: "retry()", excerptTruncated: true },
+      fileDiff: changed("2222222", [
+        "@@ -1,3 +1,4 @@",
+        " start",
+        "+added",
+        "+retry() // once more",
+        " end",
+      ]),
+      expected: { kind: "unattached" },
+    },
   ])("is $state", ({ fileDiff, expected, overrides }) => {
     expect(anchorReviewNote(note(overrides), fileDiff)).toEqual(expected);
   });

@@ -62,9 +62,13 @@ const excerptLines = (note: ReviewNote) => note.excerpt.split("\n");
 /** Where the excerpt starts on the new side, stopping at a second occurrence. */
 function findExcerpt(fileDiff: FileDiffMetadata, note: ReviewNote): number[] {
   const excerpt = excerptLines(note);
-  // The server cuts inside a line only when one line alone is too long; else it drops whole lines.
+  // The server drops whole lines first, so only a one-line note's shortened excerpt is surely cut
+  // inside its line; a longer note's may be its whole first line.
   const [only] = excerpt;
-  const cutLine = note.excerptTruncated && excerpt.length === 1 && only ? only : null;
+  const cutLine =
+    note.excerptTruncated && note.startLine === note.endLine && excerpt.length === 1 && only
+      ? only
+      : null;
   const matches = (line: string, index: number) =>
     cutLine === null ? line === excerpt[index] : line.startsWith(cutLine);
   const starts: number[] = [];

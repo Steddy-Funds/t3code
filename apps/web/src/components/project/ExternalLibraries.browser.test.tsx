@@ -164,6 +164,33 @@ describe("ExternalLibraries", () => {
     );
   });
 
+  it("folds roots past the fourth behind a count, and unfolds them without closing open folders", async () => {
+    setup([
+      python([{ path: SITE_PACKAGES, label: "site-packages", kind: "site-packages" }]),
+      {
+        languageId: "typescript",
+        name: "tsgo",
+        state: "ready",
+        libraryRoots: ["a", "b", "c", "d", "e"].map((name) => ({
+          path: `/work/packages/${name}/node_modules`,
+          label: name,
+          kind: "node_modules" as const,
+        })),
+      },
+    ]);
+    await using _screen = await mount();
+    await expandSection();
+    expect(treeRow("c/")).not.toBeNull();
+    expect(treeRow("d/")).toBeNull();
+    treeRow("site-packages/")!.click();
+    await vi.waitFor(() => expect(treeRow("site-packages/six.py")).not.toBeNull());
+
+    await page.getByRole("button", { name: "2 more" }).click();
+    await vi.waitFor(() => expect(treeRow("e/")).not.toBeNull());
+    expect(treeRow("site-packages/six.py")).not.toBeNull();
+    expect(page.getByRole("button", { name: /more$/ }).elements()).toEqual([]);
+  });
+
   it("shows a retry line when a folder fails to list, keeps the tree, and lists again on retry", async () => {
     setup([python([{ path: SITE_PACKAGES, label: "site-packages", kind: "site-packages" }])]);
     mocks.failing.add(`${SITE_PACKAGES}\n`);

@@ -175,7 +175,7 @@ export function useThreadActionMenu(input: {
       if (action.startsWith("snooze:")) {
         const preset =
           action === "snooze:custom"
-            ? await requestCustomSnooze()
+            ? await requestCustomSnooze(position)
             : pickSnoozePreset(
                 snoozePresets,
                 action.slice("snooze:".length),

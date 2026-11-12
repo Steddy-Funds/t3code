@@ -2562,7 +2562,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       if (clicked.value?.startsWith("snooze:")) {
         const preset =
           clicked.value === "snooze:custom"
-            ? await requestCustomSnooze()
+            ? await requestCustomSnooze(position)
             : pickSnoozePreset(
                 snoozePresets,
                 clicked.value.slice("snooze:".length),
@@ -2841,7 +2841,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
         if (clicked.value?.startsWith("snooze:")) {
           const preset =
             clicked.value === "snooze:custom"
-              ? await requestCustomSnooze()
+              ? await requestCustomSnooze(position)
               : pickSnoozePreset(
                   snoozePresets,
                   clicked.value.slice("snooze:".length),

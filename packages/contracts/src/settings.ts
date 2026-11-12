@@ -529,6 +529,9 @@ export const ClientSettingsSchema = Schema.Struct({
   ),
   doubleShiftSearchEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   boringSidebarEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  // Labs, macOS desktop: Glint native dialogs. An empty path falls back to $T3CODE_GLINT_HELPER.
+  glintEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  glintHelperPath: Schema.String.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
   boringSidebarMultilineRows: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(false)),
   ),
@@ -2156,6 +2159,8 @@ export const ClientSettingsPatch = Schema.Struct({
   snapShotSound: Schema.optionalKey(SnapShotSound),
   snapShotFlash: Schema.optionalKey(Schema.Boolean),
   snapShotAnimations: Schema.optionalKey(Schema.Boolean),
+  glintEnabled: Schema.optionalKey(Schema.Boolean),
+  glintHelperPath: Schema.optionalKey(Schema.String),
   wordWrap: Schema.optionalKey(Schema.Boolean),
   mathRenderingEnabled: Schema.optionalKey(Schema.Boolean),
 });

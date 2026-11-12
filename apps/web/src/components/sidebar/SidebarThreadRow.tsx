@@ -393,6 +393,7 @@ function SnoozeMenuButton(props: {
   environmentId: EnvironmentId;
 }) {
   const { open, onOpenChange, onSnooze, timestampFormat, environmentId } = props;
+  const triggerRef = useRef<HTMLButtonElement>(null);
   const presets = open
     ? // oxlint-disable-next-line react/purity -- Presets are resolved only while the menu is open, so each opening reads a fresh time.
       resolveSnoozePresets(new Date(), timestampFormat, environmentId)
@@ -405,6 +406,7 @@ function SnoozeMenuButton(props: {
             <MenuTrigger
               render={
                 <button
+                  ref={triggerRef}
                   type="button"
                   aria-label="Snooze thread"
                   onClick={(event) => event.stopPropagation()}
@@ -437,7 +439,7 @@ function SnoozeMenuButton(props: {
         <MenuItem
           onClick={async (event) => {
             event.stopPropagation();
-            const choice = await requestCustomSnooze();
+            const choice = await requestCustomSnooze(triggerRef.current ?? undefined);
             if (choice) onSnooze(choice);
           }}
         >

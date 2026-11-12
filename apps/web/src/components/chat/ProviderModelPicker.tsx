@@ -12,6 +12,7 @@ import {
   type ReactNode,
   useContext,
   useEffect,
+  type RefObject,
   useEffectEvent,
   useRef,
   useState,
@@ -124,6 +125,8 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
    */
   effortColumn?: ReactNode;
   footer?: ReactNode;
+  /** Holds the trigger instead of the picker's own ref, for a native picker anchored to it. */
+  triggerRef?: RefObject<HTMLButtonElement | null>;
 }) {
   const composerFloatingLayerProps = useComposerMenuProps();
   const [uncontrolledIsMenuOpen, setUncontrolledIsMenuOpen] = useState(false);
@@ -145,7 +148,8 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
     if (isMenuOpen) refreshModelCatalog();
   }, [isMenuOpen]);
   const searchInputRef = useRef<HTMLInputElement>(null);
-  const triggerRef = useRef<HTMLButtonElement>(null);
+  const ownTriggerRef = useRef<HTMLButtonElement>(null);
+  const triggerRef = props.triggerRef ?? ownTriggerRef;
   const popupRef = useRef<HTMLDivElement | null>(null);
   const size = props.size ?? "sm";
   const docked = props.effortColumn !== undefined;

@@ -100,7 +100,7 @@ function openGlint<K extends GlintKind>(
   const glint = window.desktopBridge?.glint;
   const id = randomUUID();
   const rect: DesktopGlintAnchor =
-    anchor instanceof Element
+    "getBoundingClientRect" in anchor
       ? (({ x, y, width, height }) => ({ x, y, width, height }))(anchor.getBoundingClientRect())
       : { x: anchor.x, y: anchor.y, width: 0, height: 0 };
   const outcome = (async (): Promise<GlintOutcome<K>> => {

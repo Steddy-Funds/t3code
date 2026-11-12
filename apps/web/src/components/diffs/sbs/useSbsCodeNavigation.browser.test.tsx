@@ -89,12 +89,17 @@ function tokenElement(id: string): HTMLElement {
 
 function Harness(props: {
   readonly context: SbsCodeNavigationContext | null;
+  readonly shownFile?: string | null;
   readonly onOpenFile?: (filePath: string, line?: number) => void;
   readonly filePath?: string;
   readonly activation?: ActivationOverrides;
   readonly second?: ActivationOverrides;
 }) {
-  const navigation = useSbsCodeNavigation(props.context, props.onOpenFile ?? (() => {}));
+  const navigation = useSbsCodeNavigation(
+    props.context,
+    props.shownFile === undefined ? "src/main.ts" : props.shownFile,
+    props.onOpenFile ?? (() => {}),
+  );
   const activate = (overrides: ActivationOverrides | undefined, anchorId: string) => {
     const anchor = tokenElement(anchorId);
     navigation.onTokenActivate?.(
@@ -457,6 +462,25 @@ describe("useSbsCodeNavigation", () => {
 
       await screen.unmount();
       expect(mocks.queries[0]!.signal?.aborted).toBe(true);
+      await settle(0, answer([declaration]));
+
+      expect(mocks.navigateToCodeLocation).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ["another file is shown", "src/other.ts"],
+      ["side by side goes", null],
+    ])("drops a lookup and its popup when %s", async (_case, shownFile) => {
+      setup();
+      await using screen = await render(<Harness context={context} />);
+      using _timers = fakeTimers();
+      await click("activate");
+      await act(() => vi.advanceTimersByTimeAsync(500));
+      await expect.element(status()).toHaveTextContent("Waiting for the language server…");
+
+      await screen.rerender(<Harness context={context} shownFile={shownFile} />);
+      expect(mocks.queries[0]!.signal?.aborted).toBe(true);
+      await vi.waitFor(() => expect(page.getByRole("status").query()).toBeNull());
       await settle(0, answer([declaration]));
 
       expect(mocks.navigateToCodeLocation).not.toHaveBeenCalled();

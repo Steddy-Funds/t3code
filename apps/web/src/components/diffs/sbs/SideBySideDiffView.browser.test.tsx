@@ -1103,7 +1103,7 @@ describe("Go to Declaration at the caret", () => {
     return { toggled, [Symbol.dispose]: unregister };
   }
 
-  it("activates the token at the caret in either pane, and keeps the key from the sidebar", async () => {
+  it("activates the token at the caret in either pane, only from the pane holding it, and keeps the key from the sidebar", async () => {
     const onTokenActivate = vi.fn();
     const fileDiff = modified();
     await using screen = await mount({ fileDiff, onTokenActivate });
@@ -1136,6 +1136,11 @@ describe("Go to Declaration at the caret", () => {
       revision: fileContentRevision(fileDiff.deletionLines.join("")),
       anchor: expect.any(Element),
     });
+
+    // The other pane takes focus with the caret left in this one: the key has no caret there.
+    focusPane(screen, "additions");
+    await userEvent.keyboard(GO_TO_DECLARATION);
+    expect(onTokenActivate).toHaveBeenCalledTimes(2);
     expect(sidebar.toggled).not.toHaveBeenCalled();
   });
 

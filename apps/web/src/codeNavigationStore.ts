@@ -49,7 +49,7 @@ function appendEntry(
 }
 
 /** A jump records where it left from; like a browser, it drops what forward held. */
-export function pushCodeHistory(history: CodeHistory, origin: CodeHistoryEntry): CodeHistory {
+function pushCodeHistory(history: CodeHistory, origin: CodeHistoryEntry): CodeHistory {
   return { back: appendEntry(history.back, origin), forward: [] };
 }
 
@@ -86,6 +86,8 @@ interface CodeNavigationState {
     path: string,
     range: CodeRange,
   ) => void;
+  /** The viewer that applied a reveal takes it, so a later mount does not apply it again. */
+  readonly consumeReveal: (threadKey: string, id: number) => void;
 }
 
 let nextRevealId = 1;
@@ -117,4 +119,10 @@ export const useCodeNavigationStore = create<CodeNavigationState>()((set) => ({
       },
       lastJump: { threadRef, href: window.location.href },
     })),
+  consumeReveal: (threadKey, id) =>
+    set((state) => {
+      if (state.revealByThreadKey[threadKey]?.id !== id) return state;
+      const { [threadKey]: _consumed, ...revealByThreadKey } = state.revealByThreadKey;
+      return { revealByThreadKey };
+    }),
 }));

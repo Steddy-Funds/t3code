@@ -4,6 +4,7 @@ import { Spinner } from "~/components/ui/spinner";
 import { Button } from "~/components/ui/button";
 import { Toggle } from "~/components/ui/toggle";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
+import { CODE_NAVIGATION_UNSAFE_CSS } from "~/components/code/codeNavigationDom";
 import { DIFF_SURFACE_THEME_UNSAFE_CSS } from "~/lib/diffRendering";
 import { cn } from "~/lib/utils";
 
@@ -56,6 +57,8 @@ export const FILE_LINK_REVEAL_UNSAFE_CSS = `
     ) !important;
     color: var(--diffs-selection-number-fg) !important;
   }
+
+  ${CODE_NAVIGATION_UNSAFE_CSS}
 `;
 
 export function FileSurfaceAction(props: {

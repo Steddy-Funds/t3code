@@ -95,7 +95,8 @@ function stepCodeNavigation(direction: CodeHistoryDirection, event: KeyboardEven
 
 function isKeybindingCaptureTarget(event: KeyboardEvent): boolean {
   return (
-    event.target instanceof HTMLElement && event.target.closest("[data-keybinding-capture]") !== null
+    event.target instanceof HTMLElement &&
+    event.target.closest("[data-keybinding-capture]") !== null
   );
 }
 

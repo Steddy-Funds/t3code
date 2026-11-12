@@ -91,6 +91,27 @@ import {
   FilesystemBrowseError,
 } from "./filesystem.ts";
 import {
+  CodeIntelDefinitionInput,
+  CodeIntelDefinitionResult,
+  CodeIntelDocumentHighlightsResult,
+  CodeIntelDocumentInput,
+  CodeIntelDocumentSymbolsResult,
+  CodeIntelError,
+  CodeIntelHoverResult,
+  CodeIntelInstallServerInput,
+  CodeIntelInstallServerResult,
+  CodeIntelPositionInput,
+  CodeIntelReferencesInput,
+  CodeIntelReferencesResult,
+  CodeIntelRestartInput,
+  CodeIntelSemanticTokensInput,
+  CodeIntelSemanticTokensResult,
+  CodeIntelStatusInput,
+  CodeIntelStatusResult,
+  CodeIntelWorkspaceSymbolsInput,
+  CodeIntelWorkspaceSymbolsResult,
+} from "./codeIntel.ts";
+import {
   AgentSessionImportInput,
   AgentSessionImportProjectChangedError,
   AgentSessionImportProjectNotFoundError,
@@ -448,6 +469,18 @@ export const WS_METHODS = {
 
   filesystemBrowse: "filesystem.browse",
   filesystemGetMetadata: "filesystem.getMetadata",
+
+  codeIntelStatus: "codeIntel.status",
+  codeIntelDefinition: "codeIntel.definition",
+  codeIntelReferences: "codeIntel.references",
+  codeIntelDocumentHighlights: "codeIntel.documentHighlights",
+  codeIntelHover: "codeIntel.hover",
+  codeIntelDocumentSymbols: "codeIntel.documentSymbols",
+  codeIntelWorkspaceSymbols: "codeIntel.workspaceSymbols",
+  codeIntelSemanticTokens: "codeIntel.semanticTokens",
+  codeIntelInstallServer: "codeIntel.installServer",
+  codeIntelRestart: "codeIntel.restart",
+
   agentSessionsScan: "agentSessions.scan",
   agentSessionsImport: "agentSessions.import",
   assetsCreateUrl: "assets.createUrl",
@@ -1455,6 +1488,68 @@ const WsFilesystemGetMetadataRpc = Rpc.make(WS_METHODS.filesystemGetMetadata, {
   error: EnvironmentAuthorizationError,
 });
 
+const CodeIntelRpcError = Schema.Union([CodeIntelError, EnvironmentAuthorizationError]);
+
+const WsCodeIntelStatusRpc = Rpc.make(WS_METHODS.codeIntelStatus, {
+  payload: CodeIntelStatusInput,
+  success: CodeIntelStatusResult,
+  error: CodeIntelRpcError,
+});
+
+const WsCodeIntelDefinitionRpc = Rpc.make(WS_METHODS.codeIntelDefinition, {
+  payload: CodeIntelDefinitionInput,
+  success: CodeIntelDefinitionResult,
+  error: CodeIntelRpcError,
+});
+
+const WsCodeIntelReferencesRpc = Rpc.make(WS_METHODS.codeIntelReferences, {
+  payload: CodeIntelReferencesInput,
+  success: CodeIntelReferencesResult,
+  error: CodeIntelRpcError,
+});
+
+const WsCodeIntelDocumentHighlightsRpc = Rpc.make(WS_METHODS.codeIntelDocumentHighlights, {
+  payload: CodeIntelPositionInput,
+  success: CodeIntelDocumentHighlightsResult,
+  error: CodeIntelRpcError,
+});
+
+const WsCodeIntelHoverRpc = Rpc.make(WS_METHODS.codeIntelHover, {
+  payload: CodeIntelPositionInput,
+  success: CodeIntelHoverResult,
+  error: CodeIntelRpcError,
+});
+
+const WsCodeIntelDocumentSymbolsRpc = Rpc.make(WS_METHODS.codeIntelDocumentSymbols, {
+  payload: CodeIntelDocumentInput,
+  success: CodeIntelDocumentSymbolsResult,
+  error: CodeIntelRpcError,
+});
+
+const WsCodeIntelWorkspaceSymbolsRpc = Rpc.make(WS_METHODS.codeIntelWorkspaceSymbols, {
+  payload: CodeIntelWorkspaceSymbolsInput,
+  success: CodeIntelWorkspaceSymbolsResult,
+  error: CodeIntelRpcError,
+});
+
+const WsCodeIntelSemanticTokensRpc = Rpc.make(WS_METHODS.codeIntelSemanticTokens, {
+  payload: CodeIntelSemanticTokensInput,
+  success: CodeIntelSemanticTokensResult,
+  error: CodeIntelRpcError,
+});
+
+const WsCodeIntelInstallServerRpc = Rpc.make(WS_METHODS.codeIntelInstallServer, {
+  payload: CodeIntelInstallServerInput,
+  success: CodeIntelInstallServerResult,
+  error: CodeIntelRpcError,
+});
+
+const WsCodeIntelRestartRpc = Rpc.make(WS_METHODS.codeIntelRestart, {
+  payload: CodeIntelRestartInput,
+  success: CodeIntelStatusResult,
+  error: CodeIntelRpcError,
+});
+
 const WsFilesystemBrowseRpc = Rpc.make(WS_METHODS.filesystemBrowse, {
   payload: FilesystemBrowseInput,
   success: FilesystemBrowseResult,
@@ -2277,6 +2372,16 @@ export const WsRpcGroup = RpcGroup.make(
   WsShellOpenInEditorRpc,
   WsFilesystemBrowseRpc,
   WsFilesystemGetMetadataRpc,
+  WsCodeIntelStatusRpc,
+  WsCodeIntelDefinitionRpc,
+  WsCodeIntelReferencesRpc,
+  WsCodeIntelDocumentHighlightsRpc,
+  WsCodeIntelHoverRpc,
+  WsCodeIntelDocumentSymbolsRpc,
+  WsCodeIntelWorkspaceSymbolsRpc,
+  WsCodeIntelSemanticTokensRpc,
+  WsCodeIntelInstallServerRpc,
+  WsCodeIntelRestartRpc,
   WsAgentSessionsScanRpc,
   WsAgentSessionsImportRpc,
   WsAssetsCreateUrlRpc,

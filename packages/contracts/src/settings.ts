@@ -1021,6 +1021,20 @@ export const ObservabilitySettings = Schema.Struct({
 });
 export type ObservabilitySettings = typeof ObservabilitySettings.Type;
 
+export const CodeIntelSettings = Schema.Struct({
+  /** Off: every codeIntel request answers `server_unavailable` and live language servers stop. */
+  enabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  /** Language id to a language server binary the user installed. An empty path is unset. */
+  serverPaths: Schema.Record(Schema.String, TrimmedString).pipe(
+    Schema.withDecodingDefault(Effect.succeed({})),
+  ),
+  /** Workspace root to its virtualenv or interpreter. Read, never run. An empty path is unset. */
+  pythonEnvironments: Schema.Record(Schema.String, TrimmedString).pipe(
+    Schema.withDecodingDefault(Effect.succeed({})),
+  ),
+});
+export type CodeIntelSettings = typeof CodeIntelSettings.Type;
+
 export const SourceControlWritingStyleMode = Schema.Literals([
   "repo_conventions",
   "conventional_commits",
@@ -1544,6 +1558,7 @@ export const ServerSettings = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed({})),
   ),
   observability: ObservabilitySettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+  codeIntel: CodeIntelSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   sourceControlHosts: Schema.Record(Schema.String, SourceControlHostSettings).pipe(
     Schema.withDecodingDefault(Effect.succeed({})),
   ),
@@ -1929,6 +1944,14 @@ export const ServerSettingsPatch = Schema.Struct({
       otlpTracesUrl: Schema.optionalKey(TrimmedString),
       otlpMetricsUrl: Schema.optionalKey(TrimmedString),
       otlpLogsUrl: Schema.optionalKey(TrimmedString),
+    }),
+  ),
+  /** Merges per entry; an empty path unsets one. */
+  codeIntel: Schema.optionalKey(
+    Schema.Struct({
+      enabled: Schema.optionalKey(Schema.Boolean),
+      serverPaths: Schema.optionalKey(Schema.Record(Schema.String, TrimmedString)),
+      pythonEnvironments: Schema.optionalKey(Schema.Record(Schema.String, TrimmedString)),
     }),
   ),
   /** Merges per host, replacing patched fields whole; redaction markers retain secrets, empty secrets remove them. A non-empty token map keeps the saved tokens of hosts it omits; an empty map clears them all. */

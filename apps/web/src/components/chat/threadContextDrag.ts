@@ -99,6 +99,18 @@ export function dropThreadContext(
   return true;
 }
 
+/** Drops threads into the focused composer, else the main chat's, as if dragged there. */
+export function mentionThreadContext(threads: ReadonlyArray<ScopedThreadRef>): boolean {
+  const targets = [...document.querySelectorAll<HTMLElement>(`[${DROP_TARGET_ATTRIBUTE}]`)];
+  const target =
+    targets.find((candidate) => candidate.contains(document.activeElement)) ??
+    targets.find((candidate) => !candidate.closest("[data-side-chat-pane]")) ??
+    targets[0];
+  if (!target || threads.length === 0) return false;
+  target.dispatchEvent(new CustomEvent(THREAD_CONTEXT_DROP_EVENT, { detail: threads }));
+  return true;
+}
+
 export function threadContextDropTargetProps() {
   return { [DROP_TARGET_ATTRIBUTE]: "true" } as const;
 }

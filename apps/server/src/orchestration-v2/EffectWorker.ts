@@ -1,4 +1,4 @@
-import { CommandId } from "@t3tools/contracts";
+import { CommandId, MessageId } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -527,6 +527,48 @@ export const layerExecutor: Layer.Layer<
                   }),
               ),
             );
+          case "machine-claims.cleanup":
+            return resourceCleanup.cleanupMachineClaims(effect.threadId);
+          case "load-pause.cleanup": {
+            const { containersPaused, continuation } = effect.request;
+            const continueRun =
+              continuation === undefined
+                ? Effect.void
+                : threads.dispatch({
+                    type: "message.dispatch",
+                    commandId: CommandId.make(
+                      `load-pause-continue:${effect.threadId}:${continuation.episodeId}`,
+                    ),
+                    messageId: MessageId.make(
+                      `load-pause-continue:${effect.threadId}:${continuation.episodeId}`,
+                    ),
+                    threadId: effect.threadId,
+                    loadPauseContinuationOfRunId: continuation.runId,
+                    text: "Continue where you left off.",
+                    attachments: [],
+                    dispatchMode: { type: "start_immediately" },
+                    createdBy: "agent",
+                    creationSource: "server",
+                  });
+            return Effect.gen(function* () {
+              const unpaused = yield* Effect.result(
+                resourceCleanup.unpauseLoadPausedContainers(containersPaused),
+              );
+              // A turn continued against a frozen container hangs, so the continuation waits for
+              // the retries; the last attempt continues regardless.
+              if (unpaused._tag === "Success" || !willRetry) yield* continueRun;
+              if (unpaused._tag === "Failure") return yield* unpaused.failure;
+            }).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new OrchestrationEffectExecutionError({
+                    effectId: effect.id,
+                    effectType: effect.request.type,
+                    cause,
+                  }),
+              ),
+            );
+          }
           case "attachment.cleanup":
             return resourceCleanup.cleanupAttachments(effect.request.attachmentIds).pipe(
               Effect.mapError(

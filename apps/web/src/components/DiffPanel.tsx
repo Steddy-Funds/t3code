@@ -28,7 +28,7 @@ import { useFilesystemReadAccess } from "~/state/filesystem";
 import { useOpenInPreferredEditor } from "../editorPreferences";
 import { useRightPanelStore } from "../rightPanelStore";
 import { useFileContextMenuHandler } from "../fileContextMenu";
-import { type DraftId } from "../composerDraftStore";
+import { type DraftId, useComposerDraftStore } from "../composerDraftStore";
 import { openDiffFilePrimaryAction } from "../diffFileActions";
 import { toolCallDiff } from "../lib/toolCallDiff";
 import { useCheckpointDiff, useTurnItemDetail } from "~/state/queries";
@@ -67,7 +67,9 @@ import { formatRelativeTimeLabel, formatShortTimestamp } from "../timestampForma
 import { DiffFilePathCopyButton } from "./DiffFilePathCopyButton";
 import { DiffPanelLoadingState, DiffPanelShell, type DiffPanelMode } from "./DiffPanelShell";
 import { DiffStatLabel } from "./chat/DiffStatLabel";
-import { AnnotatableCodeView } from "./diffs/AnnotatableCodeView";
+import { AnnotatableCodeView, type AnnotatableCodeViewHandle } from "./diffs/AnnotatableCodeView";
+import { ReviewNotesToolbar, useDiffReviewNotes } from "./diffs/ReviewNoteNavigation";
+import { sendableReviewComments, type SendReviewComments } from "./diffs/useReviewCommentDrafts";
 import { DiffFileTree } from "./diffs/DiffFileTree";
 import { FileExplorerPane } from "./files/FileExplorerPane";
 import { diffFileTreeEntries } from "./diffs/diffFileTree.logic";
@@ -222,6 +224,8 @@ interface DiffPanelProps {
   composerDraftTarget: ScopedThreadRef | DraftId;
   workspaceMutationId: string | null;
   visible: boolean;
+  /** Absent where a comment can only join the message. */
+  onSendReviewComments?: SendReviewComments | undefined;
 }
 
 export default function DiffPanel({
@@ -229,7 +233,25 @@ export default function DiffPanel({
   composerDraftTarget,
   workspaceMutationId,
   visible,
+  onSendReviewComments,
 }: DiffPanelProps) {
+  // Every review comment waiting in the message, whichever surface it was written on.
+  const unsentCommentCount = useComposerDraftStore(
+    (store) =>
+      sendableReviewComments(store.getComposerDraft(composerDraftTarget)?.reviewComments ?? [])
+        .length,
+  );
+  const sendCommentsLabel = `Send ${unsentCommentCount} ${unsentCommentCount === 1 ? "comment" : "comments"}`;
+  const [sendingComments, setSendingComments] = useState(false);
+  const sendAllComments = async () => {
+    const comments = sendableReviewComments(
+      useComposerDraftStore.getState().getComposerDraft(composerDraftTarget)?.reviewComments ?? [],
+    );
+    if (!onSendReviewComments || comments.length === 0) return;
+    setSendingComments(true);
+    await onSendReviewComments(comments).catch(() => undefined);
+    setSendingComments(false);
+  };
   const resolvedTheme = useRenderedAppearance();
   const diffThemeName = useDiffThemeName(resolvedTheme);
   const settings = useClientSettings((settings) => ({
@@ -842,6 +864,21 @@ export default function DiffPanel({
       return next;
     });
   });
+  const reviewNotes = useDiffReviewNotes({
+    threadRef: routeThreadRef,
+    files: codeViewFiles,
+    unfoldFile: unfoldDiffFile,
+    requestFile: (filePath) => {
+      if (lazySource) requestFile(filePath);
+    },
+    workspaceRoot: activeCwd,
+    repositoryRoot: activeRepositoryRoot,
+  });
+  const noteReveal = reviewNotes.reveal;
+  const attachCodeView = useStableCallback((viewer: AnnotatableCodeViewHandle | null) => {
+    codeViewReveal.attach(viewer);
+    noteReveal.attach(viewer);
+  });
 
   const toggleDiffFileCollapse = () => {
     setCodeViewRevision((current) => current + 1);
@@ -1190,6 +1227,26 @@ export default function DiffPanel({
           headerCommitSha !== null && "gap-0",
         )}
       >
+        {onSendReviewComments && unsentCommentCount > 0 ? (
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  type="button"
+                  size="xs"
+                  aria-label={sendCommentsLabel}
+                  disabled={sendingComments}
+                  onClick={() => void sendAllComments()}
+                />
+              }
+            >
+              {/* The full label would push the base picker out of a panel of the usual width. */}
+              Send {unsentCommentCount}
+            </TooltipTrigger>
+            <TooltipPopup side="top">{sendCommentsLabel} to the agent</TooltipPopup>
+          </Tooltip>
+        ) : null}
+        {reviewNotes.toolbar ? <ReviewNotesToolbar {...reviewNotes.toolbar} /> : null}
         {codeViewFiles.length > 0 || (isGitSelection && selectedGitSource?.files?.length) ? (
           <DiffStatLabel
             additions={diffLineStat.additions}
@@ -1563,7 +1620,7 @@ export default function DiffPanel({
                       key={collapseScopeKey ?? reviewSectionId}
                       environmentId={activeThread?.environmentId}
                       projectId={activeThread?.projectId}
-                      viewerRef={codeViewReveal.attach}
+                      viewerRef={attachCodeView}
                       codeViewKey={codeViewMountKey}
                       className="h-full min-h-0 overflow-auto"
                       files={codeViewFiles}
@@ -1572,6 +1629,8 @@ export default function DiffPanel({
                       sectionId={reviewSectionId}
                       sectionTitle={reviewSectionTitle}
                       composerDraftTarget={composerDraftTarget}
+                      onSendComments={onSendReviewComments}
+                      reviewNotes={reviewNotes.codeView}
                       renderHeaderFilenameSuffix={(fileDiff) => {
                         const path = resolveFileDiffPath(fileDiff);
                         const state = fileStates.get(path);
@@ -1625,7 +1684,11 @@ export default function DiffPanel({
                         preferredHighlighter: PREFERRED_HIGHLIGHTER,
                         themeType: resolvedTheme as DiffThemeType,
                         stickyHeaders: true,
-                        onPostRender: codeViewReveal.flush,
+                        // The note reveal flushes last so its line wins over a file reveal.
+                        onPostRender: () => {
+                          codeViewReveal.flush();
+                          noteReveal.flush();
+                        },
                         ...(currentLoadDiffFiles ? { loadDiffFiles } : {}),
                       }}
                     />

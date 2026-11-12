@@ -1,8 +1,10 @@
 import { useAuth } from "@clerk/react";
 import { Link } from "@tanstack/react-router";
+import type { CSSProperties } from "react";
 import { managedCapabilityDenial } from "@t3tools/contracts";
 
 import { hasCloudPublicConfig } from "~/cloud/publicConfig";
+import { previewGambaCoin } from "~/gambaMode";
 import { useT3ConnectAuthPrompt } from "../clerk/useT3ConnectAuthPrompt";
 import { Button } from "../ui/button";
 import { Switch } from "../ui/switch";
@@ -19,10 +21,12 @@ export function LabsSettingsPanel() {
     <SettingsPageContainer>
       <SettingsSection id="beta" title="Beta">
         <BoringSidebarRow />
+        <GambaModeRow />
         {/* Clerk is only mounted when this build has T3 Connect. */}
         {hasCloudPublicConfig() ? <GuestLinksRowWithSignIn /> : <GuestLinksRow />}
         <LinkedEnvironmentsRow />
         <PromptSuggestionsRow />
+        <AgentReviewNotesRow />
         <SimlockHostsRow />
         <FastWorktreeCheckoutRow />
       </SettingsSection>
@@ -72,6 +76,60 @@ function BoringSidebarMultilineRow() {
         />
       }
     />
+  );
+}
+
+function GambaModeRow() {
+  const settings = useScopedSettings();
+  const updateSettings = useUpdateScopedSettings();
+  const volume = settings.gambaModeVolume;
+  return (
+    <SettingsRow
+      {...searchableSetting("gamba-mode")}
+      description="Play a coin every time an agent finishes a turn, subagents included, so you can hear how busy the swarm is."
+      control={
+        <Switch
+          checked={settings.gambaModeEnabled}
+          onCheckedChange={(checked) => updateSettings({ gambaModeEnabled: Boolean(checked) })}
+          aria-label="Gamba mode"
+        />
+      }
+    >
+      {settings.gambaModeEnabled ? (
+        <div className="mt-3 flex items-center gap-3 pb-3.5 sm:w-72">
+          <output
+            className="min-w-12 rounded-md bg-muted px-2 py-1 text-center font-mono text-xs font-medium tabular-nums text-foreground"
+            htmlFor="gamba-mode-volume"
+          >
+            {volume}%
+          </output>
+          <input
+            aria-label="Gamba mode volume"
+            className="settings-slider min-w-0 flex-1"
+            id="gamba-mode-volume"
+            max={100}
+            min={0}
+            onChange={(event) => {
+              const gambaModeVolume = Number(event.currentTarget.value);
+              if (Number.isInteger(gambaModeVolume) && gambaModeVolume >= 0) {
+                updateSettings({ gambaModeVolume });
+              }
+            }}
+            onPointerUp={previewGambaCoin}
+            onKeyUp={previewGambaCoin}
+            step={5}
+            style={
+              {
+                "--settings-slider-progress": `${volume}%`,
+                "--settings-slider-fill-offset": `${0.5 - volume / 100}rem`,
+              } as CSSProperties
+            }
+            type="range"
+            value={volume}
+          />
+        </div>
+      ) : null}
+    </SettingsRow>
   );
 }
 
@@ -184,6 +242,29 @@ function PromptSuggestionsRow() {
             updateSettings({ promptSuggestionsEnabled: Boolean(checked) })
           }
           aria-label="Suggest next prompt"
+        />
+      }
+    />
+  );
+}
+
+function AgentReviewNotesRow() {
+  const settings = useScopedSettings();
+  const updateSettings = useUpdateScopedSettings();
+  return (
+    <SettingsRow
+      serverScoped
+      {...searchableSetting("agent-review-notes")}
+      settingKeys={["agentReviewNotesEnabled"]}
+      description="Let agents pin a note or question to lines they changed, for you to weigh before it ships. You reply from the chat or the diff. Off stops new notes at once."
+      control={
+        <ScopedSwitch
+          settingKeys={["agentReviewNotesEnabled"]}
+          checked={settings.agentReviewNotesEnabled}
+          onCheckedChange={(checked) =>
+            updateSettings({ agentReviewNotesEnabled: Boolean(checked) })
+          }
+          aria-label="Agent review notes"
         />
       }
     />

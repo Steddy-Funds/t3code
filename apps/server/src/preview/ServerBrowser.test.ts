@@ -14,6 +14,7 @@ import {
   ProviderInstanceId,
   ThreadId,
   type PreviewAutomationSnapshot,
+  type PreviewAutomationOpenInput,
   type PreviewAutomationStatus,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
@@ -38,6 +39,7 @@ import * as DesktopChannel from "./DesktopBrowserChannel.ts";
 import * as Manager from "./Manager.ts";
 import * as PreviewAgentActivity from "./PreviewAgentActivity.ts";
 import * as ServerBrowser from "./ServerBrowser.ts";
+import * as BrowserRun from "./BrowserRun.ts";
 import * as PreviewBrowser from "./PreviewBrowser.ts";
 
 vi.mock("./ServerBrowserContexts.ts", () => ({
@@ -63,6 +65,12 @@ vi.mock("./ServerBrowserContexts.ts", () => ({
     }
     async scratchPage() {
       return makeEncoderPage() as unknown as Page;
+    }
+    isRemote() {
+      return remoteTabs;
+    }
+    async remoteTakes(url: string) {
+      return browserRunTakes && !url.includes("127.0.0.1");
     }
     async connectDesktopPage(endpoint: string) {
       const context = makeContext(undefined, desktopPageUrl);
@@ -304,6 +312,9 @@ let pageCopy = "";
 let keyCopy = "";
 let focusedFrame: ReturnType<typeof makeFrame> | null = null;
 let contextFailure: Error | null = null;
+let remoteTabs = false;
+let desktopAvailable = true;
+let browserRunTakes = false;
 let pageSetupFailure: Error | null = null;
 let initialNavigation: (() => Promise<void>) | null = null;
 let desktopRendersNext = false;
@@ -356,8 +367,11 @@ const dependencies = Layer.mergeAll(
     executable: Effect.die("mock Chromium does not need an executable"),
     installed: Effect.die("mock Chromium does not need an executable"),
   }),
+  Layer.mock(BrowserRun.BrowserRun)({}),
   Layer.succeed(DesktopChannel.DesktopBrowserChannel, {
-    available: true,
+    get available() {
+      return desktopAvailable;
+    },
     awaitAttached: (key, timeout) =>
       !desktopAttachesLate || desktopRenders(key.tabId)
         ? Effect.sync(() => desktopRenders(key.tabId))
@@ -478,6 +492,9 @@ beforeEach(() => {
   contextRequests.length = 0;
   contextGate = null;
   contextFailure = null;
+  remoteTabs = false;
+  desktopAvailable = true;
+  browserRunTakes = false;
   pageSetupFailure = null;
   initialNavigation = null;
   pageCopy = "";
@@ -816,6 +833,64 @@ it.live.each([
         expect(encoderStreams).toEqual([{ frameRate, bitsPerSecond }]);
       }),
     ).pipe(Effect.provide(layer)),
+);
+
+it.live("a standalone server opens an agent's public page without a profile for Browser Run", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const browser = yield* ServerBrowser.ServerBrowser;
+      const broker = yield* Broker.PreviewAutomationBroker;
+      yield* Effect.yieldNow;
+      yield* (yield* browser.profileReporter)({ profiles: [], defaultProfileId: "default" });
+      desktopAvailable = false;
+      browserRunTakes = true;
+      const open = (input: PreviewAutomationOpenInput) =>
+        broker.invoke<PreviewAutomationStatus>({ scope, operation: "open", input });
+      const hosted = yield* open({ url: "http://93.184.216.34/", open: false });
+      expect(contextRequests).toEqual([{ profileId: "default", isolated: true }]);
+      // The hosted tab cannot load this machine's pages, so reusing it opens another tab instead.
+      remoteTabs = true;
+      const local = yield* open({ url: "http://127.0.0.1:5173/", open: false });
+      expect(local.tabId).not.toBe(hosted.tabId);
+      // A named profile keeps its logins, on this machine.
+      yield* open({ url: "http://93.184.216.34/", profileId: "default", reuseExistingTab: false });
+      // So does a tab Browser Run cannot take just now.
+      browserRunTakes = false;
+      yield* open({ url: "http://93.184.216.34/", reuseExistingTab: false });
+      expect(contextRequests.slice(1)).toEqual([
+        { profileId: "default", isolated: false },
+        { profileId: "default", isolated: false },
+        { profileId: "default", isolated: false },
+      ]);
+    }),
+  ).pipe(Effect.provide(layer)),
+);
+
+it.live("a Browser Run tab refuses addresses only this machine reaches", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { browser, broker, tabId } = yield* ready;
+      remoteTabs = true;
+      const page = contexts[0]!.page;
+      const local = "http://127.0.0.1:5173/";
+      const refused = yield* broker
+        .invoke<void>({ scope, tabId, operation: "navigate", input: { url: local } })
+        .pipe(Effect.flip);
+      expect(refused).toMatchObject({ _tag: "PreviewAutomationExecutionError" });
+      expect(refused.message).toContain("Cloudflare Browser Run");
+      yield* broker.invoke({
+        scope,
+        tabId,
+        operation: "navigate",
+        input: { url: "http://93.184.216.34/" },
+      });
+      expect(page.goto).toHaveBeenLastCalledWith("http://93.184.216.34/", expect.anything());
+      const viewer = yield* browser.attachViewer(viewerInput(tabId, true));
+      yield* viewer.input({ type: "takeControl" });
+      yield* viewer.input({ type: "navigate", url: local });
+      expect(page.goto).not.toHaveBeenCalledWith(local, expect.anything());
+    }),
+  ).pipe(Effect.provide(layer)),
 );
 
 it.live("enforces provider ownership and explicit targets when a session has multiple tabs", () =>

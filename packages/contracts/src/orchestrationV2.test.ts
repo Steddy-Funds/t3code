@@ -1,10 +1,12 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
+import * as Exit from "effect/Exit";
 import * as Schema from "effect/Schema";
 
 import { NodeId, RunAttemptId, TrimmedNonEmptyString } from "./index.ts";
 import {
   latestProviderTurnForAttempt,
+  OrchestrationV2Command,
   OrchestrationV2ProviderCapabilities,
   OrchestrationV2ProviderThread,
   OrchestrationV2ProviderThreadJson,
@@ -484,6 +486,42 @@ describe("thread open stats", () => {
     const opens = { openedAt: 1, score: 1, picks: [{ query: "upl", at: 1 }] };
     expect(decode({ ...shell, opens }).opens).toEqual(opens);
     expect(decode({ ...shell, opens: { openedAt: "2026-10-01", score: 1 } }).opens).toBeNull();
+    // Servers from before load pause send no loadPause; a paused thread round-trips.
+    expect(decode(shell).loadPause).toBeUndefined();
+    const loadPause = {
+      runId: "run-test",
+      episodeId: "episode:1",
+      pausedAt: "2026-10-01T00:00:00.000Z",
+      reason: { rule: "loadPerCore", value: 4, threshold: 3, shareOfLoad: 0.8 },
+      containersPaused: [{ id: "container:busy", dockerHost: "unix:///var/run/docker.sock" }],
+    };
+    expect(decode({ ...shell, loadPause }).loadPause).toEqual(loadPause);
+    expect(decode({ ...shell, loadPause: null }).loadPause).toBeNull();
+  });
+
+  it("lets a client only resume a load pause, never set or clear one", () => {
+    const decode = Schema.decodeUnknownExit(OrchestrationV2Command);
+    const base = { commandId: "command-test", threadId: "thread-test" };
+    expect(
+      Exit.isSuccess(
+        decode({ ...base, type: "thread.metadata.update", loadPause: { resume: true } }),
+      ),
+    ).toBe(true);
+    for (const command of [
+      { ...base, type: "thread.metadata.update", loadPause: { resume: false } },
+      { ...base, type: "thread.metadata.update", loadPause: null },
+      { ...base, type: "thread.load-pause.clear" },
+      {
+        ...base,
+        type: "thread.load-pause.set",
+        runId: "run-test",
+        episodeId: "episode:1",
+        reason: { rule: "loadPerCore", value: 4, threshold: 3, shareOfLoad: 0.8 },
+        containersPaused: [],
+      },
+    ]) {
+      expect(Exit.isFailure(decode(command))).toBe(true);
+    }
   });
 });
 

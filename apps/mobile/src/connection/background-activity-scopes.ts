@@ -37,8 +37,16 @@ function stableScopeKey(environmentId: EnvironmentId, scope: BackgroundScope): s
 function scopeForSubscription(
   observation: EnvironmentRpcSubscriptionObservation,
 ): BackgroundScope | null {
-  if (observation.method === WS_METHODS.subscribeResourceTelemetry) {
+  if (
+    observation.method === WS_METHODS.subscribeResourceTelemetry ||
+    observation.method === WS_METHODS.subscribeMachineProcesses
+  ) {
     return { type: "diagnostics" };
+  }
+  // The always-on verdict creates no demand; only live samples for an open view lease.
+  if (observation.method === WS_METHODS.subscribeMachine) {
+    const input = observation.input as { readonly intervalMs?: unknown };
+    return input.intervalMs === undefined ? null : { type: "diagnostics" };
   }
   if (observation.method !== WS_METHODS.subscribeVcsStatus) {
     return null;
@@ -56,30 +64,41 @@ export function retainedMobileBackgroundScopes(
   ).filter((scope): scope is BackgroundScope => scope !== null);
 }
 
+/** Holds `scope` in every report for `environmentId` until the returned release runs. */
+export function retainMobileBackgroundScope(
+  environmentId: EnvironmentId,
+  scope: BackgroundScope,
+): () => void {
+  const key = stableScopeKey(environmentId, scope);
+  const current = retainedScopes.get(key);
+  if (current) {
+    current.refCount += 1;
+  } else {
+    retainedScopes.set(key, { environmentId, scope, refCount: 1 });
+    notify();
+  }
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    const retained = retainedScopes.get(key);
+    if (!retained) return;
+    retained.refCount -= 1;
+    if (retained.refCount <= 0) {
+      retainedScopes.delete(key);
+      notify();
+    }
+  };
+}
+
 export function observeMobileBackgroundActivitySubscription(
   observation: EnvironmentRpcSubscriptionObservation,
 ): Effect.Effect<Effect.Effect<void>> {
   const scope = scopeForSubscription(observation);
   if (scope === null) return Effect.succeed(Effect.void);
   return Effect.sync(() => {
-    const environmentId = observation.environmentId as EnvironmentId;
-    const key = stableScopeKey(environmentId, scope);
-    const current = retainedScopes.get(key);
-    if (current) {
-      current.refCount += 1;
-    } else {
-      retainedScopes.set(key, { environmentId, scope, refCount: 1 });
-      notify();
-    }
-    return Effect.sync(() => {
-      const retained = retainedScopes.get(key);
-      if (!retained) return;
-      retained.refCount -= 1;
-      if (retained.refCount <= 0) {
-        retainedScopes.delete(key);
-        notify();
-      }
-    });
+    const release = retainMobileBackgroundScope(observation.environmentId as EnvironmentId, scope);
+    return Effect.sync(release);
   });
 }
 

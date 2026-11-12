@@ -33,7 +33,11 @@ import {
   projectStoredEventForWire,
 } from "./WireProjection.ts";
 import { threadShellFromProjection } from "./ProjectionStore.ts";
-import { MAX_TOOL_OUTPUT_IMAGES, toolOutputImages } from "@t3tools/shared/toolOutput";
+import {
+  machineCardFromToolItem,
+  MAX_TOOL_OUTPUT_IMAGES,
+  toolOutputImages,
+} from "@t3tools/shared/toolOutput";
 
 const decodeTurnItem = Schema.decodeUnknownSync(OrchestrationV2TurnItem);
 const encodeTurnItemJson = Schema.encodeSync(OrchestrationV2TurnItemJson);
@@ -150,6 +154,7 @@ describe("orchestration V2 wire projection", () => {
       turnItems: [],
       visibleTurnItems: [],
       plans: [],
+      subagents: [],
       updatedAt: now,
     } as unknown as OrchestrationV2ThreadProjection;
 
@@ -340,6 +345,58 @@ describe("orchestration V2 wire projection", () => {
     expect(JSON.stringify(projected)).not.toContain("PRIVATE_BODY");
     expect(event.payload.output).toBe(output);
     expect(projectDomainEventForWire(projected)).toEqual(projected);
+  });
+
+  it("carries a machine card through wire, JSON and live events without the read's body", () => {
+    const machineCard = {
+      environmentId: "environment:mac",
+      snapshot: {
+        verdict: "stressed",
+        reason: { rule: "memory", value: 94, threshold: 90, heldForMs: 15_000 },
+        totals: {
+          cpuUtilization: 0.4,
+          cpuCount: 8,
+          load: null,
+          memoryTotalBytes: 16_000,
+          memoryAvailableBytes: 960,
+          swapTotalBytes: 0,
+          swapUsedBytes: 0,
+          memoryPressure: "warn",
+        },
+      },
+    };
+    const body = {
+      verdict: "stressed",
+      perCore: [12, 99],
+      processes: { processes: [{ pid: 7, name: "node", command: "node PRIVATE_COMMAND" }] },
+      machineCard,
+    };
+    const item = {
+      ...base,
+      toolName: "mcp__t3-code__t3_machine_read",
+      input: { show: true },
+      output: { structuredContent: body, content: [{ type: "text", text: JSON.stringify(body) }] },
+    } satisfies OrchestrationV2TurnItem;
+
+    const projected = projectTurnItemForWire(item);
+    const decoded = decodeTurnItem(
+      decodeTurnItemJson(encodeTurnItemJson(decodeTurnItem(projected))),
+    );
+    expect(decoded).toMatchObject({ output: { machineCard }, outputOmitted: true });
+    expect(decoded.type === "dynamic_tool" && machineCardFromToolItem(decoded)).toEqual(
+      machineCard,
+    );
+    expect(JSON.stringify(decoded)).not.toContain("PRIVATE_COMMAND");
+
+    const live = projectDomainEventForWire({
+      id: EventId.make("machine-card-event"),
+      type: "turn-item.updated" as const,
+      threadId: base.threadId,
+      occurredAt: base.updatedAt,
+      payload: item,
+    });
+    expect(live.payload).toMatchObject({ output: { machineCard } });
+    expect(JSON.stringify(live)).not.toContain("PRIVATE_COMMAND");
   });
 
   it("shares one wire projection per stored event", () => {

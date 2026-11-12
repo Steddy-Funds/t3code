@@ -231,6 +231,7 @@ const ComposerCommandMenuItem = memo(function ComposerCommandMenuItem(props: {
       {props.item.type === "environment" ? (
         <EnvironmentMachineIcon
           kind={props.item.machine}
+          environmentId={props.item.environmentId}
           aria-hidden="true"
           className="size-4 shrink-0 text-secondary-label"
         />

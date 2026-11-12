@@ -2,11 +2,12 @@ import * as Dialog from "../../components/ui/Dialog";
 import { useAtomValue } from "@effect/atom-react";
 import {
   AuthOrchestrationOperateScope,
+  AuthSettingsWriteScope,
   clampManagedRuntimeMode,
   managedCapabilityDenial,
   resolveProjectProviderInstanceEnabled,
 } from "@t3tools/contracts";
-import { readEnvironmentScope } from "../../state/session";
+import { readEnvironmentScope, useEnvironmentScope } from "../../state/session";
 import type {
   EnvironmentId,
   ProjectId,
@@ -38,6 +39,16 @@ import {
   WEBHOOK_FILTER_OPS,
   type WebhookFilterDraft,
 } from "@t3tools/client-runtime/scheduled-task-webhook";
+import {
+  isGpuLoadMetric,
+  LOAD_METRICS,
+  LOAD_SCHEDULE_DRAFT_ERROR,
+  scheduledTaskScheduleSummary,
+  scheduledTaskWeekdaysLabel,
+  withLoadMetric,
+  withLoadVerdictState,
+  type LoadConditionDraft,
+} from "@t3tools/client-runtime/scheduled-task-schedule";
 import { useRef, useState, type ReactNode } from "react";
 import { useFocusEffect, useNavigation, usePreventRemove } from "@react-navigation/native";
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
@@ -72,6 +83,7 @@ import { SettingsScreen } from "./components/SettingsScreen";
 import { SettingsSection } from "./components/SettingsSection";
 import { useSettingsEnvironmentFilter, type SettingsTarget } from "./settings-environment-filter";
 import {
+  DEFAULT_SCHEDULE,
   changeDraftProject,
   editDraft,
   parseIntervalMinutes,
@@ -88,12 +100,10 @@ import {
   scheduledTaskEditorSessionAtom,
 } from "./scheduled-task-editor-state";
 import { appAtomRegistry } from "../../state/atom-registry";
-import {
-  formatNextScheduledTaskRun,
-  formatScheduledTaskInterval,
-} from "./scheduledTaskPresentation";
+import { formatNextScheduledTaskRun } from "./scheduledTaskPresentation";
 
 type ScheduledTaskRoutes = {
+  SettingsEnvironmentDetail: { readonly environmentId: EnvironmentId };
   SettingsScheduledTaskNew: undefined;
   SettingsScheduledTaskEdit: undefined;
   SettingsScheduledTaskModel: undefined;
@@ -116,17 +126,6 @@ const THREAD_MODE_LABELS: Record<ScheduledTaskThreadMode, string> = {
   continue: "One thread, same conversation",
   fresh_session: "One thread, fresh session",
 };
-
-function describeSchedule(task: ScheduledTask): string {
-  if (task.schedule.type === "webhook") return "On webhook";
-  if (task.schedule.type === "once") {
-    const runAt = new Date(task.schedule.runAt);
-    return `Once, ${formatRunAtDate(runAt)} at ${formatRunAtTime(runAt)}`;
-  }
-  if (task.schedule.type === "interval") return formatScheduledTaskInterval(task.schedule.everyMs);
-  const days = task.schedule.weekdays?.length ? repeatLabel(task.schedule.weekdays) : "Every day";
-  return `${days} at ${formatTime(task.schedule.timeOfDay)}`;
-}
 
 function formatTime(value: string): string {
   const [hours, minutes] = value.split(":").map(Number);
@@ -157,14 +156,7 @@ function timePickerValue(value: string): Date {
 }
 
 function repeatLabel(weekdays: ReadonlyArray<number>): string {
-  const days = new Set(weekdays);
-  if (days.size === 7) return "Every day";
-  if (days.size === 5 && [1, 2, 3, 4, 5].every((day) => days.has(day))) return "Weekdays";
-  return (
-    DAYS.filter((day) => days.has(day.index))
-      .map((day) => day.label)
-      .join(", ") || "Choose days"
-  );
+  return weekdays.length === 0 ? "Choose days" : scheduledTaskWeekdaysLabel(weekdays);
 }
 
 function FormField(props: {
@@ -608,7 +600,11 @@ function SettingsScheduledTaskEditorScreen({ title }: { readonly title: string }
                   ...draftForEnvironment(target.environmentId),
                   title: editor.draft.title,
                   prompt: editor.draft.prompt,
-                  schedule: editor.draft.schedule,
+                  schedule:
+                    editor.draft.schedule.mode === "load" &&
+                    target.serverConfig?.environment.capabilities.loadSchedules !== true
+                      ? DEFAULT_SCHEDULE
+                      : editor.draft.schedule,
                   enabled: editor.draft.enabled,
                 },
               });
@@ -697,6 +693,7 @@ function TaskForm({
   const offersOnce =
     config?.environment.capabilities.oneTimeSchedules === true ||
     draft.task?.schedule.type === "once";
+  const offersLoad = config?.environment.capabilities.loadSchedules === true;
   const offersThreadModes = config?.environment.capabilities.scheduledTaskThreadModes === true;
   const save = async () => {
     if (
@@ -730,6 +727,10 @@ function TaskForm({
         "Once is not available here",
         "This environment runs an older T3 Code. Update it to schedule a one-time task, or pick another schedule.",
       );
+      return;
+    }
+    if (draft.schedule.mode === "load" && schedule === null) {
+      Dialog.alert(LOAD_SCHEDULE_DRAFT_ERROR.title, LOAD_SCHEDULE_DRAFT_ERROR.description);
       return;
     }
     const parsedFilters = parseWebhookFilterDrafts(draft.schedule.filters);
@@ -823,6 +824,7 @@ function TaskForm({
             value={environmentLabel}
             valueIcon={
               <EnvironmentMachineSymbol
+                environmentId={environmentId}
                 kind={resolveEnvironmentMachineKind(config)}
                 size={18}
                 tintColorClassName="accent-foreground-muted"
@@ -1031,6 +1033,7 @@ function TaskForm({
                 ...(webhookDenial === undefined || draft.schedule.mode === "webhook"
                   ? [{ value: "webhook" as const, label: "On webhook" }]
                   : []),
+                ...(offersLoad ? [{ value: "load" as const, label: "On load" }] : []),
               ]}
               selected={draft.schedule.mode}
               onSelect={(mode) => {
@@ -1135,6 +1138,58 @@ function TaskForm({
             <Text className="border-t border-border-subtle px-4 py-3 text-sm text-foreground-muted">
               {`${webhookDenial} Switch the task to a timer, or turn it off, to save it.`}
             </Text>
+          ) : draft.schedule.mode === "load" ? (
+            <>
+              <LoadConditionRows
+                label="When"
+                condition={draft.schedule.load.condition}
+                disabled={saving}
+                onChange={(condition) =>
+                  setDraft({
+                    ...draft,
+                    schedule: {
+                      ...draft.schedule,
+                      load: { ...draft.schedule.load, condition },
+                    },
+                  })
+                }
+              />
+              <View className="min-h-14 flex-row items-center gap-3 border-t border-border-subtle px-4 py-3">
+                <Text textRole="body" className="min-w-0 flex-1 text-foreground">
+                  Clear condition
+                </Text>
+                <ThemedSwitch
+                  accessibilityLabel="Clear condition"
+                  value={draft.schedule.load.clearEnabled}
+                  onValueChange={(clearEnabled) =>
+                    setDraft({
+                      ...draft,
+                      schedule: {
+                        ...draft.schedule,
+                        load: { ...draft.schedule.load, clearEnabled },
+                      },
+                    })
+                  }
+                />
+              </View>
+              {draft.schedule.load.clearEnabled ? (
+                <LoadConditionRows
+                  label="Clear when"
+                  condition={draft.schedule.load.clear}
+                  disabled={saving}
+                  onChange={(clear) =>
+                    setDraft({
+                      ...draft,
+                      schedule: { ...draft.schedule, load: { ...draft.schedule.load, clear } },
+                    })
+                  }
+                />
+              ) : null}
+              <Text className="px-4 pb-3 text-sm text-foreground-muted">
+                Runs once, then waits for the clear condition, or for the condition to stop holding,
+                before it can run again.
+              </Text>
+            </>
           ) : draft.schedule.mode === "once" ? (
             (["date", "time"] as const).map((field) => {
               const runAt = new Date(draft.schedule.runAt);
@@ -1313,6 +1368,86 @@ function TaskForm({
   );
 }
 
+function LoadConditionRows(props: {
+  readonly label: string;
+  readonly condition: LoadConditionDraft;
+  readonly disabled: boolean;
+  readonly onChange: (condition: LoadConditionDraft) => void;
+}) {
+  const { condition, onChange } = props;
+  const metric = LOAD_METRICS.find((entry) => entry.metric === condition.metric);
+  const comparison =
+    condition.metric === "verdict"
+      ? [
+          { id: "stressed", title: "is stressed", on: condition.op === ">=" },
+          { id: "ok", title: "is ok", on: condition.op === "<=" },
+        ]
+      : [
+          { id: ">=", title: "≥", on: condition.op === ">=" },
+          { id: "<=", title: "≤", on: condition.op === "<=" },
+        ];
+  return (
+    <>
+      <SelectRow
+        label={props.label}
+        value={metric?.label ?? condition.metric}
+        borderTop
+        actions={LOAD_METRICS.map((entry) => ({
+          id: entry.metric,
+          title: entry.label,
+          state: entry.metric === condition.metric ? ("on" as const) : undefined,
+        }))}
+        onSelect={(id) => {
+          const next = LOAD_METRICS.find((entry) => entry.metric === id);
+          if (next) onChange(withLoadMetric(condition, next.metric));
+        }}
+      />
+      <SelectRow
+        label={condition.metric === "verdict" ? "Status" : "Comparison"}
+        value={comparison.find((option) => option.on)?.title ?? ""}
+        borderTop
+        actions={comparison.map((option) => ({
+          id: option.id,
+          title: option.title,
+          state: option.on ? ("on" as const) : undefined,
+        }))}
+        onSelect={(id) => {
+          if (id === "stressed" || id === "ok") onChange(withLoadVerdictState(condition, id));
+          else if (id === ">=" || id === "<=") onChange({ ...condition, op: id });
+        }}
+      />
+      {condition.metric === "verdict" ? null : (
+        <FormField
+          label={metric?.unit ? `Threshold (${metric.unit})` : "Threshold"}
+          value={condition.threshold}
+          keyboardType="decimal-pad"
+          disabled={props.disabled}
+          borderTop
+          onChange={(threshold) => onChange({ ...condition, threshold })}
+        />
+      )}
+      <FormField
+        label="For (seconds)"
+        value={condition.sustainSeconds}
+        keyboardType="number-pad"
+        disabled={props.disabled}
+        borderTop
+        onChange={(sustainSeconds) => onChange({ ...condition, sustainSeconds })}
+      />
+      {isGpuLoadMetric(condition.metric) ? (
+        <FormField
+          label="GPU"
+          value={condition.gpuId}
+          placeholder="Any"
+          disabled={props.disabled}
+          borderTop
+          onChange={(gpuId) => onChange({ ...condition, gpuId })}
+        />
+      ) : null}
+    </>
+  );
+}
+
 function WebhookScheduleDetails({
   environmentId,
   task,
@@ -1412,7 +1547,10 @@ function EnvironmentTasks({
   readonly projectIds: readonly ProjectId[] | null;
   readonly onEdit: (task: ScheduledTask) => void;
 }) {
+  const navigation = useNavigation<NativeStackNavigationProp<ScheduledTaskRoutes>>();
   const environmentId = environment.environmentId;
+  const openBuiltInSetting = () =>
+    navigation.navigate("SettingsEnvironmentDetail", { environmentId });
   const tasks = useEnvironmentQuery(
     serverEnvironment.scheduledTasksLive({ environmentId, input: {} }),
   );
@@ -1434,6 +1572,24 @@ function EnvironmentTasks({
     label: "scheduled task delete",
     reportFailure: false,
   });
+  const updateSettings = useAtomCommand(serverEnvironment.updateSettings, {
+    label: "built-in scheduled task enabled",
+    reportFailure: false,
+  });
+  const canWriteSettings = useEnvironmentScope(environmentId, AuthSettingsWriteScope);
+  const canToggleBuiltIn =
+    canWriteSettings &&
+    environment.serverConfig?.environment.capabilities.machineAutoBuckets === true;
+  // The built-in row follows this setting; a block shown in the row can keep the task off.
+  const autoBucketsEnabled = environment.serverConfig.settings.machineResources.autoBuckets.enabled;
+  const toggleBuiltIn = async () => {
+    if (!readEnvironmentScope(environmentId, AuthSettingsWriteScope)) return;
+    const result = await updateSettings({
+      environmentId,
+      input: { patch: { machineResources: { autoBuckets: { enabled: !autoBucketsEnabled } } } },
+    });
+    failure("Could not update task", result);
+  };
   const selectDetail = useSelectWorkspaceDetail();
   const failure = (title: string, result: AtomCommandResult<unknown, unknown>) => {
     if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
@@ -1457,6 +1613,7 @@ function EnvironmentTasks({
       title={environment.label}
       titleIcon={
         <EnvironmentMachineSymbol
+          environmentId={environmentId}
           kind={resolveEnvironmentMachineKind(environment.serverConfig)}
           size={16}
           tintColorClassName={
@@ -1485,17 +1642,20 @@ function EnvironmentTasks({
           >
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel={`Edit ${task.title}`}
-              onPress={() => {
-                onEdit(task);
-              }}
+              accessibilityLabel={
+                task.builtIn ? `${task.title}, built-in. Open its setting` : `Edit ${task.title}`
+              }
+              onPress={() => (task.builtIn ? openBuiltInSetting() : onEdit(task))}
               className="min-w-0 flex-1 gap-1 active:opacity-70"
             >
               <Text textRole="body" className="text-foreground" numberOfLines={1}>
                 {task.title}
               </Text>
+              {task.builtIn ? (
+                <Text className="text-sm text-foreground-muted">Built-in</Text>
+              ) : null}
               <Text className="text-sm text-foreground-muted" numberOfLines={2}>
-                {describeSchedule(task)}
+                {scheduledTaskScheduleSummary(task.schedule)}
                 {!task.enabled
                   ? " · Paused"
                   : task.nextRunAt
@@ -1514,28 +1674,42 @@ function EnvironmentTasks({
               ) : null}
             </Pressable>
             <Menu
-              actions={[
-                { id: "edit", title: "Edit" },
-                ...(task.threadId !== null && scheduledTaskThreadMode(task) !== "new_thread"
-                  ? [{ id: "thread", title: "Open thread" }]
-                  : []),
-                {
-                  id: "toggle",
-                  title: task.enabled ? "Pause" : "Resume",
-                  attributes: { disabled: !canOperate },
-                },
-                ...(task.schedule.type === "webhook"
-                  ? []
-                  : [{ id: "run", title: "Run now", attributes: { disabled: !canOperate } }]),
-                {
-                  id: "delete",
-                  title: "Delete",
-                  attributes: { destructive: true, disabled: !canOperate },
-                },
-              ]}
+              actions={
+                task.builtIn
+                  ? [
+                      { id: "setting", title: "Machine settings" },
+                      {
+                        id: "toggle",
+                        title: autoBucketsEnabled ? "Pause" : "Resume",
+                        attributes: { disabled: !canToggleBuiltIn },
+                      },
+                      { id: "run", title: "Run now", attributes: { disabled: !canOperate } },
+                    ]
+                  : [
+                      { id: "edit", title: "Edit" },
+                      ...(task.threadId !== null && scheduledTaskThreadMode(task) !== "new_thread"
+                        ? [{ id: "thread", title: "Open thread" }]
+                        : []),
+                      {
+                        id: "toggle",
+                        title: task.enabled ? "Pause" : "Resume",
+                        attributes: { disabled: !canOperate },
+                      },
+                      ...(task.schedule.type === "webhook"
+                        ? []
+                        : [{ id: "run", title: "Run now", attributes: { disabled: !canOperate } }]),
+                      {
+                        id: "delete",
+                        title: "Delete",
+                        attributes: { destructive: true, disabled: !canOperate },
+                      },
+                    ]
+              }
               onPressAction={({ nativeEvent }) => {
                 const action = nativeEvent.event;
-                if (action === "edit") {
+                if (action === "setting") {
+                  openBuiltInSetting();
+                } else if (action === "edit") {
                   onEdit(task);
                 } else if (action === "thread" && task.threadId !== null) {
                   selectDetail({
@@ -1554,6 +1728,8 @@ function EnvironmentTasks({
                       onPress: () => void act(task, "delete"),
                     },
                   ]);
+                } else if (action === "toggle" && task.builtIn) {
+                  void toggleBuiltIn();
                 } else if (action === "toggle" || action === "run") {
                   void act(task, action);
                 }

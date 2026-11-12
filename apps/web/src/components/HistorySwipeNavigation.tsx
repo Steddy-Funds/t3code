@@ -1,17 +1,25 @@
 import { ArrowLeftIcon, ArrowRightIcon } from "lucide-react";
 import { useEffect, useState } from "react";
 
-import { cn } from "../lib/utils";
+import { cn, isMacPlatform } from "../lib/utils";
 import { canNavigateHistory, navigateHistory, type HistoryDirection } from "../navigationHistory";
+import { isMomentumTail, MOMENTUM_SAMPLE_SIZE } from "../lib/trackpadMomentum";
+import { SWIPE_REPLY_ROW_SELECTOR } from "./chat/messageSwipeReply.logic";
 
 const SWIPE_TRIGGER_DISTANCE = 120;
 // Movement needed before the gesture picks an axis; first events are often diagonal.
 const SWIPE_AXIS_LOCK_DISTANCE = 8;
-const MOMENTUM_SAMPLE_SIZE = 5;
 
 type SwipeBounds = { left: number; top: number; width: number; height: number };
 type SwipeGesture =
-  | { kind: "pending"; path: EventTarget[]; y: number; sumX: number; sumY: number }
+  | {
+      kind: "pending";
+      path: EventTarget[];
+      y: number;
+      sumX: number;
+      sumY: number;
+      mentionModifier: boolean;
+    }
   | {
       kind: "tracking";
       direction: HistoryDirection;
@@ -62,6 +70,21 @@ function lockSwipeAxis(
   }
   if (canScrollHorizontally(path, sumX)) return { kind: "ignored" };
   const direction = sumX < 0 ? "back" : "forward";
+  // Swiping a message back replies to it.
+  if (
+    direction === "back" &&
+    path.some((node) => node instanceof Element && node.matches(SWIPE_REPLY_ROW_SELECTOR))
+  ) {
+    return { kind: "ignored" };
+  }
+  // Cmd swiping a sidebar thread back mentions it (SidebarSwipeMention).
+  if (
+    direction === "back" &&
+    pending.mentionModifier &&
+    path.some((node) => node instanceof Element && node.matches("[data-thread-item]"))
+  ) {
+    return { kind: "ignored" };
+  }
   if (!canNavigateHistory(direction)) return { kind: "ignored" };
   return {
     kind: "tracking",
@@ -73,21 +96,6 @@ function lockSwipeAxis(
   };
 }
 
-/**
- * macOS momentum after the fingers lift decays by a near-constant ratio per
- * event; finger movement is noisier. Deltas are signed along the swipe.
- */
-export function isMomentumTail(deltas: readonly number[]): boolean {
-  if (deltas.length < MOMENTUM_SAMPLE_SIZE) return false;
-  const recent = deltas.slice(-MOMENTUM_SAMPLE_SIZE);
-  if (recent.some((delta) => delta <= 0)) return false;
-  const ratios = recent.slice(1).map((delta, index) => delta / recent[index]!);
-  return (
-    ratios.every((ratio) => ratio >= 0.7 && ratio < 1) &&
-    Math.max(...ratios) - Math.min(...ratios) < 0.1
-  );
-}
-
 /** Two-finger horizontal trackpad swipes go back and forward, like a browser. */
 export function HistorySwipeNavigation() {
   const [swipe, setSwipe] = useState<SwipeIndicatorState | null>(null);
@@ -95,6 +103,7 @@ export function HistorySwipeNavigation() {
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- window wheel and desktop gesture listeners track trackpad swipes
   useEffect(() => {
     let gesture: SwipeGesture | null = null;
+    const mac = isMacPlatform(navigator.platform);
     const hideIndicator = () =>
       setSwipe((current) => (current === null ? null : { ...current, tracking: false }));
     // The fingers lifted: navigate if the swipe went far enough, then ignore its momentum.
@@ -118,7 +127,14 @@ export function HistorySwipeNavigation() {
         gesture =
           event.ctrlKey || event.deltaMode !== WheelEvent.DOM_DELTA_PIXEL
             ? { kind: "ignored" }
-            : { kind: "pending", path: event.composedPath(), y: event.clientY, sumX: 0, sumY: 0 };
+            : {
+                kind: "pending",
+                path: event.composedPath(),
+                y: event.clientY,
+                sumX: 0,
+                sumY: 0,
+                mentionModifier: mac && event.metaKey,
+              };
       }
       if (gesture.kind === "ignored") return;
       if (gesture.kind === "pending") {

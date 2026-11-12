@@ -933,17 +933,21 @@ const make = Effect.gen(function* () {
     if (selectedRun === undefined) {
       return { threadId: input.threadId, run: null, timedOut: false };
     }
+    // A queued message that joined another run's turn is answered by that run.
+    let deliveringRunId = selectedRun.mergedIntoRunId ?? selectedRun.id;
     // A restart cuts a run and continues it as a new run. Follow that chain,
     // so a cut run is not the answer while its continuation is pending.
     // Runs per matching event and is already covered by the waitForThread span.
     const outcome = Effect.fnUntraced(function* (runs: ReadonlyArray<OrchestrationV2Run>) {
-      const current = runs.find((candidate) => candidate.id === selectedRun.id);
-      if (current === undefined) {
+      const selected = runs.find((candidate) => candidate.id === selectedRun.id);
+      if (selected === undefined) {
         return yield* new ThreadManagementRunNotFoundError({
           threadId: input.threadId,
           runId: selectedRun.id,
         });
       }
+      const current =
+        runs.find((candidate) => candidate.id === selected.mergedIntoRunId) ?? selected;
       const run = latestRestartContinuation(runs, current);
       const pending =
         isTerminalRunStatus(run.status) && (yield* orchestrator.restartContinuationPending(run));
@@ -1013,13 +1017,19 @@ const make = Effect.gen(function* () {
         { concurrency: "unbounded" },
       ).pipe(
         Stream.mapError(loadError),
-        Stream.filter(
-          (stored) =>
-            untilDelegatedWorkSettled ||
-            stored.event.type !== "run.updated" ||
-            stored.event.payload.id === selectedRun.id ||
-            stored.event.payload.restartContinuationOfRunId !== undefined,
-        ),
+        Stream.filter((stored) => {
+          if (untilDelegatedWorkSettled || stored.event.type !== "run.updated") return true;
+          const updated = stored.event.payload;
+          // Read here, in event order: the merge and the delivering run's updates can share a chunk.
+          if (updated.id === selectedRun.id && updated.mergedIntoRunId !== undefined) {
+            deliveringRunId = updated.mergedIntoRunId;
+          }
+          return (
+            updated.id === selectedRun.id ||
+            updated.id === deliveringRunId ||
+            updated.restartContinuationOfRunId !== undefined
+          );
+        }),
       ),
       initial.pending
         ? Stream.fromEffect(orchestrator.awaitRestartContinuation(initial.run))

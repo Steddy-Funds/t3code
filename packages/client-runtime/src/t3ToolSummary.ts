@@ -314,6 +314,13 @@ export function summarizeT3ToolCalls(
     case "secret-request":
       label = phrase("Asked for", "ask for", quantity(selected.length, "secret"));
       break;
+    case "review-note":
+      label = phrase(
+        "Flagged",
+        "flag",
+        quantity(selected.length, "change for review", "changes for review"),
+      );
+      break;
     case "worktree-handoff":
       label = phrase(
         "Handed off to",
@@ -354,6 +361,24 @@ export function summarizeT3ToolCalls(
       break;
     case "environment-update":
       label = phrase("Updated", "update", `environment preferences ${times}`);
+      break;
+    case "machine-read":
+      label = phrase("Checked", "check", `machine load ${times}`);
+      break;
+    case "machine-buckets":
+      label = phrase("Used", "use", `machine buckets ${times}`);
+      break;
+    case "resource-claims":
+      label = phrase("Used", "use", `resource claims ${times}`);
+      break;
+    case "site-publish":
+      label = phrase("Published", "publish", quantity(selected.length, "site"));
+      break;
+    case "site-list":
+      label = phrase("Listed", "list", `published sites ${times}`);
+      break;
+    case "site-stop":
+      label = phrase("Stopped", "stop", quantity(selected.length, "site"));
       break;
     case "environment-links":
       label = phrase("Listed", "list", `linked environments ${times}`);

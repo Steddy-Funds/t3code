@@ -957,6 +957,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
             ? { serverPassword: settingsSecretLiteral(options.settings.serverPassword) }
             : {}),
           environment: options.environment,
+          threadId: input.threadId,
         });
         const client = runtime.createOpenCodeSdkClient({
           baseUrl: connection.url,

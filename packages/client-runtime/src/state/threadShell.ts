@@ -17,6 +17,7 @@ import { Atom } from "effect/reactivity";
 import type { EnvironmentThreadShell, PendingSubagentRequest } from "./models.ts";
 import { presentThreadShell, threadRuntimeIsActive } from "./models.ts";
 import { hiddenThreadKeys, NO_HIDDEN_THREADS } from "./threadTagFilter.ts";
+import { type AgentTree, buildAgentTree } from "./threadRelationships.ts";
 import { type EnvironmentCatalogState, enabledEnvironmentIds } from "./connections.ts";
 import {
   arrayElementsEqual,
@@ -36,6 +37,23 @@ const EMPTY_SIDE_CHATS_BY_PARENT: ReadonlyMap<
   ReadonlyArray<OrchestrationV2ThreadShell>
 > = new Map();
 const EMPTY_THREAD_SHELLS: ReadonlyArray<EnvironmentThreadShell> = Object.freeze([]);
+
+export interface AgentLineageNode {
+  readonly key: string;
+  readonly environmentId: EnvironmentId;
+  readonly thread: OrchestrationV2ThreadShell;
+}
+
+export interface AgentTreeSummary {
+  /** Live agents in the tree, the thread itself included. */
+  readonly live: number;
+  /** Every agent in the tree, the thread itself included. */
+  readonly size: number;
+  /** Live agents below the thread. */
+  readonly descendantsLive: number;
+}
+
+const EMPTY_AGENT_TREE_SUMMARY: AgentTreeSummary = { live: 0, size: 0, descendantsLive: 0 };
 const EMPTY_THREAD_REFS_BY_PROJECT: ReadonlyMap<
   ProjectId,
   ReadonlyArray<ScopedThreadRef>
@@ -434,35 +452,42 @@ export function createEnvironmentThreadShellAtoms(input: {
   // Child approvals and questions are hidden with their sidebar rows. Read their
   // shell summaries, without subscribing to every child transcript. A task
   // delegated to a linked environment is a child too, with its own subagents.
+  type ChildThread = {
+    readonly environmentId: EnvironmentId;
+    readonly thread: OrchestrationV2ThreadShell;
+  };
+  // Child threads by parent key, built once per change for every row that walks its tree.
+  const childThreadsByParentAtom = Atom.make((get) => {
+    const children = new Map<string, ChildThread[]>();
+    const addChild = (
+      parent: ScopedThreadRef,
+      environmentId: EnvironmentId,
+      thread: OrchestrationV2ThreadShell,
+    ) => {
+      const siblings = children.get(threadKey(parent));
+      if (siblings) siblings.push({ environmentId, thread });
+      else children.set(threadKey(parent), [{ environmentId, thread }]);
+    };
+    for (const environmentId of enabledEnvironmentIds(get(input.catalogValueAtom))) {
+      for (const thread of get(environmentThreadsAtom(environmentId))) {
+        const parent = thread.lineage.parentThreadId;
+        if (
+          parent !== null &&
+          (thread.lineage.relationshipToParent === "subagent" || thread.lineage.sideChat === true)
+        ) {
+          addChild({ environmentId, threadId: parent }, environmentId, thread);
+        } else if (thread.delegatedFrom !== undefined) {
+          addChild(thread.delegatedFrom, environmentId, thread);
+        }
+      }
+    }
+    return children as ReadonlyMap<string, ReadonlyArray<ChildThread>>;
+  }).pipe(Atom.withLabel("environment-child-threads-by-parent"));
+
   const childThreadInputsAtomFamily = Atom.family((key: string) => {
     let previous: ReadonlyArray<EnvironmentThreadShell> = [];
     return Atom.make((get) => {
-      const children = new Map<
-        string,
-        Array<{ environmentId: EnvironmentId; thread: OrchestrationV2ThreadShell }>
-      >();
-      const addChild = (
-        parent: ScopedThreadRef,
-        environmentId: EnvironmentId,
-        thread: OrchestrationV2ThreadShell,
-      ) => {
-        const siblings = children.get(threadKey(parent));
-        if (siblings) siblings.push({ environmentId, thread });
-        else children.set(threadKey(parent), [{ environmentId, thread }]);
-      };
-      for (const environmentId of enabledEnvironmentIds(get(input.catalogValueAtom))) {
-        for (const thread of get(environmentThreadsAtom(environmentId))) {
-          const parent = thread.lineage.parentThreadId;
-          if (
-            parent !== null &&
-            (thread.lineage.relationshipToParent === "subagent" || thread.lineage.sideChat === true)
-          ) {
-            addChild({ environmentId, threadId: parent }, environmentId, thread);
-          } else if (thread.delegatedFrom !== undefined) {
-            addChild(thread.delegatedFrom, environmentId, thread);
-          }
-        }
-      }
+      const children = get(childThreadsByParentAtom);
       const seen = new Set<string>([key]);
       const pending = [key];
       const next: EnvironmentThreadShell[] = [];
@@ -496,6 +521,48 @@ export function createEnvironmentThreadShellAtoms(input: {
       previous = next;
       return next;
     }).pipe(Atom.withLabel(`environment-child-thread-inputs:${key}`));
+  });
+
+  const agentTreeAtomFamily = Atom.family((key: string) =>
+    Atom.make((get): AgentTree<AgentLineageNode> | null => {
+      const ref = parseThreadKey(key);
+      const thread = get(environmentThreadIndexAtom(ref.environmentId)).get(ref.threadId);
+      if (thread === undefined) return null;
+      const children = get(childThreadsByParentAtom);
+      const node = (environmentId: EnvironmentId, child: OrchestrationV2ThreadShell) => ({
+        key: threadKey({ environmentId, threadId: child.id }),
+        environmentId,
+        thread: child,
+      });
+      return buildAgentTree(node(ref.environmentId, thread), (parent) =>
+        (children.get(parent.key) ?? []).map((child) => node(child.environmentId, child.thread)),
+      );
+    }).pipe(Atom.withLabel(`environment-agent-tree:${key}`)),
+  );
+
+  // Counts only, kept by identity while they hold, so a row re-renders only when one changes.
+  const agentTreeSummaryAtomFamily = Atom.family((key: string) => {
+    let previous: AgentTreeSummary = EMPTY_AGENT_TREE_SUMMARY;
+    return Atom.make((get) => {
+      const tree = get(agentTreeAtomFamily(key));
+      const next: AgentTreeSummary =
+        tree === null
+          ? EMPTY_AGENT_TREE_SUMMARY
+          : {
+              live: tree.live,
+              size: tree.size,
+              descendantsLive: tree.live - (tree.working ? 1 : 0),
+            };
+      if (
+        previous.live === next.live &&
+        previous.size === next.size &&
+        previous.descendantsLive === next.descendantsLive
+      ) {
+        return previous;
+      }
+      previous = next;
+      return next;
+    }).pipe(Atom.withLabel(`environment-agent-tree-summary:${key}`));
   });
 
   // A parent's side chats. Rows read only ids, titles and whether one needs the user, so
@@ -728,11 +795,14 @@ export function createEnvironmentThreadShellAtoms(input: {
     navigationThreadShellsAtom,
     delegatedUnderParentAtom,
     pendingSubagentRequestsAtom,
+    childThreadsByParentAtom,
     threadShellsForProjectRefsAtom: (refs: ReadonlyArray<ScopedProjectRef>) =>
       threadShellsForProjectRefsAtomFamily(projectRefCollectionKey(refs)),
     threadShellAtom: (ref: ScopedThreadRef) => threadShellAtomFamily(threadKey(ref)),
     quietThreadShellAtom: (ref: ScopedThreadRef) => quietThreadShellAtomFamily(threadKey(ref)),
     childThreadInputsAtom: (ref: ScopedThreadRef) => childThreadInputsAtomFamily(threadKey(ref)),
+    agentTreeAtom: (ref: ScopedThreadRef) => agentTreeAtomFamily(threadKey(ref)),
+    agentTreeSummaryAtom: (ref: ScopedThreadRef) => agentTreeSummaryAtomFamily(threadKey(ref)),
     sideChatsAtom: (ref: ScopedThreadRef) => sideChatsAtomFamily(threadKey(ref)),
   };
 }

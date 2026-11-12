@@ -32,4 +32,35 @@ describe("buildTraitsTriggerDisplay", () => {
     ).toBe(input.label);
     expect(getDescriptorStringValue(descriptor)).toBe(input.value);
   });
+
+  it.each([
+    { currentValue: undefined, label: "High" },
+    { currentValue: "200k", label: "High · 200k" },
+  ])("names an auto-compact window only once one is picked: $label", ({ currentValue, label }) => {
+    const descriptors: ReadonlyArray<ProviderOptionDescriptor> = [
+      {
+        id: "effort",
+        label: "Reasoning",
+        type: "select",
+        options: [{ id: "high", label: "High", isDefault: true }],
+      },
+      {
+        id: "autoCompactWindow",
+        label: "Auto-compact after",
+        type: "select",
+        options: [
+          { id: "default", label: "Default", isDefault: true },
+          { id: "200k", label: "200k" },
+        ],
+        ...(currentValue ? { currentValue } : {}),
+      },
+    ];
+    expect(
+      buildTraitsTriggerDisplay({
+        descriptors,
+        primarySelectDescriptorId: "effort",
+        ultrathinkPromptControlled: false,
+      }).label,
+    ).toBe(label);
+  });
 });

@@ -21,7 +21,6 @@ import {
   DEFAULT_MODEL,
   type EnvironmentId,
   type ModelSelection,
-  type PreviewAnnotationPayload,
   type ThreadId,
   ProviderInteractionMode,
   RuntimeMode,
@@ -94,7 +93,11 @@ import {
   loadBalancingSendWarning,
   multipleModelSendBlock,
   referencedThreadContexts,
+  reviewSendContent,
+  type DirectComposerSend,
+  type ReviewSendOutcome,
 } from "./composerSend.logic";
+import type { ReviewCommentContext } from "../../reviewCommentContext";
 import { useMultipleModelSend } from "./useMultipleModelSend";
 import { type ComposerDispatchMode } from "@t3tools/client-runtime/state/composer-dispatch";
 import {
@@ -184,6 +187,8 @@ interface ComposerSendInput {
   readonly providerInstanceEntries: ReadonlyArray<ProviderInstanceEntry>;
   readonly composerRef: ComposerHandleRef;
   readonly composerDraftTarget: ComposerThreadTarget;
+  /** The thread's own draft: `composerDraftTarget`, except while a queued message is edited. */
+  readonly threadDraftTarget: ComposerThreadTarget;
   readonly promptRef: { current: string };
   readonly composerImagesRef: { current: ComposerImageAttachment[] };
   readonly composerFilesRef: { current: ComposerFileAttachment[] };
@@ -278,6 +283,7 @@ export function useComposerSend(input: ComposerSendInput) {
     providerInstanceEntries,
     composerRef,
     composerDraftTarget,
+    threadDraftTarget,
     promptRef,
     composerImagesRef,
     composerFilesRef,
@@ -362,23 +368,42 @@ export function useComposerSend(input: ComposerSendInput) {
     respondingRequestIdsRef.current = respondingRequestIds;
   }, [pendingApprovals, respondingRequestIds]);
 
+  // A review surface can cover the composer, so it gets the reason as a toast.
+  const notifyReviewCommentsKept = (
+    reason: string,
+    count: number,
+    type: "warning" | "error" = "warning",
+  ) => {
+    toastManager.add(
+      stackedThreadToast({
+        type,
+        title: count === 1 ? "Comment not sent" : "Comments not sent",
+        description: `${reason} ${count === 1 ? "It is" : "They are"} in your message draft.`,
+      }),
+    );
+  };
+
+  /** Resolves to how a review send ended, and to nothing for every other send. */
   const onSend = async (
     e?: { preventDefault: () => void },
     dispatchMode: ComposerDispatchMode = "auto",
     submissionIntent: ComposerSubmissionIntent = "foreground",
-    directAnnotation?: {
-      annotation: PreviewAnnotationPayload;
-      image: ComposerImageAttachment | null;
-    },
-  ) => {
+    direct?: DirectComposerSend,
+  ): Promise<ReviewSendOutcome | undefined> => {
     e?.preventDefault();
+    const directAnnotation = direct?.kind === "preview-annotation" ? direct : undefined;
+    const reviewSend = direct?.kind === "review-comments" ? direct : undefined;
+    const refuse = (reason: string, alreadyShown = false): ReviewSendOutcome => {
+      if (reviewSend && !alreadyShown) notifyReviewCommentsKept(reason, reviewSend.comments.length);
+      return { status: "refused", reason };
+    };
     // What the user pressed send on; uploads below can take a while, and a redirect must not
     // decline approvals for a draft that changed meanwhile.
     const promptAtSend = promptRef.current;
     if (
       usageLimitsOffered &&
       usageLimitsKey !== null &&
-      !directAnnotation &&
+      !direct &&
       !draftHasNonPromptContent(composerDraftTarget) &&
       isUsageLimitsCommand(promptRef.current)
     ) {
@@ -412,21 +437,23 @@ export function useComposerSend(input: ComposerSendInput) {
       feedbackUploadsInFlightRef.current.has(routeThreadKey)
     ) {
       notifyDirectAnnotationAttached();
-      return;
+      return refuse(
+        sendInFlightRef.current || isSendBusy
+          ? "Another message is still being sent."
+          : "This thread can't take a message right now.",
+      );
     }
     if (needsLoadBalancing) {
       const draft = useComposerDraftStore.getState().getComposerDraft(composerDraftTarget);
-      toastManager.add({
-        type: "warning",
-        ...loadBalancingSendWarning({
-          pending: loadBalancing.pending,
-          threadContexts: draft ? referencedThreadContexts(draft) : [],
-          candidateEnvironmentIds: logicalProjectEnvironments.map(
-            (candidate) => candidate.environmentId,
-          ),
-        }),
+      const warning = loadBalancingSendWarning({
+        pending: loadBalancing.pending,
+        threadContexts: draft ? referencedThreadContexts(draft) : [],
+        candidateEnvironmentIds: logicalProjectEnvironments.map(
+          (candidate) => candidate.environmentId,
+        ),
       });
-      return;
+      toastManager.add({ type: "warning", ...warning });
+      return refuse(warning.title, true);
     }
     if (activeEnvironmentUnavailable) {
       const toastSlot = environmentUnavailableSendToastSlotRef.current;
@@ -440,14 +467,12 @@ export function useComposerSend(input: ComposerSendInput) {
         }),
         id: `chat-send-environment-unavailable:${toastSlot}`,
       });
-      return;
+      return refuse("The environment is not connected.", true);
     }
     const sendCtx = composerRef.current?.getSendContext();
     // `/side` beats an open question and a plan follow-up, which would send the text to main.
     const sideChatCommand =
-      sendCtx && !directAnnotation && !queuedRunEdit.isEditing
-        ? parseSideChatCommand(promptAtSend)
-        : null;
+      sendCtx && !direct && !queuedRunEdit.isEditing ? parseSideChatCommand(promptAtSend) : null;
     const answeringQuestion =
       Boolean(activePendingProgress) && sendCtx?.answeringPendingUserInput !== false;
     // Where side chats are unavailable, `/side` text can still be a literal answer.
@@ -494,16 +519,21 @@ export function useComposerSend(input: ComposerSendInput) {
       return;
     }
     if (answeringQuestion) {
-      if (directAnnotation) {
+      if (direct) {
         notifyDirectAnnotationAttached();
-        return;
+        return refuse("Answer the agent's question first.");
       }
       onAdvanceActivePendingUserInput();
       return;
     }
+    // A composer send declines a waiting approval and redirects the agent, with the approval
+    // in view. A comment box can be out of its sight, so a review send never does that.
+    if (reviewSend && pendingApprovalsRef.current.length > 0) {
+      return refuse("Answer the pending approval first.");
+    }
     if (!sendCtx?.providerAvailable) {
       notifyDirectAnnotationAttached();
-      return;
+      return refuse("The selected model can't take a message right now.");
     }
     const multipleModelSelections = sendCtx.multipleModelSelections;
     const approvalFeedbackTarget = pendingApprovalsRef.current.find(
@@ -537,7 +567,9 @@ export function useComposerSend(input: ComposerSendInput) {
       );
       return;
     }
+    // A review send takes the model from the composer and none of what was typed or attached.
     const {
+      prompt: composerPrompt,
       images: sendContextImages,
       files: composerFiles,
       terminalContexts: composerTerminalContexts,
@@ -545,6 +577,8 @@ export function useComposerSend(input: ComposerSendInput) {
       reviewComments: composerReviewComments,
       threadContexts: composerThreadContexts,
       environmentContexts: composerEnvironmentContexts,
+    } = reviewSend ? reviewSendContent(reviewSend.comments) : sendCtx;
+    const {
       selectedProvider: ctxSelectedProvider,
       selectedModel: ctxSelectedModel,
       selectedProviderModels: ctxSelectedProviderModels,
@@ -564,7 +598,9 @@ export function useComposerSend(input: ComposerSendInput) {
       ? ensureInlineContextReferences(promptRef.current, [
           previewAnnotationContextReference(directAnnotation.annotation),
         ])
-      : promptRef.current;
+      : reviewSend
+        ? composerPrompt
+        : promptRef.current;
     const strandedThread = threadContextsOutsideEnvironment({
       text: promptForSend,
       records: composerThreadContexts,
@@ -585,6 +621,7 @@ export function useComposerSend(input: ComposerSendInput) {
       return;
     }
     if (queuedRunEdit.isEditing) {
+      if (reviewSend) return refuse("Finish editing the queued message first.");
       // Edit mode repurposes the composer: sending saves the queued message
       // in place instead of dispatching a new turn.
       await queuedRunEdit.saveEdit(
@@ -705,7 +742,7 @@ export function useComposerSend(input: ComposerSendInput) {
           }),
         );
       }
-      return;
+      return refuse("There is nothing to send.");
     }
     if (!activeProject) {
       toastManager.add(
@@ -715,7 +752,7 @@ export function useComposerSend(input: ComposerSendInput) {
           description: "This draft no longer points to an available project.",
         }),
       );
-      return;
+      return refuse("This thread's project is no longer available.", true);
     }
     const threadIdForSend = activeThread.id;
     const sendSnapshot = snapshotComposerSend({
@@ -761,7 +798,7 @@ export function useComposerSend(input: ComposerSendInput) {
     });
     if (missingWorktreeBaseBranch) {
       setThreadError(threadIdForSend, "Select a base branch before sending in New worktree mode.");
-      return;
+      return refuse("Select a base branch first.");
     }
     // Records bind attachments by the id each side knows: the local id for the optimistic
     // row, the upload id (or local id on the data-URL path) on the wire; the server
@@ -790,7 +827,8 @@ export function useComposerSend(input: ComposerSendInput) {
       effort: ctxSelectedPromptEffort,
       text: messageTextForSend || ATTACHMENT_ONLY_BOOTSTRAP_PROMPT,
     });
-    if (composerRef.current?.validateProviderInput(outgoingMessageText) === false) {
+    // A review send holds references only, and must not clear an error shown for typed text.
+    if (!reviewSend && composerRef.current?.validateProviderInput(outgoingMessageText) === false) {
       return;
     }
 
@@ -890,7 +928,7 @@ export function useComposerSend(input: ComposerSendInput) {
       setDockedDraftHeroThreadKey((currentThreadKey) =>
         currentThreadKey === activeThreadKey ? null : currentThreadKey,
       );
-      return;
+      return refuse("This connection cannot send messages.");
     }
     // Declining is irreversible, so a redirect waits for its uploads instead of failing after.
     if (
@@ -924,6 +962,10 @@ export function useComposerSend(input: ComposerSendInput) {
           )
         : [];
     if (approvalsToDecline.length > 0 || approvalFeedbackTarget !== undefined) {
+      if (reviewSend) {
+        sendInFlightRef.current = false;
+        return refuse("Answer the pending approval first.");
+      }
       // A draft edited since send, or a paste still landing in it, is no longer the message
       // the user sent.
       const attachmentIdsAtSend = composerAttachmentsSnapshot.map((attachment) => attachment.id);
@@ -1126,9 +1168,12 @@ export function useComposerSend(input: ComposerSendInput) {
       : null;
     // Keep new-thread flows from reusing this draft while attachments and worktree setup settle.
     if (sentDraftThreadRef) markPromotedDraftThreadByRef(sentDraftThreadRef);
-    promptRef.current = "";
-    clearComposerDraftContent(composerDraftTarget);
-    composerRef.current?.resetCursorState();
+    // A review send leaves the draft alone: its comments go only once the turn has started.
+    if (!reviewSend) {
+      promptRef.current = "";
+      clearComposerDraftContent(composerDraftTarget);
+      composerRef.current?.resetCursorState();
+    }
 
     const title = deriveThreadTitleSeed({
       text: messageTextForSend,
@@ -1282,6 +1327,12 @@ export function useComposerSend(input: ComposerSendInput) {
         failure = startResult;
       } else {
         turnStartSucceeded = true;
+        if (reviewSend) {
+          const store = useComposerDraftStore.getState();
+          for (const comment of reviewSend.comments) {
+            store.removeReviewComment(composerDraftTarget, comment.id);
+          }
+        }
         setKeepFullHistory(routeThreadKey, false);
         if (freshArm !== undefined) disarmFreshSession(routeThreadKey, freshArm);
         clearUsageLimitsFor(routeThreadKey);
@@ -1337,7 +1388,11 @@ export function useComposerSend(input: ComposerSendInput) {
         );
         clearBackgroundDraftSubmissionByRef(scopeThreadRef(environmentId, threadIdForSend));
       }
-      if (
+      if (reviewSend) {
+        setOptimisticUserMessages((existing) =>
+          existing.filter((message) => message.id !== messageIdForSend),
+        );
+      } else if (
         !composerDraftHasUserContent(
           useComposerDraftStore.getState().getComposerDraft(composerDraftTarget),
         )
@@ -1398,7 +1453,42 @@ export function useComposerSend(input: ComposerSendInput) {
       );
       if (!sendQueuesBehindSetup) resetLocalDispatch();
     }
+    if (failure !== null) {
+      const error = isAtomCommandInterrupted(failure) ? null : squashAtomCommandFailure(failure);
+      const reason = error instanceof Error ? error.message : "The message could not be sent.";
+      if (reviewSend) notifyReviewCommentsKept(reason, reviewSend.comments.length, "error");
+      return { status: "failed", reason };
+    }
+    return { status: shouldQueueBehindActiveRun ? "queued" : "dispatched" };
   };
 
-  return { onSend };
+  /**
+   * Sends one message holding only these review comments, as the composer would send one now:
+   * same guards, same queue or steer preference. The comments leave the draft only once the
+   * message is on its way; otherwise they wait in the thread's draft and the reason is shown.
+   */
+  const sendReviewComments = async (
+    comments: ReadonlyArray<ReviewCommentContext>,
+  ): Promise<ReviewSendOutcome> => {
+    let outcome = await onSend(
+      undefined,
+      composerRef.current?.getSendContext().dispatchMode ?? "auto",
+      "foreground",
+      { kind: "review-comments", comments },
+    );
+    if (!outcome) {
+      outcome = { status: "refused", reason: "This thread can't take a message right now." };
+      notifyReviewCommentsKept(outcome.reason, comments.length);
+    }
+    if (outcome.status === "refused" || outcome.status === "failed") {
+      // Never the draft of a queued message under edit: cancelling that edit would drop them.
+      const store = useComposerDraftStore.getState();
+      for (const comment of comments) {
+        store.addReviewComment(threadDraftTarget, comment, { insertAtCaret: false });
+      }
+    }
+    return outcome;
+  };
+
+  return { onSend, sendReviewComments };
 }

@@ -1,4 +1,3 @@
-import { ProcessSignalActions } from "./ProcessSignalActions";
 import { AuthEnvironmentMaintainScope } from "@t3tools/contracts";
 import { RefreshIcon } from "~/components/ui/refresh-icon";
 import {
@@ -11,7 +10,6 @@ import {
   HardDriveIcon,
   MemoryStickIcon,
 } from "lucide-react";
-import { ChevronDown, ChevronRight } from "lucide";
 import type {
   BackgroundBooleanState,
   EnvironmentId,
@@ -24,16 +22,11 @@ import type {
   ResourceTelemetryProcessSummary,
   ResourceTelemetrySourceHealth,
   ResourceTelemetrySourceStatus,
-  ServerProcessSignal,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Option from "effect/Option";
 import { RegistryContext } from "@effect/atom-react";
-import { useContext, useRef, useState, type ReactNode } from "react";
-import {
-  isAtomCommandInterrupted,
-  squashAtomCommandFailure,
-} from "@t3tools/client-runtime/state/runtime";
+import { useContext, useState, type ReactNode } from "react";
 
 import {
   useResourceTelemetry,
@@ -41,23 +34,29 @@ import {
 } from "../../lib/resourceTelemetryState";
 import { cn } from "../../lib/utils";
 import { formatBytes } from "../../lib/formatBytes";
-import { ensureLocalApi } from "../../localApi";
 import { serverEnvironment } from "../../state/server";
-import { readEnvironmentScope, useEnvironmentScope } from "../../state/session";
-import { useAtomCommand } from "../../state/use-atom-command";
+import { readEnvironmentScope } from "../../state/session";
 import { useRelativeTimeState } from "../../hooks/useRelativeTimeState";
 import { Button } from "../ui/button";
-import { MorphIcon } from "~/components/MorphIcon";
 import { ScrollArea } from "../ui/scroll-area";
 import { Toggle, ToggleGroup } from "../ui/toggle-group";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { toastManager } from "../ui/toast";
 import {
+  type ProcessColumn,
+  ProcessTable,
+  type ProcessTableSort,
+} from "../nodeResources/processTable/ProcessTable";
+import {
   processIdentityKey,
+  processNameFromCommand,
+  type ProcessTableRow,
+} from "../nodeResources/processTable/processRows";
+import { useProcessSignal } from "../nodeResources/processTable/useProcessSignal";
+import {
   resourceHistoryBarHeight,
   resourceHistoryCpuScaleMax,
   shouldShowResourceMonitorRetry,
-  visibleResourceTelemetryProcesses,
 } from "./ResourceTelemetryDiagnostics.logic";
 import { SettingsSection } from "./settingsLayout";
 
@@ -92,13 +91,6 @@ function formatSampleInterval(valueMs: number): string {
   return `${seconds.toLocaleString(undefined, { maximumFractionDigits: 1 })} ${
     seconds === 1 ? "second" : "seconds"
   }`;
-}
-
-function formatProcessName(process: Pick<ResourceTelemetryProcess, "command" | "name">): string {
-  if (process.name.trim()) return process.name;
-  const firstToken = process.command.trim().split(/\s+/)[0] ?? process.command;
-  const normalized = firstToken.replace(/^['"]|['"]$/g, "");
-  return normalized.split(/[\\/]/).findLast((segment) => segment.length > 0) ?? normalized;
 }
 
 function categoryLabel(category: ResourceTelemetryProcessCategory): string {
@@ -450,48 +442,8 @@ function ResourceHistoryChart({
   );
 }
 
-function ProcessTreeName({
-  process,
-  collapsed,
-  onToggle,
-}: {
-  process: ResourceTelemetryProcess;
-  collapsed: boolean;
-  onToggle: (process: ResourceTelemetryProcess) => void;
-}) {
-  const name = formatProcessName(process);
-  const hasChildren = process.childPids.length > 0;
-  return (
-    <div
-      className="grid min-w-0 grid-cols-[1.25rem_0.375rem_minmax(0,1fr)] items-center gap-2"
-      style={{ paddingLeft: `${Math.min(process.depth, 7) * 10}px` }}
-    >
-      {hasChildren ? (
-        <Button
-          size="icon-micro"
-          variant="ghost-muted"
-          onClick={() => onToggle(process)}
-          aria-label={collapsed ? `Expand ${name}` : `Collapse ${name}`}
-        >
-          <MorphIcon className="size-3.5" icon={collapsed ? ChevronRight : ChevronDown} />
-        </Button>
-      ) : (
-        <span className="size-5" aria-hidden />
-      )}
-      <span className={cn("size-1.5 rounded-full", categoryDotClass(process.category))} />
-      <Tooltip>
-        <TooltipTrigger
-          render={<span className="min-w-0 truncate font-medium text-foreground">{name}</span>}
-        />
-        <TooltipPopup side="top" variant="code">
-          {process.command || process.name}
-        </TooltipPopup>
-      </Tooltip>
-    </div>
-  );
-}
-
-function canSignalProcess(process: ResourceTelemetryProcess): boolean {
+// Only processes T3 started on the user's behalf can be signalled from here.
+function canSignalProcess(process: LiveProcessRow): boolean {
   return (
     process.category === "server-child" ||
     process.category === "provider-root" ||
@@ -499,152 +451,143 @@ function canSignalProcess(process: ResourceTelemetryProcess): boolean {
   );
 }
 
-function ProcessActions({
-  process,
-  canMaintainEnvironment,
-  signalingKeys,
-  onSignal,
-}: {
-  process: ResourceTelemetryProcess;
-  canMaintainEnvironment: boolean;
-  signalingKeys: ReadonlySet<string>;
-  onSignal: (process: ResourceTelemetryProcess, signal: ServerProcessSignal) => void;
-}) {
-  if (!canSignalProcess(process)) {
-    return <span className="text-3xs text-muted-foreground/35">-</span>;
-  }
-  const isSignaling = signalingKeys.has(processIdentityKey(process));
-  return (
-    <ProcessSignalActions
-      disabled={!canMaintainEnvironment || isSignaling}
-      onSignal={(signal) => onSignal(process, signal)}
-    />
-  );
+type LiveProcessRow = ResourceTelemetryProcess & ProcessTableRow;
+
+const LIVE_PROCESS_COLUMNS: ReadonlyArray<ProcessColumn<LiveProcessRow>> = [
+  {
+    id: "category",
+    label: "Category",
+    width: "7.5rem",
+    sortValue: (process) => categoryLabel(process.category),
+    render: (process) => (
+      <span className="flex min-w-0 items-center gap-2 text-muted-foreground">
+        <span
+          className={cn("size-1.5 shrink-0 rounded-full", categoryDotClass(process.category))}
+        />
+        <span className="truncate">{categoryLabel(process.category)}</span>
+      </span>
+    ),
+  },
+  {
+    id: "cpu",
+    label: "CPU",
+    width: "4rem",
+    align: "end",
+    sortValue: (process) => process.cpuPercent,
+    render: (process) => `${process.cpuPercent.toFixed(1)}%`,
+  },
+  {
+    id: "cpu-time",
+    label: "CPU Time",
+    width: "4.5rem",
+    align: "end",
+    sortValue: (process) => process.cpuTimeMs,
+    render: (process) => formatCpuTime(process.cpuTimeMs),
+  },
+  {
+    id: "memory",
+    label: "Memory",
+    width: "5rem",
+    align: "end",
+    sortValue: (process) => process.residentBytes,
+    render: (process) => formatBytes(process.residentBytes),
+  },
+  {
+    id: "read-rate",
+    label: "Read/s",
+    width: "5.5rem",
+    align: "end",
+    sortValue: (process) => process.ioReadBytesPerSecond,
+    render: (process) => formatRate(process.ioReadBytesPerSecond),
+  },
+  {
+    id: "write-rate",
+    label: "Write/s",
+    width: "5.5rem",
+    align: "end",
+    sortValue: (process) => process.ioWriteBytesPerSecond,
+    render: (process) => formatRate(process.ioWriteBytesPerSecond),
+  },
+  {
+    id: "read-total",
+    label: "Read Total",
+    width: "5.5rem",
+    align: "end",
+    sortValue: (process) => process.ioReadBytes,
+    render: (process) => formatBytes(process.ioReadBytes),
+  },
+  {
+    id: "write-total",
+    label: "Write Total",
+    width: "5.5rem",
+    align: "end",
+    sortValue: (process) => process.ioWriteBytes,
+    render: (process) => (
+      <Tooltip>
+        <TooltipTrigger render={<span>{formatBytes(process.ioWriteBytes)}</span>} />
+        <TooltipPopup side="top">{ioSemanticsLabel(process.ioSemantics)}</TooltipPopup>
+      </Tooltip>
+    ),
+  },
+  {
+    id: "pid",
+    label: "PID",
+    width: "4.5rem",
+    align: "end",
+    sortValue: (process) => process.pid,
+    render: (process) => process.pid,
+  },
+];
+
+const LIVE_PROCESS_SORT: ProcessTableSort = { columnId: "cpu", descending: true };
+
+function liveProcessRow(process: ResourceTelemetryProcess): LiveProcessRow {
+  return {
+    ...process,
+    pid: process.identity.pid,
+    startTimeMs: process.identity.startTimeMs,
+    name: process.name.trim() || processNameFromCommand(process.command),
+    command: process.command || process.name,
+  };
 }
 
-function ProcessTable({
+function LiveProcessTable({
+  environmentId,
   processes,
-  canMaintainEnvironment,
-  signalingKeys,
-  onSignal,
 }: {
+  environmentId: EnvironmentId | null;
   processes: ReadonlyArray<ResourceTelemetryProcess>;
-  canMaintainEnvironment: boolean;
-  signalingKeys: ReadonlySet<string>;
-  onSignal: (process: ResourceTelemetryProcess, signal: ServerProcessSignal) => void;
 }) {
-  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set());
-  const visible = visibleResourceTelemetryProcesses(processes, collapsed);
-  const toggle = (process: ResourceTelemetryProcess) => {
-    const identityKey = processIdentityKey(process);
-    setCollapsed((current) => {
-      const next = new Set(current);
-      if (next.has(identityKey)) {
-        next.delete(identityKey);
-      } else {
-        next.add(identityKey);
-      }
-      return next;
-    });
-  };
-
+  const signal = useProcessSignal(environmentId);
+  const rows = processes.map(liveProcessRow);
   return (
-    <div className="border-t border-border/60">
-      <ScrollArea
-        chainVerticalScroll
-        scrollFade
-        hideScrollbars
-        className="max-h-[min(68vh,48rem)] w-full max-w-full"
-      >
-        <table className="w-full min-w-[1320px] table-fixed text-left text-xs">
-          <colgroup>
-            <col className="w-[20%]" />
-            <col className="w-[10%]" />
-            <col className="w-[7%]" />
-            <col className="w-[8%]" />
-            <col className="w-[9%]" />
-            <col className="w-[9%]" />
-            <col className="w-[9%]" />
-            <col className="w-[10%]" />
-            <col className="w-[8%]" />
-            <col className="w-[6%]" />
-            <col className="w-[4%]" />
-          </colgroup>
-          <thead className="sticky top-0 z-10 border-b border-border/60 bg-card text-3xs uppercase tracking-widest text-muted-foreground/65">
-            <tr>
-              <th className="px-4 py-2 font-semibold sm:pl-5">Process</th>
-              <th className="px-3 py-2 font-semibold">Category</th>
-              <th className="px-3 py-2 text-right font-semibold">CPU</th>
-              <th className="px-3 py-2 text-right font-semibold">CPU Time</th>
-              <th className="px-3 py-2 text-right font-semibold">Memory</th>
-              <th className="px-3 py-2 text-right font-semibold">Read/s</th>
-              <th className="px-3 py-2 text-right font-semibold">Write/s</th>
-              <th className="px-3 py-2 text-right font-semibold">Read Total</th>
-              <th className="px-3 py-2 text-right font-semibold">Write Total</th>
-              <th className="px-3 py-2 text-right font-semibold">PID</th>
-              <th className="px-2 py-2 text-right font-semibold sm:pr-4">Kill</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-border/50">
-            {visible.length === 0 ? (
-              <tr>
-                <td colSpan={11} className="px-4 py-5 text-xs text-muted-foreground sm:px-5">
-                  Waiting for the native process monitor.
-                </td>
-              </tr>
-            ) : null}
-            {visible.map((process) => (
-              <tr key={processIdentityKey(process)} className="hover:bg-muted/20">
-                <td className="px-4 py-2 sm:pl-5">
-                  <ProcessTreeName
-                    process={process}
-                    collapsed={collapsed.has(processIdentityKey(process))}
-                    onToggle={toggle}
-                  />
-                </td>
-                <td className="truncate px-3 py-2 text-2xs text-muted-foreground">
-                  {categoryLabel(process.category)}
-                </td>
-                <td className="px-3 py-2 text-right font-mono tabular-nums">
-                  {process.cpuPercent.toFixed(1)}%
-                </td>
-                <td className="px-3 py-2 text-right font-mono tabular-nums">
-                  {formatCpuTime(process.cpuTimeMs)}
-                </td>
-                <td className="px-3 py-2 text-right font-mono tabular-nums">
-                  {formatBytes(process.residentBytes)}
-                </td>
-                <td className="px-3 py-2 text-right font-mono tabular-nums text-info-foreground">
-                  {formatRate(process.ioReadBytesPerSecond)}
-                </td>
-                <td className="px-3 py-2 text-right font-mono tabular-nums text-warning-foreground">
-                  {formatRate(process.ioWriteBytesPerSecond)}
-                </td>
-                <td className="px-3 py-2 text-right font-mono tabular-nums text-muted-foreground">
-                  {formatBytes(process.ioReadBytes)}
-                </td>
-                <td className="px-3 py-2 text-right font-mono tabular-nums text-muted-foreground">
-                  <Tooltip>
-                    <TooltipTrigger render={<span>{formatBytes(process.ioWriteBytes)}</span>} />
-                    <TooltipPopup side="top">{ioSemanticsLabel(process.ioSemantics)}</TooltipPopup>
-                  </Tooltip>
-                </td>
-                <td className="px-3 py-2 text-right font-mono tabular-nums text-muted-foreground">
-                  {process.identity.pid}
-                </td>
-                <td className="px-2 py-2 text-right sm:pr-4">
-                  <ProcessActions
-                    process={process}
-                    canMaintainEnvironment={canMaintainEnvironment}
-                    signalingKeys={signalingKeys}
-                    onSignal={onSignal}
-                  />
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </ScrollArea>
+    <div className="border-t border-border/60 px-2 py-1">
+      <ProcessTable
+        rows={rows}
+        columns={LIVE_PROCESS_COLUMNS}
+        mode="tree"
+        defaultSort={LIVE_PROCESS_SORT}
+        kill={
+          signal.canSignal
+            ? {
+                canKill: canSignalProcess,
+                signalingKeys: signal.signalingKeys,
+                onKill: (process) =>
+                  signal.requestKill({
+                    pid: process.pid,
+                    startTimeMs: process.startTimeMs,
+                    name: process.name,
+                    command: process.command,
+                    summary: `${process.cpuPercent.toFixed(1)}% CPU · ${formatBytes(process.residentBytes)}`,
+                    childCount: process.childPids.length,
+                  }),
+              }
+            : undefined
+        }
+        empty="Waiting for the native process monitor."
+        className="h-[min(68vh,48rem)]"
+      />
+      {signal.dialog}
     </div>
   );
 }
@@ -696,7 +639,7 @@ function HistoryProcessTable({
               </tr>
             ) : null}
             {processes.map((process) => (
-              <tr key={processIdentityKey(process)} className="hover:bg-muted/20">
+              <tr key={processIdentityKey(process.identity)} className="hover:bg-muted/20">
                 <td className="px-4 py-2 sm:pl-5">
                   <Tooltip>
                     <TooltipTrigger
@@ -818,7 +761,6 @@ function ResourceTelemetryDiagnosticsBody({
   const [windowMs, setWindowMs] = useState(15 * 60_000);
   const selectedWindow =
     HISTORY_WINDOWS.find((option) => option.windowMs === windowMs) ?? HISTORY_WINDOWS[1];
-  const canMaintainEnvironment = useEnvironmentScope(environmentId, AuthEnvironmentMaintainScope);
   const telemetry = useResourceTelemetry(environmentId);
   const retryTelemetry = telemetry.retry;
   const history = useResourceTelemetryHistory(
@@ -828,93 +770,9 @@ function ResourceTelemetryDiagnosticsBody({
     },
     environmentId,
   );
-  const signalServerProcess = useAtomCommand(serverEnvironment.signalProcess, {
-    reportFailure: false,
-  });
-  const [signalingKeys, setSignalingKeys] = useState<ReadonlySet<string>>(() => new Set());
-  const signalingKeysRef = useRef<ReadonlySet<string>>(new Set());
   const [isRetrying, setIsRetrying] = useState(false);
   const snapshot = telemetry.data;
   const allT3 = snapshot?.groups.allT3;
-
-  const signalProcess = async (process: ResourceTelemetryProcess, signal: ServerProcessSignal) => {
-    const targetEnvironmentId = environmentId;
-    if (
-      targetEnvironmentId === null ||
-      !readEnvironmentScope(targetEnvironmentId, AuthEnvironmentMaintainScope)
-    )
-      return;
-    const identityKey = processIdentityKey(process);
-    if (signalingKeysRef.current.has(identityKey)) return;
-    const nextSignalingKeys = new Set(signalingKeysRef.current).add(identityKey);
-    signalingKeysRef.current = nextSignalingKeys;
-    setSignalingKeys(nextSignalingKeys);
-    const clearSignaling = () => {
-      const next = new Set(signalingKeysRef.current);
-      next.delete(identityKey);
-      signalingKeysRef.current = next;
-      setSignalingKeys(next);
-    };
-
-    if (signal === "SIGKILL") {
-      let confirmed = false;
-      try {
-        confirmed = await ensureLocalApi().dialogs.confirm(
-          `Send SIGKILL to process ${process.identity.pid}? This cannot be handled by the process.`,
-          { variant: "destructive" },
-        );
-      } catch (error) {
-        clearSignaling();
-        toastManager.add({
-          type: "error",
-          title: "Could not confirm signal",
-          description: error instanceof Error ? error.message : `Failed to send ${signal}.`,
-        });
-        return;
-      }
-      if (!confirmed) {
-        clearSignaling();
-        return;
-      }
-    }
-    if (!readEnvironmentScope(targetEnvironmentId, AuthEnvironmentMaintainScope)) {
-      clearSignaling();
-      return;
-    }
-    void signalServerProcess({
-      environmentId: targetEnvironmentId,
-      input: {
-        pid: process.identity.pid,
-        startTimeMs: process.identity.startTimeMs,
-        signal,
-      },
-    })
-      .then((result) => {
-        if (result._tag === "Failure") {
-          if (isAtomCommandInterrupted(result)) return;
-          throw squashAtomCommandFailure(result);
-        }
-        if (result.value.signaled) return;
-        toastManager.add({
-          type: "error",
-          title: `Could not send ${signal}`,
-          description: Option.getOrElse(
-            result.value.message,
-            () => `Failed to send ${signal} to process ${process.identity.pid}.`,
-          ),
-        });
-      })
-      .catch((error: unknown) => {
-        toastManager.add({
-          type: "error",
-          title: `Could not send ${signal}`,
-          description: error instanceof Error ? error.message : `Failed to send ${signal}.`,
-        });
-      })
-      .finally(() => {
-        clearSignaling();
-      });
-  };
 
   const retryCollector = () => {
     if (
@@ -1261,12 +1119,7 @@ function ResourceTelemetryDiagnosticsBody({
         }
       >
         <div className="overflow-hidden rounded-[inherit]">
-          <ProcessTable
-            processes={snapshot?.processes ?? []}
-            canMaintainEnvironment={canMaintainEnvironment}
-            signalingKeys={signalingKeys}
-            onSignal={signalProcess}
-          />
+          <LiveProcessTable environmentId={environmentId} processes={snapshot?.processes ?? []} />
         </div>
       </SettingsSection>
 

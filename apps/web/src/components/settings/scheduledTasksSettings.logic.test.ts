@@ -16,11 +16,16 @@ import type {
 } from "../../sidebarProjectGrouping";
 import { resolveSettingsScope, type SettingsScopeSearch } from "./settingsScope";
 
+import {
+  DEFAULT_LOAD_SCHEDULE_DRAFT,
+  LOAD_SCHEDULE_DRAFT_ERROR,
+} from "@t3tools/client-runtime/scheduled-task-schedule";
 import { deriveProviderInstanceEntries } from "../../providerInstances";
 import {
   scheduledTaskDefaultModel,
   defaultScheduledTaskProjectId,
   matchesScheduledTaskScope,
+  scheduleDraftErrors,
   scheduleFromDraft,
   taskToDraft,
   unbindDraftFromThread,
@@ -337,6 +342,41 @@ describe("webhook scheduled tasks", () => {
         filters: [{ id: "f1", path: "body.action", op: "in", value: " , " }],
       }),
     ).toBeNull();
+  });
+});
+
+describe("load scheduled tasks", () => {
+  const schedule = {
+    type: "load",
+    condition: {
+      metric: "vramUsedPercent",
+      op: ">=",
+      threshold: 92.5,
+      sustainSeconds: 120,
+      gpuId: "1",
+    },
+    clear: { metric: "vramUsedPercent", op: "<=", threshold: 70, sustainSeconds: 0, gpuId: "1" },
+  } as const;
+  const loadTask: ScheduledTask = { ...legacyTask, schedule };
+
+  it("opens a load task in load mode and saves it back unchanged", () => {
+    const draft = taskToDraft(loadTask);
+    expect(draft.scheduleMode).toBe("load");
+    expect(draft.load.condition).toMatchObject({ threshold: "92.5", gpuId: "1" });
+    expect(scheduleFromDraft(draft)).toStrictEqual(schedule);
+    expect(scheduleDraftErrors(draft)).toEqual([]);
+    expect(taskToDraft(legacyTask).load).toBe(DEFAULT_LOAD_SCHEDULE_DRAFT);
+  });
+
+  it("refuses an unparseable load draft with one error", () => {
+    const draft = taskToDraft(loadTask);
+    const broken = {
+      ...draft,
+      load: { ...draft.load, condition: { ...draft.load.condition, threshold: "" } },
+    };
+    expect(scheduleFromDraft(broken)).toBeNull();
+    expect(scheduleDraftErrors(broken)).toEqual([LOAD_SCHEDULE_DRAFT_ERROR]);
+    expect(scheduleDraftErrors({ ...broken, scheduleMode: "interval" })).toEqual([]);
   });
 });
 

@@ -4,9 +4,124 @@ import {
   type OrchestrationV2ThreadShell,
   type ThreadId,
 } from "@t3tools/contracts";
+import { isPullRequestWatchTask } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import * as DateTime from "effect/DateTime";
 
 export type ThreadRelationshipKind = "parent" | "fork" | "subagent" | "transfer";
+
+/** A settled thread whose own subagents still run: a kind of working, not done. */
+export const AWAITING_CHILDREN_STATUS = "awaiting_children";
+
+type ThreadStatusSource = {
+  readonly activityRunStatus?: string | null | undefined;
+  readonly pendingBackgroundTasks?: ReadonlyArray<{ readonly kind: string }> | undefined;
+};
+
+export function threadAwaitsChildren(thread: ThreadStatusSource | null | undefined): boolean {
+  return thread?.pendingBackgroundTasks?.some((task) => task.kind === "subagent") === true;
+}
+
+export type ThreadWaitReason = "agents" | "pull_request" | "background";
+
+function countLabel(count: number, noun: string, unknown: string) {
+  return count === 0 ? unknown : `${count} ${noun}${count === 1 ? "" : "s"}`;
+}
+
+/** What a waiting thread waits on, so a list row can say more than "Waiting". */
+export function resolveThreadWait(thread: {
+  readonly blockedOnThreadWait?: boolean | undefined;
+  readonly pendingBackgroundTasks?:
+    | ReadonlyArray<{ readonly kind: string; readonly taskId: string }>
+    | undefined;
+}): { readonly reason: ThreadWaitReason; readonly label: string } {
+  const tasks = thread.pendingBackgroundTasks ?? [];
+  const agents = tasks.filter((task) => task.kind === "subagent").length;
+  // A blocking delegate or t3_thread_wait holds an active run, which lists no tasks.
+  if (agents > 0 || thread.blockedOnThreadWait === true) {
+    return { reason: "agents", label: countLabel(agents, "agent", "Agents") };
+  }
+  const pullRequests = tasks.filter(isPullRequestWatchTask).length;
+  if (pullRequests > 0) {
+    return { reason: "pull_request", label: pullRequests === 1 ? "PR" : `${pullRequests} PRs` };
+  }
+  return { reason: "background", label: "Waiting" };
+}
+
+export interface AgentTreeNode {
+  readonly key: string;
+  readonly thread: {
+    readonly id: string;
+    readonly activityRunStatus?: string | null | undefined;
+    readonly blockedOnThreadWait?: boolean | undefined;
+    readonly pendingBackgroundTasks?:
+      | ReadonlyArray<{ readonly kind: string; readonly childThreadId?: string | undefined }>
+      | undefined;
+  };
+}
+
+export interface AgentTree<Node> {
+  /** Null for a pending subagent whose thread is not known yet. */
+  readonly node: Node | null;
+  /** Counts as a live agent itself. */
+  readonly working: boolean;
+  /** Live agents in this subtree. */
+  readonly live: number;
+  /** Agents in this subtree, idle ones included. */
+  readonly size: number;
+  readonly children: ReadonlyArray<AgentTree<Node>>;
+}
+
+/**
+ * A thread's agent lineage, grandchildren included. A thread works while its run does,
+ * unless it only waits on its children. A child its parent still waits on works even
+ * between its runs, and a pending subagent with no known thread works as one agent.
+ */
+export function buildAgentTree<Node extends AgentTreeNode>(
+  root: Node,
+  childrenOf: (node: Node) => ReadonlyArray<Node>,
+): AgentTree<Node> {
+  const seen = new Set<string>([root.key]);
+  const build = (node: Node, awaited: boolean): AgentTree<Node> => {
+    const { thread } = node;
+    const children = childrenOf(node).filter((child) => !seen.has(child.key));
+    for (const child of children) seen.add(child.key);
+    const childIds = new Set(children.map((child) => child.thread.id));
+    const awaitedChildIds = new Set<string>();
+    const subtrees: AgentTree<Node>[] = [];
+    for (const task of thread.pendingBackgroundTasks ?? []) {
+      if (task.kind !== "subagent") continue;
+      if (task.childThreadId !== undefined && childIds.has(task.childThreadId)) {
+        awaitedChildIds.add(task.childThreadId);
+      } else {
+        subtrees.push({ node: null, working: true, live: 1, size: 1, children: [] });
+      }
+    }
+    for (const child of children) {
+      subtrees.push(build(child, awaitedChildIds.has(child.thread.id)));
+    }
+    const below = subtrees.reduce((sum, subtree) => sum + subtree.live, 0);
+    const running =
+      thread.blockedOnThreadWait !== true &&
+      (thread.activityRunStatus === "preparing" ||
+        thread.activityRunStatus === "starting" ||
+        thread.activityRunStatus === "running");
+    const working = running || (awaited && below === 0);
+    return {
+      node,
+      working,
+      live: below + (working ? 1 : 0),
+      size: 1 + subtrees.reduce((sum, subtree) => sum + subtree.size, 0),
+      children: subtrees,
+    };
+  };
+  return build(root, false);
+}
+
+function shellRelationshipStatus(thread: ThreadStatusSource, settled: string | null) {
+  return (
+    thread.activityRunStatus ?? (threadAwaitsChildren(thread) ? AWAITING_CHILDREN_STATUS : settled)
+  );
+}
 
 export interface ThreadRelationshipNode {
   readonly threadId: ThreadId;
@@ -95,7 +210,7 @@ export function deriveThreadRelationshipGraph(input: {
       sourceThreadId: parentThreadId,
       targetThreadId: thread.id,
       kind: thread.lineage.relationshipToParent === "subagent" ? "subagent" : "fork",
-      status: thread.activityRunStatus ?? thread.status,
+      status: shellRelationshipStatus(thread, thread.status),
     });
   }
 
@@ -109,10 +224,14 @@ export function deriveThreadRelationshipGraph(input: {
         targetThreadId: subagent.childThreadId,
         kind: "subagent",
         status:
-          child?.activityRunStatus ??
-          (child?.latestRunId != null && !isOrchestrationV2WorkActive(subagent.status)
-            ? child.status
-            : subagent.status),
+          child === undefined
+            ? subagent.status
+            : shellRelationshipStatus(
+                child,
+                child.latestRunId != null && !isOrchestrationV2WorkActive(subagent.status)
+                  ? child.status
+                  : subagent.status,
+              ),
       });
     }
     for (const transfer of input.projection.contextTransfers) {
@@ -166,7 +285,7 @@ export function threadRelationshipRowStatus(
     return row.edge.status;
   }
   const thread = graph.nodes.get(row.threadId)?.thread;
-  return thread?.activityRunStatus ?? thread?.status ?? null;
+  return thread ? shellRelationshipStatus(thread, thread.status) : null;
 }
 
 function threadCreatedAtMillis(node: ThreadRelationshipNode | undefined): number | null {

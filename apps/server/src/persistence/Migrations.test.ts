@@ -163,6 +163,25 @@ describe("runMigrations", () => {
       assert.deepStrictEqual(yield* runMigrations(), []);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
+
+  it.effect("hands id 80 back to main when a fork build recorded it as ServedSites", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* runMigrations({ toMigrationInclusive: 79 });
+      yield* sql`INSERT INTO effect_sql_migrations (migration_id, name) VALUES (80, 'ServedSites')`;
+
+      yield* runMigrations();
+
+      const rows = yield* sql<{ readonly name: string }>`
+        SELECT name FROM effect_sql_migrations WHERE migration_id = 80
+      `;
+      assert.deepStrictEqual(rows, [{ name: "ScheduledTaskThreadMode" }]);
+      const columns = yield* sql<{ readonly name: string }>`
+        SELECT name FROM pragma_table_info('scheduled_tasks') WHERE name = 'thread_mode'
+      `;
+      assert.strictEqual(columns.length, 1);
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+  );
 });
 
 // The npm launcher reads the highest migration id from these file names.

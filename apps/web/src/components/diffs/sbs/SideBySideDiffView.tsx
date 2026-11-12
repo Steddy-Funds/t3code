@@ -26,7 +26,7 @@ import { usePaintedThemeEditorColors } from "~/lib/paintedThemeEditorColors";
 import { cn } from "~/lib/utils";
 import { primaryServerKeybindingsAtom } from "~/state/server";
 
-import { fileContentRevision } from "../../files/fileContentRevision";
+import { fileContentRevision } from "@t3tools/shared/fileContentRevision";
 import { Button } from "../../ui/button";
 import { SbsDivider } from "./SbsDivider";
 import { SbsFindBar, SbsScrollMarks } from "./SbsOverlays";

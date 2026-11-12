@@ -2,6 +2,7 @@ import type { EnvironmentServerConfig } from "@t3tools/client-runtime/connection
 import { scopeThreadRef, scopedThreadKey } from "@t3tools/client-runtime/environment";
 import { resolveThreadWorkingStartedAt } from "@t3tools/client-runtime/state/models";
 import { isShownUnderParent } from "@t3tools/client-runtime/state/threads";
+import { resolveThreadWait } from "@t3tools/client-runtime/state/thread-relationships";
 import { backgroundWorkHoldsCompletion } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import { threadPullRequestSearchTerms } from "@t3tools/shared/threadPullRequests";
 import * as React from "react";
@@ -21,6 +22,7 @@ import {
   type ContextMenuItem,
   type EnvironmentId,
   type ThreadId,
+  type ThreadPullRequestLink,
 } from "@t3tools/contracts";
 import type { SidebarProjectSortOrder, SidebarThreadSortOrder } from "@t3tools/contracts/settings";
 import type { AsyncResult } from "effect/reactivity";
@@ -169,15 +171,77 @@ export function useRetainedValue<T>(key: string | null, value: T | null): T | nu
 export const animateSidebarLayoutChanges: AnimateLayoutChanges = (args) =>
   args.isSorting ? defaultAnimateLayoutChanges(args) : false;
 
-// Snoozed rows cannot accept drops without a wake time. Working rows only drag out as chat context.
+// Snoozed rows cannot accept drops without a wake time. Working and review rows only drag out as
+// chat context. Backgrounded rows move only through the thread menu or an agent. A settled one
+// shelves as settled, since the server sends only the newest settled threads.
 
-export type SidebarSection = "pinned" | "active" | "working" | "snoozed" | "settled";
+export type SidebarSection =
+  | "pinned"
+  | "active"
+  | "review"
+  | "working"
+  | "snoozed"
+  | "backgrounded"
+  | "settled";
+
+/** Shelves the app places threads on; a drop cannot move a thread onto or off of them. */
+export function isPlacedSidebarSection(
+  section: SidebarSection | null | undefined,
+): section is "review" | "working" {
+  return section === "review" || section === "working";
+}
+
+export type PullRequestShelfFilter = "all" | "draft" | "open";
+
+export type WorkingShelfSort = "recent" | "burn";
+
+/** Hottest agent tree first; threads with no rate keep their order below. */
+export function sortThreadsByBurnRate<T>(
+  threads: readonly T[],
+  rates: ReadonlyMap<string, number>,
+  keyOf: (thread: T) => string,
+): readonly T[] {
+  if (rates.size === 0) return threads;
+  return threads.toSorted((a, b) => (rates.get(keyOf(b)) ?? 0) - (rates.get(keyOf(a)) ?? 0));
+}
+
+type PullRequestShelfThread = {
+  readonly pullRequests: ReadonlyArray<
+    Pick<ThreadPullRequestLink, "watch" | "source" | "snapshot">
+  >;
+};
+
+// Mirrors the watches that hold the thread open: a merged PR's watch ends without a wake.
+function watchedPullRequests(thread: PullRequestShelfThread) {
+  return thread.pullRequests.filter(
+    (link) =>
+      link.watch !== undefined &&
+      link.source !== "stack-dismissed" &&
+      link.snapshot?.state !== "merged",
+  );
+}
+
+export function threadWatchesPullRequest(thread: PullRequestShelfThread): boolean {
+  return watchedPullRequests(thread).length > 0;
+}
+
+export function pullRequestShelfMatches(
+  thread: PullRequestShelfThread,
+  filter: PullRequestShelfFilter,
+): boolean {
+  if (filter === "all") return true;
+  return watchedPullRequests(thread).some(
+    ({ snapshot }) => snapshot?.state === "open" && snapshot.isDraft === (filter === "draft"),
+  );
+}
 
 export function resolveSidebarThreadSection(input: {
+  readonly backgrounded: boolean;
   readonly snoozed: boolean;
   readonly settled: boolean;
   readonly pinned: boolean;
 }): SidebarSection {
+  if (input.backgrounded && !input.settled) return "backgrounded";
   if (input.snoozed) return "snoozed";
   if (input.settled) return "settled";
   if (input.pinned) return "pinned";
@@ -191,8 +255,10 @@ export type SidebarListMarker =
   | "active-placeholder"
   | "settled-placeholder"
   | "pinned-divider"
+  | "review-header"
   | "working-header"
   | "snoozed-header"
+  | "backgrounded-header"
   | "settled-header";
 
 export function sidebarMarkerId(marker: SidebarListMarker): string {
@@ -213,8 +279,10 @@ function sectionAtSidebarSlot(items: readonly SidebarListItem[], index: number):
     const item = items[i]!;
     if (item.kind !== "marker") continue;
     if (item.marker === "pinned-divider") section = "active";
+    else if (item.marker === "review-header") section = "review";
     else if (item.marker === "working-header") section = "working";
     else if (item.marker === "snoozed-header") section = "snoozed";
+    else if (item.marker === "backgrounded-header") section = "backgrounded";
     else if (item.marker === "settled-header") section = "settled";
   }
   return section;
@@ -237,7 +305,8 @@ export function resolveSidebarDropTarget(
   const moved = items.filter((_, index) => index !== activeIndex);
   moved.splice(overIndex, 0, items[activeIndex]!);
   const section = sectionAtSidebarSlot(moved, overIndex);
-  if (section === "working" || section === "snoozed") return null;
+  if (isPlacedSidebarSection(section) || section === "snoozed" || section === "backgrounded")
+    return null;
   const pinnedOrder: string[] = [];
   const activeOrder: string[] = [];
   let currentSection: SidebarSection = "pinned";
@@ -245,8 +314,10 @@ export function resolveSidebarDropTarget(
     if (item.kind === "marker") {
       if (item.marker === "pinned-divider") currentSection = "active";
       else if (
+        item.marker === "review-header" ||
         item.marker === "working-header" ||
         item.marker === "snoozed-header" ||
+        item.marker === "backgrounded-header" ||
         item.marker === "settled-header"
       )
         break;
@@ -279,13 +350,21 @@ type SidebarThreadDropPlan =
     }
   | { readonly kind: "settle" };
 
-export type SidebarDropVerb = "pin" | "unpin" | "settle" | "unsettle" | "wake";
+/** "foreground" only labels a sweep across backgrounded rows; no drop resolves to it. */
+export type SidebarDropVerb = "pin" | "unpin" | "settle" | "unsettle" | "wake" | "foreground";
 
 export function resolveSidebarDropVerb(
   from: SidebarSection,
   to: SidebarSection | null,
 ): SidebarDropVerb | null {
-  if (to === null || to === from || to === "working" || to === "snoozed") return null;
+  if (
+    to === null ||
+    to === from ||
+    isPlacedSidebarSection(to) ||
+    to === "snoozed" ||
+    to === "backgrounded"
+  )
+    return null;
   if (to === "pinned") return "pin";
   if (to === "settled") return "settle";
   if (from === "pinned") return "unpin";
@@ -370,7 +449,7 @@ export function planSidebarThreadDrop(input: {
     activeKeysById,
     activeReorderableKeys,
   } = input;
-  if (activeSection === "working") return { kind: "none" };
+  if (isPlacedSidebarSection(activeSection)) return { kind: "none" };
   if (input.supportsSettlement === false && (target.section === "settled" || activeSettled)) {
     return { kind: "none" };
   }
@@ -639,16 +718,7 @@ export function buildBulkUnpinContextMenuItem(input: {
 }
 
 export interface ThreadStatusPill {
-  label:
-    | "Working"
-    | "Connecting"
-    | "Completed"
-    | "Failed"
-    | "Pending Approval"
-    | "Awaiting Input"
-    | "Guest Request"
-    | "Waiting"
-    | "Plan Ready";
+  label: string;
   colorClass: string;
   dotClass: string;
   pulse: boolean;
@@ -1149,12 +1219,20 @@ export function resolveThreadStatusPill(input: {
     (thread.runtime?.status === "running" && thread.blockedOnThreadWait === true) ||
     backgroundWorkHoldsCompletion(thread.pendingBackgroundTasks ?? [])
   ) {
-    return {
-      label: "Waiting",
-      colorClass: "text-sidebar-muted-foreground",
-      dotClass: "bg-sidebar-muted-foreground",
-      pulse: false,
-    };
+    const wait = resolveThreadWait(thread);
+    return wait.reason === "agents"
+      ? {
+          label: wait.label,
+          colorClass: "text-sky-600 dark:text-sky-300/80",
+          dotClass: "bg-sky-500 dark:bg-sky-300/80",
+          pulse: false,
+        }
+      : {
+          label: wait.label,
+          colorClass: "text-sidebar-muted-foreground",
+          dotClass: "bg-sidebar-muted-foreground",
+          pulse: false,
+        };
   }
 
   if (hasUnseenFailure(thread)) {
@@ -1353,5 +1431,26 @@ export function sortScopedProjectsForSidebar<
       left.title.localeCompare(right.title) ||
       left.environmentId.localeCompare(right.environmentId) ||
       left.id.localeCompare(right.id),
+  );
+}
+
+/**
+ * Drops the owner from "owner/repo" names unless another project shares the repo name,
+ * so the owner shows only to tell forks apart.
+ */
+export function shortProjectDisplayNames(
+  names: ReadonlyArray<string>,
+): ReadonlyMap<string, string> {
+  const repoName = (name: string) => name.slice(name.lastIndexOf("/") + 1);
+  const counts = new Map<string, number>();
+  for (const name of new Set(names)) {
+    const repo = repoName(name).toLowerCase();
+    counts.set(repo, (counts.get(repo) ?? 0) + 1);
+  }
+  return new Map(
+    names.map((name) => {
+      const repo = repoName(name);
+      return [name, (counts.get(repo.toLowerCase()) ?? 0) > 1 ? name : repo] as const;
+    }),
   );
 }

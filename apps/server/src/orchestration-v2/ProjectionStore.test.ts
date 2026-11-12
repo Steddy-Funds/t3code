@@ -18,6 +18,8 @@ import {
   NodeId,
   PlanId,
   ProjectId,
+  REVIEW_NOTE_TOOL_NAME,
+  REVIEW_NOTE_TURN_ITEM_PREFIX,
   ProviderDriverKind,
   ProviderInstanceId,
   ProviderSessionId,
@@ -1412,6 +1414,9 @@ const threadWorktreePathsIncludeArchivedOnRequest = Effect.gen(function* () {
       [ThreadId.make("thread:archived")]: "Title for thread:archived",
     },
   );
+  assert.equal(yield* store.getLineageUsageRecords(deleted.id), null);
+  const archivedUsage = yield* store.getLineageUsageRecords(ThreadId.make("thread:archived"));
+  assert.deepEqual(archivedUsage?.threadIds, [ThreadId.make("thread:archived")]);
 });
 
 const commandReadsSkipSettledLeafNodes = Effect.gen(function* () {
@@ -1773,6 +1778,13 @@ const runlessNativeSubagentNeedsRecovery = Effect.gen(function* () {
     assert.equal(
       (yield* store.getRecoveryThreadIds("runtime")).includes(threadId),
       status !== "completed",
+    );
+    const expected = status === "completed" ? 1 : undefined;
+    assert.equal((yield* store.getThreadShell(threadId))?.nativeSubagentsCompleted, expected);
+    assert.equal(
+      ProjectionStore.threadShellFromProjection(yield* store.getThreadProjection(threadId))
+        .nativeSubagentsCompleted,
+      expected,
     );
   }
 });
@@ -2399,6 +2411,60 @@ it.effect("lists only active subagent IDs without loading shell data", () =>
     assert.sameMembers(
       [...(yield* store.listActiveSubagentThreadIds())],
       [ThreadId.make("active-subagent")],
+    );
+  }).pipe(Effect.provide(layerTest)),
+);
+
+it.effect("lists live subagent links, without forks or deleted threads", () =>
+  Effect.gen(function* () {
+    const store = yield* ProjectionStore.ProjectionStoreV2;
+    const sql = yield* SqlClient.SqlClient;
+    const createdAt = "2026-01-05T00:00:00.000Z";
+    for (const [id, relationship, parent, archivedAt, deletedAt] of [
+      ["parent", null, null, null, null],
+      ["child", "subagent", "parent", null, null],
+      ["grandchild", "subagent", "child", null, null],
+      ["sibling", "subagent", "parent", null, null],
+      ["archived", "subagent", "parent", createdAt, null],
+      ["deleted", "subagent", "parent", null, createdAt],
+      ["under-deleted", "subagent", "deleted", null, null],
+      ["fork", "fork", "parent", null, null],
+      ["under-fork", "subagent", "fork", null, null],
+      ["unrelated", null, null, null, null],
+      ["loop-a", "subagent", "loop-b", null, null],
+      ["loop-b", "subagent", "loop-a", null, null],
+    ] as const) {
+      yield* sql`
+        INSERT INTO orchestration_v2_projection_threads (
+          thread_id, project_id, title, default_provider, runtime_mode, interaction_mode,
+          created_at, updated_at, archived_at, deleted_at, payload_json
+        ) VALUES (
+          ${id}, 'project:test', ${id}, 'codex', 'full-access', 'default',
+          ${createdAt}, ${createdAt}, ${archivedAt}, ${deletedAt},
+          ${JSON.stringify({
+            lineage: { relationshipToParent: relationship, parentThreadId: parent },
+            archivedAt,
+          })}
+        )
+      `;
+    }
+    const link = (threadId: string, parentThreadId: string) => ({
+      threadId: ThreadId.make(threadId),
+      parentThreadId: ThreadId.make(parentThreadId),
+    });
+    // A fork is no link but tops its own tree; a deleted thread loses its links both ways.
+    assert.sameDeepMembers(
+      [...(yield* store.listSubagentLinks())],
+      [
+        link("child", "parent"),
+        link("grandchild", "child"),
+        link("sibling", "parent"),
+        link("archived", "parent"),
+        link("under-fork", "fork"),
+        // A corrupt cycle reads back as is; the lineage walks end on it.
+        link("loop-a", "loop-b"),
+        link("loop-b", "loop-a"),
+      ],
     );
   }).pipe(Effect.provide(layerTest)),
 );
@@ -3321,6 +3387,33 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
         );
         assert.isUndefined(page.items.find((row) => row.item.ordinal === 2)?.item.deferredWork);
       }
+      // The server's review note stays out; a provider row with its name and input folds in.
+      const [before] = yield* sql<{ readonly turn_item_id: string; readonly payload_json: string }>`
+        SELECT turn_item_id, payload_json FROM orchestration_v2_projection_turn_items
+        WHERE thread_id = ${threadId} AND ordinal = 2`;
+      const providerItemId = before!.turn_item_id;
+      for (const [itemId, firstDeferred] of [
+        [`${REVIEW_NOTE_TURN_ITEM_PREFIX}bounded-sql-history`, 3],
+        [providerItemId, 2],
+      ] as const) {
+        yield* sql`UPDATE orchestration_v2_projection_turn_items
+          SET type = 'dynamic_tool', turn_item_id = ${itemId},
+          payload_json = json_set(payload_json, '$.id', ${itemId}, '$.type', 'dynamic_tool',
+            '$.toolName', ${REVIEW_NOTE_TOOL_NAME}, '$.input', json('{"kind":"review_note"}'))
+          WHERE thread_id = ${threadId} AND ordinal = 2`;
+        const window = yield* projectionStore.getThreadSnapshotWindow(threadId, {
+          rowLimit: sqlPageLimit,
+          userTurnLimit: 10,
+          deferWork: true,
+        });
+        assert.strictEqual(
+          window.projection.visibleTurnItems.find((row) => row.item.deferredWork)?.item.ordinal,
+          firstDeferred,
+        );
+      }
+      yield* sql`UPDATE orchestration_v2_projection_turn_items
+        SET turn_item_id = ${providerItemId}, payload_json = ${before!.payload_json}
+        WHERE thread_id = ${threadId} AND ordinal = 2`;
       yield* sql`UPDATE orchestration_v2_projection_turn_items SET type = 'command_execution',
         payload_json = json_set(payload_json, '$.type', 'command_execution') WHERE thread_id = ${threadId} AND ordinal = 2`;
       const sharedRunId = "run:bounded-sql-history:1";
@@ -6052,6 +6145,7 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
             settledOverride: sqlShell.settledOverride,
             pendingRuntimeRequest: null,
             limitRecovery: sqlShell.limitRecovery,
+            loadPause: null,
             snoozedUntil: sqlShell.snoozedUntil,
           });
         } else assert.isUndefined(candidate);

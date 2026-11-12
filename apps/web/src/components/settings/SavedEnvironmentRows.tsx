@@ -25,10 +25,11 @@ import * as Option from "effect/Option";
 
 import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
 import { cn } from "../../lib/utils";
-import { SettingsRow } from "./settingsLayout";
+import { SettingsRow, useOpenWhenTargeted, useSettingsSearchTargetId } from "./settingsLayout";
 import { searchableSetting } from "./settingsSearch";
 import { EnvironmentIconMenu } from "./EnvironmentIconPicker";
 import { EnvironmentRoutesList } from "./EnvironmentRoutesList";
+import { MachineResourcesSection, MachineSettingsToggle } from "./MachineResourcesSection";
 import {
   ConnectionDiagnosisPanel,
   ConnectionDiagnosisSummary,
@@ -77,6 +78,10 @@ type SavedBackendListRowProps = {
   onAddRoute: (environment: EnvironmentPresentation) => void;
 };
 
+/** The hash that scrolls Settings → Environments to this row and opens its machine settings. */
+export const environmentSettingsTargetId = (environmentId: EnvironmentId) =>
+  `environment-${environmentId}`;
+
 function savedBackendStatus(environment: EnvironmentPresentation): {
   readonly text: string;
   readonly tone: "muted" | "error";
@@ -119,6 +124,10 @@ export function SavedBackendListRow({
   const [permissionsOpen, setPermissionsOpen] = useState(false);
   const [diagnosisOpen, setDiagnosisOpen] = useState(false);
   const environmentId = environment.environmentId;
+  const targetId = environmentSettingsTargetId(environmentId);
+  const [machineSettingsOpen, setMachineSettingsOpen] = useOpenWhenTargeted(
+    useSettingsSearchTargetId() === targetId,
+  );
   const unsupported = environment.connection.phase === "unsupported";
   const blocked = unsupported && !hasSavedBearerRoute(environment.entry);
   const enabled = environment.entry.enabled && !unsupported;
@@ -210,6 +219,8 @@ export function SavedBackendListRow({
       (lastDescriptor === undefined ? null : { environment: lastDescriptor }),
   );
   const routeCount = connectionRoutes(environment.entry).length;
+  const hasMachineSettings =
+    environment.serverConfig?.environment.capabilities.machineResources === true;
   const subtitleText = [
     environmentTransportLabel(environment, connectedTarget),
     // The headline below names the failure in full.
@@ -240,6 +251,9 @@ export function SavedBackendListRow({
   return (
     <EnvironmentRow
       kind={machineKind}
+      environmentId={environment.environmentId}
+      settingsTargetId={targetId}
+      machineCard
       label={environment.label}
       dimmed={!enabled}
       subtitle={
@@ -353,6 +367,9 @@ export function SavedBackendListRow({
               />
             </div>
           )}
+          {hasMachineSettings && machineSettingsOpen ? (
+            <MachineResourcesSection environmentId={environmentId} />
+          ) : null}
         </>
       }
     >
@@ -395,6 +412,13 @@ export function SavedBackendListRow({
           {blocked ? "Client not supported" : enabled ? "Switch off" : "Switch on"}
         </TooltipPopup>
       </Tooltip>
+      {hasMachineSettings ? (
+        <MachineSettingsToggle
+          label={environment.label}
+          open={machineSettingsOpen}
+          onToggle={() => setMachineSettingsOpen((open) => !open)}
+        />
+      ) : null}
       <Menu>
         <MenuTrigger
           render={

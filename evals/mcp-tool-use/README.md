@@ -27,6 +27,7 @@ Cases are JSON lines in `cases/`, one file per area. The case schema in `run.ts`
 - `kind`: `bad` reproduces a mistake, `guard` protects correct behavior, `control` is ordinary work.
 - `experience`: the real mistake, in a sentence. `source`: where it happened.
 - `setup`: the fake thread, its `world` (repo, branch, files, PRs, pages), `priorTurns`, and `mocks` for tool results.
+- `productPrompt`: use a prompt T3 Code itself sends, such as `machine-buckets` (the built-in Machine buckets task), as the user turn instead of `prompt`, so the case grades the shipped text.
 - `setup.priorTurns[].toolCalls[].resultFile`: load a repository-relative file as the tool result instead of copying its contents into the case. An empty `prompt` resumes a top-level thread after its last prior tool result without adding a user message. Side-chat and subagent setups require a nonempty prompt.
 - `expect`: the checks, such as `calls`, `callsMustNot`, `maxCalls`, `order`, `shellMust`, `textMust`, `finalTextMust` (the last text, once the turn ended), and `linked`. A call's `args` match partially: `~text` is a case-insensitive substring, `"<=N"` / `">=N"` bound a number, `null` matches a missing key, and keys may be dotted paths. Device cases also use `device` to check every child brief, forbid raw UI commands, bound failed device actions per user turn, and require artifact paths in completed final answers. Secrets cases use `secret` (see [Secrets cases](#secrets-cases)).
 
@@ -109,6 +110,24 @@ Raw-route checks inspect possible literal invocations; managed capture and recor
 Commands built at run time, external script files and full shell/interpreter semantics (including complex quoting, dynamic control flow and exception handling) are outside the bounded parser. Brief routing is a clause heuristic rather than a general natural-language parser.
 
 This API replay measures routing and recovery decisions. Screenshots return product text and metadata without rendered image blocks, and Codex code cells have no `image` helper, so a cell that calls it fails with `image is not defined`. The shell remains simulated, children are not executed, and `priorTurns` is synthetic context rather than native resume or compaction. It does not test launcher execution, binding, pruning, actual device state, transport failures or resource cleanup, and it models agent-device's session check rather than running it. DEL-02 checks managed recording start/stop and the final filename; it does not inspect video bytes, required flow, transforms, codec or size. Screenshots and final text do not establish delivered artifacts or honesty. Keep local real-harness results separate; their scores and costs are not API-replay results. Offline validation costs $0. Record fresh per-model baseline and candidate costs before using device-case scores as release evidence.
+
+## Machine resources cases
+
+`cases/machine-resources.ndjson` checks `t3_resource_claim` and `t3_machine_read`. An agent asked to count a container it started toward its thread claims it, and restarting that container claims nothing. An agent asked whether the machine is overloaded reads `t3_machine_read` and names the verdict and the busy thread, and editing a test runner's worker count reads nothing.
+
+`auto-buckets-groups-unbucketed` runs the built-in Machine buckets task through `productPrompt`: it must group unowned load into rule-based buckets and leave the user's own bucket alone.
+
+## Load schedule cases
+
+`cases/load-schedules.ndjson` checks the `load` schedule. Asked to rerun tests when a slammed machine frees up, an agent schedules a `<=` load task bound to the thread whose prompt deletes the task, never a sleep loop or an interval. The control keeps a nightly request on `fixed_time`.
+
+## Load guard cases
+
+`cases/load-guard.ndjson` checks the `t3 guard` line. With `T3CODE_GUARD` in the world's environment, as T3 sets it while load management is on, an agent asked for the full test suite runs it as `"$T3CODE_GUARD" -- <command>`. The controls run the suite bare when the variable is unset, and read code without the guard. Its priority case asks to keep a backgrounded thread from being load-paused, which needs `t3_thread_organize` `set_priority` `normal` rather than bringing the thread back; the control only backgrounds and leaves priority alone. Its resume case asks to resume a load-paused thread, which needs `resume_load_pause`; the control only asks what the pause means and resumes nothing.
+
+## Served sites cases
+
+`cases/served-sites.ndjson` checks sharing a dev server an agent started. Asked for a link to open on a phone, the agent calls `t3_site_publish` on the server's port; asked for a link someone off the tailnet can open, it passes `visibility: "public"`. Neither runs `tailscale serve`, `funnel` or a tunnel CLI by hand. The control only asks for the port and publishes nothing.
 
 ## Threads vs tasks cases
 

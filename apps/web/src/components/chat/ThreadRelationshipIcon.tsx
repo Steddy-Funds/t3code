@@ -18,6 +18,8 @@ export function threadRelationshipStatusLabel(status: string | null): string {
     case "waiting":
     case "blocked":
       return "Waiting";
+    case "awaiting_children":
+      return "Awaiting children";
     case "completed":
       return "Done";
     case "failed":
@@ -85,7 +87,8 @@ export function ThreadRelationshipIcon({
           status === "running" ||
             status === "in_progress" ||
             status === "pending" ||
-            status === "waiting"
+            status === "waiting" ||
+            status === "awaiting_children"
             ? "bg-info"
             : status === "failed" || status === "error"
               ? "bg-destructive"

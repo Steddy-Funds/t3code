@@ -8,6 +8,7 @@ import {
   ThreadId,
   TrimmedNonEmptyString,
 } from "./baseSchemas.ts";
+import { ServedSitesCapability } from "./servedSites.ts";
 import { SourceControlProviderKind } from "./sourceControl.ts";
 
 export const ORCHESTRATION_PROTOCOL_VERSION = 2;
@@ -132,6 +133,8 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   threadStop: Schema.optionalKey(Schema.Boolean),
   /** Absent on older servers and on Windows hosts, which cannot stop a discovered server. */
   localServerStop: Schema.optionalKey(Schema.Boolean),
+  /** Serves `servedSites.*`; absent on older servers. */
+  servedSites: Schema.optionalKey(ServedSitesCapability),
   threadPullRequests: Schema.optionalKey(Schema.Boolean),
   threadPullRequestWatch: Schema.optionalKey(Schema.Boolean),
   pullRequestStackActions: Schema.optionalKey(Schema.Boolean),
@@ -177,8 +180,24 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   triage: Schema.optionalKey(Schema.Boolean),
   /** Server accepts `{ type: "once" }` scheduled tasks; older servers reject them on save. */
   oneTimeSchedules: Schema.optionalKey(Schema.Boolean),
+  /** Serves `subscribeMachine`; without it clients show the plain icon and never call it. */
+  machineResources: Schema.optionalKey(Schema.Boolean),
+  /** Saves `machineResources.buckets` and releases claims; older servers drop bucket patches silently. */
+  machineOwnership: Schema.optionalKey(Schema.Boolean),
+  /** `serverSignalProcess` accepts SIGTERM and signals host-wide processes; older servers take only INT/KILL. */
+  processSigterm: Schema.optionalKey(Schema.Boolean),
+  /** Saves and runs `load` scheduled tasks; older servers reject the schedule on decode. */
+  loadSchedules: Schema.optionalKey(Schema.Boolean),
+  /** Runs the built-in auto-buckets task and saves `machineResources.autoBuckets`; older servers drop the key. */
+  machineAutoBuckets: Schema.optionalKey(Schema.Boolean),
+  /** Writes guard.json and the `t3 guard` launcher, injects `T3CODE_GUARD`, and saves `machineResources.loadManagement`. */
+  loadGuard: Schema.optionalKey(Schema.Boolean),
+  /** Pauses low-priority threads while the machine is stressed; older servers never pause. */
+  loadPause: Schema.optionalKey(Schema.Boolean),
   /** Server honors `freshContext` on sends; older servers ignore it and keep the old context. */
   freshContext: Schema.optionalKey(Schema.Boolean),
+  /** Serves `subscribeTokenBurnRates`; clients call it only when set. */
+  tokenBurnRates: Schema.optionalKey(Schema.Boolean),
   /** Server saves and runs scheduled task `threadMode`; older servers ignore it. */
   scheduledTaskThreadModes: Schema.optionalKey(Schema.Boolean),
   /** Server can transcribe 16 kHz mono PCM audio on the environment machine. */

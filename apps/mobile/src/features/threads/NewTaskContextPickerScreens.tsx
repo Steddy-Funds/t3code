@@ -80,6 +80,7 @@ function EnvironmentPickerRow(props: {
           className="min-h-16 flex-1 flex-row items-center gap-3 px-4 py-3 active:bg-subtle"
         >
           <EnvironmentMachineSymbol
+            environmentId={props.environmentId}
             kind={resolveEnvironmentMachineKind(presentation?.serverConfig ?? null)}
             size={20}
             tintColorClassName="accent-icon-muted"

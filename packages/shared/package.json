@@ -135,6 +135,10 @@
       "types": "./src/toolOutput.ts",
       "import": "./src/toolOutput.ts"
     },
+    "./reviewNote": {
+      "types": "./src/reviewNote.ts",
+      "import": "./src/reviewNote.ts"
+    },
     "./htmlRender": {
       "types": "./src/htmlRender.ts",
       "import": "./src/htmlRender.ts"
@@ -238,6 +242,10 @@
     "./path": {
       "types": "./src/path.ts",
       "import": "./src/path.ts"
+    },
+    "./fileContentRevision": {
+      "types": "./src/fileContentRevision.ts",
+      "import": "./src/fileContentRevision.ts"
     },
     "./keybindings": {
       "types": "./src/keybindings.ts",
@@ -347,6 +355,18 @@
       "types": "./src/AgentScope.ts",
       "import": "./src/AgentScope.ts"
     },
+    "./cgroup": {
+      "types": "./src/cgroup.ts",
+      "import": "./src/cgroup.ts"
+    },
+    "./GuardEnvironment": {
+      "types": "./src/GuardEnvironment.ts",
+      "import": "./src/GuardEnvironment.ts"
+    },
+    "./ProcessOwnershipRegistry": {
+      "types": "./src/ProcessOwnershipRegistry.ts",
+      "import": "./src/ProcessOwnershipRegistry.ts"
+    },
     "./managedPolicyFile": {
       "types": "./src/managedPolicyFile.ts",
       "import": "./src/managedPolicyFile.ts"
@@ -354,6 +374,22 @@
     "./HostProcess": {
       "types": "./src/HostProcess.ts",
       "import": "./src/HostProcess.ts"
+    },
+    "./hostTotals": {
+      "types": "./src/hostTotals.ts",
+      "import": "./src/hostTotals.ts"
+    },
+    "./machineBuckets": {
+      "types": "./src/machineBuckets.ts",
+      "import": "./src/machineBuckets.ts"
+    },
+    "./processProviderGroup": {
+      "types": "./src/processProviderGroup.ts",
+      "import": "./src/processProviderGroup.ts"
+    },
+    "./nodeVerdict": {
+      "types": "./src/nodeVerdict.ts",
+      "import": "./src/nodeVerdict.ts"
     },
     "./testing/longTempDir": {
       "types": "./src/testing/longTempDir.ts",

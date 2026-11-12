@@ -16,9 +16,58 @@ requests one sample a minute and exports process totals by group
 ([`ProcessGroupMetrics`](../../apps/server/src/resourceTelemetry/ProcessGroupMetrics.ts)),
 because the user asked for continuous telemetry. Groups are a fixed set named after
 the server's direct children, never process IDs or threads, so the series count
-stays bounded as agents come and go. History therefore covers only time with a live
+stays bounded as agents come and go. Per-thread ownership
+([`ProcessOwnership`](../../apps/server/src/resourceTelemetry/ProcessOwnership.ts)) runs only
+on process-table frames, so it costs nothing without a viewer; its claims stay in memory and
+end with the process, the container or the thread. History therefore covers only time with a live
 subscriber, plus on-demand and export samples. Consuming host power for background scheduling must not retain
 live diagnostics. There is no telemetry database or recurring shell-probe fallback.
+
+Per-thread totals
+([`ThreadResources`](../../apps/server/src/resourceTelemetry/ThreadResources.ts)) are the one
+viewer-independent exception, and stay cheap because they run only while a turn is running:
+every 30 s on the `Scheduler` tick, and skipped outright when no run is active. On Linux a
+rollup reads each owned unit's cgroup files (`cpu.stat`, `memory.current`, falling back to
+`statm` over `cgroup.procs`). Nested units are subtracted, so a process under both a root and a
+claim counts once. Members of shared roots are split by the `T3CODE_THREAD_ID` in their
+environment. Roots without a cgroup, macOS and Windows take one native discovery pass instead
+(about 130 ms). History is in memory only: 240 points for each of at most 200 threads. A thread
+with no running turn gets its current value sampled on demand, which adds no point, so idle time
+shows as a gap rather than filler.
+
+## Machine verdict
+
+The machine verdict (ok, stressed, unknown) is always on, so it must stay cheap.
+[`HostResources`](../../apps/server/src/resourceTelemetry/HostResources.ts) reads host totals
+on the shared 5 s `Scheduler` tick: CPU counters, load average, memory and swap, never the
+process table. [`stepVerdict`](../../packages/shared/src/nodeVerdict.ts) folds each tick
+with hysteresis, and the server pushes a snapshot only when the verdict or its rule changes,
+plus a 30 s heartbeat. Clients judge staleness by their own receipt time, so the heartbeat
+must stay well inside the client's 75 s expiry. Per-core samples run on their own fiber only
+while a view subscribes with an interval.
+
+On macOS the RAM rule needs the memory-pressure level, which Node cannot read, so each tick
+asks the native monitor for `hostTotals`. Without a monitor, or while it restarts, memory reads
+unknown and the load rule still works; there is no shell fallback. Each tick also asks for
+`gpuTotals`, merged into the totals for the GPU rules; without a monitor they skip.
+
+The same tick feeds a one-hour ring of Float32Array columns (totals, per-core, GPU devices),
+bounded at 512 KB. Only the first snapshot of a subscription that asks for `historyMs`
+carries it, quantised to permille, so a heartbeat never repeats it.
+
+The monitor's host mode (protocol 4) walks every process on the machine, not just the
+server's tree, so it runs only while a view streams it (`setHostStreaming`) or on one
+request (`hostSampleNow`), and it frees its process table when streaming stops. Host samples
+never enter history. Static fields (command, cwd, user, cgroup) are read once per process
+identity, and the client keeps that table per monitor generation. `gpuTotals` reads device
+totals only, so it rides the always-on 5 s tick, and live views reuse that tick's reading
+rather than querying at their own rate; a suspended GPU is never woken to read it. Each vendor
+backend counts its own failures and turns off alone after three in a row; the monitor sends
+`gpu-unavailable` only when the last one does. GPU code runs inside the monitor, so a crash
+while GPU work was in flight (a pending GPU request, or host streaming with GPUs) also blames
+the GPUs. After either, GPUs stay off until the server restarts; a crash with no GPU work in
+flight restarts the monitor with GPUs on. A protocol 3 binary still works without the host
+features.
 
 History has independent bounds for age, snapshot count, process rows, and retained
 bytes. A count limit alone cannot bound memory when command lines vary in size.
@@ -39,6 +88,11 @@ unconstrained states. Headless servers leave unavailable power data unknown.
   Electron and native start times have different precision, so merging allows a
   small tolerance. Process signaling rechecks the native identity with a fresh
   sample.
+- Kill sends SIGTERM and Force kill sends SIGKILL. Servers older than host mode accept
+  only INT and KILL, so clients offer those there. On Windows every signal is
+  TerminateProcess, so there is a single Kill. The server refuses pid 1 and below, itself
+  and its ancestors, the monitor, and any process whose start time no longer matches the
+  fresh sample, so a reused PID is never signalled.
 - Snapshot sequence numbers belong to a monitor generation. Comparing them across
   restarts would discard the new monitor's samples until its sequence caught up.
 - Sampling can miss a process that starts and exits between samples. Cumulative
@@ -55,3 +109,43 @@ A WSL backend needs a Linux monitor even though Electron runs on Windows. Window
 desktop packages currently supply only the Windows executable, so native process
 telemetry for the WSL backend is unavailable. The inherited Electron power feed
 still works.
+
+## Load management
+
+Off unless `machineResources.loadManagement.enabled`. Two independent halves act on the verdict.
+
+**`t3 guard`** ([`cli/guard.ts`](../../apps/server/src/cli/guard.ts)) runs inside provider
+sandboxes and pod containers, often with no access to the server's `node_modules`. It is
+therefore its own `guard.mjs` bundle of `node:*` plus our packages only
+([`vite.config.ts`](../../apps/server/vite.config.ts) fails the build if a dependency sneaks in),
+and reads a resolved `guard.json` rather than calling the server
+([`LoadGuard`](../../apps/server/src/resourceTelemetry/LoadGuard.ts)). The command stays in the guard's
+process group, so a provider or a thread interrupt that kills that group stops both; a detached
+command would outlive the guard and keep loading the machine. Sharing the group means a group
+signal already reached the command, and Node cannot tell it from a `kill <guard pid>`: the guard
+forwards SIGTERM only to a command still running 1 s later (a slower graceful shutdown still sees
+a second SIGTERM), and never forwards SIGINT, which the tty sends to the whole group. At kill time the guard walks the
+command's descendants by ppid and rechecks each start time right before signalling, never itself,
+its ancestors or pid 1, and still SIGKILLs stragglers after the command exits on SIGTERM. The
+limit follows: a double-forked daemon reparented to init, or a process in another container
+(`docker exec`), escapes the kill.
+
+**Pauses** ([`LoadPauseWorker`](../../apps/server/src/orchestration-v2/LoadPauseWorker.ts),
+policy in [`LoadPausePolicy`](../../apps/server/src/orchestration-v2/LoadPausePolicy.ts)) interrupt
+and later continue a thread, never SIGSTOP it. The traps:
+
+- **Record before acting.** The `thread.load-pause.set` command, carrying the containers it will
+  pause, commits before any `docker pause`. Every path that clears the pause (resume, archive,
+  delete, lane off) unpauses from that record, so a crash between the two leaves at worst an
+  unpause that finds nothing to do, never a container frozen with no owner.
+- **Startup reconcile.** The first sweep after start, and every switch from on to off, clears
+  every recorded pause, archived threads included. Pauses never survive a restart, so no
+  in-memory state needs persisting.
+- **Never act on:** a container any non-victim still claims, a container whose cgroup holds the
+  server itself, and, after a fresh `docker inspect` under the claim's `DOCKER_HOST`, one whose
+  full id or state no longer matches or whose pid is 1 or the server's
+  ([`LoadPauseDocker`](../../apps/server/src/orchestration-v2/LoadPauseDocker.ts)). Claims and
+  the pause episode are re-read just before each `docker pause`, since a claim or a user resume
+  can land between selection and action. Unpause gets the same identity check, so a container recreated since is left alone.
+- **Never pause** a thread the user can see or is needed by: see `isPausable` in the policy. The
+  focus lease is the `thread` `BackgroundScope` that fork clients report.

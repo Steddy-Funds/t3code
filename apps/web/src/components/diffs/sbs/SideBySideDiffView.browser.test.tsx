@@ -9,7 +9,7 @@ import { page, userEvent } from "vite-plus/test/browser";
 import { render, type Screen } from "../../../../test/render";
 import { isMacPlatform } from "~/lib/utils";
 
-import { fileContentRevision } from "../../files/fileContentRevision";
+import { fileContentRevision } from "@t3tools/shared/fileContentRevision";
 import {
   SideBySideDiffView,
   type SbsAnnotation,

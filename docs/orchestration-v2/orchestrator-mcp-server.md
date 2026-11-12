@@ -471,8 +471,18 @@ returned unchanged, and a thread with no active provider turn returns
 recurring work in the app scheduler; `schedule_task` with a `scheduledTaskId`
 updates an existing task. A schedule
 runs its prompt on an interval, at a fixed time in the server's local time
-zone, or on each qualifying webhook request, even when no turn is active.
+zone, on each qualifying webhook request, or when this machine's load meets a
+condition, even when no turn is active.
 Without a signature, anyone with the webhook URL can trigger a run.
+A `load` task has no next run time. `LoadMonitor` checks it on the 5 s host
+tick and fires once per episode: it re-arms only after the clear condition
+(`clear`, else the condition failing for max(`sustainSeconds`, 60) s) and a
+fixed 60 s cooldown. It recurs, so a one-time wake deletes the task from its run.
+Monitors that wait for load to drop (`op: "<="`) start one at a time, 20–40 s
+apart, each re-checked first, so a drop does not start every waiting agent at
+once. Episodes live in memory, so a restart mid-episode may fire once more. A
+linked environment without `loadSchedules` refuses a forwarded `load` save
+before the call leaves.
 Signature checks, filters, and dedupe can skip a webhook request.
 `bindToCurrentThread` defaults to `true` only when the caller has a thread in
 the task's project; otherwise it defaults to `false`. Bound runs post into

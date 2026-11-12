@@ -147,6 +147,8 @@ export const writes = <P, A, E, R>(
   options?: {
     /** Whether a linked caller may make it, as for uploads its own sends need. */
     readonly linkedCallers?: "allowed";
+    /** What a refused linked caller is told it cannot change. */
+    readonly noun?: string;
   },
 ) =>
   declare(
@@ -155,7 +157,10 @@ export const writes = <P, A, E, R>(
         Effect.tap((caller) =>
           options?.linkedCallers === "allowed"
             ? Effect.void
-            : assertNotLinked(caller, "change this environment's scheduled tasks"),
+            : assertNotLinked(
+                caller,
+                `change ${options?.noun ?? "this environment's scheduled tasks"}`,
+              ),
         ),
         Effect.flatMap(() => handle(params)),
       ),
@@ -402,7 +407,11 @@ const routed = Effect.fn("McpToolAccess.routed")(function* <Tools extends Record
         if (scope.linkedEnvironments === false) return yield* PeerForwarding.linkedEnvironmentsOff;
         yield* (remote as RemoteCheck<typeof params>)(params);
         if (Option.isNone(forwarding)) return yield* linksUnavailable;
-        return yield* forwarding.value.call(scope, tool, target, { ...params, environmentId });
+        // RemoteDelegation stamps delegatedFrom on its own forward; an agent's never carries one.
+        const { delegatedFrom: _delegatedFrom, ...forwarded } = params as {
+          readonly delegatedFrom?: unknown;
+        };
+        return yield* forwarding.value.call(scope, tool, target, { ...forwarded, environmentId });
       });
   }
   return handlers as Toolkit.HandlersFrom<Tools>;

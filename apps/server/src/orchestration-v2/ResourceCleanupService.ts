@@ -1,4 +1,4 @@
-import { ThreadId } from "@t3tools/contracts";
+import { type OrchestrationV2LoadPausedContainer, ThreadId } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -9,13 +9,21 @@ import { resolveAttachmentRelativePath } from "../attachmentPaths.ts";
 import { parseAttachmentFileExtension, resolveAttachmentPathById } from "../attachmentStore.ts";
 import * as ServerConfig from "../config.ts";
 import * as PreviewManager from "../preview/Manager.ts";
+import { ProcessOwnership } from "../resourceTelemetry/ProcessOwnership.ts";
 import * as ScheduledTaskService from "../scheduledTasks/ScheduledTaskService.ts";
 import * as TerminalManager from "../terminal/Manager.ts";
+import * as LoadPauseDocker from "./LoadPauseDocker.ts";
 
 export class ResourceCleanupError extends Schema.TaggedError<ResourceCleanupError>()(
   "ResourceCleanupError",
   {
-    operation: Schema.Literals(["terminal", "preview", "attachment", "scheduled-tasks"]),
+    operation: Schema.Literals([
+      "terminal",
+      "preview",
+      "attachment",
+      "scheduled-tasks",
+      "load-pause-containers",
+    ]),
     threadId: Schema.optional(Schema.String),
     attachmentId: Schema.optional(Schema.String),
     cause: Schema.Defect(),
@@ -26,6 +34,15 @@ export class ResourceCleanupService extends Context.Reference<{
   readonly cleanupScheduledTasks: (threadId: ThreadId) => Effect.Effect<void, ResourceCleanupError>;
   readonly cleanupTerminals: (threadId: string) => Effect.Effect<void, ResourceCleanupError>;
   readonly cleanupPreviews: (threadId: string) => Effect.Effect<void, ResourceCleanupError>;
+  /** Releases a deleted thread's machine claims; archiving keeps them. */
+  readonly cleanupMachineClaims: (threadId: ThreadId) => Effect.Effect<void>;
+  /**
+   * Unpauses containers a load pause paused. Succeeds when one is already running or gone; any
+   * other failure fails it after every container was tried, so the outbox retries.
+   */
+  readonly unpauseLoadPausedContainers: (
+    containers: ReadonlyArray<OrchestrationV2LoadPausedContainer>,
+  ) => Effect.Effect<void, ResourceCleanupError>;
   readonly cleanupAttachments: (
     attachmentIds: ReadonlyArray<string>,
   ) => Effect.Effect<void, ResourceCleanupError>;
@@ -34,6 +51,8 @@ export class ResourceCleanupService extends Context.Reference<{
     cleanupScheduledTasks: () => Effect.void,
     cleanupTerminals: () => Effect.void,
     cleanupPreviews: () => Effect.void,
+    cleanupMachineClaims: () => Effect.void,
+    unpauseLoadPausedContainers: () => Effect.void,
     cleanupAttachments: () => Effect.void,
   }),
 }) {}
@@ -46,7 +65,27 @@ export const layer = Layer.effect(
     const fileSystem = yield* FileSystem.FileSystem;
     const config = yield* ServerConfig.ServerConfig;
     const scheduledTasks = yield* ScheduledTaskService.ScheduledTaskService;
+    const ownership = yield* ProcessOwnership;
+    const docker = yield* LoadPauseDocker.LoadPauseDocker;
     return {
+      cleanupMachineClaims: ownership.releaseThread,
+      unpauseLoadPausedContainers: Effect.fn("ResourceCleanupService.unpauseLoadPausedContainers")(
+        function* (containers: ReadonlyArray<OrchestrationV2LoadPausedContainer>) {
+          const failures: Array<LoadPauseDocker.LoadPauseDockerError> = [];
+          for (const container of containers) {
+            const result = yield* Effect.result(docker.unpause(container));
+            if (result._tag === "Failure" && result.failure.reason !== "not-found") {
+              failures.push(result.failure);
+            }
+          }
+          if (failures.length > 0) {
+            return yield* new ResourceCleanupError({
+              operation: "load-pause-containers",
+              cause: failures,
+            });
+          }
+        },
+      ),
       cleanupScheduledTasks: Effect.fn("ResourceCleanupService.cleanupScheduledTasks")(function (
         threadId: ThreadId,
       ) {

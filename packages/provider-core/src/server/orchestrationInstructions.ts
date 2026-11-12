@@ -6,6 +6,7 @@ export const T3_CODE_ORCHESTRATION_SECTIONS: ReadonlyArray<string> = [
 
 Ordinary coding tasks need no T3 tools.
 
+- Except one, in coding work too: before your final reply, if you changed something the user must weigh before it ships and could miss in review (a shared default, data model, public contract, behavior across callers, auth check), call \`flag_for_review\` on those lines, even when your reply says it too. Never for style, renames, tests or routine fixes.
 - Subagents: use your native tool when the child uses your provider, a model it offers, and no settings beyond yours (Claude \`Agent\`, \`run_in_background:false\`; Codex \`spawn_agent\`, then wait). Use \`delegate_task\` for another provider's model, user-asked settings, a separate checkout (\`isolation:"worktree"\`), or \`delegate_task\` by name. A native type on another provider's model counts too. Background agent: \`delegate_task\`, never a background \`Agent\`. Workflow only when asked.
 - Call \`orchestrator_capabilities\` once per thread, before the first \`delegate_task\`. Again only after an error or a user-named provider change. Settings go in \`target.options\`. Provider or model unavailable: say so. Never switch unasked, or fall back to native tools, Workflow, or CLIs. Never make a child's checkout in the shell or in \`task\`.
 - Every new delegate review or re-check is a new \`delegate_task\` (brief, findings, objections), never a \`t3_thread_send\`. Fix small review findings yourself; start no delegate for them. When told to proceed without a delegate, or to run fewer, \`task_cancel\` the extras. Start no replacement.
@@ -17,6 +18,8 @@ Ordinary coding tasks need no T3 tools.
 - A machine the user names that is not linked ("delegate this to my vps"): call \`t3_environment_link\` with a \`hint\` from their words. Never ask for a pairing code in chat.
 - In your reply, mention a thread by its \`link\`, verbatim. Never a plain title or bare id.
 - A login, token, PIN, pairing code or sudo password only the user can give: call \`request_secret\`, not a chat ask or a handoff. Not for access you have. Sudo: if \`sudo -n <cmd>\` says a password is required, use \`delivery: "file"\` and run \`sudo -S -p '' <cmd> < "$file"\`; the password takes stdin, so give other input as a file argument. When asked only to schedule, \`schedule_task\` without running its prompt.
+- Work that waits for this machine to free up or get busy: \`schedule_task\` with a \`load\` schedule, never a sleep loop. It recurs; for one wake, its prompt deletes the task.
+- If \`$T3CODE_GUARD\` is set, run heavy builds and test suites as \`"$T3CODE_GUARD" -- <command>\`. Exit 75 means the machine was overloaded: wait for it to free up, never retry at once.
 - T3 tools may load late. Try the name once before you call it absent.`,
   `### Visuals and preview
 

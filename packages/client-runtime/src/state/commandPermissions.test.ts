@@ -20,6 +20,7 @@ import {
   ThreadId,
   EnvironmentId,
   ORCHESTRATION_V2_WS_METHODS,
+  CLIENT_GUARDED_RPC_SCOPES,
   ScheduledTaskId,
   WS_METHODS,
   type AuthSessionState,
@@ -163,6 +164,7 @@ describe("command permissions", () => {
   it.effect.each([
     { method: WS_METHODS.serverRunStorageCleanup, scope: AuthSettingsWriteScope },
     { method: WS_METHODS.serverReclaimDatabaseSpace, scope: AuthEnvironmentMaintainScope },
+    { method: WS_METHODS.codeIntelInstallServer, scope: AuthSettingsWriteScope },
   ])("requires the destination $scope grant for $method", ({ method, scope }) =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -185,25 +187,54 @@ describe("command permissions", () => {
     ),
   );
 
-  it.effect("requires the destination settings grant to check OTLP endpoints", () =>
+  it.effect.each([
+    ["signal a process", WS_METHODS.serverSignalProcess],
+    ["release a machine claim", WS_METHODS.machineClaimsRelease],
+  ] as const)("requires the destination maintain grant to %s", ([, method]) =>
     Effect.scoped(
       Effect.gen(function* () {
+        expect(CLIENT_GUARDED_RPC_SCOPES[method]).toBe(AuthEnvironmentMaintainScope);
         const registry = yield* setup;
-        const check = createCommandPermissions(runtime, WS_METHODS.serverCheckOtlpEndpoint);
+        const signal = createCommandPermissions(runtime, method);
+        const only = (scope: NonNullable<AuthSessionState["scopes"]>[number]) =>
+          AsyncResult.success({ ...grant(false), scopes: [scope], permissions: [scope] });
         registry.set(sessions(env), AsyncResult.success(grant(true)));
-        expect(registry.get(check.permissionAtom(env))).toBe(false);
-        registry.set(
-          sessions(env),
-          AsyncResult.success({
-            ...grant(false),
-            scopes: [AuthSettingsWriteScope],
-            permissions: [AuthSettingsWriteScope],
-          }),
+        expect(registry.get(signal.permissionAtom(env))).toBe(false);
+        registry.set(sessions(env), only(AuthSettingsWriteScope));
+        expect(registry.get(signal.permissionAtom(env))).toBe(false);
+        expect((yield* signal.authorize(registry, env).pipe(Effect.flip))._tag).toBe(
+          "EnvironmentAuthorizationError",
         );
-        expect(registry.get(check.permissionAtom(env))).toBe(true);
-        yield* check.authorize(registry, env);
+        registry.set(sessions(env), only(AuthEnvironmentMaintainScope));
+        expect(registry.get(signal.permissionAtom(env))).toBe(true);
+        yield* signal.authorize(registry, env);
+        registry.set(sessions(other), AsyncResult.success(grant(false)));
+        expect(registry.get(signal.permissionAtom(other))).toBe(false);
       }),
     ),
+  );
+
+  it.effect.each([WS_METHODS.serverCheckOtlpEndpoint, WS_METHODS.serverCheckBrowserRun])(
+    "requires the destination settings grant for %s",
+    (method) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const registry = yield* setup;
+          const check = createCommandPermissions(runtime, method);
+          registry.set(sessions(env), AsyncResult.success(grant(true)));
+          expect(registry.get(check.permissionAtom(env))).toBe(false);
+          registry.set(
+            sessions(env),
+            AsyncResult.success({
+              ...grant(false),
+              scopes: [AuthSettingsWriteScope],
+              permissions: [AuthSettingsWriteScope],
+            }),
+          );
+          expect(registry.get(check.permissionAtom(env))).toBe(true);
+          yield* check.authorize(registry, env);
+        }),
+      ),
   );
 
   it.effect.each([WS_METHODS.scheduledTasksDelete, ORCHESTRATION_V2_WS_METHODS.stopWorkflow])(

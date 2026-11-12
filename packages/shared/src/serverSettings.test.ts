@@ -1,5 +1,6 @@
 import {
   DEFAULT_SERVER_SETTINGS,
+  MachineBucketId,
   ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
@@ -10,6 +11,7 @@ import {
   UsageLimitSourceId,
   type ServerProvider,
 } from "@t3tools/contracts";
+import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
@@ -677,6 +679,104 @@ describe("serverSettings helpers", () => {
 
     const removed = applyServerSettingsPatch(added, { secretProviders: { [personal]: null } });
     expect(Object.keys(removed.secretProviders)).toEqual([work]);
+  });
+
+  it("upserts and removes machine buckets per entry, storing only stamped entries", () => {
+    const builds = MachineBucketId.make("builds");
+    const docs = MachineBucketId.make("docs");
+    const unstamped = MachineBucketId.make("unstamped");
+    const provenance = {
+      createdBy: { type: "user" as const },
+      updatedBy: { type: "user" as const },
+      updatedAt: DateTime.makeUnsafe(0),
+    };
+    const bucket = (id: MachineBucketId, value: string) => ({
+      id,
+      name: value,
+      rules: [{ field: "command" as const, op: "contains" as const, value }],
+      provenance,
+    });
+    const current = {
+      ...DEFAULT_SERVER_SETTINGS,
+      machineResources: {
+        ...DEFAULT_SERVER_SETTINGS.machineResources,
+        buckets: { [builds]: bucket(builds, "cargo") },
+      },
+    };
+
+    const added = applyServerSettingsPatch(current, {
+      machineResources: {
+        thresholds: { loadPerCore: 4 },
+        buckets: {
+          [docs]: bucket(docs, "mdbook"),
+          [unstamped]: { id: unstamped, name: "x", rules: [] },
+        },
+      },
+    });
+    expect(added.machineResources.buckets).toEqual({
+      [builds]: bucket(builds, "cargo"),
+      [docs]: bucket(docs, "mdbook"),
+    });
+    expect(added.machineResources.thresholds).toEqual({
+      ...DEFAULT_SERVER_SETTINGS.machineResources.thresholds,
+      loadPerCore: 4,
+    });
+
+    const removed = applyServerSettingsPatch(added, {
+      machineResources: { buckets: { [builds]: null } },
+    });
+    expect(Object.keys(removed.machineResources.buckets)).toEqual([docs]);
+    expect(removed.machineResources.thresholds.loadPerCore).toBe(4);
+
+    const thresholdsOnly = applyServerSettingsPatch(removed, {
+      machineResources: { thresholds: { exitFactor: 0.5 } },
+    });
+    expect(thresholdsOnly.machineResources.buckets).toEqual(removed.machineResources.buckets);
+
+    const held = applyServerSettingsPatch(thresholdsOnly, {
+      machineResources: { loadManagement: { guardHoldSeconds: 30, pauseHoldSeconds: 15 } },
+    });
+    const enabledOnly = applyServerSettingsPatch(held, {
+      machineResources: { loadManagement: { enabled: true } },
+    });
+    expect(enabledOnly.machineResources.loadManagement).toEqual({
+      enabled: true,
+      guardHoldSeconds: 30,
+      pauseHoldSeconds: 15,
+    });
+    expect(enabledOnly.machineResources.thresholds).toEqual(held.machineResources.thresholds);
+  });
+
+  it("replaces the auto-buckets model whole and keeps it when only enabled changes", () => {
+    const withOptions = createModelSelection(ProviderInstanceId.make("codex"), "gpt-5.4", [
+      { id: "effort", value: "high" },
+    ]);
+    const plain = { instanceId: ProviderInstanceId.make("claudeAgent"), model: "claude-haiku" };
+    const chosen = applyServerSettingsPatch(DEFAULT_SERVER_SETTINGS, {
+      machineResources: { autoBuckets: { modelSelection: withOptions } },
+    });
+    expect(chosen.machineResources.autoBuckets).toEqual({
+      enabled: true,
+      modelSelection: withOptions,
+    });
+
+    const switched = applyServerSettingsPatch(chosen, {
+      machineResources: { autoBuckets: { modelSelection: plain } },
+    });
+    expect(switched.machineResources.autoBuckets.modelSelection).toStrictEqual(plain);
+
+    const disabled = applyServerSettingsPatch(switched, {
+      machineResources: { autoBuckets: { enabled: false } },
+    });
+    expect(disabled.machineResources.autoBuckets).toStrictEqual({
+      enabled: false,
+      modelSelection: plain,
+    });
+    expect(
+      applyServerSettingsPatch(disabled, {
+        machineResources: { autoBuckets: { modelSelection: null } },
+      }).machineResources.autoBuckets,
+    ).toStrictEqual({ enabled: false, modelSelection: null });
   });
 
   it("replaces and removes individual usage prices without clobbering other models", () => {

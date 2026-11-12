@@ -1,6 +1,11 @@
 import * as Schema from "effect/Schema";
 
-import { ForwardCompatibleArray, NonNegativeInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import {
+  ForwardCompatibleArray,
+  NonNegativeInt,
+  ThreadId,
+  TrimmedNonEmptyString,
+} from "./baseSchemas.ts";
 
 /** Bump for incompatible UsageSummary changes; skipped unknown array variants need no bump. */
 export const USAGE_CONTRACT_VERSION = 6 as const;
@@ -152,8 +157,59 @@ export const UsageSummary = Schema.Struct({
 });
 export type UsageSummary = typeof UsageSummary.Type;
 
+export const ThreadUsageInput = Schema.Struct({ threadId: ThreadId });
+export type ThreadUsageInput = typeof ThreadUsageInput.Type;
+
+/** A model's share of a scope; costUsd is null when no rate is known for it. */
+export const ThreadUsageModel = Schema.Struct({
+  model: TrimmedNonEmptyString,
+  totals: UsageTokenTotals,
+  costUsd: Schema.NullOr(Schema.Number),
+});
+export type ThreadUsageModel = typeof ThreadUsageModel.Type;
+
+/** Usage recorded on a set of threads' provider turns, priced at list rates. */
+export const ThreadUsageScope = Schema.Struct({
+  threads: NonNegativeInt,
+  totals: UsageTokenTotals,
+  costUsd: Schema.Number,
+  models: ForwardCompatibleArray(ThreadUsageModel),
+  providerTurns: NonNegativeInt,
+  /** Turns with no token counts, such as providers that do not report them. */
+  unmeasuredTurns: NonNegativeInt,
+  /** Measured turns whose model has no known rate; their tokens are not in costUsd. */
+  unpricedTurns: NonNegativeInt,
+  toolCalls: NonNegativeInt,
+  /** Summed provider turn wall time; concurrent threads each count. */
+  activeMs: NonNegativeInt,
+  firstActivityAt: Schema.NullOr(Schema.String),
+  lastActivityAt: Schema.NullOr(Schema.String),
+});
+export type ThreadUsageScope = typeof ThreadUsageScope.Type;
+
+/** `lineage` covers every thread sharing the thread's lineage root, the thread included. */
+export const ThreadUsage = Schema.Struct({
+  thread: ThreadUsageScope,
+  lineage: ThreadUsageScope,
+  pricing: UsagePricing,
+});
+export type ThreadUsage = typeof ThreadUsage.Type;
+
+export const ThreadTokenBurnRate = Schema.Struct({
+  threadId: ThreadId,
+  tokensPerMinute: NonNegativeInt,
+});
+export type ThreadTokenBurnRate = typeof ThreadTokenBurnRate.Type;
+
+/** Tokens per minute over the last five minutes, sampled each minute; idle threads are absent. */
+export const TokenBurnRates = Schema.Struct({
+  sampledAt: Schema.String,
+  threads: ForwardCompatibleArray(ThreadTokenBurnRate),
+});
+export type TokenBurnRates = typeof TokenBurnRates.Type;
+
 export class UsageReadError extends Schema.TaggedError<UsageReadError>()("UsageReadError", {
-  reason: Schema.Literals(["scanFailed", "invalidWindow"]),
+  reason: Schema.Literals(["scanFailed", "invalidWindow", "threadNotFound"]),
   detail: TrimmedNonEmptyString,
   cause: Schema.optional(Schema.Defect()),
 }) {

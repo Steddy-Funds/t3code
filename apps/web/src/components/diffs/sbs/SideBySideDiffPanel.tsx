@@ -15,7 +15,7 @@ import {
 } from "~/lib/diffFileContents";
 
 import { DiffFilePathCopyButton } from "../../DiffFilePathCopyButton";
-import { fileContentRevision } from "../../files/fileContentRevision";
+import { fileContentRevision } from "@t3tools/shared/fileContentRevision";
 import { DiffPanelLoadingState } from "../../DiffPanelShell";
 import { StartTruncatedPath } from "../../StartTruncatedPath";
 import { Button } from "../../ui/button";

@@ -12,6 +12,7 @@ import { __setClientSettingsForTests } from "./hooks/useSettings";
 import { readThreadPreviewState, resetPreviewStateForTests } from "./previewStateStore";
 import { planNextReopen, type ReopenOwnerState, reopenClosedView } from "./reopenClosedView";
 import {
+  machineSurface,
   hostRightPanel,
   selectThreadRightPanelState,
   type ThreadRightPanelState,
@@ -152,6 +153,24 @@ describe("reopenClosedView", () => {
       }
     },
   );
+
+  it("restores a machine tab, unfocused, without a workspace or browser session", async () => {
+    const openPreview = vi.fn();
+    const environmentId = "studio" as ScopedThreadRef["environmentId"];
+    const reopened = await reopenClosedView(
+      {
+        kind: "panel-tab",
+        threadRef,
+        surface: machineSurface(environmentId, threadRef.threadId),
+      },
+      { openPreview, workspaceAvailable: false },
+    );
+    expect(reopened).toBe(true);
+    const state = selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, threadRef);
+    expect(state).toMatchObject({ isOpen: true, activeSurfaceId: "machine:studio" });
+    expect(state.surfaces).toEqual([{ id: "machine:studio", kind: "machine", environmentId }]);
+    expect(openPreview).not.toHaveBeenCalled();
+  });
 
   it("does not reopen workspace tabs without an available project", async () => {
     const options = {

@@ -357,7 +357,7 @@ const lsofProcessIds = (raw: string): ReadonlyArray<number> => {
 const AGENT_THREAD_ASSIGNMENT = new RegExp(`(?:^|\\s)${AGENT_THREAD_ENV}=(\\S+)`);
 
 /** Reads `/proc/<pid>/environ`, whose entries are NUL-separated. */
-const parseProcEnvironThread = (raw: string): ThreadId | null => {
+export const parseProcEnvironThread = (raw: string): ThreadId | null => {
   const prefix = `${AGENT_THREAD_ENV}=`;
   const value = raw
     .split("\0")
@@ -371,7 +371,7 @@ const parseProcEnvironThread = (raw: string): ThreadId | null => {
  * Reads macOS `ps -E -o pid=,command=`, which appends each process's launch environment to its
  * argv with spaces, so an argument that spells the assignment out also matches.
  */
-const parsePsEnvironmentThreads = (raw: string): ReadonlyMap<number, ThreadId | null> => {
+export const parsePsEnvironmentThreads = (raw: string): ReadonlyMap<number, ThreadId | null> => {
   const threads = new Map<number, ThreadId | null>();
   for (const line of raw.split("\n")) {
     const match = /^\s*(\d+)\s(.*)$/.exec(line);

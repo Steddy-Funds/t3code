@@ -31,6 +31,17 @@ export function ownedAgentSlice(stateDir: string): string {
   return `app-t3code-agents-${hash}.slice`;
 }
 
+/** systemd nests `a-b-c.slice` under `a.slice/a-b.slice`; the scope's cgroup follows from that. */
+export function scopeControlGroup(
+  managerControlGroup: string,
+  slice: string,
+  unit: string,
+): string {
+  const parts = slice.replace(/\.slice$/, "").split("-");
+  const slices = parts.map((_, index) => `${parts.slice(0, index + 1).join("-")}.slice`);
+  return [managerControlGroup, ...slices, unit].join("/");
+}
+
 const GiB = 1024 ** 3;
 
 /**
@@ -96,6 +107,7 @@ const STOPPING_POLL_ATTEMPTS = 20;
 const CLEAR_FAILED_INTERVAL = "1 second";
 const CLEAR_FAILED_ATTEMPTS = 120;
 const MAX_TRACKED_THREADS = 500;
+const MAX_CONTROL_GROUPS = 1_000;
 
 export const make = Effect.gen(function* () {
   const platform = yield* HostProcess.Platform;
@@ -201,6 +213,11 @@ export const make = Effect.gen(function* () {
       const limits = agentSliceMemoryLimits(NodeOS.totalmem());
       yield* setProperties(AGENT_SLICE, [`MemoryHigh=${limits.high}`, `MemoryMax=${limits.max}`]);
       yield* setProperties(AGENTS_PARENT_SLICE, AGENTS_PARENT_PROPERTIES);
+      const manager = yield* run(systemctl, ["--user", "show", "--property=ControlGroup"]);
+      const managerControlGroup =
+        manager._tag === "Some" && manager.value.code === 0
+          ? parseKeyValues(manager.value.stdout).get("ControlGroup") || undefined
+          : undefined;
       yield* Effect.logInfo("Agent scopes are on", {
         slice: AGENT_SLICE,
         ...limits,
@@ -211,9 +228,18 @@ export const make = Effect.gen(function* () {
         systemctl,
         runtimeDir,
         supportsOomPolicy,
+        managerControlGroup,
       };
     }),
   );
+
+  const controlGroupByUnit = new Map<string, string>();
+  const rememberControlGroup = (unit: string, controlGroup: string) => {
+    controlGroupByUnit.set(unit, controlGroup);
+    if (controlGroupByUnit.size <= MAX_CONTROL_GROUPS) return;
+    const oldest = controlGroupByUnit.keys().next();
+    if (oldest.done !== true) controlGroupByUnit.delete(oldest.value);
+  };
 
   // `shared` scopes serve other threads too: tracked only for OOM diagnosis on old systemd.
   const scopeByThread = new Map<string, { unit: string; oomKilled: boolean; shared: boolean }>();
@@ -391,6 +417,7 @@ export const make = Effect.gen(function* () {
       env,
       survivesRestart,
       shared,
+      memoryMaxBytes,
     }) {
       const resolved = yield* resolve(command, env ?? hostEnvironment);
       if (resolved === null) return { command, args };
@@ -403,10 +430,14 @@ export const make = Effect.gen(function* () {
       const owned = threadId !== undefined && !continuing;
       if (threadId !== undefined)
         yield* track(scope.systemctl, threadId, owned ? unit : undefined, shared === true);
+      const slice = survivesRestart === true ? AGENT_SLICE : ownedSlice;
+      if (scope.managerControlGroup !== undefined) {
+        rememberControlGroup(unit, scopeControlGroup(scope.managerControlGroup, slice, unit));
+      }
       const systemdScope: AgentSystemdScope = {
         systemdRun: scope.systemdRun,
         runtimeDir: scope.runtimeDir,
-        slice: survivesRestart === true ? AGENT_SLICE : ownedSlice,
+        slice,
         unit,
         // Without an owning thread nothing reads the result, so let systemd
         // unload the unit even when it fails.
@@ -416,6 +447,10 @@ export const make = Effect.gen(function* () {
             ? [`--property=OOMPolicy=${continuing ? "continue" : "stop"}`]
             : []),
           ...(owned ? [] : ["--collect"]),
+          // Swap would let the scope outgrow its ceiling instead of being killed at it.
+          ...(memoryMaxBytes === undefined
+            ? []
+            : [`--property=MemoryMax=${memoryMaxBytes}`, "--property=MemorySwapMax=0"]),
         ],
       };
       return { ...agentScopeCommand({ command: resolved, args, scope: systemdScope }), unit };
@@ -424,6 +459,7 @@ export const make = Effect.gen(function* () {
     stop,
     kill,
     clear,
+    controlGroup: (unit) => Effect.sync(() => controlGroupByUnit.get(unit)),
   } satisfies AgentScopeShape;
 });
 

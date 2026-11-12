@@ -47,6 +47,8 @@ export function SubagentTooltipContent(props: {
   parentProject?: Pick<OrchestrationProjectShell, "workspaceRoot"> | undefined;
   childProject?: Pick<OrchestrationProjectShell, "id" | "title" | "workspaceRoot"> | undefined;
   status: OrchestrationV2TurnItemStatus;
+  /** The task is done but the child still waits on its own subagents. */
+  awaitingChildren?: boolean;
   result?: string | null | undefined;
   progress?: string | null | undefined;
 }) {
@@ -108,7 +110,9 @@ export function SubagentTooltipContent(props: {
   const entries = deriveProviderInstanceEntries(props.providers ?? []);
   const entry = entries.find((candidate) => candidate.instanceId === props.provider?.instanceId);
   const showInstanceBadge = entry !== undefined && shouldShowInstanceBadge(entry, entries);
-  const working = ["running", "in_progress", "pending", "waiting"].includes(props.status);
+  const working =
+    props.awaitingChildren === true ||
+    ["running", "in_progress", "pending", "waiting"].includes(props.status);
   const failed = ["failed", "error"].includes(props.status);
   const StatusIcon = working
     ? CircleDashedIcon
@@ -163,7 +167,7 @@ export function SubagentTooltipContent(props: {
           )}
         >
           <StatusIcon aria-hidden className="size-3 shrink-0" />
-          {props.status.replaceAll("_", " ")}
+          {props.awaitingChildren ? "Awaiting children" : props.status.replaceAll("_", " ")}
         </span>
         {props.elapsed}
       </div>

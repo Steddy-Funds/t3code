@@ -14,6 +14,7 @@ import {
   ProviderDriverKind,
   type RunId,
   type ThreadId,
+  threadAutonomy,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as SecureRandom from "effect/crypto/SecureRandom";
@@ -261,6 +262,7 @@ const make = Effect.gen(function* () {
       const key = input.clientRequestId ?? (yield* random.uuidV4());
       const task = taskPrompt(input);
       const title = input.title ?? parent.thread.title;
+      const autonomy = threadAutonomy(parent.thread);
       const launched = yield* forwarding.call(
         scope,
         ProjectToolkit.tools.t3_thread_launch,
@@ -278,6 +280,7 @@ const make = Effect.gen(function* () {
             environmentId: hereId,
             threadId: parent.thread.id,
             title: parent.thread.title,
+            ...(autonomy === "default" ? {} : { autonomy }),
           },
         },
       );

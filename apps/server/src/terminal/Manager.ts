@@ -38,6 +38,8 @@ import {
 import { makeKeyedCoalescingWorker } from "@t3tools/shared/KeyedCoalescingWorker";
 import * as KeyedLock from "@t3tools/shared/KeyedLock";
 import { AgentScope } from "@t3tools/shared/AgentScope";
+import { GuardEnvironment } from "@t3tools/shared/GuardEnvironment";
+import { ProcessOwnershipRegistry } from "@t3tools/shared/ProcessOwnershipRegistry";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { mergePathEntries } from "@t3tools/shared/shell";
 
@@ -303,6 +305,7 @@ interface TerminalSessionState {
   shell: string | null;
   unsubscribeData: (() => void) | null;
   unsubscribeExit: (() => void) | null;
+  releaseRoot: (() => void) | null;
   hasRunningSubprocess: boolean;
   childCommandLabel: string | null;
   runtimeEnv: Record<string, string> | null;
@@ -491,6 +494,8 @@ function cleanupProcessHandles(session: TerminalSessionState): void {
   session.unsubscribeData = null;
   session.unsubscribeExit?.();
   session.unsubscribeExit = null;
+  session.releaseRoot?.();
+  session.releaseRoot = null;
 }
 
 function enqueueProcessEvent(
@@ -1525,6 +1530,8 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
   const platform = yield* HostProcess.Platform;
   const architecture = yield* HostProcess.Architecture;
   const agentScope = yield* AgentScope;
+  const ownership = yield* ProcessOwnershipRegistry;
+  const guard = yield* GuardEnvironment;
   // Inherit the full environment minus createTerminalSpawnEnv's blocklist; allowlists silently drop user tooling variables.
   const baseEnv = options.env ?? process.env;
   const shellResolver = options.shellResolver ?? (() => defaultShellResolver(platform, baseEnv));
@@ -2348,7 +2355,12 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     index = 0,
     lastError: PtyAdapter.PtySpawnError | null = null,
   ): Effect.fn.Return<
-    { process: PtyAdapter.PtyProcess; shell: string; shellLabel: string },
+    {
+      process: PtyAdapter.PtyProcess;
+      shell: string;
+      shellLabel: string;
+      cgroup: string | undefined;
+    },
     PtyAdapter.PtySpawnError
   > {
     if (index >= shellCandidates.length) {
@@ -2393,6 +2405,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         process: attempt.success,
         shell: candidate.shell,
         shellLabel: formatShellCandidate(candidate),
+        cgroup: launch.unit === undefined ? undefined : yield* agentScope.controlGroup(launch.unit),
       };
     }
 
@@ -2444,12 +2457,16 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         Effect.andThen(
           Effect.gen(function* () {
             const shellCandidates = resolveShellCandidates(shellResolver, platform, baseEnv);
-            const terminalEnv = createTerminalSpawnEnv(
-              baseEnv,
-              session.runtimeEnv,
-              platform,
-              yield* HostProcess.HomeDirectory,
-            );
+            // After the spawn env strips every inherited T3CODE_* key.
+            const terminalEnv = {
+              ...createTerminalSpawnEnv(
+                baseEnv,
+                session.runtimeEnv,
+                platform,
+                yield* HostProcess.HomeDirectory,
+              ),
+              ...guard.env(),
+            };
             // Append managed install directories so agent commands resolve without shadowing user/system tools.
             if (
               options.managedBinaryCacheDir !== undefined &&
@@ -2498,6 +2515,15 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
               session.shell = spawnResult.shell;
               session.pid = processPid;
               session.status = "running";
+              session.releaseRoot = ownership.registerRoot({
+                pid: processPid,
+                ...(spawnResult.cgroup === undefined ? {} : { cgroup: spawnResult.cgroup }),
+                owner: {
+                  type: "thread",
+                  threadId: session.threadId,
+                  terminalId: session.terminalId,
+                },
+              });
               // onExit may replay an exit immediately; accept it before subscribing.
               session.unsubscribeData = spawnResult.process.onData((data) => {
                 if (!enqueueProcessEvent(session, processPid, { type: "output", data })) {
@@ -2875,6 +2901,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         shell: null,
         unsubscribeData: null,
         unsubscribeExit: null,
+        releaseRoot: null,
         hasRunningSubprocess: false,
         childCommandLabel: null,
         runtimeEnv: normalizedRuntimeEnv(input.env),

@@ -9,6 +9,7 @@ import { readCaller } from "../../threadAccess.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
 import * as OrchestratorMcpService from "../../OrchestratorMcpService.ts";
+import * as ReviewNotes from "../../ReviewNotes.ts";
 import * as ThreadMetadataMcpService from "../../ThreadMetadataMcpService.ts";
 
 const handlers = {
@@ -136,6 +137,13 @@ const handlers = {
       const scope = yield* McpInvocationContext.McpInvocationContext;
       const service = yield* OrchestratorMcpService.OrchestratorMcpService;
       return yield* service.requestSecret(scope, input);
+    }),
+  ),
+  flag_for_review: McpToolAccess.actsAsCaller((input) =>
+    Effect.gen(function* () {
+      const scope = yield* McpInvocationContext.McpInvocationContext;
+      const notes = yield* ReviewNotes.ReviewNotes;
+      return yield* notes.flag(scope, input);
     }),
   ),
   create_threads: McpToolAccess.actsAsCaller((input) =>

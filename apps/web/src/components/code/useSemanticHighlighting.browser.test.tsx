@@ -234,6 +234,14 @@ describe("useSemanticHighlighting", () => {
 
     await settle(1, answer(EDITED, EDITED_DATA));
     expect(paintedWords(screen.container)).toEqual(["items"]);
+
+    // Undone back to the text answered first: that answer was replaced, so it is asked again.
+    await screen.rerender(viewer({ text: TEXT }));
+    await advance(250);
+    expect(asks()).toHaveLength(3);
+    expect(inputOf(2)).toMatchObject({ document: { ifRevision: fileContentRevision(TEXT) } });
+    await settle(2, answer(TEXT, DATA));
+    expect(paintedWords(screen.container)).toHaveLength(6);
   });
 
   it("never lets an older answer replace a newer one", async () => {

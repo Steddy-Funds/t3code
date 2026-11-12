@@ -4,7 +4,10 @@ import {
   DEFAULT_CLIENT_SETTINGS,
   EnvironmentId,
   ProjectId,
+  REVIEW_NOTE_TOOL_NAME,
+  RunId,
   ThreadId,
+  TurnItemId,
   type ClientSettings,
   type ReviewBranchCommitsResult,
   type ReviewDiffPreviewResult,
@@ -35,6 +38,10 @@ const state = vi.hoisted(() => ({
   localRefs: null as unknown as ResultAtom<VcsListRefsResult>,
   remoteRefs: null as unknown as ResultAtom<VcsListRefsResult>,
   commits: null as unknown as ResultAtom<ReviewBranchCommitsResult>,
+  settings: {} as Partial<ClientSettings>,
+  turnItems: [] as ReadonlyArray<{ readonly item: unknown }>,
+  contentsCommand: {},
+  contents: null as { readonly oldContents: string; readonly newContents: string } | null,
 }));
 
 vi.mock("~/state/server", async () => {
@@ -50,7 +57,7 @@ vi.mock("~/state/review", () => ({
       state.previews.get(input.baseRef ?? null)!,
     branchCommits: () => state.commits,
     diffFilePatch: () => state.patch,
-    diffFileContents: {},
+    diffFileContents: state.contentsCommand,
   },
 }));
 vi.mock("~/state/vcs", () => ({
@@ -64,7 +71,7 @@ vi.mock("~/state/entities", () => ({
   useQuietThreadShell: () => state.thread,
   useProject: () => ({ workspaceRoot: "/project", repositoryIdentity: null }),
   useThreadCheckpointSummaries: () => [],
-  useQuietThreadVisibleTurnItems: () => [],
+  useQuietThreadVisibleTurnItems: () => state.turnItems,
 }));
 vi.mock("~/state/filesystem", () => ({
   useFilesystemReadAccess: () => ({ canReadFiles: true, isPending: false, error: null }),
@@ -72,7 +79,11 @@ vi.mock("~/state/filesystem", () => ({
 vi.mock("~/hooks/useThreadRouteTarget", () => ({ useThreadRouteRef: () => state.threadRef }));
 vi.mock("~/hooks/useSettings", () => ({
   useClientSettings: (select: (settings: ClientSettings) => unknown) =>
-    select({ ...DEFAULT_CLIENT_SETTINGS, diffFilesCollapsed: state.diffFilesCollapsed }),
+    select({
+      ...DEFAULT_CLIENT_SETTINGS,
+      diffFilesCollapsed: state.diffFilesCollapsed,
+      ...state.settings,
+    }),
   updateClientSettings: async () => {},
 }));
 vi.mock("~/hooks/useTheme", () => ({
@@ -85,7 +96,12 @@ vi.mock("~/state/queries", () => ({
   useTurnItemDetail: () => ({ data: null, error: null, isPending: false }),
   useDebouncedValue: <A,>(value: A) => value,
 }));
-vi.mock("~/state/use-atom-command", () => ({ useAtomCommand: () => async () => {} }));
+vi.mock("~/state/use-atom-command", () => ({
+  useAtomCommand: (command: unknown) =>
+    command === state.contentsCommand
+      ? async () => ({ _tag: "Success", value: state.contents })
+      : async () => {},
+}));
 vi.mock("~/editorPreferences", () => ({ useOpenInPreferredEditor: () => async () => {} }));
 vi.mock("~/fileContextMenu", () => ({ useFileContextMenuHandler: () => () => {} }));
 vi.mock("~/browser/useOpenLink", () => ({ useOpenLink: () => async () => {} }));
@@ -95,6 +111,7 @@ vi.mock("./DiffFilePathCopyButton", () => ({ DiffFilePathCopyButton: () => null 
 
 import DiffPanel from "./DiffPanel";
 import { useDiffPanelSessionStore, useDiffPanelStore } from "~/diffPanelStore";
+import { useReviewNoteRevealStore } from "~/reviewNotes";
 
 const cwd = "/project-worktree";
 const errorMessage = "Could not find a common commit between 'origin/orphan' and HEAD.";
@@ -131,6 +148,9 @@ function setup(failedBaseRef: string | null) {
   };
   reset();
   state.diffFilesCollapsed = false;
+  state.settings = {};
+  state.turnItems = [];
+  state.contents = null;
   const patch = Atom.make<AsyncResult.AsyncResult<ReviewDiffPreviewSource, Error>>(
     AsyncResult.initial(),
   );
@@ -272,3 +292,95 @@ it.each([false, true])(
     await expect.element(toggle).toHaveAttribute("aria-expanded", "false");
   },
 );
+
+it.each([
+  { name: "while side by side showed, then the panel narrowed", narrowFirst: false },
+  { name: "while the panel was narrow", narrowFirst: true },
+])("opens a note asked for $name, once side by side shows again", async ({ narrowFirst }) => {
+  using context = setup("origin/orphan");
+  const viewport = { width: window.innerWidth, height: window.innerHeight };
+  await using _viewport = {
+    [Symbol.asyncDispose]: () => page.viewport(viewport.width, viewport.height),
+  };
+  // The panel fills the page, so the page's width decides between side by side and stacked.
+  const narrow = () => page.viewport(480, 900);
+  const wide = () => page.viewport(1600, 900);
+  state.settings = { diffSideBySide: true };
+  // Each row its own file: the diff's caches outlive a test.
+  const path = narrowFirst ? "narrow.ts" : "wide.ts";
+  const lines = Array.from({ length: 40 }, (_, index) => `const value${index + 1} = ${index + 1};`);
+  const after = lines.with(9, "const alpha = 1;");
+  state.contents = { oldContents: `${lines.join("\n")}\n`, newContents: `${after.join("\n")}\n` };
+  const noteId = TurnItemId.make("turn-item:review-note:thread:0123456789abcdef0123456789abcdef");
+  state.turnItems = [
+    {
+      item: {
+        id: noteId,
+        type: "dynamic_tool",
+        toolName: REVIEW_NOTE_TOOL_NAME,
+        input: {
+          kind: "review_note",
+          path,
+          startLine: 10,
+          endLine: 10,
+          note: "Alpha replaced value ten.",
+          excerpt: "const alpha = 1;",
+          excerptTruncated: false,
+          contentRevision: "a".repeat(40),
+          runId: RunId.make("run-1"),
+        },
+      },
+    },
+  ];
+  const metadata = preview();
+  const source = {
+    ...metadata.sources[0]!,
+    files: [{ path, previousPath: null, additions: 1, deletions: 1 }],
+  };
+  state.previews.set("main", Atom.make(AsyncResult.success({ ...metadata, sources: [source] })));
+  useDiffPanelStore.getState().selectBranchBaseRef(context.threadRef, "main");
+  const askForNote = () =>
+    act(() => useReviewNoteRevealStore.getState().request(context.threadRef, noteId));
+
+  await (narrowFirst ? narrow() : wide());
+  await using screen = await render(
+    <RegistryContext.Provider value={context.registry}>
+      <div style={{ height: 600, display: "flex", flexDirection: "column" }}>
+        <DiffPanel composerDraftTarget={context.threadRef} workspaceMutationId={null} visible />
+      </div>
+    </RegistryContext.Provider>,
+  );
+  const stacked = screen.getByRole("button", { name: new RegExp(`^(Expand|Collapse) ${path}$`) });
+  const sideBySide = screen.getByText("Loading file...");
+  if (narrowFirst) {
+    await expect.element(stacked).toBeVisible();
+    await askForNote();
+  } else {
+    await expect.element(sideBySide).toBeVisible();
+    await askForNote();
+    await narrow();
+    await expect.element(stacked).toBeVisible();
+  }
+  await wide();
+  await expect.element(sideBySide).toBeVisible();
+  await act(() =>
+    context.registry.set(
+      context.patch,
+      AsyncResult.success({
+        ...source,
+        diff: `diff --git a/${path} b/${path}\n--- a/${path}\n+++ b/${path}\n@@ -7,7 +7,7 @@\n${[
+          " const value7 = 7;",
+          " const value8 = 8;",
+          " const value9 = 9;",
+          "-const value10 = 10;",
+          "+const alpha = 1;",
+          " const value11 = 11;",
+          " const value12 = 12;",
+          " const value13 = 13;",
+        ].join("\n")}\n`,
+      }),
+    ),
+  );
+
+  await expect.element(screen.getByText("Alpha replaced value ten.")).toBeVisible();
+});

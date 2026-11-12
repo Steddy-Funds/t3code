@@ -14,6 +14,8 @@ import {
   AuthSourceControlWriteScope,
   AuthTerminalReadScope,
   AuthTerminalOperateScope,
+  type CodeIntelError,
+  type EnvironmentAuthorizationError,
   WS_METHODS,
   WsRpcGroup,
 } from "@t3tools/contracts";
@@ -468,3 +470,112 @@ it.effect("denies manual cleanup before the handler without settings permission"
     expect(handled).toBe(false);
   }).pipe(Effect.scoped),
 );
+
+describe("code intelligence scopes", () => {
+  const document = { cwd: "/repo", path: "app.py" };
+  const position = { line: 0, character: 0 };
+  const readCalls = {
+    [WS_METHODS.codeIntelStatus]: { cwd: "/repo" },
+    [WS_METHODS.codeIntelDefinition]: { document, position, kind: "definition" },
+    [WS_METHODS.codeIntelReferences]: { document, position, includeDeclaration: true, limit: 10 },
+    [WS_METHODS.codeIntelDocumentHighlights]: { document, position },
+    [WS_METHODS.codeIntelHover]: { document, position },
+    [WS_METHODS.codeIntelDocumentSymbols]: { document },
+    [WS_METHODS.codeIntelWorkspaceSymbols]: { cwd: "/repo", query: "greet", limit: 10 },
+    [WS_METHODS.codeIntelSemanticTokens]: { document },
+    [WS_METHODS.codeIntelRestart]: { cwd: "/repo" },
+  } as const;
+
+  it("asks filesystem read scope for every read and for restart, and settings write to install", () => {
+    for (const method of Object.keys(readCalls) as Array<keyof typeof readCalls>) {
+      expect(requiredScopeForRpcMethod(method)).toBe(AuthFilesystemReadScope);
+    }
+    expect(requiredScopeForRpcMethod(WS_METHODS.codeIntelInstallServer)).toBe(
+      AuthSettingsWriteScope,
+    );
+  });
+
+  it.effect("denies each call before its handler without filesystem read scope", () =>
+    Effect.gen(function* () {
+      let handled = 0;
+      const method = (tag: keyof typeof readCalls) => tag;
+      for (const tag of Object.keys(readCalls) as Array<keyof typeof readCalls>) {
+        const group = WsRpcGroup.omit(
+          ...[...WsRpcGroup.requests.keys()].filter(
+            (other): other is Exclude<keyof typeof RPC_REQUIRED_SCOPES, typeof tag> => other !== tag,
+          ),
+        );
+        const client = yield* RpcTest.makeClient(group).pipe(
+          Effect.provide(
+            Layer.mergeAll(
+              group.toLayerHandler(tag, () =>
+                Effect.sync(() => {
+                  handled++;
+                  return {} as never;
+                }),
+              ),
+              RpcAuthorization.layer([AuthOrchestrationReadScope, AuthSettingsWriteScope]),
+            ),
+          ),
+        );
+        const call = client[method(tag)] as (
+          input: unknown,
+        ) => Effect.Effect<object, EnvironmentAuthorizationError | CodeIntelError>;
+        expect(yield* call(readCalls[tag]).pipe(Effect.flip)).toMatchObject({
+          requiredPermission: AuthFilesystemReadScope,
+        });
+      }
+      expect(handled).toBe(0);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("denies installing a server before the handler without settings write scope", () =>
+    Effect.gen(function* () {
+      const group = WsRpcGroup.omit(
+        ...[...WsRpcGroup.requests.keys()].filter(
+          (
+            tag,
+          ): tag is Exclude<
+            keyof typeof RPC_REQUIRED_SCOPES,
+            typeof WS_METHODS.codeIntelInstallServer
+          > => tag !== WS_METHODS.codeIntelInstallServer,
+        ),
+      );
+      let handled = 0;
+      const client = yield* RpcTest.makeClient(group).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            group.toLayerHandler(WS_METHODS.codeIntelInstallServer, () =>
+              Effect.sync(() => {
+                handled++;
+                return { state: "stopped" as const };
+              }),
+            ),
+            RpcAuthorization.layer([AuthOrchestrationReadScope, AuthFilesystemReadScope]),
+          ),
+        ),
+      );
+
+      expect(
+        yield* client[WS_METHODS.codeIntelInstallServer]({ languageId: "python" }).pipe(
+          Effect.flip,
+        ),
+      ).toMatchObject({ requiredPermission: AuthSettingsWriteScope });
+      expect(handled).toBe(0);
+
+      const allowed = yield* RpcTest.makeClient(group).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            group.toLayerHandler(WS_METHODS.codeIntelInstallServer, () =>
+              Effect.succeed({ state: "stopped" as const }),
+            ),
+            RpcAuthorization.layer([AuthSettingsWriteScope]),
+          ),
+        ),
+      );
+      expect(yield* allowed[WS_METHODS.codeIntelInstallServer]({ languageId: "python" })).toEqual({
+        state: "stopped",
+      });
+    }).pipe(Effect.scoped),
+  );
+});

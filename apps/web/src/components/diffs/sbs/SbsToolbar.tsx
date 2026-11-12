@@ -39,6 +39,9 @@ export interface SbsToolbarProps {
   readonly statusLabel: string;
   readonly canStep: boolean;
   readonly onStep: (direction: "next" | "previous") => void;
+  /** The keys the keymap gives Next and Previous Change in a diff; null when it gives none. */
+  readonly nextShortcut: string | null;
+  readonly previousShortcut: string | null;
   readonly collapseUnchanged: boolean;
   readonly onCollapseUnchangedChange: (collapse: boolean) => void;
   readonly highlightMode: SbsHighlightMode;
@@ -49,6 +52,8 @@ export function SbsToolbar({
   statusLabel,
   canStep,
   onStep,
+  nextShortcut,
+  previousShortcut,
   collapseUnchanged,
   onCollapseUnchangedChange,
   highlightMode,
@@ -79,7 +84,9 @@ export function SbsToolbar({
         >
           <ArrowUpIcon className="size-3.5" />
         </TooltipTrigger>
-        <TooltipPopup side="top">Previous difference (Shift+F7)</TooltipPopup>
+        <TooltipPopup side="top">
+          {previousShortcut ? `Previous difference (${previousShortcut})` : "Previous difference"}
+        </TooltipPopup>
       </Tooltip>
       <Tooltip>
         <TooltipTrigger
@@ -96,7 +103,9 @@ export function SbsToolbar({
         >
           <ArrowDownIcon className="size-3.5" />
         </TooltipTrigger>
-        <TooltipPopup side="top">Next difference (F7)</TooltipPopup>
+        <TooltipPopup side="top">
+          {nextShortcut ? `Next difference (${nextShortcut})` : "Next difference"}
+        </TooltipPopup>
       </Tooltip>
       <Tooltip>
         <TooltipTrigger

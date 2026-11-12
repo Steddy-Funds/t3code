@@ -2286,9 +2286,19 @@ code {
   --diff-deletion-foreground: light-dark(var(--color-red-700), var(--color-red-400));
 }
 
-/* Side-by-side diff. A theme may set any of these outright; every theme gets these defaults. */
+/* Side-by-side diff. Every theme gets this colour for a changed line; a theme with editor
+   colours replaces the block colours below on the view itself. */
 :root {
   --diff-modified: light-dark(var(--color-blue-600), var(--color-blue-400));
+}
+
+/* That scheme's additions are already blue. */
+:root[data-diff-color-scheme="blue-orange"] {
+  --diff-modified: light-dark(var(--color-violet-600), var(--color-violet-400));
+}
+
+/* Declared here, not on :root, so they mix over the background this view paints on. */
+.sbs-diff {
   --diff-block-inserted: color-mix(in srgb, var(--diff-addition) 20%, var(--code-background));
   --diff-block-deleted: color-mix(in srgb, var(--diff-deletion) 20%, var(--code-background));
   --diff-block-modified: color-mix(in srgb, var(--diff-modified) 24%, var(--code-background));
@@ -2300,14 +2310,6 @@ code {
     var(--code-background)
   );
   --diff-fold-wave: color-mix(in srgb, var(--code-foreground) 32%, transparent);
-}
-
-/* That scheme's additions are already blue. */
-:root[data-diff-color-scheme="blue-orange"] {
-  --diff-modified: light-dark(var(--color-violet-600), var(--color-violet-400));
-}
-
-.sbs-diff {
   --sbs-gutter-width: calc(var(--sbs-gutter-digits, 3) * 1ch + 1.75rem);
   background: var(--code-background);
   color: var(--code-foreground);
@@ -2385,7 +2387,7 @@ code {
   width: var(--sbs-gutter-width);
   padding-inline: 0.75rem 0.5rem;
   background: inherit;
-  color: color-mix(in srgb, var(--code-foreground) 45%, transparent);
+  color: var(--sbs-line-number, color-mix(in srgb, var(--code-foreground) 45%, transparent));
   text-align: right;
   cursor: default;
   user-select: none;
@@ -2430,13 +2432,30 @@ code {
   background: var(--diff-block-modified);
 }
 
+/* The thread find's colours, or the editor theme's own. */
 .sbs-match {
-  background: light-dark(#ff963288, #ff963266);
+  background: var(
+    --sbs-find-match,
+    var(--app-theme-search-match-background, light-dark(oklch(0.915 0.11 85), oklch(0.55 0.1 85)))
+  );
+  color: var(
+    --sbs-find-foreground,
+    var(
+      --app-theme-search-match-foreground,
+      light-dark(oklch(0.216164 0.028283 77.423), oklch(0.970151 0 0))
+    )
+  );
 }
 
 .sbs-match-current {
-  background: light-dark(#ff9632, #ff9632cc);
-  color: #000;
+  background: var(
+    --sbs-find-current,
+    var(--app-theme-search-match-active-background, oklch(0.774202 0.151946 74.331))
+  );
+  color: var(
+    --sbs-find-foreground,
+    var(--app-theme-search-match-active-foreground, oklch(0.216164 0.028283 77.423))
+  );
 }
 
 /* A collapsed run of unchanged lines: JetBrains' wave, drawn through a mask so it takes a colour. */

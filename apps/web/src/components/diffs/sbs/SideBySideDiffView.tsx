@@ -1,4 +1,7 @@
+import { useAtomValue } from "@effect/atom-react";
 import { LineDiffRangeCache, type FileContents, type FileDiffMetadata } from "@pierre/diffs";
+import type { KeybindingCommand } from "@t3tools/contracts";
+import type { ThemeEditorColors } from "@t3tools/shared/themePalettes";
 import {
   useLayoutEffect,
   useRef,
@@ -12,8 +15,12 @@ import {
 
 import { useClientSettings } from "~/hooks/useSettings";
 import { useStableCallback } from "~/hooks/useStableCallback";
+import { resolveShortcutCommand, shortcutLabelForCommand } from "~/keybindings";
+import { focusScopeProps } from "~/lib/focusScopes";
 import { observeResize } from "~/lib/observeResize";
+import { usePaintedThemeEditorColors } from "~/lib/paintedThemeEditorColors";
 import { cn } from "~/lib/utils";
+import { primaryServerKeybindingsAtom } from "~/state/server";
 
 import { fileContentRevision } from "../../files/fileContentRevision";
 import { Button } from "../../ui/button";
@@ -23,7 +30,6 @@ import { SbsPane, type SbsPaneAnnotation } from "./SbsPane";
 import { SbsBar, SbsToolbar } from "./SbsToolbar";
 import { sbsFindMatches, sbsFindMatchesByLine, sbsFindStep } from "./sbsFind";
 import type { SbsHighlightMode } from "./sbsInline";
-import { sbsKeyAction, type SbsKeyAction } from "./sbsKeymap";
 import {
   sbsFoldsCovering,
   sbsLayoutOf,
@@ -140,6 +146,22 @@ const WINDOW_STEP_ROWS = 8;
 const MAX_WORD_DIFF_LINE_LENGTH = 1_000;
 const CARD_MARGIN = 4;
 const MODIFIER_KEYS = new Set(["Shift", "Meta", "Control", "Alt"]);
+
+const IN_DIFF = { context: { diffFocus: true } };
+
+/** A theme's own diff, line number and find colours, in the variables the panes paint with. */
+function editorColorVariables(colors: ThemeEditorColors): CSSProperties {
+  return {
+    "--diff-block-inserted": colors.diff.inserted,
+    "--diff-block-deleted": colors.diff.deleted,
+    "--diff-block-modified": colors.diff.modified,
+    "--diff-block-modified-muted": colors.diff.modifiedMuted,
+    "--sbs-line-number": colors.lineNumber,
+    "--sbs-find-match": colors.find.match,
+    "--sbs-find-current": colors.find.currentMatch,
+    "--sbs-find-foreground": colors.find.foreground,
+  } as CSSProperties;
+}
 const PANE_LABELS: Record<SbsSide, string> = { deletions: "Before", additions: "After" };
 
 interface Viewport {
@@ -282,6 +304,8 @@ export function SideBySideDiffView<T = unknown>(props: SideBySideDiffViewProps<T
   const { fileDiff, collapseUnchanged, highlightMode } = props;
   const fontSize = useClientSettings((settings) => settings.fontSizeCode);
   const lineHeight = Math.round(fontSize * 1.5);
+  const keybindings = useAtomValue(primaryServerKeybindingsAtom);
+  const editorColors = usePaintedThemeEditorColors();
   const model = sbsDocumentOf(fileDiff);
   const [expandedFolds, setExpandedFolds] = useState(EMPTY_FOLDS);
   const layout = sbsLayoutOf(model, { collapseUnchanged, expandedFolds });
@@ -295,9 +319,7 @@ export function SideBySideDiffView<T = unknown>(props: SideBySideDiffViewProps<T
     deletions: sbsRowCount(layout, "deletions"),
     additions: sbsRowCount(layout, "additions"),
   };
-  const [wordRanges] = useState(
-    () => new LineDiffRangeCache("word", MAX_WORD_DIFF_LINE_LENGTH),
-  );
+  const [wordRanges] = useState(() => new LineDiffRangeCache("word", MAX_WORD_DIFF_LINE_LENGTH));
   const highlightedRows = useSbsHighlight(highlightFilesOf(fileDiff), {
     deletions: model.lines.deletions.length,
     additions: model.lines.additions.length,
@@ -447,10 +469,10 @@ export function SideBySideDiffView<T = unknown>(props: SideBySideDiffViewProps<T
     props.onOpenSource?.({ side, line: sbsLineNumber(model, side, Math.min(line, lastLine)) });
   };
 
-  const keyActions: Record<SbsKeyAction, () => void> = {
-    nextChange: () => step("next"),
-    previousChange: () => step("previous"),
-    jumpToSource,
+  const commands: Partial<Record<KeybindingCommand, () => void>> = {
+    "diff.nextChange": () => step("next"),
+    "diff.previousChange": () => step("previous"),
+    "diff.jumpToSource": jumpToSource,
   };
 
   const attachScroller = (side: SbsSide, element: HTMLDivElement | null) => {
@@ -571,7 +593,13 @@ export function SideBySideDiffView<T = unknown>(props: SideBySideDiffViewProps<T
     const side = range ? paneSideOf(range.startContainer) : null;
     const start = range ? lineIndexOf(range.startContainer) : null;
     let end = range ? lineIndexOf(range.endContainer) : null;
-    if (!range || !side || side !== paneSideOf(range.endContainer) || start === null || end === null) {
+    if (
+      !range ||
+      !side ||
+      side !== paneSideOf(range.endContainer) ||
+      start === null ||
+      end === null
+    ) {
       if (reportedTextSelection.current) {
         reportedTextSelection.current = false;
         props.onSelectRange(null);
@@ -601,7 +629,12 @@ export function SideBySideDiffView<T = unknown>(props: SideBySideDiffViewProps<T
     const gutter = elementOf(event.target)?.closest("[data-sbs-gutter]");
     const side = paneSideOf(event.target);
     const line = lineIndexOf(gutter ?? null);
-    if (!gutter || !side || line === null || elementOf(event.target)?.closest("[data-sbs-annotation]")) {
+    if (
+      !gutter ||
+      !side ||
+      line === null ||
+      elementOf(event.target)?.closest("[data-sbs-annotation]")
+    ) {
       if (gutterSelection && paneSideOf(event.target)) {
         setGutterSelection(null);
         props.onSelectRange?.(null);
@@ -667,7 +700,9 @@ export function SideBySideDiffView<T = unknown>(props: SideBySideDiffViewProps<T
       },
       revision: model.partial
         ? null
-        : fileContentRevision((side === "deletions" ? fileDiff.deletionLines : fileDiff.additionLines).join("")),
+        : fileContentRevision(
+            (side === "deletions" ? fileDiff.deletionLines : fileDiff.additionLines).join(""),
+          ),
     });
   };
 
@@ -690,10 +725,11 @@ export function SideBySideDiffView<T = unknown>(props: SideBySideDiffViewProps<T
 
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.defaultPrevented || MODIFIER_KEYS.has(event.key)) return;
-    const action = sbsKeyAction(event);
-    if (action) {
+    const command = resolveShortcutCommand(event.nativeEvent, keybindings);
+    const run = command === null ? undefined : commands[command];
+    if (run) {
       event.preventDefault();
-      keyActions[action]();
+      run();
       return;
     }
     setEdgeHint(null);
@@ -767,7 +803,8 @@ export function SideBySideDiffView<T = unknown>(props: SideBySideDiffViewProps<T
       openAnnotation && openAnnotationRange && openAnnotation.side === side
         ? overlayPlacement(side, sbsRangeRows(layout, side, openAnnotationRange), cardHeight)
         : null;
-    const hint = hintRows && side === lead ? overlayPlacement(side, hintRows, lineHeight + 8) : null;
+    const hint =
+      hintRows && side === lead ? overlayPlacement(side, hintRows, lineHeight + 8) : null;
     return (
       <>
         {/* Beside a scrollbar only: in a file that fits there is nothing for the marks to map to. */}
@@ -855,42 +892,42 @@ export function SideBySideDiffView<T = unknown>(props: SideBySideDiffViewProps<T
   const deletionsPane =
     single === "additions" ? null : (
       <div className="relative min-w-0 flex-1" data-sbs-pane="deletions">
-      <SbsPane
-        {...paneProps}
-        side="deletions"
-        label={PANE_LABELS.deletions}
-        firstRow={deletionsWindow.first}
-        lastRow={deletionsWindow.last}
-        highlightedRows={highlightedRows.deletions}
-        findMatches={find?.side === "deletions" ? findByLine : null}
-        findCurrent={find?.side === "deletions" ? currentMatch : null}
-        annotations={annotationRanges.deletions}
-        selectedStart={gutterSelection?.side === "deletions" ? selectedStart : -1}
-        selectedEnd={gutterSelection?.side === "deletions" ? selectedEnd : -1}
-        hideScrollbar={single === null}
-        scrollerRef={attachDeletions}
-      />
+        <SbsPane
+          {...paneProps}
+          side="deletions"
+          label={PANE_LABELS.deletions}
+          firstRow={deletionsWindow.first}
+          lastRow={deletionsWindow.last}
+          highlightedRows={highlightedRows.deletions}
+          findMatches={find?.side === "deletions" ? findByLine : null}
+          findCurrent={find?.side === "deletions" ? currentMatch : null}
+          annotations={annotationRanges.deletions}
+          selectedStart={gutterSelection?.side === "deletions" ? selectedStart : -1}
+          selectedEnd={gutterSelection?.side === "deletions" ? selectedEnd : -1}
+          hideScrollbar={single === null}
+          scrollerRef={attachDeletions}
+        />
         {renderOverlays("deletions")}
       </div>
     );
   const additionsPane =
     single === "deletions" ? null : (
       <div className="relative min-w-0 flex-1" data-sbs-pane="additions">
-      <SbsPane
-        {...paneProps}
-        side="additions"
-        label={PANE_LABELS.additions}
-        firstRow={additionsWindow.first}
-        lastRow={additionsWindow.last}
-        highlightedRows={highlightedRows.additions}
-        findMatches={find?.side === "additions" ? findByLine : null}
-        findCurrent={find?.side === "additions" ? currentMatch : null}
-        annotations={annotationRanges.additions}
-        selectedStart={gutterSelection?.side === "additions" ? selectedStart : -1}
-        selectedEnd={gutterSelection?.side === "additions" ? selectedEnd : -1}
-        hideScrollbar={false}
-        scrollerRef={attachAdditions}
-      />
+        <SbsPane
+          {...paneProps}
+          side="additions"
+          label={PANE_LABELS.additions}
+          firstRow={additionsWindow.first}
+          lastRow={additionsWindow.last}
+          highlightedRows={highlightedRows.additions}
+          findMatches={find?.side === "additions" ? findByLine : null}
+          findCurrent={find?.side === "additions" ? currentMatch : null}
+          annotations={annotationRanges.additions}
+          selectedStart={gutterSelection?.side === "additions" ? selectedStart : -1}
+          selectedEnd={gutterSelection?.side === "additions" ? selectedEnd : -1}
+          hideScrollbar={false}
+          scrollerRef={attachAdditions}
+        />
         {renderOverlays("additions")}
       </div>
     );
@@ -899,7 +936,8 @@ export function SideBySideDiffView<T = unknown>(props: SideBySideDiffViewProps<T
     <div
       className="flex min-h-0 min-w-0 flex-1 flex-col"
       data-sbs-view=""
-      // On the whole view, so the keys also work from its toolbar.
+      // The whole view, so the diff keys also work from its toolbar.
+      {...focusScopeProps("diff")}
       onKeyDown={handleKeyDown}
     >
       <SbsBar leading={props.leading}>
@@ -915,6 +953,8 @@ export function SideBySideDiffView<T = unknown>(props: SideBySideDiffViewProps<T
             props.adjacentFiles?.previous === true
           }
           onStep={stepFromToolbar}
+          nextShortcut={shortcutLabelForCommand(keybindings, "diff.nextChange", IN_DIFF)}
+          previousShortcut={shortcutLabelForCommand(keybindings, "diff.previousChange", IN_DIFF)}
           collapseUnchanged={collapseUnchanged}
           onCollapseUnchangedChange={toggleCollapseFromToolbar}
           highlightMode={highlightMode}
@@ -924,9 +964,18 @@ export function SideBySideDiffView<T = unknown>(props: SideBySideDiffViewProps<T
       {props.notice}
       <div
         ref={observeBody}
-        className="sbs-diff relative flex min-h-0 flex-1"
+        className={cn(
+          "sbs-diff relative flex min-h-0 flex-1",
+          // Like the other layouts: a theme with editor colours keeps its code surface, the
+          // others blend the diff into the panel.
+          !editorColors && "[--code-background:var(--background)]",
+        )}
         style={
-          { "--sbs-line-height": `${lineHeight}px`, fontSize: `${fontSize}px` } as CSSProperties
+          {
+            ...(editorColors ? editorColorVariables(editorColors) : null),
+            "--sbs-line-height": `${lineHeight}px`,
+            fontSize: `${fontSize}px`,
+          } as CSSProperties
         }
         onClick={handleClick}
         onKeyUp={(event) => {

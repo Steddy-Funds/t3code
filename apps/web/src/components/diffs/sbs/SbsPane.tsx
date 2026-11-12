@@ -14,12 +14,7 @@ import {
   type SbsColumnRange,
   type SbsLineMarks,
 } from "./sbsLineContent";
-import {
-  sbsLineNumber,
-  type SbsChangeKind,
-  type SbsDocument,
-  type SbsSide,
-} from "./sbsModel";
+import { sbsLineNumber, type SbsChangeKind, type SbsDocument, type SbsSide } from "./sbsModel";
 
 /** An annotated range of this pane, in line indices. `end` is exclusive. */
 export interface SbsPaneAnnotation {
@@ -114,7 +109,8 @@ function insertionPointBelowLastRow(
 }
 
 function pieceClassName(piece: { changed: boolean; match: 0 | 1 | 2 }): string | undefined {
-  const match = piece.match === 2 ? "sbs-match sbs-match-current" : piece.match === 1 ? "sbs-match" : "";
+  const match =
+    piece.match === 2 ? "sbs-match sbs-match-current" : piece.match === 1 ? "sbs-match" : "";
   if (!piece.changed) return match || undefined;
   return match ? `sbs-word ${match}` : "sbs-word";
 }
@@ -247,7 +243,9 @@ function renderRow(context: RowContext, row: number): ReactNode {
     return (
       <div key={`omitted:${target.segment}`} className="sbs-row sbs-omitted">
         <span className="sbs-omitted-label">
-          {segment.lines === 1 ? "1 line not in the patch" : `${segment.lines} lines not in the patch`}
+          {segment.lines === 1
+            ? "1 line not in the patch"
+            : `${segment.lines} lines not in the patch`}
         </span>
       </div>
     );
@@ -364,9 +362,8 @@ export function SbsPane({
       ref={scrollerRef}
       role="group"
       aria-label={label}
-      // A pane takes keys (F7, find) only while it holds focus.
+      // Focusable, so a click puts the keyboard in the diff.
       tabIndex={0}
-      data-focus-scope="diff"
       data-sbs-scroller={side}
       className={cn(
         "sbs-scroller absolute inset-0 overflow-auto outline-none",

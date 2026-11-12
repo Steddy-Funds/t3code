@@ -1,8 +1,8 @@
 import { DEFAULT_TOKENIZE_MAX_LENGTH, type FileContents } from "@pierre/diffs";
 import { useEffect, useState } from "react";
 
+import { getDiffThemeName } from "~/hooks/useDiffThemeName";
 import { getRenderedAppearance } from "~/hooks/useTheme";
-import { resolveDiffThemeName } from "~/lib/diffRendering";
 
 import { useDiffWorkerPool } from "../../DiffWorkerPoolProvider";
 import type { SbsSide } from "./sbsModel";
@@ -24,9 +24,9 @@ export function useSbsHighlight(
   lineCounts: Readonly<Record<SbsSide, number>>,
 ): SbsHighlightedRows {
   const pool = useDiffWorkerPool();
-  const [highlighted, setHighlighted] = useState<
-    Readonly<Record<SbsSide, HighlightedFile | null>>
-  >({ deletions: null, additions: null });
+  const [highlighted, setHighlighted] = useState<Readonly<Record<SbsSide, HighlightedFile | null>>>(
+    { deletions: null, additions: null },
+  );
   const { deletions, additions } = files;
   const deletionLines = lineCounts.deletions;
   const additionLines = lineCounts.additions;
@@ -53,7 +53,7 @@ export function useSbsHighlight(
     const prime = () => {
       // A pool still switching to the page's appearance is asked again when it gets there:
       // a request under the theme it is leaving fails in the worker.
-      if (pool.getFileRenderOptions().theme !== resolveDiffThemeName(getRenderedAppearance())) {
+      if (pool.getFileRenderOptions().theme !== getDiffThemeName(getRenderedAppearance())) {
         return;
       }
       for (const { file, lines } of sides) {

@@ -885,7 +885,7 @@ export function SideBySideDiffView<T = unknown>(props: SideBySideDiffViewProps<T
     });
   };
 
-  const activateAtCaret = useEffectEvent((event: globalThis.KeyboardEvent) => {
+  const activateAtCaret = useStableCallback((event: globalThis.KeyboardEvent) => {
     event.preventDefault();
     const point = caret.current;
     const text = point ? (model.lines[point.side][point.line] ?? "") : "";
@@ -924,7 +924,7 @@ export function SideBySideDiffView<T = unknown>(props: SideBySideDiffViewProps<T
       { "code.goToDeclaration": (event) => activateAtCaret(event) },
       { capture: true, when: inPane, context: () => ({ codeFocus: true, codeNavigation: true }) },
     );
-  }, [navigable]);
+  }, [navigable, activateAtCaret, scrollers]);
 
   const handleClick = (event: MouseEvent<HTMLDivElement>) => {
     const target = elementOf(event.target);

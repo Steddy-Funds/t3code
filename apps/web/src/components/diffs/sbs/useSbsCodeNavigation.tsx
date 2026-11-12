@@ -18,6 +18,7 @@ import { navigateToCodeLocation } from "~/components/code/navigation";
 import { Button } from "~/components/ui/button";
 import { Popover, PopoverPopup } from "~/components/ui/popover";
 import { resolveDiffPathForWorkspace } from "~/diffFileActions";
+import { useStableCallback } from "~/hooks/useStableCallback";
 import { appAtomRegistry } from "~/rpc/atomRegistry";
 import { codeIntelEnvironment } from "~/state/codeIntel";
 
@@ -73,11 +74,11 @@ export function useSbsCodeNavigation(
     controller: null,
   });
 
-  const cancel = () => {
+  const cancel = useStableCallback(() => {
     request.current.seq += 1;
     request.current.controller?.abort();
     request.current.controller = null;
-  };
+  });
 
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- a lookup still in flight when its file or the diff goes is aborted
   useEffect(
@@ -85,7 +86,11 @@ export function useSbsCodeNavigation(
       cancel();
       setPopup(null);
     },
-    [shownFile],
+    [
+      // oxlint-disable-next-line react/exhaustive-effect-dependencies -- Another file in the panes ends the lookup asked from the one before.
+      shownFile,
+      cancel,
+    ],
   );
 
   const activate = async (

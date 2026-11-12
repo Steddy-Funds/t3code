@@ -895,7 +895,9 @@ export function SideBySideDiffView<T = unknown>(props: SideBySideDiffViewProps<T
     // A caret just past a name still means that name.
     if (!isToken(character) && isToken(character - 1)) character -= 1;
     const scroller = scrollers.current[point.side];
-    if (!isToken(character) || !scroller) return;
+    // A caret left in the other pane is not this one's.
+    const inCaretPane = event.target instanceof Node && scroller?.contains(event.target) === true;
+    if (!isToken(character) || !scroller || !inCaretPane) return;
     props.onTokenActivate?.({
       side: point.side,
       line: sbsLineNumber(model, point.side, point.line),

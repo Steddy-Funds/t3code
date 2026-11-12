@@ -2740,7 +2740,7 @@ code {
   stroke-opacity: 0.6;
 }
 
-.sbs-move-shape[data-kind="wedge"] {
+.sbs-move-shape[data-kind="wedge"][data-side="deletions"] {
   fill: var(--diff-block-moved-out);
 }
 

@@ -192,6 +192,8 @@ export function SideBySideDiffPanel(props: SideBySideDiffPanelProps) {
     fileKey: string;
     side: "deletions" | "additions";
     line: number;
+    /** The file has been shown; selecting another one then ends the arrival. */
+    reached: boolean;
   } | null>(null);
   const smartDiff = useClientSettings((settings) => settings.smartDiffEnabled);
   // A file too large to compare whole, opened as its patch on request.
@@ -202,6 +204,12 @@ export function SideBySideDiffPanel(props: SideBySideDiffPanelProps) {
     files.findIndex((file) => file.fileKey === props.selectedFileKey),
   );
   const entry = files[index];
+  // Adjusted in render: a file picked any other way, such as from the tree, ends the arrival.
+  if (moveArrival && entry) {
+    const here = entry.fileKey === moveArrival.fileKey;
+    if (here && !moveArrival.reached) setMoveArrival({ ...moveArrival, reached: true });
+    else if (!here && moveArrival.reached) setMoveArrival(null);
+  }
   const filePath = entry?.filePath ?? "";
   const patch = entry?.fileDiff;
   const patchState = entry ? props.patchState(filePath) : null;
@@ -257,6 +265,7 @@ export function SideBySideDiffPanel(props: SideBySideDiffPanelProps) {
       fileKey: target.fileKey,
       side: move.side === "deletions" ? "additions" : "deletions",
       line: move.counterpart.startLine,
+      reached: false,
     });
     setArrival(null);
     props.onSelectFile(target.fileKey);

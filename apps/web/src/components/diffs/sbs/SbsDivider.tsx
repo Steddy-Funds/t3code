@@ -52,6 +52,7 @@ export function SbsDivider({
           d={shape.path}
           className="sbs-move-shape"
           data-kind={shape.kind}
+          data-side={shape.side}
           data-sbs-move-shape={shape.id}
         />
       ))}

@@ -115,6 +115,8 @@ export interface SbsMoveShape {
   readonly id: string;
   /** A band between both ends of a move in this file, or a wedge for one that leaves it. */
   readonly kind: "band" | "wedge";
+  /** The side the move starts from: the old side's lines left for good. */
+  readonly side: SbsSide;
   readonly path: string;
 }
 
@@ -149,14 +151,19 @@ export function sbsVisibleMoveShapes(
       const own = span(side, mark.range);
       if (!mark.move.counterpart.sameFile) {
         if (inView(own))
-          shapes.push({ id, kind: "wedge", path: wedgePath(own, side === "deletions", width) });
+          shapes.push({
+            id,
+            kind: "wedge",
+            side,
+            path: wedgePath(own, side === "deletions", width),
+          });
         return;
       }
       // One band per move: the old side's mark draws it.
       if (side !== "deletions" || mark.counterpartRange === null) return;
       const other = span("additions", mark.counterpartRange);
       if (inView(own) && inView(other)) {
-        shapes.push({ id, kind: "band", path: sbsConnectorPath(own, other, width) });
+        shapes.push({ id, kind: "band", side, path: sbsConnectorPath(own, other, width) });
       }
     });
   }

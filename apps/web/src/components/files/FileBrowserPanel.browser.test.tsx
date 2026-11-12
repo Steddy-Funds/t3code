@@ -181,7 +181,7 @@ describe("FileBrowserPanel", () => {
     await vi.waitFor(() => expect(onOpenFile).toHaveBeenCalledTimes(1));
   });
 
-  it("in the Project pane, colours changes and follows the opened file without taking focus or a search", async () => {
+  it("in the Project pane, colours changes and follows the opened file without taking focus, and after a search", async () => {
     setup({ entries: projectEntries });
     const pane = projectPane({
       gitChanges: [
@@ -211,6 +211,12 @@ describe("FileBrowserPanel", () => {
     await expect.element(search).toHaveValue("read");
     await expect.element(search).toHaveFocus();
     expect(findTreeRow("notes.txt")?.getAttribute("aria-selected")).not.toBe("true");
+
+    await userEvent.clear(search);
+    await vi.waitFor(() =>
+      expect(findTreeRow("notes.txt")?.getAttribute("aria-selected")).toBe("true"),
+    );
+    expect(findTreeRow("src/app.ts")?.getAttribute("aria-selected")).not.toBe("true");
   });
 
   it("in the Project pane, a focus request lands on the opened file's row, and typing there searches", async () => {
@@ -229,14 +235,15 @@ describe("FileBrowserPanel", () => {
     });
     expect(onTreeFocused).toHaveBeenCalledOnce();
 
-    await userEvent.keyboard("r");
+    // "n" matches notes.txt only, so the focused row is filtered out.
+    await userEvent.keyboard("n");
     const search = page.getByRole("searchbox");
     await expect.element(search).toHaveFocus();
-    await expect.element(search).toHaveValue("r");
+    await expect.element(search).toHaveValue("n");
     await userEvent.keyboard("{ArrowDown}");
     await vi.waitFor(() => {
       const focused = document.activeElement?.shadowRoot?.activeElement;
-      expect(focused?.getAttribute("data-item-path")).toBeTruthy();
+      expect(focused?.getAttribute("data-item-path")).toBe("notes.txt");
     });
   });
 

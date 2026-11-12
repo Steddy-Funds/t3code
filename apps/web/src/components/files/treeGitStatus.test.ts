@@ -96,6 +96,15 @@ describe("workspaceChanges", () => {
     ).toBeNull();
   });
 
+  it("takes a workspace reached through a symlink as the root git resolved", () => {
+    const physical = workingTreeChanges(
+      status("/private/tmp/demo", [{ path: "a.ts", insertions: 1, deletions: 0 }]),
+    );
+    expect(workspaceChanges(physical, "/tmp/demo/")).toEqual([
+      { path: "a.ts", change: "modified" },
+    ]);
+  });
+
   it("matches Windows roots regardless of case and separators", () => {
     const windows = workingTreeChanges(
       status("C:\\Code\\Repo", [{ path: "pkg/a.ts", insertions: 1, deletions: 0 }]),

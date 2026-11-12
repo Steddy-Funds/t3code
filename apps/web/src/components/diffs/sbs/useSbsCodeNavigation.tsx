@@ -59,10 +59,12 @@ function anchorOf(element: Element): CodePopupAnchor {
 /**
  * Go to Declaration from a side-by-side pane, through the file viewer's navigation. A pane's text
  * is asked about only when it is the file on disk now: an older version, or a patch's hunks, says
- * so and offers the file instead.
+ * so and offers the file instead. A lookup lasts as long as `shownFile`, the file the panes show
+ * (null when they are gone).
  */
 export function useSbsCodeNavigation(
   context: SbsCodeNavigationContext | null,
+  shownFile: string | null,
   onOpenFile: (filePath: string, line?: number) => void,
 ) {
   const [popup, setPopup] = useState<SbsNavigationPopup | null>(null);
@@ -77,8 +79,14 @@ export function useSbsCodeNavigation(
     request.current.controller = null;
   };
 
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- a lookup still in flight when the diff goes is aborted
-  useEffect(() => () => cancel(), []);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- a lookup still in flight when its file or the diff goes is aborted
+  useEffect(
+    () => () => {
+      cancel();
+      setPopup(null);
+    },
+    [shownFile],
+  );
 
   const activate = async (
     { environmentId, cwd, repositoryRoot, threadRef }: SbsCodeNavigationContext,

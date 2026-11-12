@@ -743,9 +743,11 @@ export default function DiffPanel({
   const shownFileEntries = renderableFileEntries.filter(({ fileDiff }) => isFileShown(fileDiff));
   const sideBySideFileKey =
     sideBySideFile?.scopeKey === collapseScopeKey ? sideBySideFile.fileKey : null;
+  const sideBySideShownFile = sideBySide
+    ? (shownFileEntries.find((file) => file.fileKey === sideBySideFileKey) ?? shownFileEntries[0])
+    : undefined;
   const treeSelectedPath = sideBySide
-    ? ((shownFileEntries.find((file) => file.fileKey === sideBySideFileKey) ?? shownFileEntries[0])
-        ?.fileDiff.name ?? null)
+    ? (sideBySideShownFile?.fileDiff.name ?? null)
     : selectedFilePath;
   const shownFileKeys = shownFileEntries.map((file) => file.fileKey);
   const defaultCollapsedDiffFileKeys = settings.diffFilesCollapsed
@@ -856,6 +858,7 @@ export default function DiffPanel({
           threadRef: routeThreadRef,
         }
       : null,
+    sideBySideShownFile ? `${collapseScopeKey}:${sideBySideShownFile.fileKey}` : null,
     openDiffFile,
   );
   const toggleDiffFileCollapsed = useStableCallback((fileKey: string) => {

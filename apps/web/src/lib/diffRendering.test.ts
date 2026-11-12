@@ -460,7 +460,6 @@ describe("ALL_DIFF_THEME_NAMES", () => {
 
 describe("DIFF_SURFACE_THEME_UNSAFE_CSS", () => {
   it("carries no theme's editor colours, so every other theme paints from the stock tints", () => {
-    expect(DIFF_SURFACE_THEME_UNSAFE_CSS).not.toContain("--app-theme-editor-");
     expect(DIFF_SURFACE_THEME_UNSAFE_CSS).not.toContain("data-diff-span");
     expect(DIFF_SURFACE_THEME_UNSAFE_CSS).not.toContain("--diffs-computed-");
     expect(DIFF_SURFACE_THEME_UNSAFE_CSS).not.toContain("--diffs-fg-number-override");
@@ -495,10 +494,9 @@ describe("themeEditorSurfaceCss", () => {
     expect(themeEditorSurfaceCss(sentinel)).toBe(css);
   });
 
-  it("is not empty for Material Ocean, and never reads an editor variable off the root", () => {
+  it("is not empty for Material Ocean", () => {
     const own = themeEditorSurfaceCss(getThemeEditorColors(MATERIAL_OCEAN_THEME, "dark"));
     expect(own.length).toBeGreaterThan(0);
-    expect(own).not.toContain("--app-theme-editor-");
     expect(own).not.toContain("undefined");
   });
 

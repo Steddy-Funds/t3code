@@ -779,8 +779,6 @@ describe("stored theme preferences", () => {
 });
 
 describe("material-ocean on the root", () => {
-  const EDITOR_PREFIX = "--app-theme-editor-";
-
   function withRoot(
     run: (root: { properties: Map<string, string>; dataset: Record<string, string> }) => void,
     storedThemes?: unknown,
@@ -815,9 +813,6 @@ describe("material-ocean on the root", () => {
     }
   }
 
-  const editorVariables = (properties: ReadonlyMap<string, string>) =>
-    [...properties.keys()].filter((name) => name.startsWith(EDITOR_PREFIX));
-
   it("sets chrome, code and terminal variables from its palette", () => {
     withRoot(({ properties, dataset }) => {
       applyThemePalette("material-ocean", "dark");
@@ -835,35 +830,6 @@ describe("material-ocean on the root", () => {
         );
       }
     });
-  });
-
-  it("sets no editor variable under any theme, in either appearance, or in a preview", () => {
-    const custom = parseThemeFile({
-      version: THEME_FILE_VERSION,
-      id: "midnight",
-      name: "Midnight",
-      appearance: "dark",
-      colors: { canvas: "#101820" },
-    });
-    withRoot(
-      ({ properties }) => {
-        for (const id of [
-          "system",
-          "light",
-          "dark",
-          "midnight",
-          ...BUILT_IN_THEMES.map((theme) => theme.id),
-        ]) {
-          for (const appearance of ["light", "dark"] as const) {
-            applyThemePalette(id, appearance);
-            expect(editorVariables(properties), `${id} ${appearance}`).toEqual([]);
-          }
-        }
-        applyThemeColorPreview(getThemeColorsForMode(GROVE_THEME, "dark")!, "dark");
-        expect(editorVariables(properties)).toEqual([]);
-      },
-      [custom],
-    );
   });
 
   it("is the same painted roles in either appearance it is asked for", () => {

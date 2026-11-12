@@ -144,7 +144,7 @@ export function composerCodeBlockHighlight(options: {
             // otherwise tell the view a repaint is due.
             const themeObserver = new MutationObserver(() => refresh(false));
             themeObserver.observe(document.documentElement, {
-              attributeFilter: ["class"],
+              attributeFilter: ["class", "data-theme-id"],
             });
 
             return {

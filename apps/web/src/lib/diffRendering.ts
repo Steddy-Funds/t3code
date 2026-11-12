@@ -383,8 +383,10 @@ export function themeEditorSurfaceCss(editorColors: ThemeEditorColors | null): s
   return `
 ${DIFF_SURFACE_ROOTS} {
   --diffs-fg-number-override: ${lineNumber};
-  --diffs-bg-addition-number-override: ${diff.inserted.line};
-  --diffs-bg-deletion-number-override: ${diff.deleted.line};
+  --diffs-bg-addition-override: ${diff.inserted};
+  --diffs-bg-addition-number-override: ${diff.inserted};
+  --diffs-bg-deletion-override: ${diff.deleted};
+  --diffs-bg-deletion-number-override: ${diff.deleted};
   --diffs-bg-search-match-override: ${find.match};
   --diffs-bg-search-match-current-override: ${find.currentMatch};
   --diffs-fg-search-match-override: ${find.foreground};
@@ -392,18 +394,18 @@ ${DIFF_SURFACE_ROOTS} {
 
 /* Pierre mixes a tint into the surface; an IDE scheme's diff colour is the painted colour. */
 :is([data-line], [data-no-newline])[data-line-type="change-addition"] {
-  --diffs-computed-diff-line-bg: ${diff.inserted.line};
+  --diffs-computed-diff-line-bg: ${diff.inserted};
 }
 :is([data-line], [data-no-newline])[data-line-type="change-deletion"] {
-  --diffs-computed-diff-line-bg: ${diff.deleted.line};
+  --diffs-computed-diff-line-bg: ${diff.deleted};
 }
 
 /* A line with changed words is a modified line: muted, its words at the full colour. */
 ${CHANGED_LINE}:has([data-diff-span]) {
-  --diffs-computed-diff-line-bg: ${diff.modified.muted};
+  --diffs-computed-diff-line-bg: ${diff.modifiedMuted};
 }
 ${CHANGED_LINE} [data-diff-span] {
-  background-color: ${diff.modified.line};
+  background-color: ${diff.modified};
 }
 
 :is([data-line], [data-column-number])[data-editor-active-line] {

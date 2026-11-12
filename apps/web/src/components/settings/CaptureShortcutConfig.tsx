@@ -1,4 +1,4 @@
-import { useDiffThemeName } from "../../hooks/useDiffThemeName";
+import { useDiffThemeName, useThemeEditorSurfaceCss } from "../../hooks/useDiffThemeName";
 import {
   isModifierPairShortcut,
   type DesktopCaptureConfigApplied,
@@ -38,6 +38,7 @@ export function CaptureShortcutConfig({
   const bridge = getDesktopSnapShotBridge();
   const resolvedTheme = useRenderedAppearance();
   const diffThemeName = useDiffThemeName(resolvedTheme);
+  const themeCss = useThemeEditorSurfaceCss();
   const { copyToClipboard, isCopied } = useCopyToClipboard();
   const [preview, setPreview] = useState<DesktopCaptureConfigPreview | null>(null);
   const [result, setResult] = useState<DesktopCaptureConfigApplied | null>(null);
@@ -181,6 +182,7 @@ export function CaptureShortcutConfig({
                 options={{
                   diffStyle: "unified",
                   theme: diffThemeName,
+                  ...(themeCss ? { unsafeCSS: themeCss } : {}),
                   overflow: "wrap",
                   preferredHighlighter: PREFERRED_HIGHLIGHTER,
                 }}

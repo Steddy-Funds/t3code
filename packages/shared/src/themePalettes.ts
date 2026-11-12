@@ -123,15 +123,6 @@ export type ThemeSyntaxTheme = Readonly<{
 
 export type ThemeTokenStyle = Readonly<{ color: string; italic?: true; bold?: true }>;
 
-export type ThemeDiffColors = Readonly<{
-  /** A whole changed line. */
-  line: string;
-  /** A changed line whose changed words are painted on top of it. */
-  muted: string;
-  /** The changed words, and the scrollbar marker. */
-  word: string;
-}>;
-
 export type ThemeAnsiColors = readonly [
   string,
   string,
@@ -162,10 +153,14 @@ export type ThemeEditorColors = Readonly<{
   /** The line the caret is on, in an editable file. */
   caretRow: string;
   diff: Readonly<{
-    inserted: ThemeDiffColors;
-    deleted: ThemeDiffColors;
-    modified: ThemeDiffColors;
-    conflict: ThemeDiffColors;
+    /** A wholly added line. */
+    inserted: string;
+    /** A wholly deleted line. */
+    deleted: string;
+    /** The changed words of a line that changed on both sides. */
+    modified: string;
+    /** That line itself, under its changed words. */
+    modifiedMuted: string;
   }>;
   find: Readonly<{ match: string; currentMatch: string; foreground: string }>;
 }>;
@@ -1199,10 +1194,10 @@ export const MATERIAL_OCEAN_THEME: ThemeDefinition = {
       lineNumber: "#475f63",
       caretRow: "#1b2529",
       diff: {
-        inserted: { line: "#264b33", muted: "#182824", word: "#447152" },
-        deleted: { line: "#41454b", muted: "#23262e", word: "#656e76" },
-        modified: { line: "#12404b", muted: "#10242e", word: "#43698d" },
-        conflict: { line: "#4b1515", muted: "#271318", word: "#b03435" },
+        inserted: "#264b33",
+        deleted: "#41454b",
+        modified: "#12404b",
+        modifiedMuted: "#10242e",
       },
       find: { match: "#f8e71c", currentMatch: "#84ffff", foreground: "#292d3e" },
     },
@@ -1244,11 +1239,14 @@ export function semanticTokenStyle(
   modifiers: ReadonlyArray<string> = [],
 ): ThemeTokenStyle | null {
   if (!theme) return null;
+  // Own entries only: a server's token type may be named like an Object.prototype member.
+  const styleOf = (key: string) =>
+    Object.hasOwn(theme.semantic, key) ? theme.semantic[key] : null;
   for (const prefix of [type, "*"]) {
     for (const modifier of modifiers) {
-      const style = theme.semantic[`${prefix}.${modifier}`];
+      const style = styleOf(`${prefix}.${modifier}`);
       if (style) return style;
     }
   }
-  return theme.semantic[type] ?? null;
+  return styleOf(type) ?? null;
 }

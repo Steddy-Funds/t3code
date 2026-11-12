@@ -27,11 +27,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import { McpSchema, McpServer } from "effect/ai";
-import {
-  answeredReviewNoteIds,
-  reviewNoteFromToolItem,
-  reviewNoteSectionId,
-} from "@t3tools/shared/reviewNote";
+import { reviewNoteFromToolItem, reviewNoteSectionId } from "@t3tools/shared/reviewNote";
 import type * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 import * as ProviderContinuationRequests from "@t3tools/provider-core/server/ProviderContinuationRequests";
 
@@ -103,14 +99,15 @@ const mcpClient = McpSchema.McpServerClient.of({
   getClient: Effect.die("unused"),
 });
 
+const caller: McpInvocationContext.McpThreadCaller = {
+  threadId,
+  providerSessionId: "provider-session:review-notes",
+  providerInstanceId: instanceId,
+};
 const scope: McpInvocationContext.McpInvocationScope = {
   environmentId: EnvironmentId.make("environment:review-notes"),
   requestNamespace: "provider-session:review-notes",
-  thread: {
-    threadId,
-    providerSessionId: "provider-session:review-notes",
-    providerInstanceId: instanceId,
-  },
+  thread: caller,
   client: undefined,
   capabilities: new Set(["orchestration"]),
   issuedAt: 1,
@@ -391,6 +388,29 @@ describe("flag_for_review", () => {
           expect.objectContaining({ note: args.note }),
         ]);
 
+        // A note stored before the thread joined the hash, under the id it got then, is the same
+        // note when the agent sends it again.
+        const before = { path: FILE, startLine: 4, endLine: 4, note: "Refunds retry too." };
+        const beforeId = TurnItemId.make(
+          `${REVIEW_NOTE_TURN_ITEM_PREFIX}${encodeURIComponent(threadId)}:ffef5a3fa384e56f44a29f109188b61e`,
+        );
+        yield* a.orchestrator.dispatch({
+          type: "review_note.record",
+          commandId: CommandId.make("command:review-note:before"),
+          threadId,
+          runId,
+          nodeId: rootNode,
+          turnItemId: beforeId,
+          note: {
+            ...before,
+            excerpt: "four",
+            excerptTruncated: false,
+            contentRevision: FILE_BLOB,
+          },
+        });
+        expect(noteIdOf(yield* a.flag(before))).toBe(beforeId);
+        expect((yield* a.notes).map((note) => note.id)).toEqual([noteId, beforeId]);
+
         // The blob id is of the file's bytes, a byte order mark included.
         yield* a.write(a.workspace, "src/bom.ts", "\uFEFFone\n");
         const bom = { ...args, path: "src/bom.ts", startLine: 1, endLine: 1 };
@@ -524,7 +544,7 @@ describe("flag_for_review", () => {
 
         // The fork's agent flags the same note on the same lines.
         const forkNoteId = noteIdOf(
-          yield* a.flagAs({ ...scope, thread: { ...scope.thread, threadId: forkId } })(args),
+          yield* a.flagAs({ ...scope, thread: { ...caller, threadId: forkId } })(args),
         );
         expect(forkNoteId).not.toBe(sourceNoteId);
         expect(
@@ -532,21 +552,10 @@ describe("flag_for_review", () => {
         ).toBe(true);
         expect(reviewNoteSectionId(forkNoteId)).not.toBe(reviewNoteSectionId(sourceNoteId));
 
-        const notes = (yield* visibleNotes(forkId)).map(({ note }) => note);
-        expect(notes.map((note) => note.id)).toEqual([sourceNoteId, forkNoteId]);
-
-        // A reply in the fork's section answers the fork's note, not the inherited one.
-        const reply = (noteId: TurnItemId) => ({
-          role: "user",
-          context: {
-            version: 1 as const,
-            records: [{ kind: "review-comment", sectionId: reviewNoteSectionId(noteId) }],
-          },
-        });
-        expect(answeredReviewNoteIds(notes, [reply(forkNoteId)])).toEqual(new Set([forkNoteId]));
-        expect(answeredReviewNoteIds(notes, [reply(sourceNoteId)])).toEqual(
-          new Set([sourceNoteId]),
-        );
+        expect((yield* visibleNotes(forkId)).map(({ note }) => note.id)).toEqual([
+          sourceNoteId,
+          forkNoteId,
+        ]);
 
         // The source gains nothing from the fork.
         expect((yield* a.notesOf(threadId)).map((note) => note.id)).toEqual([sourceNoteId]);

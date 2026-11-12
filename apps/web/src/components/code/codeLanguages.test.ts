@@ -1,7 +1,7 @@
 import type { CodeLibraryRoot, CodeServerStatus } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import { fileExtension, libraryRootForPath, serverForPath } from "./codeLanguages";
+import { fileExtension, isLibraryPath, libraryRootForPath, serverForPath } from "./codeLanguages";
 
 const server = (languageId: string, roots: ReadonlyArray<string> = []): CodeServerStatus => ({
   languageId,
@@ -129,5 +129,26 @@ describe("libraryRootForPath", () => {
     expect(
       libraryRootForPath([server("python", ["C:/proj/.venv/"])], "C:\\proj\\.venv\\a.py"),
     ).not.toBeNull();
+  });
+});
+
+describe("isLibraryPath", () => {
+  it.each([
+    "node_modules/pkg/index.d.ts",
+    "packages/web/node_modules/pkg/index.d.ts",
+    ".venv/lib/python3.12/site-packages/attr/__init__.py",
+    "/usr/lib/python3/site-packages/six.py",
+    "C:\\proj\\node_modules\\pkg\\index.js",
+  ])("is library code under a node_modules or site-packages folder: %s", (path) => {
+    expect(isLibraryPath(path)).toBe(true);
+  });
+
+  it.each([
+    "src/node_modules.ts",
+    "docs/site-packages.md",
+    "my_node_modules/pkg/index.js",
+    "src/app.py",
+  ])("is not for a name that only contains one: %s", (path) => {
+    expect(isLibraryPath(path)).toBe(false);
   });
 });

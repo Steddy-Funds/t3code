@@ -1157,7 +1157,7 @@ export default function FilePreviewPanel({
       !file.data.truncated,
   );
   const readOnlySource =
-    file.data?.truncated === true || isHostFile || !canWriteFiles || codeIntel.libraryRoot !== null;
+    file.data?.truncated === true || isHostFile || !canWriteFiles || codeIntel.libraryCode;
   const codeNavigation = useCodeNavigation({
     environmentId,
     cwd,
@@ -1348,7 +1348,7 @@ export default function FilePreviewPanel({
           Read-only connection. Unsaved edits are kept until write access returns.
         </div>
       ) : null}
-      {codeIntel.libraryRoot !== null && showsRawText ? (
+      {codeIntel.libraryCode && showsRawText ? (
         <LibraryCodeNotice root={codeIntel.libraryRoot} />
       ) : null}
       {previewPath &&

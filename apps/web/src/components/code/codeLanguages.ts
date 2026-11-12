@@ -41,6 +41,13 @@ function isWithin(path: string, root: string): boolean {
   return normalizedPath === normalizedRoot || normalizedPath.startsWith(`${normalizedRoot}/`);
 }
 
+/** The server marks these locations external too, wherever they sit. */
+export function isLibraryPath(path: string): boolean {
+  return path
+    .split(/[\\/]/)
+    .some((segment) => segment === "node_modules" || segment === "site-packages");
+}
+
 /** The library root an absolute path lies under, innermost first when roots nest. */
 export function libraryRootForPath(
   servers: ReadonlyArray<CodeServerStatus>,

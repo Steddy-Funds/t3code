@@ -17,7 +17,12 @@ import {
   selectActiveRightPanelSurface,
   useRightPanelStore,
 } from "../../rightPanelStore";
-import { codeNavigationThreadKey, navigateToCodeLocation, registerCodeViewer } from "./navigation";
+import {
+  codeNavigationThreadKey,
+  expireCodeJump,
+  navigateToCodeLocation,
+  registerCodeViewer,
+} from "./navigation";
 
 // The dispatcher's keybinding lookup is its own test's business: capture what navigation.ts
 // registers and call the handlers directly.
@@ -385,6 +390,8 @@ describe("back and forward", () => {
     using stack = setup();
     jumped(stack);
     (document.activeElement as HTMLElement | null)?.blur();
+    // The router resolving the same location again, as `router.invalidate()` does, keeps the jump.
+    expireCodeJump();
 
     const { handled, event } = press("navigation.back");
 
@@ -405,6 +412,19 @@ describe("back and forward", () => {
     expect(handled).toBe(false);
     expect(event.defaultPrevented).toBe(false);
     expect(history(keyA).back).toEqual([entry("src/origin.ts", 2, 1)]);
+  });
+
+  it("falls through after app navigation left the jump's page and came back to it", () => {
+    using stack = setup();
+    jumped(stack);
+    const before = window.location.href;
+    stack.defer(() => window.history.replaceState(null, "", before));
+    window.history.replaceState(null, "", `${before.split("#")[0]}#moved`);
+    expireCodeJump();
+    window.history.replaceState(null, "", before);
+    expireCodeJump();
+
+    expect(press("navigation.back").handled).toBe(false);
   });
 
   it("still steps after app navigation when focus is inside a viewer", () => {

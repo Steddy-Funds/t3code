@@ -128,10 +128,10 @@ export function CodeIntelStatusChip(props: {
   );
 }
 
-export function LibraryCodeNotice(props: { readonly root: CodeLibraryRoot }) {
+export function LibraryCodeNotice(props: { readonly root: CodeLibraryRoot | null }) {
   return (
     <div className="shrink-0 border-b px-3 py-1.5 text-2xs text-muted-foreground">
-      Library code from {props.root.label}. Read-only.
+      {props.root === null ? "Library code" : `Library code from ${props.root.label}`}. Read-only.
     </div>
   );
 }

@@ -5,7 +5,7 @@ import { resolvePathLinkTarget } from "@t3tools/shared/fileLinks";
 import { codeIntelEnvironment } from "~/state/codeIntel";
 import { useEnvironmentQuery } from "~/state/query";
 
-import { libraryRootForPath, serverForPath } from "./codeLanguages";
+import { isLibraryPath, libraryRootForPath, serverForPath } from "./codeLanguages";
 
 const NO_SERVERS: ReadonlyArray<CodeServerStatus> = [];
 
@@ -15,8 +15,10 @@ export interface CodeIntelFile {
   readonly servers: ReadonlyArray<CodeServerStatus>;
   /** The language server for this file's language; null for languages without one. */
   readonly server: CodeServerStatus | null;
-  /** Set for files under a virtualenv, stdlib, stubs or node_modules: read-only library code. */
+  /** The virtualenv, stdlib, stubs or node_modules root the file lies under. */
   readonly libraryRoot: CodeLibraryRoot | null;
+  /** Read-only: under a library root, or in a node_modules or site-packages folder anywhere. */
+  readonly libraryCode: boolean;
   readonly refreshStatus: () => void;
 }
 
@@ -33,12 +35,15 @@ export function useCodeIntelFile(
       : null,
   );
   const servers = status.data?.servers ?? NO_SERVERS;
+  const supported = status.data !== null && !isCodeIntelUnsupportedError(status.failure);
+  const libraryRoot =
+    path === null ? null : libraryRootForPath(servers, resolvePathLinkTarget(path, cwd));
   return {
-    supported: status.data !== null && !isCodeIntelUnsupportedError(status.failure),
+    supported,
     servers,
     server: path === null ? null : serverForPath(servers, path),
-    libraryRoot:
-      path === null ? null : libraryRootForPath(servers, resolvePathLinkTarget(path, cwd)),
+    libraryRoot,
+    libraryCode: libraryRoot !== null || (supported && path !== null && isLibraryPath(path)),
     refreshStatus: status.refresh,
   };
 }

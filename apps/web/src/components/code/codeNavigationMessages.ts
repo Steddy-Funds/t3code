@@ -19,6 +19,9 @@ const NO_RESULT: Record<CodeNavigationAction, string> = {
   definition: "No definition found",
 };
 
+// Shown once the viewer reloaded the file: asking again reads the new text.
+export const CHANGED_ON_DISK = "The file changed on disk. Try again.";
+
 export function noResultMessage(action: CodeNavigationAction): string {
   return NO_RESULT[action];
 }
@@ -52,7 +55,7 @@ export function codeIntelFailureMessage(
         ? `${name} is still indexing. Try again in a moment.`
         : `${name} did not answer in time`;
     case "stale_document":
-      return "The file changed on disk. Reopen it to navigate.";
+      return CHANGED_ON_DISK;
     case "file_too_large":
       return "This file is too large for the language server";
     case "not_found":

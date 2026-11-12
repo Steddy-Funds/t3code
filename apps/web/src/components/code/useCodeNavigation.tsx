@@ -43,6 +43,7 @@ import {
   wordAtTarget,
 } from "./codeNavigationDom";
 import {
+  CHANGED_ON_DISK,
   type CodeNavigationAction,
   codeIntelFailureMessage,
   noResultMessage,
@@ -50,6 +51,7 @@ import {
 } from "./codeNavigationMessages";
 import {
   codeIntelOutcome,
+  codeIntelStep,
   definitionExcerpt,
   fencedCode,
   isLineUnchanged,
@@ -178,6 +180,7 @@ export function useCodeNavigation(options: CodeNavigationOptions) {
   const modifierRef = useRef(false);
   const pressRef = useRef<CodeWordHit | null>(null);
   const keepPopupFocusRef = useRef(false);
+  const shownPathRef = useRef(path);
   const targetRef = useRef<PaintedRanges | null>(null);
   const usagesRef = useRef<PaintedRanges | null>(null);
   const requestRef = useRef<{ seq: number; controller: AbortController | null }>({
@@ -327,38 +330,37 @@ export function useCodeNavigation(options: CodeNavigationOptions) {
     request.controller = null;
     if (server?.state !== "ready") intel.refreshStatus();
     const outcome = codeIntelOutcome(result);
-    switch (outcome._tag) {
-      case "answer":
-        if (outcome.value.revision === fileContentRevision(currentText())) return outcome.value;
+    if (outcome._tag === "failed" && onFailure?.(outcome.reason)) return null;
+    const step = codeIntelStep(
+      outcome,
+      {
+        revision: fileContentRevision(currentText()),
+        unsaved: getUnsavedProjectFileQueryData(environmentId, cwd, path) !== null,
+      },
+      retried,
+    );
+    switch (step._tag) {
+      case "use":
+        return step.value;
+      case "ignore":
+        return null;
+      case "close":
         setPopup(null);
         return null;
-      case "interrupted":
+      case "hint":
+        setPopup({ kind: "hint", anchor, message: step.message });
         return null;
-      case "unsupported":
-        setPopup(null);
-        return null;
-      case "defect":
-        setPopup({ kind: "hint", anchor, message: outcome.message });
-        return null;
-      case "failed": {
-        if (onFailure?.(outcome.reason)) return null;
-        if (outcome.reason === "stale_document") {
-          if (getUnsavedProjectFileQueryData(environmentId, cwd, path) !== null) {
-            setPopup({ kind: "hint", anchor, message: "Save to navigate" });
-            return null;
-          }
-          if (!retried) {
-            await reloadFile(path);
-            if (request.seq !== seq) return null;
-            // Lines moved under the caret: asking again would answer for another name.
-            if (!isLineUnchanged(askedText, currentText(), position.line)) {
-              setPopup({ kind: "hint", anchor, message: "The file changed on disk. Try again." });
-              return null;
-            }
-            return ask(position, query, onFailure, true);
-          }
+      case "reload":
+        await reloadFile(path);
+        if (request.seq !== seq) return null;
+        // Lines moved under the caret: asking again would answer for another name.
+        if (!isLineUnchanged(askedText, currentText(), position.line)) {
+          setPopup({ kind: "hint", anchor, message: CHANGED_ON_DISK });
+          return null;
         }
-        const message = codeIntelFailureMessage(outcome.reason, outcome.message, {
+        return ask(position, query, onFailure, true);
+      case "failed": {
+        const message = codeIntelFailureMessage(step.reason, step.message, {
           extension: fileExtension(path),
           server,
         });
@@ -516,6 +518,7 @@ export function useCodeNavigation(options: CodeNavigationOptions) {
 
   const runCommand = useEffectEvent((command: CodeCommand, event: KeyboardEvent) => {
     event.preventDefault();
+    keepPopupFocusRef.current = false;
     const position = currentPosition();
     if (command === "goToLine") {
       setPopup({
@@ -613,6 +616,7 @@ export function useCodeNavigation(options: CodeNavigationOptions) {
     const { start } = hit.range;
     // The clicked word is where Back returns to.
     cursorRef.current = start;
+    keepPopupFocusRef.current = false;
     editorRef.current?.focus({ lineNumber: start.line + 1, character: start.character });
     void goTo("declaration", "definition", start);
   });
@@ -692,6 +696,18 @@ export function useCodeNavigation(options: CodeNavigationOptions) {
     };
   }, [active, threadKey, threadRef]);
 
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- one viewer serves every file tab, so a file switch drops what was asked or shown over the last file
+  useEffect(() => {
+    if (shownPathRef.current === path) return;
+    shownPathRef.current = path;
+    const request = requestRef.current;
+    request.seq += 1;
+    request.controller?.abort();
+    request.controller = null;
+    // Cmd+Enter in a result list opens another file and keeps the list.
+    if (!keepPopupFocusRef.current) setPopup(null);
+  }, [path]);
+
   const onPostRender = (fileContainer: HTMLElement, phase: PostRenderPhase) => {
     if (phase === "unmount") {
       if (containerRef.current === fileContainer) containerRef.current = null;
@@ -708,6 +724,7 @@ export function useCodeNavigation(options: CodeNavigationOptions) {
   }, [hasEditor]);
 
   const closePopup = (restoreFocus: boolean) => {
+    keepPopupFocusRef.current = false;
     setPopup(null);
     if (restoreFocus) focusViewer();
   };

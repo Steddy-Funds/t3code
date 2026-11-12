@@ -5,7 +5,9 @@ import { AsyncResult } from "effect/reactivity";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  type CodeIntelOutcome,
   codeIntelOutcome,
+  codeIntelStep,
   definitionExcerpt,
   fencedCode,
   filterLocations,
@@ -484,5 +486,48 @@ describe("codeIntelOutcome", () => {
       reason: "timeout",
       message: "slow",
     });
+  });
+});
+
+describe("codeIntelStep", () => {
+  type Answer = { readonly revision: string };
+  const answer: CodeIntelOutcome<Answer> = { _tag: "answer", value: { revision: "r1" } };
+  const stale: CodeIntelOutcome<Answer> = {
+    _tag: "failed",
+    reason: "stale_document",
+    message: "changed",
+  };
+  const clean = { revision: "r1", unsaved: false };
+  const unsaved = { revision: "r1", unsaved: true };
+  const saveToNavigate = { _tag: "hint", message: "Save to navigate" };
+
+  it("uses an answer for the revision the viewer shows", () => {
+    expect(codeIntelStep(answer, clean, false)).toEqual({ _tag: "use", value: answer.value });
+  });
+
+  it("drops an answer for a revision the viewer no longer shows, retried or not", () => {
+    const edited = { revision: "r2", unsaved: true };
+    expect(codeIntelStep(answer, edited, false)).toEqual({ _tag: "close" });
+    expect(codeIntelStep(answer, { ...edited, unsaved: false }, true)).toEqual({ _tag: "close" });
+  });
+
+  it("asks for a save while the server has not seen the buffer's edits, never reloading it", () => {
+    expect(codeIntelStep(stale, unsaved, false)).toEqual(saveToNavigate);
+    expect(codeIntelStep(stale, unsaved, true)).toEqual(saveToNavigate);
+  });
+
+  it("reloads a clean file that changed on disk once, then reports the failure", () => {
+    expect(codeIntelStep(stale, clean, false)).toEqual({ _tag: "reload" });
+    expect(codeIntelStep(stale, clean, true)).toEqual(stale);
+  });
+
+  it("passes other failures through, whatever the buffer", () => {
+    const timeout: CodeIntelOutcome<Answer> = {
+      _tag: "failed",
+      reason: "timeout",
+      message: "slow",
+    };
+    expect(codeIntelStep(timeout, unsaved, false)).toEqual(timeout);
+    expect(codeIntelStep(timeout, clean, false)).toEqual(timeout);
   });
 });

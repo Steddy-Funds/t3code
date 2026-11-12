@@ -198,3 +198,38 @@ export function codeIntelOutcome<A>(result: AtomCommandResult<A, unknown>): Code
         : "The language server request failed",
   };
 }
+
+export type CodeIntelStep<A> =
+  | { readonly _tag: "use"; readonly value: A }
+  | { readonly _tag: "ignore" }
+  | { readonly _tag: "close" }
+  | { readonly _tag: "hint"; readonly message: string }
+  | { readonly _tag: "reload" }
+  | { readonly _tag: "failed"; readonly reason: CodeIntelErrorReason; readonly message: string };
+
+/**
+ * What an outcome means for the text the viewer shows now. An answer for another revision is
+ * dropped; a stale document asks for a save while the buffer has edits, else one reload and retry.
+ */
+export function codeIntelStep<A extends { readonly revision: string }>(
+  outcome: CodeIntelOutcome<A>,
+  shown: { readonly revision: string; readonly unsaved: boolean },
+  retried: boolean,
+): CodeIntelStep<A> {
+  switch (outcome._tag) {
+    case "answer":
+      return outcome.value.revision === shown.revision
+        ? { _tag: "use", value: outcome.value }
+        : { _tag: "close" };
+    case "interrupted":
+      return { _tag: "ignore" };
+    case "unsupported":
+      return { _tag: "close" };
+    case "defect":
+      return { _tag: "hint", message: outcome.message };
+    case "failed":
+      if (outcome.reason !== "stale_document") return outcome;
+      if (shown.unsaved) return { _tag: "hint", message: "Save to navigate" };
+      return retried ? outcome : { _tag: "reload" };
+  }
+}

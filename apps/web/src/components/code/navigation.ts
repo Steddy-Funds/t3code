@@ -1,5 +1,6 @@
 import { scopedThreadKey } from "@t3tools/client-runtime/environment";
 import type { CodeLocation, ScopedThreadRef } from "@t3tools/contracts";
+import type { AnyRouter } from "@tanstack/react-router";
 
 import {
   type CodeHistoryDirection,
@@ -59,6 +60,18 @@ export function navigateToCodeLocation(
   }
   store.reveal(threadKey, threadRef, location.path, location.range);
   useRightPanelStore.getState().openFile(threadRef, location.path, location.range.start.line + 1);
+}
+
+/** Once app navigation leaves the jump's page, back and forward stay the app's, also on return. */
+export function expireCodeJump(): void {
+  const { lastJump } = useCodeNavigationStore.getState();
+  if (lastJump !== null && lastJump.href !== window.location.href) {
+    useCodeNavigationStore.setState({ lastJump: null });
+  }
+}
+
+export function startCodeJumpExpiry(router: AnyRouter): () => void {
+  return router.subscribe("onResolved", expireCodeJump);
 }
 
 function historyThreadRef(): ScopedThreadRef | null {

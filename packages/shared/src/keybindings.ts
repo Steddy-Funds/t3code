@@ -486,27 +486,34 @@ function missingDefaultInsertIndex(
   order: number,
 ): number {
   const placementKey = shortcutPlacementKey(rule.shortcut);
-  let insertIndex = 0;
+  let afterEarlierOnShortcut = 0;
+  let outRankedAt = config.length;
   for (const [index, entry] of config.entries()) {
     if (entry === null || shortcutPlacementKey(entry.shortcut) !== placementKey) continue;
     const entryOrder = DEFAULT_RULE_ORDER.get(ruleIdentity(entry));
-    if (entryOrder === undefined) {
-      // A rule the user wrote above every earlier default ranks below them already. One after
-      // an earlier default out-ranks it, so the new default must stay below that rule.
-      if (insertIndex > 0) break;
+    if (entryOrder !== undefined && entryOrder <= order) {
+      afterEarlierOnShortcut = index + 1;
+      // A rule the user wrote above an earlier default ranks below that default already.
+      outRankedAt = config.length;
       continue;
     }
-    if (entryOrder > order) break;
-    insertIndex = index + 1;
+    outRankedAt = Math.min(outRankedAt, index);
+    if (entryOrder !== undefined || afterEarlierOnShortcut > 0) break;
   }
-  return insertIndex;
+  let afterOwnEarlier = 0;
+  for (const [index, entry] of config.entries()) {
+    if (entry?.command !== rule.command) continue;
+    const entryOrder = DEFAULT_RULE_ORDER.get(ruleIdentity(entry));
+    if (entryOrder !== undefined && entryOrder < order) afterOwnEarlier = index + 1;
+  }
+  // A command is named by its last rule, but which command a key runs comes first.
+  return Math.min(Math.max(afterEarlierOnShortcut, afterOwnEarlier), outRankedAt);
 }
 
 /**
- * Adds defaults a config lacks without moving what it holds. The last match wins, so a default
- * goes right after the unmodified defaults on its shortcut that precede it in the default list,
- * as in a fresh config, and before the first rule the user wrote after one of them: that rule
- * out-ranked a default and still out-ranks this one. With no such default, it goes first.
+ * Adds defaults a config lacks without moving what it holds. A default goes below the earlier
+ * defaults on its shortcut and of its own command, as in a fresh config, and above the first rule
+ * on its shortcut that out-ranks it: a later default, or a rule the user wrote below the earlier.
  */
 export function insertMissingDefaultKeybindings<Rule>(
   config: ReadonlyArray<Rule>,

@@ -250,16 +250,23 @@ describe("ExternalLibraries", () => {
     ]);
   });
 
-  it("lists a root inside the workspace through it, so pnpm's links into the root node_modules stay", async () => {
+  it("lists a root inside the workspace through it, so pnpm's links into the root node_modules stay, or from its own folder when it links out", async () => {
     const WEB_MODULES = "/work/apps/web/node_modules";
+    // A link out of the workspace, as a worktree's node_modules can be: the workspace refuses it.
+    const LINKED_MODULES = "/work/node_modules";
     setup([
       {
         languageId: "typescript",
         name: "tsgo",
         state: "ready",
-        libraryRoots: [{ path: WEB_MODULES, label: "web", kind: "node_modules" }],
+        libraryRoots: [
+          { path: WEB_MODULES, label: "web", kind: "node_modules" },
+          { path: LINKED_MODULES, label: "node_modules", kind: "node_modules" },
+        ],
       },
     ]);
+    mocks.failing.add("/work\nnode_modules");
+    mocks.entries.set(`${LINKED_MODULES}\n`, [{ path: "zod", kind: "directory" }]);
     mocks.entries.set("/work\napps/web/node_modules", [
       { path: "apps/web/node_modules/react", kind: "directory" },
     ]);
@@ -285,5 +292,13 @@ describe("ExternalLibraries", () => {
         selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, threadRef).surfaces,
       ).toEqual([expect.objectContaining({ id: `file:${WEB_MODULES}/react/index.js` })]),
     );
+
+    treeRow("node_modules/")!.click();
+    await vi.waitFor(() => expect(treeRow("node_modules/zod/")).not.toBeNull());
+    expect(mocks.listings.slice(2)).toEqual([
+      { cwd: "/work", directoryPath: "node_modules" },
+      { cwd: LINKED_MODULES, directoryPath: "" },
+    ]);
+    expect(retry().elements()).toEqual([]);
   });
 });

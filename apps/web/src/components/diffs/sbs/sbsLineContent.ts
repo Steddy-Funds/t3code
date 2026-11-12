@@ -54,7 +54,8 @@ export function sbsTextPieces(
   for (let index = 0; index + 1 < columns.length; index += 1) {
     const start = columns[index]!;
     const end = columns[index + 1]!;
-    while (tokens && tokenIndex < tokens.length && tokens[tokenIndex]!.end <= start) tokenIndex += 1;
+    while (tokens && tokenIndex < tokens.length && tokens[tokenIndex]!.end <= start)
+      tokenIndex += 1;
     const token = tokens?.[tokenIndex];
     pieces.push({
       start,
@@ -89,6 +90,9 @@ function hastText(node: HastNode): string {
  * The tokens of one highlighted line as Pierre's worker renders it: a row element whose
  * children are one span per token. Null when the row does not spell out `text`, so a line
  * the highlighter saw differently falls back to plain text instead of miscoloured columns.
+ *
+ * Whitespace joins the token before it and neighbours that look the same are one token: every
+ * token is an element to style, and styling them is most of what a scroll costs.
  */
 export function sbsTokensFromHast(row: unknown, text: string): ReadonlyArray<SbsToken> | null {
   if (typeof row !== "object" || row === null) return null;
@@ -97,13 +101,20 @@ export function sbsTokensFromHast(row: unknown, text: string): ReadonlyArray<Sbs
   for (const child of (row as HastNode).children ?? []) {
     const content = hastText(child);
     if (content.length === 0) continue;
-    const style = child.properties?.style;
-    tokens.push({
-      start: column,
-      end: column + content.length,
-      style: typeof style === "string" && style.length > 0 ? style : undefined,
-    });
-    column += content.length;
+    const raw = child.properties?.style;
+    const style = typeof raw === "string" && raw.length > 0 ? raw : undefined;
+    const end = column + content.length;
+    const previous = tokens.at(-1);
+    if (
+      previous &&
+      (previous.style === style ||
+        (content.trim() === "" && !previous.style?.includes("decoration")))
+    ) {
+      tokens[tokens.length - 1] = { ...previous, end };
+    } else {
+      tokens.push({ start: column, end, style });
+    }
+    column = end;
   }
   return column === text.length ? tokens : null;
 }

@@ -126,11 +126,16 @@ function LineText({
 }) {
   if (text.length === 0) return <br />;
   if (tokens === null && marks === NO_LINE_MARKS) return text;
-  return sbsTextPieces(text, tokens, marks).map((piece) => (
-    <span key={piece.start} style={sbsTokenStyle(piece.style)} className={pieceClassName(piece)}>
-      {piece.text}
-    </span>
-  ));
+  return sbsTextPieces(text, tokens, marks).map((piece) => {
+    const className = pieceClassName(piece);
+    // Plain text needs no element of its own.
+    if (piece.style === undefined && className === undefined) return piece.text;
+    return (
+      <span key={piece.start} style={sbsTokenStyle(piece.style)} className={className}>
+        {piece.text}
+      </span>
+    );
+  });
 }
 
 function lineMarks(

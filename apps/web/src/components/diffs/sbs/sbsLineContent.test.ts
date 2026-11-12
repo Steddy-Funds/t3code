@@ -137,9 +137,37 @@ describe("sbsTokensFromHast", () => {
       name: "empty spans and empty styles left out",
       row: { type: "element", children: [span(""), span("ab", ""), span("c")] },
       text: "abc",
+      expected: [{ start: 0, end: 3, style: undefined }],
+    },
+    {
+      name: "whitespace joined to the token before it, and alike neighbours as one",
+      row: {
+        type: "element",
+        children: [
+          span("  "),
+          span("let", "color:red"),
+          span(" "),
+          span("x", "color:blue"),
+          span("(", "color:blue"),
+          span(" ", "color:green"),
+          span("y", "color:red"),
+        ],
+      },
+      text: "  let x( y",
       expected: [
         { start: 0, end: 2, style: undefined },
-        { start: 2, end: 3, style: undefined },
+        { start: 2, end: 6, style: "color:red" },
+        { start: 6, end: 9, style: "color:blue" },
+        { start: 9, end: 10, style: "color:red" },
+      ],
+    },
+    {
+      name: "whitespace after an underlined token kept apart",
+      row: { type: "element", children: [span("a", "text-decoration:underline"), span(" b")] },
+      text: "a b",
+      expected: [
+        { start: 0, end: 1, style: "text-decoration:underline" },
+        { start: 1, end: 3, style: undefined },
       ],
     },
     {

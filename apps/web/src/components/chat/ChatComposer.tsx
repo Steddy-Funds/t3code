@@ -333,6 +333,8 @@ export interface ChatComposerHandle {
     selectedModel: string;
     selectedProviderModels: ReadonlyArray<ServerProvider["models"][number]>;
     shownPendingApprovalIds: ReadonlyArray<RuntimeRequestId>;
+    /** How a plain send reaches a running turn now: the queue or steer preference. */
+    dispatchMode: ComposerDispatchMode;
   };
   validateProviderInput: (providerInput: string) => boolean;
   setMultipleModelSelections: (selections: ReadonlyArray<ModelSelection>) => void;
@@ -3088,6 +3090,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         selectedProvider,
         selectedModel,
         selectedProviderModels,
+        dispatchMode: resolveComposerDispatchMode({
+          running: phase === "running",
+          alternateModifier: false,
+          activeTurnDefault: followUpBehavior,
+          canSteer: !isCompacting,
+        }),
       }),
       setMultipleModelSelections,
       validateProviderInput: (providerInput: string) => {
@@ -3125,6 +3133,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       composerReviewComments,
       composerThreadContexts,
       composerEnvironmentContexts,
+      phase,
+      followUpBehavior,
+      isCompacting,
       focusComposer,
       environmentId,
       primaryEnvironmentId,

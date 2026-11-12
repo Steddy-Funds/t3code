@@ -2872,7 +2872,7 @@ export default function ChatView(props: ChatViewProps) {
     scrollToEnd,
     setThreadError,
   });
-  const { onSend } = useComposerSend({
+  const { onSend, sendReviewComments } = useComposerSend({
     environmentId,
     routeThreadKey,
     currentRouteThreadKeyRef,
@@ -2896,6 +2896,7 @@ export default function ChatView(props: ChatViewProps) {
     providerInstanceEntries,
     composerRef,
     composerDraftTarget,
+    threadDraftTarget: baseComposerDraftTarget,
     promptRef,
     composerImagesRef,
     composerFilesRef,
@@ -2961,9 +2962,10 @@ export default function ChatView(props: ChatViewProps) {
     annotation: PreviewAnnotationPayload,
     image: ComposerImageAttachment | null,
   ) => {
-    void onSend(undefined, "auto", "foreground", { annotation, image });
+    void onSend(undefined, "auto", "foreground", { kind: "preview-annotation", annotation, image });
   };
   const sendPreviewAnnotationStable = useStableCallback(sendPreviewAnnotation);
+  const sendReviewCommentsStable = useStableCallback(sendReviewComments);
   const onComposerResumeStable = useStableCallback(onResume);
   const onComposerCompactContextStable = useStableCallback(onCompactContext);
   // Read from the projection the footer renders, so the scroll below sees the new message.
@@ -3181,11 +3183,15 @@ export default function ChatView(props: ChatViewProps) {
       environmentId={activeThread.environmentId}
       visible={rightPanelOpen}
       composerDraftTarget={composerDraftTarget}
+      reviewDraftTarget={baseComposerDraftTarget}
       keybindings={keybindings}
       configuredPreviewUrls={configuredPreviewUrls}
       workspaceMutationId={workspaceMutationId}
       getShortcutContext={getShortcutContextStable}
       onSendAnnotation={sendPreviewAnnotationStable}
+      {...(canOperateThread && isServerThread
+        ? { onSendReviewComments: sendReviewCommentsStable }
+        : {})}
       onCloseSurface={closeRightPanelSurface}
       sideChatParentPanel={sideChatParentPanel}
       terminal={{

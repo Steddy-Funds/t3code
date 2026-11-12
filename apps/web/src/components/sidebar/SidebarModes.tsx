@@ -1,5 +1,6 @@
 import { useAtomValue } from "@effect/atom-react";
 import { AuthFilesystemWriteScope } from "@t3tools/contracts";
+import { LockIcon } from "lucide-react";
 import { type ReactNode, useEffect, useState } from "react";
 
 import ProjectPane, {
@@ -57,9 +58,16 @@ function ProjectPaneLabel({ target }: { target: ProjectPaneTarget }) {
         </Badge>
       ) : null}
       {readOnly ? (
-        <Badge size="sm" variant="outline" className="shrink-0">
-          Read only
-        </Badge>
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <span role="img" aria-label="Read only" className="shrink-0 text-muted-foreground" />
+            }
+          >
+            <LockIcon className="size-3.5" />
+          </TooltipTrigger>
+          <TooltipPopup>Read only: this connection can browse files but not change them.</TooltipPopup>
+        </Tooltip>
       ) : null}
     </div>
   );

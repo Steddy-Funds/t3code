@@ -280,16 +280,26 @@ const make = Effect.gen(function* () {
     } satisfies PythonEnvironmentLocation;
   });
 
+  // Clients key the setting by the workspace path they opened, which may be a symlink to `root`.
+  const settingFor = Effect.fnUntraced(function* (root: string) {
+    const environments = yield* settings.getSettings.pipe(
+      Effect.map(({ codeIntel }) => codeIntel.pythonEnvironments),
+      Effect.orElseSucceed((): Readonly<Record<string, string>> => ({})),
+    );
+    if (Object.hasOwn(environments, root) && environments[root]) return environments[root];
+    for (const [workspace, setting] of Object.entries(environments)) {
+      if (!setting || workspace === root) continue;
+      const resolved = yield* fileSystem
+        .realPath(workspace)
+        .pipe(Effect.orElseSucceed(() => undefined));
+      if (resolved === root) return setting;
+    }
+    return undefined;
+  });
+
   const locate: PythonEnvironment["Service"]["locate"] = Effect.fn("PythonEnvironment.locate")(
     function* (root) {
-      const setting = yield* settings.getSettings.pipe(
-        Effect.map(({ codeIntel }) =>
-          Object.hasOwn(codeIntel.pythonEnvironments, root)
-            ? codeIntel.pythonEnvironments[root]
-            : undefined,
-        ),
-        Effect.orElseSucceed(() => undefined),
-      );
+      const setting = yield* settingFor(root);
       if (setting) return yield* locateFromSetting(root, setting);
 
       const ownEnvironment = yield* findVirtualenv(root);

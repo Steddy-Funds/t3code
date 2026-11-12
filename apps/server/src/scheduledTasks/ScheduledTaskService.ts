@@ -407,6 +407,12 @@ const BUILT_IN_TASKS: ReadonlyMap<string, NonNullable<ScheduledTask["builtIn"]>>
 /** Background runs of the built-in start at most this often; its row's last run start survives restarts. */
 const MACHINE_BUCKETS_COOLDOWN_MS = 6 * 60 * 60 * 1000;
 const MACHINE_BUCKETS_MIN_NEW_SHARE = 0.3;
+/** Run endings that leave nothing to resume. */
+const MACHINE_BUCKETS_DONE_STATUSES: ReadonlySet<string> = new Set([
+  "completed",
+  "failed",
+  "cancelled",
+]);
 /** How long a run's thread is watched for deletion; a longer run waits for the next sweep. */
 const MACHINE_BUCKETS_RUN_WAIT_MS = 2 * 60 * 60 * 1000;
 
@@ -939,15 +945,24 @@ export const layer = Layer.effect(
       return null;
     });
 
-    // A finished auto-buckets thread holds nothing to read, so it is deleted once idle.
-    // One the user pinned or wrote in is theirs now and stays.
+    // A finished auto-buckets thread holds nothing to read, so it is deleted. Only a run that
+    // ended for good counts: an interrupted one may be a user's Stop or a load pause that resumes.
+    // A thread someone touched (pinned, archived, wrote in, opened a side chat or fork on) stays.
     const deleteIdleMachineBucketsThread = Effect.fnUntraced(function* (threadId: ThreadId) {
       const shell = yield* threadManagement.getThreadShell(threadId);
       if (
         shell === null ||
         shell.deletedAt != null ||
-        shell.activeRunId !== null ||
+        shell.archivedAt != null ||
         shell.tags?.includes(MACHINE_BUCKETS_THREAD_TAG) !== true ||
+        shell.lineage.parentThreadId !== null ||
+        !MACHINE_BUCKETS_DONE_STATUSES.has(shell.status) ||
+        shell.activeRunId !== null ||
+        shell.activityRunStatus != null ||
+        shell.loadPause != null ||
+        shell.limitRecovery != null ||
+        shell.pendingRuntimeRequest !== null ||
+        (shell.pendingBackgroundTasks?.length ?? 0) > 0 ||
         shell.pinnedAt != null ||
         shell.latestUserAuthoredMessageAt != null ||
         !(yield* managedFolders.isScratchProject(shell.projectId))
@@ -961,16 +976,22 @@ export const layer = Layer.effect(
       });
     });
 
-    // Catches threads whose run outlived the wait below or a server restart.
+    // Runs after each run ends, before the next and at startup, so one left by a restart or
+    // a run that outlived the wait goes too.
     const sweepMachineBucketsThreads = Effect.suspend(() =>
-      threadManagement.listProjectThreads({ includeSubagents: false }),
+      threadManagement.getShellSnapshot({ location: "active" }),
     ).pipe(
-      Effect.flatMap((threads) =>
-        Effect.forEach(
+      Effect.flatMap(({ threads }) => {
+        const withChildren = new Set(
+          threads.flatMap(({ lineage }) =>
+            lineage.parentThreadId === null ? [] : [lineage.parentThreadId],
+          ),
+        );
+        return Effect.forEach(
           threads.filter(
             (thread) =>
               thread.tags?.includes(MACHINE_BUCKETS_THREAD_TAG) === true &&
-              thread.activeRunId === null,
+              !withChildren.has(thread.id),
           ),
           (thread) =>
             deleteIdleMachineBucketsThread(thread.id).pipe(
@@ -982,26 +1003,20 @@ export const layer = Layer.effect(
               ),
             ),
           { discard: true },
-        ),
-      ),
+        );
+      }),
       Effect.catchCause((cause) =>
         Effect.logWarning("Could not sweep finished auto-buckets threads.", cause),
       ),
     );
 
-    const deleteMachineBucketsThreadWhenDone = (
-      projectId: ProjectId,
-      threadId: ThreadId,
-      runId: RunId,
-    ) =>
+    const sweepWhenRunEnds = (projectId: ProjectId, threadId: ThreadId, runId: RunId) =>
       threadManagement
         .waitForThread({ projectId, threadId, runId, timeoutMs: MACHINE_BUCKETS_RUN_WAIT_MS })
         .pipe(
-          Effect.flatMap(({ timedOut }) =>
-            timedOut ? Effect.void : deleteIdleMachineBucketsThread(threadId),
-          ),
+          Effect.flatMap(({ timedOut }) => (timedOut ? Effect.void : sweepMachineBucketsThreads)),
           Effect.catchCause((cause) =>
-            Effect.logWarning("Could not delete a finished auto-buckets thread.", {
+            Effect.logWarning("Could not wait for an auto-buckets run to end.", {
               threadId,
               cause,
             }),
@@ -1219,11 +1234,7 @@ export const layer = Layer.effect(
                 createdBy: active.createdBy,
                 creationSource: active.creationSource,
               })
-              .pipe(
-                Effect.flatMap(({ run }) =>
-                  deleteMachineBucketsThreadWhenDone(projectId, threadId, run.id),
-                ),
-              ),
+              .pipe(Effect.flatMap(({ run }) => sweepWhenRunEnds(projectId, threadId, run.id))),
           ),
           Effect.map(({ threadId }) => threadId),
         );

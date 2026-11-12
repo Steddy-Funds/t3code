@@ -89,7 +89,7 @@ describe("SidebarModes", () => {
       await using _screen = await render(
         <>
           <textarea aria-label="Composer" />
-          <SidebarModes>
+          <SidebarModes header={null} footer={null}>
             <button type="button">Thread one</button>
           </SidebarModes>
           <div role="region" aria-label="Code" tabIndex={0} {...focusScopeProps("code")}>

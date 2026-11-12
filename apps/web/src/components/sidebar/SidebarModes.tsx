@@ -66,10 +66,19 @@ function ProjectPaneLabel({ target }: { target: ProjectPaneTarget }) {
 }
 
 /**
- * The left sidebar's Threads and Project modes. Threads stays mounted and laid out underneath, so
- * its scroll position, search and shortcuts survive a trip to Project.
+ * The left sidebar's Threads and Project modes, between its header and footer. Threads stays
+ * mounted and laid out underneath, so its scroll position, search and shortcuts survive a trip
+ * to Project.
  */
-export function SidebarModes({ children }: { children: ReactNode }) {
+export function SidebarModes({
+  header,
+  footer,
+  children,
+}: {
+  header: ReactNode;
+  footer: ReactNode;
+  children: ReactNode;
+}) {
   const mode = useProjectPaneStore((state) => state.mode);
   const projectMode = mode === "project";
   const target = useProjectPaneTarget();
@@ -121,6 +130,7 @@ export function SidebarModes({ children }: { children: ReactNode }) {
 
   return (
     <>
+      {header}
       <div className="flex h-9 shrink-0 items-center gap-2 px-[var(--sidebar-content-inset)]">
         <ToggleGroup
           aria-label="Sidebar view"
@@ -154,6 +164,7 @@ export function SidebarModes({ children }: { children: ReactNode }) {
           </div>
         ) : null}
       </div>
+      {footer}
     </>
   );
 }

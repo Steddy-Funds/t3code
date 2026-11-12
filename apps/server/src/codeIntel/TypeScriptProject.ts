@@ -3,6 +3,7 @@ import * as NodeFSP from "node:fs/promises";
 
 import { fromLenientJson } from "@t3tools/shared/schemaJson";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
@@ -24,12 +25,31 @@ const GLOB = /[*?[{]/;
 
 const ProjectConfig = fromLenientJson(
   Schema.Struct({
+    extends: Schema.optional(Schema.Union([Schema.String, Schema.Array(Schema.String)])),
     files: Schema.optional(Schema.Array(Schema.String)),
     include: Schema.optional(Schema.Array(Schema.String)),
     references: Schema.optional(Schema.Array(Schema.Struct({ path: Schema.String }))),
   }),
 );
+type ProjectConfig = typeof ProjectConfig.Type;
 const decodeProjectConfig = Schema.decodeUnknownOption(ProjectConfig);
+
+const Dependencies = Schema.optional(Schema.Record(Schema.String, Schema.Unknown));
+const PackageManifest = fromLenientJson(
+  Schema.Struct({
+    name: Schema.optional(Schema.String),
+    exports: Schema.optional(Schema.Unknown),
+    main: Schema.optional(Schema.Unknown),
+    module: Schema.optional(Schema.Unknown),
+    types: Schema.optional(Schema.Unknown),
+    typings: Schema.optional(Schema.Unknown),
+    dependencies: Dependencies,
+    devDependencies: Dependencies,
+    peerDependencies: Dependencies,
+  }),
+);
+type PackageManifest = typeof PackageManifest.Type;
+const decodePackageManifest = Schema.decodeUnknownOption(PackageManifest);
 
 interface Listing {
   readonly directories: ReadonlyArray<string>;
@@ -38,7 +58,39 @@ interface Listing {
 
 const EMPTY_LISTING: Listing = { directories: [], files: [] };
 
+/** Folder listings one search has left. */
+interface Budget {
+  listings: number;
+}
+
+const newBudget = (): Budget => ({ listings: MAX_LISTED_DIRECTORIES });
+
+/** `files` and `include` as tsc reads them, relative to `directory`. */
+interface Sources {
+  readonly directory: string;
+  readonly files: ReadonlyArray<string>;
+  readonly include: ReadonlyArray<string>;
+}
+
+interface Candidate {
+  readonly config: string;
+  readonly name: string | undefined;
+  /** The workspace packages it imports, whose files tsc loads with its own. */
+  readonly loads: ReadonlyArray<string>;
+}
+
 const isSource = (name: string, source: RegExp) => source.test(name) && !/\.d\.[cm]?ts$/.test(name);
+
+const ownSources = (directory: string, config: ProjectConfig): Sources | undefined =>
+  config.files === undefined && config.include === undefined
+    ? undefined
+    : { directory, files: config.files ?? [], include: config.include ?? [] };
+
+// No entry point: an app, which no dependent imports, so only opening it loads it.
+const isImportable = (manifest: PackageManifest) =>
+  [manifest.exports, manifest.main, manifest.module, manifest.types, manifest.typings].some(
+    (entry) => entry !== undefined,
+  );
 
 /**
  * tsc loads a project only when one of its files opens, and a workspace-wide question sees
@@ -70,14 +122,15 @@ export const make = Effect.gen(function* () {
   const walk = Effect.fnUntraced(function* (
     start: string,
     depth: number,
+    budget: Budget,
     visit: (directory: string, listing: Listing) => boolean,
   ) {
     let level = [start];
-    let listed = 0;
     for (let current = 0; current <= depth && level.length > 0; current++) {
       const next: Array<string> = [];
       for (const directory of level) {
-        if (listed++ >= MAX_LISTED_DIRECTORIES) return;
+        if (budget.listings <= 0) return;
+        budget.listings -= 1;
         const listing = yield* list(directory);
         if (visit(directory, listing)) return;
         for (const name of listing.directories) {
@@ -88,9 +141,13 @@ export const make = Effect.gen(function* () {
     }
   });
 
-  const firstSourceUnder = Effect.fnUntraced(function* (directory: string, source: RegExp) {
+  const firstSourceUnder = Effect.fnUntraced(function* (
+    directory: string,
+    source: RegExp,
+    budget: Budget,
+  ) {
     let found: string | undefined;
-    yield* walk(directory, Number.POSITIVE_INFINITY, (current, listing) => {
+    yield* walk(directory, Number.POSITIVE_INFINITY, budget, (current, listing) => {
       const name = listing.files.find((file) => isSource(file, source));
       if (name !== undefined) found = path.join(current, name);
       return found !== undefined;
@@ -112,6 +169,7 @@ export const make = Effect.gen(function* () {
     directory: string,
     pattern: string,
     source: RegExp,
+    budget: Budget,
   ) {
     const segments = pattern.split("/");
     const wildcard = segments.findIndex((segment) => GLOB.test(segment));
@@ -121,30 +179,64 @@ export const make = Effect.gen(function* () {
     );
     if (!KnownWorkspaces.isWithinRoot(path, start, root)) return undefined;
     if (wildcard < 0 && isSource(start, source) && (yield* isFile(start))) return start;
-    return yield* firstSourceUnder(start, source);
+    return yield* firstSourceUnder(start, source, budget);
   });
 
-  const readConfig = (root: string, configPath: string) =>
-    workspaceFileSystem.readFile({ cwd: root, relativePath: configPath }).pipe(
-      Effect.map((file) =>
-        file.exists === false || file.truncated ? undefined : decodeProjectConfig(file.contents),
+  const readJson = <A>(
+    root: string,
+    file: string,
+    decode: (contents: string) => Option.Option<A>,
+  ): Effect.Effect<A | undefined> =>
+    workspaceFileSystem.readFile({ cwd: root, relativePath: file }).pipe(
+      Effect.map((read) =>
+        read.exists === false || read.truncated
+          ? undefined
+          : Option.getOrUndefined(decode(read.contents)),
       ),
       Effect.orElseSucceed(() => undefined),
     );
 
-  /** A file of the project `configPath` names, or of a project it references. */
-  const projectFile = Effect.fnUntraced(function* (
+  const readConfig = (root: string, configPath: string) =>
+    readJson(root, configPath, decodeProjectConfig);
+
+  const referencesOf = (configPath: string, config: ProjectConfig) =>
+    (config.references ?? []).map((reference) => {
+      const target = path.resolve(path.dirname(configPath), reference.path);
+      return target.endsWith(".json") ? target : path.join(target, "tsconfig.json");
+    });
+
+  /** A project without `files` or `include` takes its base's, relative to the base, else all. */
+  const sourcesOf = Effect.fnUntraced(function* (
     root: string,
     configPath: string,
-    hops: number,
-  ): Effect.fn.Return<string | undefined> {
-    const read = yield* readConfig(root, configPath);
-    if (read === undefined || read._tag === "None") return undefined;
-    const config = read.value;
+    config: ProjectConfig,
+  ) {
     const directory = path.dirname(configPath);
+    const own = ownSources(directory, config);
+    if (own !== undefined) return own;
+    const bases = typeof config.extends === "string" ? [config.extends] : (config.extends ?? []);
+    // The last base wins; a package's base (`@tsconfig/node22`) names no project files.
+    for (const base of bases.toReversed().filter((entry) => entry.startsWith("."))) {
+      const basePath = path.resolve(directory, base.endsWith(".json") ? base : `${base}.json`);
+      const baseConfig = yield* readConfig(root, basePath);
+      const inherited =
+        baseConfig === undefined ? undefined : ownSources(path.dirname(basePath), baseConfig);
+      if (inherited !== undefined) return inherited;
+    }
+    return { directory, files: [], include: ["**/*"] } satisfies Sources;
+  });
+
+  /** A file of the project itself, without its references. */
+  const ownFile = Effect.fnUntraced(function* (
+    root: string,
+    configPath: string,
+    config: ProjectConfig,
+    budget: Budget,
+  ) {
+    const sources = yield* sourcesOf(root, configPath, config);
     const source = path.basename(configPath) === "jsconfig.json" ? ANY_SOURCE : TYPESCRIPT_SOURCE;
-    for (const file of config.files ?? []) {
-      const candidate = path.resolve(directory, file);
+    for (const file of sources.files) {
+      const candidate = path.resolve(sources.directory, file);
       if (
         KnownWorkspaces.isWithinRoot(path, candidate, root) &&
         isSource(candidate, source) &&
@@ -153,39 +245,104 @@ export const make = Effect.gen(function* () {
         return candidate;
       }
     }
-    // tsc's own default: every file under the project, unless `files` names them.
-    for (const pattern of config.include ?? (config.files === undefined ? ["**/*"] : [])) {
-      const found = yield* fromPattern(root, directory, pattern, source);
-      if (found !== undefined) return found;
-    }
-    // A solution lists no files of its own; opening one of a referenced project loads it.
-    if (hops >= MAX_REFERENCE_HOPS) return undefined;
-    for (const reference of config.references ?? []) {
-      const target = path.resolve(directory, reference.path);
-      const referenced = target.endsWith(".json") ? target : path.join(target, "tsconfig.json");
-      const found = yield* projectFile(root, referenced, hops + 1);
+    for (const pattern of sources.include) {
+      const found = yield* fromPattern(root, sources.directory, pattern, source, budget);
       if (found !== undefined) return found;
     }
     return undefined;
   });
 
-  /** The root's own project, or the shallowest projects below a root that has none. */
+  /** A file of the project `configPath` names, or of a project it references. */
+  const projectFile = Effect.fnUntraced(function* (
+    root: string,
+    configPath: string,
+    hops: number,
+    budget: Budget,
+  ): Effect.fn.Return<string | undefined> {
+    const config = yield* readConfig(root, configPath);
+    if (config === undefined) return undefined;
+    const own = yield* ownFile(root, configPath, config, budget);
+    if (own !== undefined || hops >= MAX_REFERENCE_HOPS) return own;
+    // A solution lists no files of its own; opening one of a referenced project loads it.
+    for (const reference of referencesOf(configPath, config)) {
+      const found = yield* projectFile(root, reference, hops + 1, budget);
+      if (found !== undefined) return found;
+    }
+    return undefined;
+  });
+
+  /**
+   * A project loads the workspace packages it imports with its own files. So the projects that
+   * import the most go first, and one a chosen project already loads is not opened again.
+   */
+  const pickProjects = Effect.fnUntraced(function* (
+    root: string,
+    configs: ReadonlyArray<string>,
+    budget: Budget,
+  ) {
+    const manifests = yield* Effect.forEach(configs, (config) =>
+      readJson(root, path.join(path.dirname(config), "package.json"), decodePackageManifest),
+    );
+    const importable = new Set(
+      manifests.flatMap((manifest) =>
+        manifest?.name !== undefined && isImportable(manifest) ? [manifest.name] : [],
+      ),
+    );
+    const candidates = configs.map((config, index): Candidate => {
+      const manifest = manifests[index];
+      const dependencies = [
+        manifest?.dependencies,
+        manifest?.devDependencies,
+        manifest?.peerDependencies,
+      ].flatMap((map) => Object.keys(map ?? {}));
+      return {
+        config,
+        name: manifest?.name,
+        loads: [...new Set(dependencies)].filter(
+          (name) => name !== manifest?.name && importable.has(name),
+        ),
+      };
+    });
+    const loaded = new Set<string>();
+    const files: Array<string> = [];
+    for (const candidate of candidates.toSorted(
+      (left, right) => right.loads.length - left.loads.length,
+    )) {
+      if (files.length >= MAX_SEED_PROJECTS) break;
+      if (candidate.name !== undefined && loaded.has(candidate.name)) continue;
+      const file = yield* projectFile(root, candidate.config, 0, budget);
+      if (file === undefined || files.includes(file)) continue;
+      files.push(file);
+      if (candidate.name !== undefined) loaded.add(candidate.name);
+      for (const name of candidate.loads) loaded.add(name);
+    }
+    return files;
+  });
+
+  /**
+   * The root's own project; else the projects its solution references, or those up to two
+   * folders below it, as many as `pickProjects` chooses.
+   */
   const seedFiles = Effect.fn("TypeScriptProject.seedFiles")(function* (root: string) {
+    const budget = newBudget();
     const rootListing = yield* list(root);
     for (const name of CONFIG_NAMES) {
       if (!rootListing.files.includes(name)) continue;
-      const file = yield* projectFile(root, path.join(root, name), 0);
-      if (file !== undefined) return [file];
+      const configPath = path.join(root, name);
+      const config = yield* readConfig(root, configPath);
+      if (config === undefined) continue;
+      const own = yield* ownFile(root, configPath, config, budget);
+      if (own !== undefined) return [own];
+      const references = referencesOf(configPath, config);
+      if (references.length > 0) return yield* pickProjects(root, references, budget);
     }
     const configs: Array<string> = [];
-    yield* walk(root, PROJECT_DEPTH, (directory, listing) => {
-      if (directory === root) return false;
+    yield* walk(root, PROJECT_DEPTH, newBudget(), (directory, listing) => {
       const name = CONFIG_NAMES.find((candidate) => listing.files.includes(candidate));
-      if (name !== undefined) configs.push(path.join(directory, name));
-      return configs.length >= MAX_SEED_PROJECTS;
+      if (directory !== root && name !== undefined) configs.push(path.join(directory, name));
+      return false;
     });
-    const files = yield* Effect.forEach(configs, (config) => projectFile(root, config, 0));
-    return [...new Set(files.filter((file) => file !== undefined))];
+    return yield* pickProjects(root, configs, budget);
   });
 
   /** `node_modules` folders of the root and of packages up to two folders down, root first. */
@@ -193,7 +350,7 @@ export const make = Effect.gen(function* () {
     root: string,
   ) {
     const roots: Array<string> = [];
-    yield* walk(root, PROJECT_DEPTH, (directory, listing) => {
+    yield* walk(root, PROJECT_DEPTH, newBudget(), (directory, listing) => {
       if (listing.directories.includes("node_modules")) {
         roots.push(path.join(directory, "node_modules"));
       }

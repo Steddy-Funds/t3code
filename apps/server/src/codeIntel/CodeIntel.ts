@@ -575,12 +575,16 @@ const make = Effect.gen(function* () {
       : { ...tokens, revision: document.revision };
   });
 
+  // A root with nothing to open is searched once a server, not on every keystroke of a picker.
+  const seeded = new WeakSet<LanguageServerPool.LiveServer["session"]>();
+
   /**
    * tsc answers a workspace question about loaded projects alone, and loads one only when a file
-   * of it opens. Before the first question, nothing is open: a file of the root's project is.
+   * of it opens. Before the first question, nothing is open: a file of each chosen project is.
    */
   const loadProjects = Effect.fnUntraced(function* (live: LanguageServerPool.LiveServer) {
-    if (live.row.id !== "typescript" || (yield* live.session.hasOpenDocument)) return;
+    if (live.row.id !== "typescript" || seeded.has(live.session)) return;
+    if (yield* live.session.hasOpenDocument) return;
     const files = yield* typeScriptProjects.seedFiles(live.root);
     yield* Effect.forEach(
       files,
@@ -591,6 +595,7 @@ const make = Effect.gen(function* () {
         ),
       { discard: true },
     );
+    seeded.add(live.session);
   });
 
   // A row whose files or manifests sit in the root or one folder down.

@@ -183,6 +183,15 @@ export const toWorkspaceSymbols = (result: unknown): ReadonlyArray<LspWorkspaceS
 
 const MAX_NAME_SEARCH_LINES = 64;
 const IDENTIFIER_CHARACTER = /[\p{L}\p{N}_$]/u;
+const STRING_LITERAL = /(["'`])(?:\\.|(?!\1).)*\1/g;
+
+// `#` starts a Python comment, or a TypeScript private name.
+const isCommentLine = (text: string, name: string) => {
+  const code = text.trimStart();
+  return (
+    code.startsWith("//") || code.startsWith("/*") || (code.startsWith("#") && !name.startsWith("#"))
+  );
+};
 
 /** A range that is exactly as wide as the name, on one line, already is the name. */
 export const isNameRange = (range: CodeRange, name: string): boolean =>
@@ -207,12 +216,14 @@ export const nameRange = (
     if (text === undefined) break;
     // A decorator's arguments may span lines and name the symbol, as in `@register("Ledger")`.
     if (openDecoratorParens > 0 || text.trimStart().startsWith("@")) {
+      const code = text.replace(STRING_LITERAL, "");
       openDecoratorParens = Math.max(
         0,
-        openDecoratorParens + text.split("(").length - text.split(")").length,
+        openDecoratorParens + code.split("(").length - code.split(")").length,
       );
       continue;
     }
+    if (isCommentLine(text, name)) continue;
     const end = line === range.end.line ? range.end.character : text.length;
     let index = text.indexOf(name, line === range.start.line ? range.start.character : 0);
     while (index >= 0 && index + name.length <= end) {

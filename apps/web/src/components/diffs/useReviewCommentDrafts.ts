@@ -83,14 +83,19 @@ function collapseWhitespace(value: string): string {
   return value.replace(/\s+/gu, " ").trim();
 }
 
-/** The lines a comment covers, without the hunk header and change markers of a diff. */
-function reviewCommentCode(comment: ReviewCommentContext): string {
-  if ((comment.fenceLanguage ?? "diff") !== "diff") return comment.diff;
-  return comment.diff
-    .split("\n")
-    .slice(1)
-    .map((line) => line.slice(1))
-    .join("\n");
+/**
+ * The lines a comment covers, without the hunk header and change markers of a diff. A range on
+ * one side also gives that side's lines alone: a pane of a split or side-by-side view holds
+ * only those, so text selected there skips the other side's rows of a change.
+ */
+function reviewCommentCode(comment: ReviewCommentContext): string[] {
+  if ((comment.fenceLanguage ?? "diff") !== "diff") return [comment.diff];
+  const lines = comment.diff.split("\n").slice(1);
+  const code = (kept: ReadonlyArray<string>) => kept.map((line) => line.slice(1)).join("\n");
+  const side = comment.selection?.side;
+  if (!side || comment.selection?.endSide !== side) return [code(lines)];
+  const otherMarker = side === "additions" ? "-" : "+";
+  return [code(lines), code(lines.filter((line) => !line.startsWith(otherMarker)))];
 }
 
 /**
@@ -104,7 +109,9 @@ export function withQuotedSelection(
   const selected = selectedText?.replaceAll("\r", "").trim() ?? "";
   if (
     selected === "" ||
-    !collapseWhitespace(reviewCommentCode(comment)).includes(collapseWhitespace(selected))
+    !reviewCommentCode(comment).some((code) =>
+      collapseWhitespace(code).includes(collapseWhitespace(selected)),
+    )
   ) {
     return comment;
   }

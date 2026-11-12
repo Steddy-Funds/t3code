@@ -110,7 +110,7 @@ import {
 } from "../lib/diffFileContents";
 import { observeResize } from "~/lib/observeResize";
 import { orchestrationEnvironment } from "../state/orchestration";
-import { SideBySideDiffPanel } from "./diffs/sbs/SideBySideDiffPanel";
+import { SbsReviewPanel, type SbsNoteReveal } from "./diffs/sbs/review/SbsReviewPanel";
 
 import { observeIntersection } from "~/lib/observeIntersection";
 import { useReviewFilePatches } from "./diffs/useReviewFilePatches";
@@ -282,6 +282,10 @@ export default function DiffPanel({
     scopeKey: string | null;
     fileKey: string;
   } | null>(null);
+  // A review note side by side brings into view once it shows the note's file.
+  const [sideBySideNoteReveal, setSideBySideNoteReveal] = useState<
+    (SbsNoteReveal & { readonly scopeKey: string | null }) | null
+  >(null);
 
   const routeThreadRef = useThreadRouteRef();
   const activeThreadId = routeThreadRef?.threadId ?? null;
@@ -873,6 +877,12 @@ export default function DiffPanel({
     },
     workspaceRoot: activeCwd,
     repositoryRoot: activeRepositoryRoot,
+    onShowNote: sideBySide
+      ? ({ note, fileKey }) => {
+          setSideBySideFile({ scopeKey: collapseScopeKey, fileKey });
+          setSideBySideNoteReveal({ scopeKey: collapseScopeKey, noteId: note.id });
+        }
+      : undefined,
   });
   const noteReveal = reviewNotes.reveal;
   const attachCodeView = useStableCallback((viewer: AnnotatableCodeViewHandle | null) => {
@@ -1246,8 +1256,7 @@ export default function DiffPanel({
             <TooltipPopup side="top">{sendCommentsLabel} to the agent</TooltipPopup>
           </Tooltip>
         ) : null}
-        {/* Side by side draws no review notes yet, so their stepper would move nothing. */}
-        {reviewNotes.toolbar && !sideBySide ? (
+        {reviewNotes.toolbar ? (
           <ReviewNotesToolbar {...reviewNotes.toolbar} />
         ) : null}
         {codeViewFiles.length > 0 || (isGitSelection && selectedGitSource?.files?.length) ? (
@@ -1533,7 +1542,25 @@ export default function DiffPanel({
               <div className="flex min-h-0 flex-1 overflow-hidden">
                 {sideBySide ? (
                   <div ref={observeDiffArea} className="flex min-h-0 min-w-0 flex-1">
-                    <SideBySideDiffPanel
+                    <SbsReviewPanel
+                      key={collapseScopeKey ?? reviewSectionId}
+                      environmentId={activeThread?.environmentId}
+                      projectId={activeThread?.projectId}
+                      sectionId={reviewSectionId}
+                      sectionTitle={reviewSectionTitle}
+                      composerDraftTarget={composerDraftTarget}
+                      onSendComments={onSendReviewComments}
+                      reviewNotes={reviewNotes.codeView}
+                      noteReveal={
+                        sideBySideNoteReveal?.scopeKey === collapseScopeKey
+                          ? sideBySideNoteReveal
+                          : null
+                      }
+                      onNoteRevealed={() => setSideBySideNoteReveal(null)}
+                      onNoteUnplaced={() => {
+                        setSideBySideNoteReveal(null);
+                        reviewNotes.toolbar?.onListOpenChange(true);
+                      }}
                       files={shownFileEntries.map(({ fileDiff, fileKey }) => ({
                         fileDiff,
                         fileKey,

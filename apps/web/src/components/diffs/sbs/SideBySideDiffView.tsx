@@ -130,6 +130,8 @@ export interface SideBySideDiffViewProps<T = unknown> {
   readonly onOpenAnnotationChange?: (id: string | null) => void;
   /** The card's content. The card is the surface: return no border or shadow of your own. */
   readonly renderAnnotation?: (annotation: SbsAnnotation<T>) => ReactNode;
+  /** Unfolds and scrolls to this annotation's lines whenever it is set, as on mount. */
+  readonly revealAnnotationId?: string | null;
   /** A selection was made or, with null, given up. */
   readonly onSelectRange?: (selection: SbsLineSelection | null) => void;
   readonly onTokenActivate?: (activation: SbsTokenActivation) => void;
@@ -961,15 +963,20 @@ export function SideBySideDiffView<T = unknown>(props: SideBySideDiffViewProps<T
     };
   };
 
-  const revealAnnotation = () => {
-    if (!openAnnotation || !openAnnotationRange) return;
-    expandFolds(sbsFoldsCovering(layout, openAnnotation.side, openAnnotationRange));
-    revealAfterRender({
-      kind: "line",
-      side: openAnnotation.side,
-      line: openAnnotationRange.start,
-    });
+  const revealAnnotation = (id: string) => {
+    const annotation = annotations.find((candidate) => candidate.id === id);
+    const range = annotation
+      ? annotationRanges[annotation.side].find((candidate) => candidate.id === id)
+      : undefined;
+    if (!annotation || !range) return;
+    expandFolds(sbsFoldsCovering(layout, annotation.side, range));
+    revealAfterRender({ kind: "line", side: annotation.side, line: range.start });
   };
+  const revealRequestedAnnotation = useEffectEvent(revealAnnotation);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- the caller asks for an annotation's lines, such as a note it steps to; the rows must be laid out first
+  useLayoutEffect(() => {
+    if (props.revealAnnotationId != null) revealRequestedAnnotation(props.revealAnnotationId);
+  }, [props.revealAnnotationId]);
 
   const hintRows =
     edgeHint === null
@@ -1043,7 +1050,12 @@ export function SideBySideDiffView<T = unknown>(props: SideBySideDiffViewProps<T
             data-docked={card.docked ? "" : undefined}
           >
             {card.docked ? (
-              <Button type="button" size="micro" variant="ghost-muted" onClick={revealAnnotation}>
+              <Button
+                type="button"
+                size="micro"
+                variant="ghost-muted"
+                onClick={() => revealAnnotation(openAnnotation.id)}
+              >
                 {openAnnotation.startLine === openAnnotation.endLine
                   ? `Show line ${openAnnotation.startLine}`
                   : `Show lines ${openAnnotation.startLine} to ${openAnnotation.endLine}`}

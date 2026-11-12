@@ -87,6 +87,7 @@ export const make = Effect.fn("LspConnection.make")(function* (
   let nextRequestId = 1;
 
   // `close` and `send` run for every message; the request they belong to owns the span.
+  // Uninterruptible: `closed` stops the server, and with it the fiber running this close.
   const close = Effect.fnUntraced(function* (error: LspConnectionClosedError) {
     if (!(yield* Deferred.succeed(closed, error))) return;
     const waiting = [...pending.values()];
@@ -95,7 +96,7 @@ export const make = Effect.fn("LspConnection.make")(function* (
       discard: true,
     });
     yield* Queue.end(outgoing);
-  });
+  }, Effect.uninterruptible);
 
   const send = Effect.fnUntraced(function* (message: Record<string, unknown>) {
     if (Deferred.isDoneUnsafe(closed)) return yield* Effect.flip(Deferred.await(closed));

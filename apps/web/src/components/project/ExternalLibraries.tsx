@@ -24,7 +24,7 @@ import {
   libraryListings,
   libraryLocation,
   SHOWN_LIBRARY_ROOTS,
-} from "./externalLibraries";
+} from "./ExternalLibraries.logic";
 
 function parentOf(path: string): string {
   return path.slice(0, Math.max(0, path.lastIndexOf("/")));

@@ -9,7 +9,7 @@ import { useState } from "react";
 
 import { Button } from "~/components/ui/button";
 import { Input } from "~/components/ui/input";
-import { SHOWN_LIBRARY_ROOTS } from "~/components/project/externalLibraries";
+import { SHOWN_LIBRARY_ROOTS } from "~/components/project/ExternalLibraries.logic";
 import { Popover, PopoverPopup, PopoverTrigger } from "~/components/ui/popover";
 import { cn } from "~/lib/utils";
 import { codeIntelEnvironment } from "~/state/codeIntel";

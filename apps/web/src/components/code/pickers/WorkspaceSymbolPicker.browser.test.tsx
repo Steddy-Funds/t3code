@@ -52,11 +52,17 @@ vi.mock(import("~/state/server"), async (original) => {
   const { Atom } = await import("effect/reactivity");
   return { ...(await original()), primaryServerKeybindingsAtom: Atom.make([]) as never };
 });
-vi.mock(import("../navigation"), () => ({
+vi.mock(import("../navigation"), async (original) => ({
+  ...(await original()),
   navigateToCodeLocation: mocks.navigateToCodeLocation,
 }));
 
+import { dispatchCommandPalette, useCommandPaletteStore } from "~/commandPaletteStore";
+import { focusScopeProps } from "~/lib/focusScopes";
+
+import { CommandPalette } from "../../CommandPalette";
 import { CLASS_SYMBOL_KINDS } from "./codePickers.logic";
+import { runJumpFromPalette } from "./codeSymbolCommands";
 import { WorkspaceSymbolPicker } from "./WorkspaceSymbolPicker";
 
 const threadRef = scopeThreadRef(EnvironmentId.make("env-sym"), ThreadId.make("thread-sym"));
@@ -104,6 +110,20 @@ function setup() {
   mocks.searches.length = 0;
   mocks.answers.clear();
   mocks.navigateToCodeLocation.mockReset();
+  useCommandPaletteStore.setState(useCommandPaletteStore.getInitialState(), true);
+}
+
+// The code viewer's editor: a contenteditable in the code focus scope.
+function mountCodeEditor() {
+  const viewer = document.createElement("div");
+  for (const [name, value] of Object.entries(focusScopeProps("code"))) {
+    viewer.setAttribute(name, value);
+  }
+  const editor = document.createElement("div");
+  editor.contentEditable = "true";
+  viewer.append(editor);
+  document.body.append(viewer);
+  return Object.assign(editor, { [Symbol.dispose]: () => viewer.remove() });
 }
 
 describe("Go to class", () => {
@@ -142,6 +162,7 @@ describe("Go to class", () => {
     await userEvent.keyboard("{Enter}");
 
     expect(setOpen).toHaveBeenCalledWith(false);
+    expect(runJumpFromPalette()).toBe(true);
     expect(mocks.navigateToCodeLocation).toHaveBeenCalledWith(threadRef, invoice.location);
   });
 
@@ -172,6 +193,32 @@ describe("Go to class", () => {
     );
     await userEvent.keyboard("{Enter}");
 
+    expect(runJumpFromPalette()).toBe(true);
     expect(mocks.navigateToCodeLocation).toHaveBeenCalledWith(threadRef, invoiceLine.location);
+  });
+
+  it("keeps focus in the code it was opened from once the pick closes the palette", async () => {
+    setup();
+    const href = window.location.href;
+    using _url = { [Symbol.dispose]: () => window.history.replaceState(null, "", href) };
+    // Opening the file changes the URL, as the right panel's openFile does.
+    mocks.navigateToCodeLocation.mockImplementation(() =>
+      window.history.replaceState(null, "", "#billing-models"),
+    );
+    await using _screen = await render(<CommandPalette>{null}</CommandPalette>);
+    using editor = mountCodeEditor();
+    editor.focus();
+
+    dispatchCommandPalette({ _tag: "ToggleMode", mode: "classes" });
+    await userEvent.type(page.getByPlaceholder("Search classes…"), "InvoiceL");
+    await expect
+      .element(page.getByRole("option", { name: /billing\/models\.py:53/ }))
+      .toBeVisible();
+    await userEvent.keyboard("{Enter}");
+
+    await vi.waitFor(() =>
+      expect(mocks.navigateToCodeLocation).toHaveBeenCalledWith(threadRef, invoiceLine.location),
+    );
+    await expect.element(page.elementLocator(editor)).toHaveFocus();
   });
 });

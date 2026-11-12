@@ -1,4 +1,4 @@
-import { describe, expect, it } from "@effect/vitest";
+import { describe, expect, it, vi } from "@effect/vitest";
 import {
   EnvironmentId,
   ORCHESTRATION_V2_WS_METHODS,
@@ -104,8 +104,10 @@ const makeEnvironmentQueryHarness = Effect.fn("TestEnvironmentQuery.makeHarness"
     rpcSession,
     isFinal,
     onAnswer,
+    refreshIntervalMs,
   }: {
     readonly refreshTrigger?: Atom.Atom<unknown>;
+    readonly refreshIntervalMs?: number;
     readonly onAnswer?: QueryAnswerHandler<undefined, A>;
     readonly isFinal?: (value: A) => boolean;
     readonly idleTtlMs?: number;
@@ -156,6 +158,7 @@ const makeEnvironmentQueryHarness = Effect.fn("TestEnvironmentQuery.makeHarness"
     ...(idleTtlMs === undefined ? {} : { idleTtlMs }),
     ...(isFinal === undefined ? {} : { isFinal }),
     ...(onAnswer === undefined ? {} : { onAnswer }),
+    ...(refreshIntervalMs === undefined ? {} : { refreshIntervalMs }),
   });
 
   return {
@@ -1020,6 +1023,42 @@ describe("environment query lifecycle", () => {
         expect(executions).toBe(2);
 
         expect(yield* read).toBe(3);
+      }),
+    ),
+  );
+
+  it.effect("waits twice as long to refresh after each failure in a row, up to a minute", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+        yield* Effect.addFinalizer(() => Effect.sync(() => vi.useRealTimers()));
+        let executions = 0;
+        let failing = true;
+        const harness = yield* makeEnvironmentQueryHarness(
+          Effect.suspend(() => {
+            executions += 1;
+            return failing
+              ? Effect.fail(new TestQueryError({ message: "Status failed." }))
+              : Effect.succeed(executions);
+          }),
+          { refreshIntervalMs: 20_000 },
+        );
+        const registry = yield* mountEnvironmentQuery(harness.atom);
+        const executionsAfter = (ms: number) =>
+          Effect.promise(() => vi.advanceTimersByTimeAsync(ms)).pipe(Effect.map(() => executions));
+
+        yield* readEnvironmentQuery(registry, harness.atom).pipe(Effect.exit);
+        expect(executions).toBe(1);
+        expect(yield* executionsAfter(39_999)).toBe(1);
+        expect(yield* executionsAfter(1)).toBe(2);
+        expect(yield* executionsAfter(59_999)).toBe(2);
+        expect(yield* executionsAfter(1)).toBe(3);
+        expect(yield* executionsAfter(60_000)).toBe(4);
+
+        failing = false;
+        expect(yield* executionsAfter(60_000)).toBe(5);
+        expect(yield* readEnvironmentQuery(registry, harness.atom)).toBe(5);
+        expect(yield* executionsAfter(20_000)).toBe(6);
       }),
     ),
   );

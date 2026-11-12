@@ -6,7 +6,11 @@ import { managedCapabilityDenial } from "@t3tools/contracts";
 import { hasCloudPublicConfig } from "~/cloud/publicConfig";
 import { previewGambaCoin } from "~/gambaMode";
 import { useT3ConnectAuthPrompt } from "../clerk/useT3ConnectAuthPrompt";
+import { useState } from "react";
+
+import { isElectron } from "~/env";
 import { Button } from "../ui/button";
+import { Input } from "../ui/input";
 import { Switch } from "../ui/switch";
 import { ScopedSwitch } from "./ScopedSwitch";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
@@ -29,6 +33,7 @@ export function LabsSettingsPanel() {
         <AgentReviewNotesRow />
         <SimlockHostsRow />
         <FastWorktreeCheckoutRow />
+        <NativeTrackpadDialogsRow />
       </SettingsSection>
     </SettingsPageContainer>
   );
@@ -341,5 +346,45 @@ function FastWorktreeCheckoutRow() {
         />
       }
     />
+  );
+}
+
+/** Glint's native dialogs replace a few web pickers; only the macOS desktop app can show them. */
+function NativeTrackpadDialogsRow() {
+  const settings = useScopedSettings();
+  const updateSettings = useUpdateScopedSettings();
+  const [path, setPath] = useState(settings.glintHelperPath);
+  if (!isElectron || window.desktopBridge?.getClientPlatform() !== "darwin") return null;
+  const commitPath = () => {
+    if (path.trim() !== settings.glintHelperPath) updateSettings({ glintHelperPath: path.trim() });
+  };
+  return (
+    <SettingsRow
+      {...searchableSetting("native-trackpad-dialogs")}
+      description="Open custom snooze, the model picker and /color as Glint's trackpad dialogs. Needs the glint-helper app; without it, the usual pickers open."
+      control={
+        <Switch
+          checked={settings.glintEnabled}
+          onCheckedChange={(checked) => updateSettings({ glintEnabled: Boolean(checked) })}
+          aria-label="Native trackpad dialogs"
+        />
+      }
+    >
+      {settings.glintEnabled ? (
+        <div className="mt-2 mb-2 border-l-2 border-border/60 ps-3">
+          <Input
+            size="sm"
+            aria-label="Glint helper path"
+            placeholder="Helper path (default: $T3CODE_GLINT_HELPER)"
+            value={path}
+            onValueChange={setPath}
+            onBlur={commitPath}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") commitPath();
+            }}
+          />
+        </div>
+      ) : null}
+    </SettingsRow>
   );
 }

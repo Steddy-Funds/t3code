@@ -22,6 +22,7 @@ import {
 import { formatProviderSkillDisplayName } from "@t3tools/shared/inlineSkills";
 
 import type { ComposerTrigger } from "../../composer-logic";
+import { useClientSettings } from "../../hooks/useSettings";
 import type { DraftId } from "../../composerDraftStore";
 import { basenameOfPath } from "../../pierre-icons";
 import {
@@ -102,6 +103,10 @@ export function useComposerMenuItems({
     readonly modelOptionsByInstance: ReadonlyMap<ProviderInstanceId, ReadonlyArray<ModelEsque>>;
   };
 }) {
+  // Glint's native color die; there is no web picker to fall back to.
+  const colorPickerAvailable =
+    useClientSettings((settings) => settings.glintEnabled) &&
+    window.desktopBridge?.glint !== undefined;
   // Thread mentions rank by recency as of when the composer mounted.
   const [now] = useState(() => Date.now());
   const composerTriggerKind = composerTrigger?.kind ?? null;
@@ -253,6 +258,17 @@ export function useComposerMenuItems({
                 command: "btw",
                 label: "/btw",
                 description: sideChatDisabledReason ?? "Same as /side",
+              },
+            ] as const)
+          : []),
+        ...(colorPickerAvailable
+          ? ([
+              {
+                id: "slash:color",
+                type: "slash-command",
+                command: "color",
+                label: "/color",
+                description: "Pick a color and insert its hex code",
               },
             ] as const)
           : []),

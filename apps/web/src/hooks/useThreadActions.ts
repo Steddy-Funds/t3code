@@ -10,6 +10,7 @@ import { threadRuntimeCanArchive } from "@t3tools/client-runtime/state/models";
 import {
   AuthOrchestrationOperateScope,
   AuthSourceControlWriteScope,
+  CommandId,
   EnvironmentAuthorizationError,
   EnvironmentId,
   type ScopedThreadRef,
@@ -54,6 +55,13 @@ import { buildThreadRouteParams, resolveThreadRouteRef } from "../threadRoutes";
 import { formatWorktreePathForDisplay, getOrphanedWorktreePathForThread } from "../worktreeCleanup";
 import { stackedThreadToast, toastManager } from "../components/ui/toast";
 import { useClientSettings } from "./useSettings";
+import { randomUUID } from "../lib/utils";
+import { requestSnoozeReason, snoozeReasonAnchor } from "../components/SnoozeReasonPrompt";
+import {
+  promptSnoozeReasons,
+  type SnoozeChoice,
+  snoozeChoiceOrigin,
+} from "../components/SnoozeReasonPrompt.logic";
 import * as ThreadUndo from "@t3tools/client-runtime/state/thread-undo";
 import { showThreadUndoNotice } from "./showThreadUndoNotice";
 import { useAtomCommand } from "../state/use-atom-command";
@@ -310,6 +318,14 @@ export function useThreadActions() {
   const unsnoozeThreadMutation = useOrchestrationCommand(threadEnvironment.unsnooze, {
     reportFailure: false,
   });
+  // A server without the snooze log rejects this; the snooze itself already landed.
+  const recordSnoozeMutation = useAtomCommand(orchestrationEnvironment.recordSnooze, {
+    reportFailure: false,
+  });
+  const snoozeReasonPromptEnabled = useClientSettings(
+    (settings) => settings.snoozeReasonPromptEnabled,
+  );
+  const snoozeReasons = useClientSettings((settings) => settings.snoozeReasons);
   const markThreadUnread = useMarkThreadUnread();
   const createProjectFromThread = useAtomCommand(projectEnvironment.createFromThread, {
     reportFailure: false,
@@ -896,7 +912,12 @@ export function useThreadActions() {
     });
   };
 
-  const snoozeThread = async (target: ScopedThreadRef, snoozedUntil: string) => {
+  /** `choice` is the picked preset or custom time; without one the log records no picker. */
+  const snoozeThread = async (
+    target: ScopedThreadRef,
+    snoozedUntil: string,
+    choice?: SnoozeChoice,
+  ) => {
     if (!readEnvironmentServerConfigLoaded(target.environmentId)) {
       return AsyncResult.failure(
         Cause.fail(
@@ -920,14 +941,32 @@ export function useThreadActions() {
       );
     }
     const action = ThreadUndo.begin("snooze", scopedThreadKey(target));
+    // The server keys the snooze log by this command, so the reason can find its snooze.
+    const snoozeId = CommandId.make(randomUUID());
+    const anchor = snoozeReasonPromptEnabled ? snoozeReasonAnchor(scopedThreadKey(target)) : null;
     const result = await snoozeThreadMutation({
       environmentId: target.environmentId,
-      input: { threadId: target.threadId, snoozedUntil },
+      input: { threadId: target.threadId, snoozedUntil, commandId: snoozeId },
     });
     if (result._tag !== "Success") {
       action.finish();
       return result;
     }
+    void (async () => {
+      const reason = snoozeReasonPromptEnabled
+        ? await requestSnoozeReason({ anchor, reasons: promptSnoozeReasons(snoozeReasons) })
+        : undefined;
+      if (reason === undefined && choice === undefined) return;
+      await recordSnoozeMutation({
+        environmentId: target.environmentId,
+        input: {
+          threadId: target.threadId,
+          snoozeId,
+          ...(choice === undefined ? {} : snoozeChoiceOrigin(choice)),
+          ...(reason === undefined ? {} : { reason }),
+        },
+      });
+    })();
     showThreadUndoNotice({
       action: "Snoozed",
       claim: action,

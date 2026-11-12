@@ -28,6 +28,7 @@ import { Route as ChatSettingsVoiceRouteImport } from './routes/_chat.settings.v
 import { Route as ChatSettingsThreadsRouteImport } from './routes/_chat.settings.threads'
 import { Route as ChatSettingsStorageRouteImport } from './routes/_chat.settings.storage'
 import { Route as ChatSettingsSourceControlRouteImport } from './routes/_chat.settings.source-control'
+import { Route as ChatSettingsSnoozesRouteImport } from './routes/_chat.settings.snoozes'
 import { Route as ChatSettingsSnapShotRouteImport } from './routes/_chat.settings.snap-shot'
 import { Route as ChatSettingsSecretsRouteImport } from './routes/_chat.settings.secrets'
 import { Route as ChatSettingsScheduledTasksRouteImport } from './routes/_chat.settings.scheduled-tasks'
@@ -149,6 +150,11 @@ const ChatSettingsSourceControlRoute =
     path: '/source-control',
     getParentRoute: () => ChatSettingsRoute,
   } as any)
+const ChatSettingsSnoozesRoute = ChatSettingsSnoozesRouteImport.update({
+  id: '/snoozes',
+  path: '/snoozes',
+  getParentRoute: () => ChatSettingsRoute,
+} as any)
 const ChatSettingsSnapShotRoute = ChatSettingsSnapShotRouteImport.update({
   id: '/snap-shot',
   path: '/snap-shot',
@@ -311,6 +317,7 @@ export interface FileRoutesByFullPath {
   '/settings/scheduled-tasks': typeof ChatSettingsScheduledTasksRoute
   '/settings/secrets': typeof ChatSettingsSecretsRoute
   '/settings/snap-shot': typeof ChatSettingsSnapShotRoute
+  '/settings/snoozes': typeof ChatSettingsSnoozesRoute
   '/settings/source-control': typeof ChatSettingsSourceControlRoute
   '/settings/storage': typeof ChatSettingsStorageRoute
   '/settings/threads': typeof ChatSettingsThreadsRoute
@@ -355,6 +362,7 @@ export interface FileRoutesByTo {
   '/settings/scheduled-tasks': typeof ChatSettingsScheduledTasksRoute
   '/settings/secrets': typeof ChatSettingsSecretsRoute
   '/settings/snap-shot': typeof ChatSettingsSnapShotRoute
+  '/settings/snoozes': typeof ChatSettingsSnoozesRoute
   '/settings/source-control': typeof ChatSettingsSourceControlRoute
   '/settings/storage': typeof ChatSettingsStorageRoute
   '/settings/threads': typeof ChatSettingsThreadsRoute
@@ -401,6 +409,7 @@ export interface FileRoutesById {
   '/_chat/settings/scheduled-tasks': typeof ChatSettingsScheduledTasksRoute
   '/_chat/settings/secrets': typeof ChatSettingsSecretsRoute
   '/_chat/settings/snap-shot': typeof ChatSettingsSnapShotRoute
+  '/_chat/settings/snoozes': typeof ChatSettingsSnoozesRoute
   '/_chat/settings/source-control': typeof ChatSettingsSourceControlRoute
   '/_chat/settings/storage': typeof ChatSettingsStorageRoute
   '/_chat/settings/threads': typeof ChatSettingsThreadsRoute
@@ -447,6 +456,7 @@ export interface FileRouteTypes {
     | '/settings/scheduled-tasks'
     | '/settings/secrets'
     | '/settings/snap-shot'
+    | '/settings/snoozes'
     | '/settings/source-control'
     | '/settings/storage'
     | '/settings/threads'
@@ -491,6 +501,7 @@ export interface FileRouteTypes {
     | '/settings/scheduled-tasks'
     | '/settings/secrets'
     | '/settings/snap-shot'
+    | '/settings/snoozes'
     | '/settings/source-control'
     | '/settings/storage'
     | '/settings/threads'
@@ -536,6 +547,7 @@ export interface FileRouteTypes {
     | '/_chat/settings/scheduled-tasks'
     | '/_chat/settings/secrets'
     | '/_chat/settings/snap-shot'
+    | '/_chat/settings/snoozes'
     | '/_chat/settings/source-control'
     | '/_chat/settings/storage'
     | '/_chat/settings/threads'
@@ -689,6 +701,13 @@ declare module '@tanstack/react-router' {
       path: '/source-control'
       fullPath: '/settings/source-control'
       preLoaderRoute: typeof ChatSettingsSourceControlRouteImport
+      parentRoute: typeof ChatSettingsRoute
+    }
+    '/_chat/settings/snoozes': {
+      id: '/_chat/settings/snoozes'
+      path: '/snoozes'
+      fullPath: '/settings/snoozes'
+      preLoaderRoute: typeof ChatSettingsSnoozesRouteImport
       parentRoute: typeof ChatSettingsRoute
     }
     '/_chat/settings/snap-shot': {
@@ -885,6 +904,7 @@ interface ChatSettingsRouteChildren {
   ChatSettingsScheduledTasksRoute: typeof ChatSettingsScheduledTasksRoute
   ChatSettingsSecretsRoute: typeof ChatSettingsSecretsRoute
   ChatSettingsSnapShotRoute: typeof ChatSettingsSnapShotRoute
+  ChatSettingsSnoozesRoute: typeof ChatSettingsSnoozesRoute
   ChatSettingsSourceControlRoute: typeof ChatSettingsSourceControlRoute
   ChatSettingsStorageRoute: typeof ChatSettingsStorageRoute
   ChatSettingsThreadsRoute: typeof ChatSettingsThreadsRoute
@@ -915,6 +935,7 @@ const ChatSettingsRouteChildren: ChatSettingsRouteChildren = {
   ChatSettingsScheduledTasksRoute: ChatSettingsScheduledTasksRoute,
   ChatSettingsSecretsRoute: ChatSettingsSecretsRoute,
   ChatSettingsSnapShotRoute: ChatSettingsSnapShotRoute,
+  ChatSettingsSnoozesRoute: ChatSettingsSnoozesRoute,
   ChatSettingsSourceControlRoute: ChatSettingsSourceControlRoute,
   ChatSettingsStorageRoute: ChatSettingsStorageRoute,
   ChatSettingsThreadsRoute: ChatSettingsThreadsRoute,

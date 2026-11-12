@@ -32,6 +32,7 @@ import { mcpToolSession, type McpToolSession } from "../mcp/AcpMcpStdioBridge.ts
 import { expandHomePath } from "../os-jank.ts";
 import { readPersistedServerRuntimeState } from "../serverRuntimeState.ts";
 import { projectLocationFlags, resolveCliAuthConfig } from "./config.ts";
+import { threadSnoozesCommand } from "./snoozes.ts";
 
 /**
  * Short enough that a run which stops to ask the user something is noticed
@@ -772,5 +773,6 @@ export const threadCommand = Command.make("thread").pipe(
     threadStartCommand,
     threadSendCommand,
     threadShowCommand,
+    threadSnoozesCommand,
   ]),
 );

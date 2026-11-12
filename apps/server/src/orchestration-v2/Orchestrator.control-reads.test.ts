@@ -39,6 +39,7 @@ import * as Orchestrator from "./Orchestrator.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
 import * as ProviderReplayHarness from "./testkit/ProviderReplayHarness.ts";
+import * as ThreadSnoozeLog from "./ThreadSnoozeLog.ts";
 import type * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 
 const instanceId = ProviderInstanceId.make("codex");
@@ -1665,5 +1666,90 @@ it.effect("dispatch records the command outcome and its duration", () =>
 
     assert.strictEqual((yield* successes).count - successesBefore, 1);
     assert.strictEqual((yield* durations).count - durationsBefore, 1);
+  }).pipe(Effect.provide(layerTest)),
+);
+
+it.effect("logs each snooze with how it ended, and keeps the reason recorded after it", () =>
+  Effect.gen(function* () {
+    const orchestrator = yield* Orchestrator.OrchestratorV2;
+    const snoozeLog = yield* ThreadSnoozeLog.make;
+    const { threadId } = yield* completeAndSnoozeThread("snooze-log", 60);
+    const snoozeIn = (minutes: number, commandId: string) =>
+      Effect.gen(function* () {
+        yield* orchestrator.dispatch({
+          type: "thread.snooze",
+          commandId: CommandId.make(commandId),
+          threadId,
+          snoozedUntil: DateTime.formatIso(DateTime.add(yield* DateTime.now, { minutes })),
+        });
+      });
+
+    yield* TestClock.adjust("5 minutes");
+    yield* snoozeIn(30, "snooze-log-again");
+    yield* TestClock.adjust("10 minutes");
+    yield* orchestrator.dispatch({
+      type: "thread.unsnooze",
+      commandId: CommandId.make("snooze-log-wake"),
+      threadId,
+      reason: "user",
+    });
+    yield* snoozeIn(1, "snooze-log-short");
+    yield* TestClock.adjust("3 minutes");
+
+    yield* snoozeLog.record({
+      threadId,
+      snoozeId: "snooze-log-again",
+      picker: "preset",
+      presetLabel: "30 minutes",
+      reason: { id: "other", label: "Other", note: "  waiting on design  " },
+    });
+    yield* snoozeLog.record({ threadId, snoozeId: "snooze-log-short", reason: null });
+    const missing = yield* snoozeLog
+      .record({ threadId, snoozeId: "no-such-snooze", reason: null })
+      .pipe(Effect.flip);
+    assert.strictEqual(missing._tag, "ThreadSnoozeLogError");
+
+    const entries = yield* snoozeLog.list({ threadId });
+    assert.deepStrictEqual(
+      entries.map((entry) => ({
+        snoozeId: entry.snoozeId,
+        endKind: entry.endKind,
+        requestedMs: entry.requestedMs,
+        snoozedMs: entry.snoozedMs,
+        picker: entry.picker,
+        reason: [entry.reasonId, entry.reasonLabel, entry.reasonNote],
+        prompted: entry.reasonRecordedAt !== null,
+      })),
+      [
+        {
+          snoozeId: "snooze-log-short",
+          endKind: "expired",
+          requestedMs: 60_000,
+          snoozedMs: 60_000,
+          picker: null,
+          reason: [null, null, null],
+          prompted: true,
+        },
+        {
+          snoozeId: "snooze-log-again",
+          endKind: "unsnoozed",
+          requestedMs: 30 * 60_000,
+          snoozedMs: 10 * 60_000,
+          picker: "preset",
+          reason: ["other", "Other", "waiting on design"],
+          prompted: true,
+        },
+        {
+          snoozeId: "snooze-snooze-log",
+          endKind: "resnoozed",
+          requestedMs: 60 * 60_000,
+          snoozedMs: 5 * 60_000,
+          picker: null,
+          reason: [null, null, null],
+          prompted: false,
+        },
+      ],
+    );
+    assert.deepStrictEqual(yield* snoozeLog.list({ limit: 1 }), entries.slice(0, 1));
   }).pipe(Effect.provide(layerTest)),
 );

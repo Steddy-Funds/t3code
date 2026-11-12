@@ -1,5 +1,8 @@
 import type { CodeServerStatus } from "@t3tools/contracts";
 
+/** Roots shown before the rest fold behind a count: a monorepo lists each package's node_modules. */
+export const SHOWN_LIBRARY_ROOTS = 4;
+
 /** A library folder the workspace's language servers read, under its own top-level tree node. */
 export interface ExternalLibraryRoot {
   /** Absolute. */

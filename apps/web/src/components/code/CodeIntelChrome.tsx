@@ -9,14 +9,13 @@ import { useState } from "react";
 
 import { Button } from "~/components/ui/button";
 import { Input } from "~/components/ui/input";
+import { SHOWN_LIBRARY_ROOTS } from "~/components/project/externalLibraries";
 import { Popover, PopoverPopup, PopoverTrigger } from "~/components/ui/popover";
 import { cn } from "~/lib/utils";
 import { codeIntelEnvironment } from "~/state/codeIntel";
 import { serverEnvironment } from "~/state/server";
 import { useEnvironmentScope } from "~/state/session";
 import { useAtomCommand } from "~/state/use-atom-command";
-
-const SHOWN_LIBRARY_ROOTS = 4;
 
 const STATE_LABEL: Record<CodeServerStatus["state"], string | null> = {
   ready: null,

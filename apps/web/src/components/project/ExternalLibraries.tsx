@@ -20,6 +20,7 @@ import {
   type ExternalLibraryRoot,
   externalLibraryRoots,
   libraryLocation,
+  SHOWN_LIBRARY_ROOTS,
 } from "./externalLibraries";
 
 function parentOf(path: string): string {
@@ -101,9 +102,11 @@ function LibraryTree({
   roots: ReadonlyArray<ExternalLibraryRoot>;
 }) {
   const { resolvedTheme } = useTheme();
+  const [showAll, setShowAll] = useState(false);
+  const shown = showAll ? roots : roots.slice(0, SHOWN_LIBRARY_ROOTS);
   const { kinds, treePaths, load, loading, failed, retry } = useLibraryEntries(
     environmentId,
-    roots,
+    shown,
   );
   const kindsRef = useRef(kinds);
   const loadingRef = useRef(loading);
@@ -187,6 +190,15 @@ function LibraryTree({
         className="min-h-0 flex-1 overflow-hidden"
         style={pierreTreeStyle(resolvedTheme)}
       />
+      {shown.length < roots.length ? (
+        <button
+          type="button"
+          onClick={() => setShowAll(true)}
+          className="self-start px-3 py-1 text-2xs text-muted-foreground hover:text-foreground"
+        >
+          {roots.length - shown.length} more
+        </button>
+      ) : null}
     </>
   );
 }

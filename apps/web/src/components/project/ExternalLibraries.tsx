@@ -7,6 +7,7 @@ import { useEffect, useRef, useState } from "react";
 import { joinHostPath } from "~/components/files/filePath";
 import { buildFileTreePathUpdates } from "~/components/files/fileTreePathReconciliation";
 import { CollapsibleSectionHeader } from "~/components/ui/collapsible-section-header";
+import { useStableCallback } from "~/hooks/useStableCallback";
 import { useTheme } from "~/hooks/useTheme";
 import { T3_PIERRE_ICONS } from "~/pierre-icons";
 import { PIERRE_TREE_UNSAFE_CSS, pierreTreeStyle } from "~/pierre-tree-theme";
@@ -19,6 +20,7 @@ import { useEnvironmentQuery } from "~/state/query";
 import {
   type ExternalLibraryRoot,
   externalLibraryRoots,
+  libraryListing,
   libraryLocation,
   SHOWN_LIBRARY_ROOTS,
 } from "./externalLibraries";
@@ -30,6 +32,7 @@ function parentOf(path: string): string {
 /** Lists library folders as they open. Paths are tree paths: the root's label, then its own. */
 function useLibraryEntries(
   environmentId: EnvironmentId,
+  workspace: string,
   roots: ReadonlyArray<ExternalLibraryRoot>,
 ) {
   const [listed, setListed] = useState(new Map<string, readonly ProjectEntry[]>());
@@ -50,9 +53,10 @@ function useLibraryEntries(
     setLoading((previous) => new Set(previous).add(directory));
     setFailed((previous) => without(previous, directory));
     const { root, relativePath } = location;
+    const listing = libraryListing(root, relativePath, workspace);
     const atom = projectEnvironment.listEntries({
       environmentId,
-      input: { cwd: root.path, directoryPath: relativePath },
+      input: { cwd: listing.cwd, directoryPath: listing.directoryPath },
     });
     void executeAtomQuery(appAtomRegistry, atom, {
       refresh: true,
@@ -60,20 +64,26 @@ function useLibraryEntries(
       reportDefect: false,
     }).then((result) => {
       setLoading((previous) => without(previous, directory));
+      // A failed folder stays requested until Retry, so tree events don't ask for it again.
       if (result._tag !== "Success") {
-        requested.current.delete(directory);
         setFailed((previous) => new Set(previous).add(directory));
         return;
       }
       const children = result.value.entries
-        .filter((entry) => parentOf(entry.path) === relativePath)
-        .map((entry) => ({ ...entry, path: `${root.label}/${entry.path}` }));
+        .filter((entry) => parentOf(entry.path) === listing.directoryPath)
+        .map((entry) => ({
+          ...entry,
+          path: `${root.label}/${entry.path.slice(listing.prefix.length)}`,
+        }));
       setListed((previous) => new Map(previous).set(directory, children));
     });
   };
 
   const retry = () => {
-    for (const directory of failed) load(directory);
+    for (const directory of failed) {
+      requested.current.delete(directory);
+      load(directory);
+    }
   };
 
   const kinds = new Map<string, ProjectEntry["kind"]>();
@@ -94,10 +104,12 @@ function useLibraryEntries(
 
 function LibraryTree({
   environmentId,
+  cwd,
   threadRef,
   roots,
 }: {
   environmentId: EnvironmentId;
+  cwd: string;
   threadRef: ScopedThreadRef;
   roots: ReadonlyArray<ExternalLibraryRoot>;
 }) {
@@ -106,26 +118,29 @@ function LibraryTree({
   const shown = showAll ? roots : roots.slice(0, SHOWN_LIBRARY_ROOTS);
   const { kinds, treePaths, load, loading, failed, retry } = useLibraryEntries(
     environmentId,
+    cwd,
     shown,
   );
   const kindsRef = useRef(kinds);
   const loadingRef = useRef(loading);
   const previousTreePathsRef = useRef<readonly string[] | null>(null);
+  // The model keeps its first options, and the Project pane keeps this tree across threads.
+  const openSelected = useStableCallback((selectedPaths: readonly string[]) => {
+    const selected = selectedPaths.at(-1)?.replace(/\/$/, "");
+    if (!selected || kindsRef.current.get(selected) !== "file") return;
+    const location = libraryLocation(roots, selected);
+    if (location === null) return;
+    useRightPanelStore
+      .getState()
+      .openFile(threadRef, joinHostPath(location.root.path, location.relativePath));
+  });
   const { model } = useFileTree({
     density: "compact",
     // Keeps each root its own row; a root with one folder would otherwise merge into it.
     flattenEmptyDirectories: false,
     initialExpansion: "closed",
     icons: T3_PIERRE_ICONS,
-    onSelectionChange: (selectedPaths) => {
-      const selected = selectedPaths.at(-1)?.replace(/\/$/, "");
-      if (!selected || kindsRef.current.get(selected) !== "file") return;
-      const location = libraryLocation(roots, selected);
-      if (location === null) return;
-      useRightPanelStore
-        .getState()
-        .openFile(threadRef, joinHostPath(location.root.path, location.relativePath));
-    },
+    onSelectionChange: openSelected,
     paths: [],
     renderRowDecoration: ({ item, row }) =>
       row.kind === "directory" &&
@@ -243,6 +258,7 @@ export default function ExternalLibraries({
         <LibraryTree
           key={roots.map((root) => `${root.label}\n${root.path}`).join("\n")}
           environmentId={environmentId}
+          cwd={cwd}
           threadRef={threadRef}
           roots={roots}
         />

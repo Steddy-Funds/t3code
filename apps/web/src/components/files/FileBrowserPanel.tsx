@@ -241,6 +241,8 @@ export default function FileBrowserPanel({
   // Shadow-DOM row rects are unreliable; capture the composed contextmenu event's viewport position.
   const contextMenuPointerRef = useRef<{ x: number; y: number; at: number } | null>(null);
 
+  // The model keeps its first options, and the Project pane keeps this tree across threads.
+  const openFile = useStableCallback(onOpenFile);
   const showEntryContextMenu = useStableCallback(
     (item: TreeContextMenuItem, context: TreeContextMenuOpenContext) => {
       const api = readLocalApi();
@@ -348,7 +350,7 @@ export default function FileBrowserPanel({
       const selectedPath = selectedPaths.at(-1)?.replace(/\/$/, "");
       if (selectedPath && entryKindsRef.current.get(selectedPath) === "file") {
         treeSelectionPathRef.current = selectedPath;
-        onOpenFile(panelPath(selectedPath));
+        openFile(panelPath(selectedPath));
       }
     },
     paths: [],

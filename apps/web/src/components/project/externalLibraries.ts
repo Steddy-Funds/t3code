@@ -1,4 +1,5 @@
 import type { CodeServerStatus } from "@t3tools/contracts";
+import { workspaceRelativeFilePath } from "@t3tools/shared/path";
 
 /** Roots shown before the rest fold behind a count: a monorepo lists each package's node_modules. */
 export const SHOWN_LIBRARY_ROOTS = 4;
@@ -46,4 +47,25 @@ export function libraryLocation(
   const root = roots.find((candidate) => candidate.label === label);
   if (!root) return null;
   return { root, relativePath: slash === -1 ? "" : path.slice(slash + 1) };
+}
+
+/**
+ * Where a folder under a root is listed, and the prefix to strip from what comes back. A root
+ * inside the workspace lists through it: pnpm links each package's node_modules into the root
+ * one, and a listing drops links that leave its cwd.
+ */
+export function libraryListing(
+  root: ExternalLibraryRoot,
+  relativePath: string,
+  workspace: string,
+): { readonly cwd: string; readonly directoryPath: string; readonly prefix: string } {
+  const inWorkspace = workspaceRelativeFilePath(root.path, workspace);
+  if (inWorkspace === null || inWorkspace === ".") {
+    return { cwd: root.path, directoryPath: relativePath, prefix: "" };
+  }
+  return {
+    cwd: workspace,
+    directoryPath: relativePath === "" ? inWorkspace : `${inWorkspace}/${relativePath}`,
+    prefix: `${inWorkspace}/`,
+  };
 }

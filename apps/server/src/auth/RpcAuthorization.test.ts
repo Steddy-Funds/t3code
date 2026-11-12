@@ -6,6 +6,7 @@ import {
   AuthSettingsWriteScope,
   DEFAULT_SERVER_SETTINGS,
   ProviderDriverKind,
+  ORCHESTRATION_V2_WS_METHODS,
   ProviderInstanceId,
   SecretProviderId,
   ThreadId,
@@ -138,6 +139,53 @@ describe("RPC scope middleware", () => {
     }).pipe(Effect.scoped),
   );
 });
+
+it.effect.each([
+  { scopes: [], missing: AuthOrchestrationReadScope },
+  { scopes: [AuthOrchestrationReadScope], missing: AuthFilesystemReadScope },
+  { scopes: [AuthFilesystemReadScope], missing: AuthOrchestrationReadScope },
+  { scopes: [AuthOrchestrationReadScope, AuthFilesystemReadScope], missing: undefined },
+])("turn diff file contents with scopes [$scopes] misses $missing", ({ scopes, missing }) =>
+  Effect.gen(function* () {
+    const method = ORCHESTRATION_V2_WS_METHODS.getTurnDiffFileContents;
+    const group = WsRpcGroup.omit(
+      ...[...WsRpcGroup.requests.keys()].filter(
+        (tag): tag is Exclude<keyof typeof RPC_REQUIRED_SCOPES, typeof method> => tag !== method,
+      ),
+    );
+    let handled = 0;
+    const client = yield* RpcTest.makeClient(group).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          group.toLayerHandler(method, () =>
+            Effect.sync(() => {
+              handled++;
+              return { oldContents: "", newContents: "" };
+            }),
+          ),
+          RpcAuthorization.layer(scopes),
+        ),
+      ),
+    );
+    const result = yield* client[method]({
+      threadId: ThreadId.make("thread"),
+      fromTurnCount: 0,
+      toTurnCount: 1,
+      path: "file.txt",
+    }).pipe(Effect.exit);
+
+    if (missing === undefined) {
+      expect(result._tag).toBe("Success");
+      expect(handled).toBe(1);
+    } else {
+      expect(yield* Effect.flip(result)).toMatchObject({
+        _tag: "EnvironmentAuthorizationError",
+        requiredPermission: missing,
+      });
+      expect(handled).toBe(0);
+    }
+  }).pipe(Effect.scoped),
+);
 
 it.effect.each([WS_METHODS.subscribeVcsBranch, WS_METHODS.subscribeVcsStatus] as const)(
   "enforces read permission on stream %s",

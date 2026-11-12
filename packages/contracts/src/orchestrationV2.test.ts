@@ -639,3 +639,32 @@ describe("latestProviderTurnForAttempt", () => {
     expect(latestProviderTurnForAttempt(turns, null)).toBeUndefined();
   });
 });
+
+describe("turn diff file contents input", () => {
+  const decode = Schema.decodeUnknownExit(OrchestrationV2RpcSchemas.getTurnDiffFileContents.input);
+  const valid = { threadId: "thread-1", fromTurnCount: 0, toTurnCount: 2, path: "src/a.ts" };
+
+  it("trims both paths and accepts a rename", () => {
+    const exit = decode({ ...valid, path: "  src/b.ts ", previousPath: " src/a.ts\n" });
+    expect(exit._tag === "Success" && exit.value).toMatchObject({
+      path: "src/b.ts",
+      previousPath: "src/a.ts",
+    });
+  });
+
+  it.each([
+    ["a range that runs backwards", { fromTurnCount: 3 }],
+    ["an empty path", { path: "" }],
+    ["a blank path", { path: "  \n" }],
+    ["a blank previousPath", { previousPath: " " }],
+    ["a path over 4096 characters", { path: "x".repeat(4_097) }],
+    ["a previousPath over 4096 characters", { previousPath: "x".repeat(4_097) }],
+    ["a negative turn count", { fromTurnCount: -1 }],
+  ])("rejects %s", (_name, patch) => {
+    expect(decode({ ...valid, ...patch })._tag).toBe("Failure");
+  });
+
+  it("accepts the longest path and an empty range", () => {
+    expect(decode({ ...valid, path: "x".repeat(4_096), fromTurnCount: 2 })._tag).toBe("Success");
+  });
+});

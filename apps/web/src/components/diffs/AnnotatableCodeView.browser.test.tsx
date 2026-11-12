@@ -35,6 +35,7 @@ vi.mock("./StyledDiffCodeView", () => ({
           >
             Comment on {item.fileDiff.name}
           </button>
+          <code>{item.fileDiff.additionLines.join("")}</code>
           {props.selectedLines?.id === item.id ? (
             <mark>Line {props.selectedLines.range.start}</mark>
           ) : null}
@@ -49,6 +50,7 @@ vi.mock("./StyledDiffCodeView", () => ({
 
 import { AnnotatableCodeView } from "./AnnotatableCodeView";
 import type { StyledDiffCodeView } from "./StyledDiffCodeView";
+import type { SendReviewComments } from "./useReviewCommentDrafts";
 
 const target = DraftId.make("diff-draft-test");
 const range: SelectedLineRange = { start: 1, end: 1, side: "additions" };
@@ -59,9 +61,10 @@ function file(
   fileVersion = 1,
   type: FileDiffMetadata["type"] = "change",
   prevName?: string,
+  added = "new",
 ) {
   const fileDiff = parsePatchFiles(
-    `diff --git a/${name} b/${name}\n--- a/${name}\n+++ b/${name}\n@@ -1 +1 @@\n-old\n+new\n`,
+    `diff --git a/${name} b/${name}\n--- a/${name}\n+++ b/${name}\n@@ -1 +1 @@\n-old\n+${added}\n`,
     { cacheKeyPrefix: name },
   )[0]!.files[0]!;
   fileDiff.type = type;
@@ -79,6 +82,7 @@ function view(
   files: ReturnType<typeof file>[],
   codeViewKey = "initial",
   pendingFiles: FileDiffMetadata[] = [],
+  onSendComments?: SendReviewComments,
 ) {
   return (
     <StrictMode>
@@ -89,6 +93,7 @@ function view(
         sectionId="unstaged"
         sectionTitle="Uncommitted"
         composerDraftTarget={target}
+        onSendComments={onSendComments}
         options={{}}
         renderHeaderFilenameSuffix={() => null}
         renderHeaderPrefix={() => null}
@@ -159,5 +164,62 @@ describe("diff comment drafts", () => {
       }),
     ]);
     expect(container.querySelector("p")?.textContent).toBe("Keep this draft");
+  });
+
+  it("offers Send beside Add to message once the thread can take a comment", async () => {
+    using _drafts = setup();
+    const onSend = vi.fn<SendReviewComments>(async () => ({ status: "dispatched" }));
+    await using _screen = await render(view([file("shared.ts")], "initial", [], onSend), {
+      container,
+    });
+
+    await click("Comment on shared.ts");
+    await typeComment("For the message");
+    await click("Add to message");
+    await click("Comment on shared.ts");
+    await typeComment("For the agent, now");
+    await click("Send");
+
+    expect(onSend).toHaveBeenCalledTimes(1);
+    expect(onSend).toHaveBeenCalledWith([
+      expect.objectContaining({ filePath: "shared.ts", text: "For the agent, now" }),
+    ]);
+    expect(
+      useComposerDraftStore
+        .getState()
+        .getComposerDraft(target)
+        ?.reviewComments.map((comment) => comment.text),
+    ).toEqual(["For the message"]);
+    expect(container.querySelector("textarea")).toBeNull();
+  });
+
+  it("quotes the words selected in the commented line at the top of the comment", async () => {
+    using _drafts = setup();
+    await using _screen = await render(
+      view([file("shared.ts", 1, "change", undefined, "const value = foo(bar);")]),
+      { container },
+    );
+    const code = container.querySelector("code")!.firstChild!;
+    const words = document.createRange();
+    words.setStart(code, "const value = ".length);
+    words.setEnd(code, "const value = foo(bar)".length);
+    const selection = document.getSelection()!;
+    selection.removeAllRanges();
+    selection.addRange(words);
+    // The press that opens the box is also what clears the selection in a real viewer.
+    await act(() =>
+      container
+        .querySelector("button")!
+        .dispatchEvent(new PointerEvent("pointerdown", { bubbles: true })),
+    );
+    selection.removeAllRanges();
+
+    await click("Comment on shared.ts");
+    await typeComment("Should this be baz?");
+    await click("Comment");
+
+    expect(useComposerDraftStore.getState().getComposerDraft(target)?.reviewComments[0]?.text).toBe(
+      "> foo(bar)\n\nShould this be baz?",
+    );
   });
 });

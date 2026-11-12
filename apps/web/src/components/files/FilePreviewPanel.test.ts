@@ -5,7 +5,14 @@ import { ProjectReadFileError } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 import { describe, expect, it, vi } from "vite-plus/test";
 
-import { remapFileCommentAnnotations } from "./fileCommentAnnotations";
+import { buildFileReviewComment } from "~/reviewCommentContext";
+import {
+  editorSelectedText,
+  fileCommentLineAnnotations,
+  fileCommentStillFits,
+  remapFileCommentAnnotations,
+  sameFileCommentAnnotations,
+} from "./fileCommentAnnotations";
 import {
   filePreviewReadErrorMessage,
   isMarkdownPreviewFile,
@@ -62,6 +69,106 @@ describe("file comment annotations", () => {
         },
       },
     ]);
+  });
+});
+
+describe("file comments from the message draft", () => {
+  const saved = (id: string, startLine: number, endLine: number) =>
+    ({
+      kind: "comment",
+      id,
+      comment: buildFileReviewComment({
+        id,
+        filePath: "notes.md",
+        startLine,
+        endLine,
+        text: `note ${id}`,
+        contents: "a\nb\nc\nd\n",
+      }),
+    }) as const;
+  const open = (text: string) =>
+    ({
+      kind: "draft",
+      id: "open",
+      range: { startLine: 3, endLine: 4 },
+      rangeLabel: "L3 to L4",
+      selectedText: undefined,
+      text,
+      sending: false,
+    }) as const;
+
+  it("puts each comment on the last line of its range, with the open box after the saved ones", () => {
+    expect(
+      fileCommentLineAnnotations([saved("a", 1, 2), saved("b", 4, 4), open("typing")]),
+    ).toEqual([
+      {
+        lineNumber: 2,
+        metadata: {
+          entries: [{ id: "a", kind: "comment", startLine: 1, endLine: 2, text: "note a" }],
+        },
+      },
+      {
+        lineNumber: 4,
+        metadata: {
+          entries: [
+            { id: "b", kind: "comment", startLine: 4, endLine: 4, text: "note b" },
+            { id: "open", kind: "draft", startLine: 3, endLine: 4, text: "" },
+          ],
+        },
+      },
+    ]);
+  });
+
+  it.each([
+    { name: "typing in the open box", next: [saved("a", 1, 2), open("typing more")], same: true },
+    { name: "a comment moving a line", next: [saved("a", 2, 3), open("typing")], same: false },
+    { name: "the box closing", next: [saved("a", 1, 2)], same: false },
+  ])("the viewer gets new annotations after $name: not $same", ({ next, same }) => {
+    const shown = fileCommentLineAnnotations([saved("a", 1, 2), open("typing")]);
+    expect(sameFileCommentAnnotations(shown, fileCommentLineAnnotations(next))).toBe(same);
+  });
+});
+
+describe("fileCommentStillFits", () => {
+  const comment = buildFileReviewComment({
+    id: "c",
+    filePath: "notes.md",
+    startLine: 2,
+    endLine: 3,
+    text: "note",
+    contents: "a\nb\nc\nd\n",
+  });
+
+  it.each([
+    { name: "the file as it was commented", contents: "a\nb\nc\nd\n", fits: true },
+    { name: "an edit below the comment", contents: "a\nb\nc\nd changed\n", fits: true },
+    { name: "a line added above it on disk", contents: "new\na\nb\nc\nd\n", fits: false },
+    { name: "its last line now longer", contents: "a\nb\ncc\nd\n", fits: false },
+    { name: "a file cut short", contents: "a\n", fits: false },
+  ])("with $name: $fits", ({ contents, fits }) => {
+    expect(fileCommentStillFits(contents, comment)).toBe(fits);
+  });
+});
+
+describe("editorSelectedText", () => {
+  const text = "const value = foo(bar);\n  return value;\n";
+  const at = (line: number, character: number) => ({ line, character });
+
+  it.each([
+    { name: "words inside one line", start: at(0, 14), end: at(0, 22), selected: "foo(bar)" },
+    {
+      name: "a selection across lines",
+      start: at(0, 14),
+      end: at(1, 8),
+      selected: "foo(bar);\n  return",
+    },
+    { name: "a selection made backward", start: at(0, 22), end: at(0, 14), selected: "foo(bar)" },
+  ])("reads $name", ({ start, end, selected }) => {
+    expect(editorSelectedText(text, [{ start, end }])).toBe(selected);
+  });
+
+  it("is nothing for a caret", () => {
+    expect(editorSelectedText(text, [{ start: at(0, 3), end: at(0, 3) }])).toBeUndefined();
   });
 });
 

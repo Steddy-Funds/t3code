@@ -1,5 +1,52 @@
-import type { EnvironmentId, ThreadContextRecord } from "@t3tools/contracts";
-import { collectInlineContextIds } from "../../lib/composerContextReferences";
+import type {
+  EnvironmentId,
+  PreviewAnnotationPayload,
+  ThreadContextRecord,
+} from "@t3tools/contracts";
+import type { ComposerImageAttachment } from "../../composerDraftStore";
+import {
+  collectInlineContextIds,
+  ensureInlineContextReferences,
+} from "../../lib/composerContextReferences";
+import { reviewCommentContextReference } from "../../lib/composerContextRecords";
+import type { ReviewCommentContext } from "../../reviewCommentContext";
+
+/** A send started outside the composer. */
+export type DirectComposerSend =
+  /** The draft as it is, plus an annotation written to it in the same tick. */
+  | {
+      readonly kind: "preview-annotation";
+      readonly annotation: PreviewAnnotationPayload;
+      readonly image: ComposerImageAttachment | null;
+    }
+  /** One message holding these comments and nothing the composer holds. */
+  | { readonly kind: "review-comments"; readonly comments: ReadonlyArray<ReviewCommentContext> };
+
+/**
+ * How a review send ended. The comments left the draft only when it was `dispatched` (started
+ * a turn or went into the running one) or `queued` (waits behind the running turn).
+ */
+export type ReviewSendOutcome =
+  | { readonly status: "dispatched" }
+  | { readonly status: "queued" }
+  /** The thread could not take a message; nothing was sent. */
+  | { readonly status: "refused"; readonly reason: string }
+  /** The message was sent and the server did not accept it. */
+  | { readonly status: "failed"; readonly reason: string };
+
+/** What a review send carries in place of the composer's draft. */
+export function reviewSendContent(comments: ReadonlyArray<ReviewCommentContext>) {
+  return {
+    prompt: ensureInlineContextReferences("", comments.map(reviewCommentContextReference)),
+    images: [],
+    files: [],
+    terminalContexts: [],
+    previewAnnotations: [],
+    reviewComments: comments,
+    threadContexts: [],
+    environmentContexts: [],
+  };
+}
 
 /** Attached threads the prompt still links to; replacing linked text leaves stale records. */
 export function referencedThreadContexts(draft: {

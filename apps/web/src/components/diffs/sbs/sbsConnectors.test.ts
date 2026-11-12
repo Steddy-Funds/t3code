@@ -6,9 +6,11 @@ import {
   sbsRowsSpan,
   sbsVisibleConnectors,
   sbsVisibleFoldLinks,
+  sbsVisibleMoveShapes,
 } from "./sbsConnectors";
 import { buildSbsLayout, type SbsLayoutOptions } from "./sbsLayout";
 import { buildSbsDocument } from "./sbsModel";
+import { sbsDiffMovesOf, sbsMoveLayerOf, sbsMovesForFile } from "./sbsMoves";
 
 const numbered = (count: number) => Array.from({ length: count }, (_, index) => `line${index + 1}`);
 const fileOf = (lines: ReadonlyArray<string>) => ({
@@ -265,5 +267,64 @@ describe("sbsVisibleFoldLinks", () => {
         lineHeight: LINE_HEIGHT,
       }),
     ).toEqual(expected);
+  });
+});
+
+describe("sbsVisibleMoveShapes", () => {
+  const block = [
+    "function parseAmount(raw) {",
+    "  const cleaned = raw.trim();",
+    "  return Number(cleaned);",
+  ];
+  // The block sits at lines 3-5 before and 58-60 after: 55 rows, 1100px, apart.
+  const before = [...numbered(2), ...block, ...numbered(55).map((line) => `${line}b`)];
+  const after = [...numbered(2), ...numbered(55).map((line) => `${line}b`), ...block];
+  const fileDiff = parseDiffFromFile(fileOf(before), fileOf(after));
+  const document = buildSbsDocument(fileDiff);
+  const moves = sbsMovesForFile(
+    sbsDiffMovesOf([{ filePath: "file.txt", fileDiff }]),
+    "file.txt",
+    (path) => path,
+  );
+  const shapes = (scrollTop: { deletions: number; additions: number }, viewportHeight: number) =>
+    sbsVisibleMoveShapes({
+      layout: buildSbsLayout(document, FLAT),
+      scrollTop,
+      viewportHeight,
+      lineHeight: LINE_HEIGHT,
+      moves: sbsMoveLayerOf(document, moves),
+    }).map((shape) => shape.kind);
+
+  it.each([
+    { name: "both ends in view", scrollTop: atTop, viewport: 1400, expected: ["band"] },
+    { name: "only the old end in view", scrollTop: atTop, viewport: 400, expected: [] },
+    {
+      name: "the panes scrolled apart onto both ends",
+      scrollTop: { deletions: 0, additions: 1100 },
+      viewport: 400,
+      expected: ["band"],
+    },
+  ])("draws a move within the file as one band with $name", ({ scrollTop, viewport, expected }) => {
+    expect(shapes(scrollTop, viewport)).toEqual(expected);
+  });
+
+  it("draws a wedge on each side of a move to another file while that end is in view", () => {
+    const other = parseDiffFromFile(fileOf(numbered(3)), fileOf([...numbered(3), ...block]));
+    const diffMoves = sbsDiffMovesOf([
+      { filePath: "a.txt", fileDiff: parseDiffFromFile(fileOf(before), fileOf(numbered(57))) },
+      { filePath: "b.txt", fileDiff: other },
+    ]);
+    const otherDocument = buildSbsDocument(other);
+    const incoming = sbsVisibleMoveShapes({
+      layout: buildSbsLayout(otherDocument, FLAT),
+      scrollTop: atTop,
+      viewportHeight: 400,
+      lineHeight: LINE_HEIGHT,
+      moves: sbsMoveLayerOf(
+        otherDocument,
+        sbsMovesForFile(diffMoves, "b.txt", (path) => path),
+      ),
+    });
+    expect(incoming.map((shape) => [shape.id, shape.kind])).toEqual([["additions:0", "wedge"]]);
   });
 });

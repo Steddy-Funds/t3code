@@ -28,7 +28,10 @@ describe("lspResults", () => {
       ["an array", [0, 1]],
       ["a missing end", { start: { line: 0, character: 0 } }],
       ["a negative line", { start: { line: -1, character: 0 }, end: { line: 0, character: 0 } }],
-      ["a fractional character", { start: { line: 0, character: 0.5 }, end: { line: 0, character: 1 } }],
+      [
+        "a fractional character",
+        { start: { line: 0, character: 0.5 }, end: { line: 0, character: 1 } },
+      ],
       ["a string line", { start: { line: "0", character: 0 }, end: { line: 0, character: 1 } }],
     ])("rejects %s", (_name, value) => {
       expect(toRange(value)).toBeUndefined();
@@ -61,9 +64,9 @@ describe("lspResults", () => {
     });
 
     it("falls back to the full target range of a link without a selection range", () => {
-      expect(
-        toLocations([{ targetUri: "file:///a.py", targetRange: range(1, 0, 5) }]),
-      ).toEqual([{ uri: "file:///a.py", range: range(1, 0, 5) }]);
+      expect(toLocations([{ targetUri: "file:///a.py", targetRange: range(1, 0, 5) }])).toEqual([
+        { uri: "file:///a.py", range: range(1, 0, 5) },
+      ]);
     });
 
     it("drops entries that are not locations without failing the rest", () => {
@@ -107,14 +110,14 @@ describe("lspResults", () => {
       expect(
         toDocumentSymbols(
           [
-          {
-            name: "Greeter",
-            kind: 5,
-            detail: "class",
-            range: range(0, 0, 10),
-            selectionRange: range(0, 6, 13),
-            children: [{ name: "greet", kind: 6, range: range(1, 2, 8) }],
-          },
+            {
+              name: "Greeter",
+              kind: 5,
+              detail: "class",
+              range: range(0, 0, 10),
+              selectionRange: range(0, 6, 13),
+              children: [{ name: "greet", kind: 6, range: range(1, 2, 8) }],
+            },
           ],
           FILE,
         ),
@@ -143,7 +146,11 @@ describe("lspResults", () => {
         toDocumentSymbols(
           [
             { name: "f", kind: 12, detail: "", location: { uri: FILE, range: range(3, 0, 4) } },
-            { name: "g", kind: 12, location: { uri: "file:///opt/t3/lib.py", range: range(0, 0, 1) } },
+            {
+              name: "g",
+              kind: 12,
+              location: { uri: "file:///opt/t3/lib.py", range: range(0, 0, 1) },
+            },
           ],
           FILE,
         ),
@@ -160,7 +167,10 @@ describe("lspResults", () => {
 
     it("skips an entry without a name or a range, and anything that is not a list", () => {
       expect(
-        toDocumentSymbols([{ kind: 12, range: range(0, 0, 1) }, { name: "x", kind: 12 }, 5, null], FILE),
+        toDocumentSymbols(
+          [{ kind: 12, range: range(0, 0, 1) }, { name: "x", kind: 12 }, 5, null],
+          FILE,
+        ),
       ).toEqual([]);
       expect(toDocumentSymbols(null, FILE)).toEqual([]);
       expect(toDocumentSymbols({ name: "x" }, FILE)).toEqual([]);
@@ -181,7 +191,10 @@ describe("lspResults", () => {
         node = { name: `n${depth}`, kind: 12, range: range(0, 0, 1), children: [node] };
       }
       let levels = 0;
-      let current: ReadonlyArray<{ children: ReadonlyArray<unknown> }> = toDocumentSymbols([node], FILE) as never;
+      let current: ReadonlyArray<{ children: ReadonlyArray<unknown> }> = toDocumentSymbols(
+        [node],
+        FILE,
+      ) as never;
       while (current.length > 0) {
         levels += 1;
         current = current[0]!.children as never;
@@ -194,9 +207,13 @@ describe("lspResults", () => {
     it("reads MarkupContent, a string, and a list of both forms joined by a blank line", () => {
       expect(toHoverMarkdown({ kind: "markdown", value: "**a**" })).toBe("**a**");
       expect(toHoverMarkdown("plain")).toBe("plain");
-      expect(toHoverMarkdown(["one", { language: "python", value: "def f()" }, { kind: "plaintext", value: "two" }])).toBe(
-        "one\n\n```python\ndef f()\n```\n\ntwo",
-      );
+      expect(
+        toHoverMarkdown([
+          "one",
+          { language: "python", value: "def f()" },
+          { kind: "plaintext", value: "two" },
+        ]),
+      ).toBe("one\n\n```python\ndef f()\n```\n\ntwo");
     });
 
     it("is null for nothing worth showing", () => {
@@ -262,9 +279,10 @@ describe("lspResults", () => {
 
     it("ranks the exact name, then the same name in another case, then prefixes, then the rest", () => {
       expect(
-        rankWorkspaceSymbols(named("a_greet", "greeter", "Greet", "greet", "Greeting", "xgreetx"), "greet").map(
-          (symbol) => symbol.name,
-        ),
+        rankWorkspaceSymbols(
+          named("a_greet", "greeter", "Greet", "greet", "Greeting", "xgreetx"),
+          "greet",
+        ).map((symbol) => symbol.name),
       ).toEqual(["greet", "Greet", "greeter", "Greeting", "a_greet", "xgreetx"]);
     });
 
@@ -290,7 +308,9 @@ describe("lspResults", () => {
 
   describe("semantic tokens", () => {
     it("keeps whole tokens of non-negative integers and nothing else", () => {
-      expect(toSemanticTokenData({ data: [0, 1, 2, 3, 4, 1, 0, 2, 1, 0] })).toEqual([0, 1, 2, 3, 4, 1, 0, 2, 1, 0]);
+      expect(toSemanticTokenData({ data: [0, 1, 2, 3, 4, 1, 0, 2, 1, 0] })).toEqual([
+        0, 1, 2, 3, 4, 1, 0, 2, 1, 0,
+      ]);
       expect(toSemanticTokenData({ data: [0, 1, 2, 3] })).toEqual([]);
       expect(toSemanticTokenData({ data: [0, 1, 2, 3, -4] })).toEqual([]);
       expect(toSemanticTokenData({ data: [0, 1, 2, 3, 0.5] })).toEqual([]);
@@ -300,7 +320,9 @@ describe("lspResults", () => {
 
     it("reads the legend and ignores non-string entries", () => {
       expect(
-        toSemanticTokensLegend({ legend: { tokenTypes: ["class", 1, "function"], tokenModifiers: "x" } }),
+        toSemanticTokensLegend({
+          legend: { tokenTypes: ["class", 1, "function"], tokenModifiers: "x" },
+        }),
       ).toEqual({ tokenTypes: ["class", "function"], tokenModifiers: [] });
       expect(toSemanticTokensLegend({})).toBeUndefined();
       expect(toSemanticTokensLegend(undefined)).toBeUndefined();

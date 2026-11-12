@@ -70,7 +70,11 @@ export interface ServerSessionOptions {
 
 export const make = Effect.fn("ServerSession.make")(function* (
   options: ServerSessionOptions,
-): Effect.fn.Return<ServerSession, never, Scope.Scope | WorkspaceWatcher.WorkspaceWatcher | Path.Path> {
+): Effect.fn.Return<
+  ServerSession,
+  never,
+  Scope.Scope | WorkspaceWatcher.WorkspaceWatcher | Path.Path
+> {
   const { server, row, context } = options;
   const watcher = yield* WorkspaceWatcher.WorkspaceWatcher;
   const path = yield* Path.Path;
@@ -173,7 +177,9 @@ export const make = Effect.fn("ServerSession.make")(function* (
     }
   });
 
-  const notifyChanged = (changes: ReadonlyArray<{ readonly uri: string; readonly type: number }>) =>
+  const notifyChanged = (
+    changes: ReadonlyArray<{ readonly uri: string; readonly type: number }>,
+  ) =>
     changes.length === 0
       ? Effect.void
       : Effect.ignore(server.notify("workspace/didChangeWatchedFiles", { changes }));
@@ -184,11 +190,15 @@ export const make = Effect.fn("ServerSession.make")(function* (
   const closeIfOpen = (uri: string) => {
     const open = documents.get(uri);
     if (open === undefined) return Effect.void;
-    return open.lock.withPermitsIfAvailable(DOCUMENT_PERMITS)(closeHeld(open)).pipe(
-      Effect.flatMap((closed) =>
-        Option.isSome(closed) ? Effect.void : Effect.asVoid(Effect.forkIn(close(open), sessionScope)),
-      ),
-    );
+    return open.lock
+      .withPermitsIfAvailable(DOCUMENT_PERMITS)(closeHeld(open))
+      .pipe(
+        Effect.flatMap((closed) =>
+          Option.isSome(closed)
+            ? Effect.void
+            : Effect.asVoid(Effect.forkIn(close(open), sessionScope)),
+        ),
+      );
   };
 
   const onBatch = Effect.fnUntraced(function* (batch: WorkspaceWatcher.WatchBatch) {

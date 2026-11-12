@@ -3,7 +3,7 @@
 const HEADER_SEPARATOR = Buffer.from("\r\n\r\n", "ascii");
 const MAX_HEADER_BYTES = 8 * 1024;
 // The largest real answer measured is under 1 MB; a body is parsed whole in the server's process.
-export const MAX_LSP_MESSAGE_BYTES = 16 * 1024 * 1024;
+const MAX_LSP_MESSAGE_BYTES = 16 * 1024 * 1024;
 
 export type LspFramingFailure = "header_too_large" | "missing_content_length" | "message_too_large";
 

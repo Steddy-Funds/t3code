@@ -28,9 +28,7 @@ import * as LanguageServerPool from "../LanguageServerPool.ts";
 import * as PythonEnvironment from "../PythonEnvironment.ts";
 import * as WorkspaceWatcher from "../WorkspaceWatcher.ts";
 
-export const FIXTURE = NodeURL.fileURLToPath(
-  new URL("./fakeLanguageServer.fixture.mjs", import.meta.url),
-);
+const FIXTURE = NodeURL.fileURLToPath(new URL("./fakeLanguageServer.fixture.mjs", import.meta.url));
 export const UNKNOWN_WORKSPACE_PREFIX = "t3code-code-intel-unknown-";
 
 export interface RecordedMessage {
@@ -75,7 +73,9 @@ const passGate = (gate: Gate | undefined) =>
     ? Effect.void
     : Effect.suspend(() => {
         gate.arrived += 1;
-        return gate.arrived >= gate.expected ? Deferred.succeed(gate.began, undefined) : Effect.void;
+        return gate.arrived >= gate.expected
+          ? Deferred.succeed(gate.began, undefined)
+          : Effect.void;
       }).pipe(Effect.andThen(Deferred.await(gate.letGo)));
 
 export const isAlive = (pid: number) => {
@@ -167,7 +167,8 @@ export const forkRequest = Effect.fn("forkRequest")(function* <A, E, R>(
   effect: Effect.Effect<A, E, R>,
 ) {
   const done = yield* Deferred.make<
-    { readonly _tag: "Success"; readonly value: A } | { readonly _tag: "Failure"; readonly error: E }
+    | { readonly _tag: "Success"; readonly value: A }
+    | { readonly _tag: "Failure"; readonly error: E }
   >();
   yield* effect.pipe(
     Effect.matchEffect({
@@ -230,10 +231,11 @@ export const makeScenario = Effect.fn("makeScenario")(function* (options: Scenar
     const entry: LogEntry = {
       level: String(logLevel),
       text: String(parts[0]),
-      fields: typeof fields === "object" && fields !== null ? (fields as Record<string, unknown>) : {},
+      fields:
+        typeof fields === "object" && fields !== null ? (fields as Record<string, unknown>) : {},
     };
     state.history.push(entry);
-    for (const waiter of [...state.waiters]) {
+    for (const waiter of state.waiters) {
       if (!waiter.match(entry)) continue;
       state.waiters.delete(waiter);
       waiter.resume(Effect.succeed(entry));
@@ -255,19 +257,23 @@ export const makeScenario = Effect.fn("makeScenario")(function* (options: Scenar
     LanguageServerBinaries.LanguageServerBinaries,
     LanguageServerBinaries.LanguageServerBinaries.of({
       resolve: (languageId) =>
-        Effect.suspend(() => passGate(state.resolveGate)).pipe(Effect.andThen(Effect.sync(() => {
-          Queue.offerUnsafe(resolved, languageId);
-          return state.missing.has(languageId)
-            ? ({
-                _tag: "Unavailable",
-                languageId,
-                name: "fake",
-                reason: "not_installed",
-                installable: true,
-                message: "fake is not installed. Install it to navigate this language.",
-              } as const)
-            : launchSpec(languageId);
-        }))),
+        Effect.suspend(() => passGate(state.resolveGate)).pipe(
+          Effect.andThen(
+            Effect.sync(() => {
+              Queue.offerUnsafe(resolved, languageId);
+              return state.missing.has(languageId)
+                ? ({
+                    _tag: "Unavailable",
+                    languageId,
+                    name: "fake",
+                    reason: "not_installed",
+                    installable: true,
+                    message: "fake is not installed. Install it to navigate this language.",
+                  } as const)
+                : launchSpec(languageId);
+            }),
+          ),
+        ),
       install: (languageId) =>
         Effect.suspend(() => {
           state.installs.push(languageId);

@@ -24,10 +24,10 @@ import * as ServerSession from "./ServerSession.ts";
 import * as WorkspaceWatcher from "./WorkspaceWatcher.ts";
 
 /** Counts servers that are starting or stopping too. */
-export const MAX_LIVE_SERVERS = 4;
+const MAX_LIVE_SERVERS = 4;
 /** Requests one server works on at a time; the rest wait inside their own deadline. */
 const MAX_CONCURRENT_REQUESTS = 8;
-export const IDLE_TIMEOUT_MS = 15 * 60_000;
+const IDLE_TIMEOUT_MS = 15 * 60_000;
 const CRASH_WINDOW_MS = 10 * 60_000;
 const CRASH_LIMIT = 3;
 const TIMEOUT_LIMIT = 3;
@@ -184,7 +184,9 @@ const make = Effect.gen(function* () {
     slot: Slot,
     reason: StopReason,
     after: Phase = { _tag: "stopped" },
-  ): { readonly stopped: Deferred.Deferred<void>; readonly finish: Effect.Effect<void> } | undefined => {
+  ):
+    | { readonly stopped: Deferred.Deferred<void>; readonly finish: Effect.Effect<void> }
+    | undefined => {
     const phase = slot.phase;
     if (phase._tag === "stopping") return { stopped: phase.stopped, finish: Effect.void };
     if (phase._tag !== "starting" && phase._tag !== "ready") return undefined;
@@ -445,7 +447,10 @@ const make = Effect.gen(function* () {
     const backoffMs =
       slot.startFailuresInARow < 2
         ? 0
-        : Math.min(START_BACKOFF_BASE_MS * 2 ** (slot.startFailuresInARow - 2), START_BACKOFF_MAX_MS);
+        : Math.min(
+            START_BACKOFF_BASE_MS * 2 ** (slot.startFailuresInARow - 2),
+            START_BACKOFF_MAX_MS,
+          );
     slot.generation += 1;
     const generation = slot.generation;
     slot.lastUsedAt = now;

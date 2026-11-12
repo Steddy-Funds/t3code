@@ -32,7 +32,9 @@ interface World {
 }
 
 const fill = (dir: string, files: Readonly<Record<string, string>>) =>
-  Object.fromEntries(Object.entries(files).map(([name, text]) => [name, text.replaceAll(WORLD, dir)]));
+  Object.fromEntries(
+    Object.entries(files).map(([name, text]) => [name, text.replaceAll(WORLD, dir)]),
+  );
 
 /** A scratch directory holding `files`; `@WORLD@` in a file's text stands for the directory. */
 const inWorld = <A, E>(
@@ -51,7 +53,10 @@ const inWorld = <A, E>(
         Layer.provide(
           Layer.mergeAll(
             ServerSettings.ServerSettingsService.layerTest({ codeIntel: { pythonEnvironments } }),
-            Layer.succeed(HostProcess.HomeDirectory, NodePath.join(dir, options.homeName ?? "home")),
+            Layer.succeed(
+              HostProcess.HomeDirectory,
+              NodePath.join(dir, options.homeName ?? "home"),
+            ),
             Layer.succeed(HostProcess.Environment, options.environment?.(dir) ?? {}),
           ),
         ),
@@ -77,7 +82,8 @@ const venv = (
   options: { readonly cfg?: string; readonly site?: boolean } = {},
 ): Record<string, string> => ({
   [`${prefix}/pyvenv.cfg`]:
-    options.cfg ?? `home = ${WORLD}/base/bin\ninclude-system-site-packages = false\nversion = 3.12.1\n`,
+    options.cfg ??
+    `home = ${WORLD}/base/bin\ninclude-system-site-packages = false\nversion = 3.12.1\n`,
   ...(options.site === false ? {} : { [`${prefix}/lib/python3.12/site-packages/.keep`]: "" }),
 });
 
@@ -120,7 +126,10 @@ describe("PythonEnvironment", () => {
     it.effect("finds venv when there is no .venv, and prefers .venv when there are both", () =>
       inWorld({ ...BASE, ...venv("venv") }, (world) =>
         Effect.gen(function* () {
-          expect(yield* world.locate()).toMatchObject({ source: "root", environment: world.at("venv") });
+          expect(yield* world.locate()).toMatchObject({
+            source: "root",
+            environment: world.at("venv"),
+          });
           yield* world.write(venv(".venv"));
           expect(yield* world.locate()).toMatchObject({ environment: world.at(".venv") });
         }),
@@ -144,24 +153,41 @@ describe("PythonEnvironment", () => {
       ),
     );
 
-    for (const row of [
+    it.effect.each([
       { name: "version", cfg: "home = @WORLD@/base/bin\nversion = 3.12.1\n", version: "3.12.1" },
-      { name: "version_info", cfg: "home = @WORLD@/base/bin\nversion_info = 3.12.1.final.0\n", version: "3.12.1" },
-      { name: "a two-part version", cfg: "home = @WORLD@/base/bin\nversion = 3.12\n", version: "3.12" },
-      { name: "a capitalised key and CRLF lines", cfg: "home = @WORLD@/base/bin\r\nVersion = 3.12.1\r\n", version: "3.12.1" },
-      { name: "no spaces around =", cfg: "home=@WORLD@/base/bin\nversion=3.12.1\n", version: "3.12.1" },
-    ]) {
-      it.effect(`reads the version from ${row.name}`, () =>
-        inWorld({ ...BASE, ...venv(".venv", { cfg: row.cfg }) }, (world) =>
-          Effect.gen(function* () {
-            const location = yield* world.locate();
+      {
+        name: "version_info",
+        cfg: "home = @WORLD@/base/bin\nversion_info = 3.12.1.final.0\n",
+        version: "3.12.1",
+      },
+      {
+        name: "a two-part version",
+        cfg: "home = @WORLD@/base/bin\nversion = 3.12\n",
+        version: "3.12",
+      },
+      {
+        name: "a capitalised key and CRLF lines",
+        cfg: "home = @WORLD@/base/bin\r\nVersion = 3.12.1\r\n",
+        version: "3.12.1",
+      },
+      {
+        name: "no spaces around =",
+        cfg: "home=@WORLD@/base/bin\nversion=3.12.1\n",
+        version: "3.12.1",
+      },
+    ])("reads the version from $name", (row) =>
+      inWorld({ ...BASE, ...venv(".venv", { cfg: row.cfg }) }, (world) =>
+        Effect.gen(function* () {
+          const location = yield* world.locate();
 
-            expect(location.interpreter?.version).toBe(row.version);
-            expect(location.libraryRoots.map((root) => root.kind)).toEqual(["site-packages", "stdlib"]);
-          }),
-        ),
-      );
-    }
+          expect(location.interpreter?.version).toBe(row.version);
+          expect(location.libraryRoots.map((root) => root.kind)).toEqual([
+            "site-packages",
+            "stdlib",
+          ]);
+        }),
+      ),
+    );
 
     it.effect("has no version, and so no library roots, when pyvenv.cfg names none", () =>
       inWorld({ ...BASE, ...venv(".venv", { cfg: "home = @WORLD@/base/bin\n" }) }, (world) =>
@@ -179,7 +205,11 @@ describe("PythonEnvironment", () => {
       inWorld({ ...venv(".venv", { site: false }), ...BASE }, (world) =>
         Effect.gen(function* () {
           expect((yield* world.locate()).libraryRoots).toEqual([
-            { path: world.at("base", "lib", "python3.12"), label: expect.any(String), kind: "stdlib" },
+            {
+              path: world.at("base", "lib", "python3.12"),
+              label: expect.any(String),
+              kind: "stdlib",
+            },
           ]);
 
           yield* world.write(venv(".venv"));
@@ -193,7 +223,9 @@ describe("PythonEnvironment", () => {
           ]);
 
           yield* world.write(venv(".venv", { cfg: "version = 3.12.1\n" }));
-          expect((yield* world.locate()).libraryRoots.map((root) => root.kind)).toEqual(["site-packages"]);
+          expect((yield* world.locate()).libraryRoots.map((root) => root.kind)).toEqual([
+            "site-packages",
+          ]);
         }),
       ),
     );
@@ -243,27 +275,35 @@ describe("PythonEnvironment", () => {
         },
         (world) =>
           Effect.gen(function* () {
-            expect(yield* world.locate()).toMatchObject({ environment: world.at("backend", ".venv") });
+            expect(yield* world.locate()).toMatchObject({
+              environment: world.at("backend", ".venv"),
+            });
           }),
       ),
     );
 
-    it.effect("falls through to a bare .venv when the configured one has no pyvenv.cfg or is half set", () =>
-      inWorld(
-        { ...BASE, ...venv(".venv"), "pyrightconfig.json": JSON.stringify({ venvPath: "envs", venv: "gone" }) },
-        (world) =>
-          Effect.gen(function* () {
-            expect(yield* world.locate()).toMatchObject({ environment: world.at(".venv") });
-            yield* world.write({ "pyrightconfig.json": JSON.stringify({ venv: "gone" }) });
-            expect(yield* world.locate()).toMatchObject({ environment: world.at(".venv") });
-          }),
-      ),
+    it.effect(
+      "falls through to a bare .venv when the configured one has no pyvenv.cfg or is half set",
+      () =>
+        inWorld(
+          {
+            ...BASE,
+            ...venv(".venv"),
+            "pyrightconfig.json": JSON.stringify({ venvPath: "envs", venv: "gone" }),
+          },
+          (world) =>
+            Effect.gen(function* () {
+              expect(yield* world.locate()).toMatchObject({ environment: world.at(".venv") });
+              yield* world.write({ "pyrightconfig.json": JSON.stringify({ venv: "gone" }) });
+              expect(yield* world.locate()).toMatchObject({ environment: world.at(".venv") });
+            }),
+        ),
     );
 
-    for (const row of [
+    it.effect.each([
       {
         name: "pyproject.toml [tool.pyright] venvPath and venv",
-        toml: '[tool.pyright]\nvenvPath = "envs"   # where they live\nvenv = \'py\'\n',
+        toml: "[tool.pyright]\nvenvPath = \"envs\"   # where they live\nvenv = 'py'\n",
         venv: "envs/py",
       },
       {
@@ -281,81 +321,97 @@ describe("PythonEnvironment", () => {
         toml: '[tool."pyright"]\nvenvPath = "."\nvenv = ".venv-ty"\n',
         venv: ".venv-ty",
       },
-    ]) {
-      it.effect(`reads ${row.name}`, () =>
-        inWorld(
-          {
-            ...BASE,
-            ...venv(".venv"),
-            ...venv(row.venv),
-            ...(row.venv === ".venv-ty" ? { ".venv-ty/bin/python": "" } : {}),
-            "pyproject.toml": row.toml,
-          },
-          (world) =>
-            Effect.gen(function* () {
-              expect(yield* world.locate()).toMatchObject({
-                source: "root",
-                environment: world.at(row.venv),
-              });
-            }),
-        ),
-      );
-    }
-
-    for (const row of [
-      { name: "a venv key in another table", toml: '[tool.other]\nvenvPath = "."\nvenv = ".other"\n' },
-      { name: "an array of tables", toml: '[[tool.pyright]]\nvenvPath = "."\nvenv = ".other"\n' },
-      { name: "an inline table", toml: 'tool = { pyright = { venvPath = ".", venv = ".other" } }\n' },
-      { name: "a commented-out table", toml: '# [tool.pyright]\n# venvPath = "."\n# venv = ".other"\n' },
-      { name: "a table closed before the keys", toml: '[tool.pyright]\n[tool.other]\nvenvPath = "."\nvenv = ".other"\n' },
-    ]) {
-      it.effect(`ignores ${row.name}`, () =>
-        inWorld({ ...BASE, ...venv(".venv"), ...venv(".other"), "pyproject.toml": row.toml }, (world) =>
-          Effect.gen(function* () {
-            expect(yield* world.locate()).toMatchObject({ environment: world.at(".venv") });
-          }),
-        ),
-      );
-    }
-
-    it.effect("tries pyrightconfig.json, then [tool.pyright], then [tool.ty.environment] in one directory", () =>
-      inWorld(
-        {
-          ...BASE,
-          ...venv("a"),
-          ...venv("b"),
-          ...venv("c"),
-          "pyrightconfig.json": JSON.stringify({ venvPath: ".", venv: "a" }),
-          "pyproject.toml":
-            '[tool.pyright]\nvenvPath = "."\nvenv = "b"\n[tool.ty.environment]\npython = "c"\n',
-        },
-        (world) =>
-          Effect.gen(function* () {
-            expect(yield* world.locate()).toMatchObject({ environment: world.at("a") });
-            NodeFS.rmSync(world.at("pyrightconfig.json"));
-            expect(yield* world.locate()).toMatchObject({ environment: world.at("b") });
-            NodeFS.rmSync(world.at("b"), { recursive: true });
-            expect(yield* world.locate()).toMatchObject({ environment: world.at("c") });
-          }),
-      ),
-    );
-
-    it.effect("prefers a config in the root over one in a subdirectory, and either over a bare venv", () =>
+    ])("reads $name", (row) =>
       inWorld(
         {
           ...BASE,
           ...venv(".venv"),
-          ...venv("sub/own"),
-          ...venv("top"),
-          "sub/pyrightconfig.json": JSON.stringify({ venvPath: ".", venv: "own" }),
+          ...venv(row.venv),
+          ...(row.venv === ".venv-ty" ? { ".venv-ty/bin/python": "" } : {}),
+          "pyproject.toml": row.toml,
         },
         (world) =>
           Effect.gen(function* () {
-            expect(yield* world.locate()).toMatchObject({ environment: world.at("sub", "own") });
-            yield* world.write({ "pyrightconfig.json": JSON.stringify({ venvPath: ".", venv: "top" }) });
-            expect(yield* world.locate()).toMatchObject({ environment: world.at("top") });
+            expect(yield* world.locate()).toMatchObject({
+              source: "root",
+              environment: world.at(row.venv),
+            });
           }),
       ),
+    );
+
+    it.effect.each([
+      {
+        name: "a venv key in another table",
+        toml: '[tool.other]\nvenvPath = "."\nvenv = ".other"\n',
+      },
+      { name: "an array of tables", toml: '[[tool.pyright]]\nvenvPath = "."\nvenv = ".other"\n' },
+      {
+        name: "an inline table",
+        toml: 'tool = { pyright = { venvPath = ".", venv = ".other" } }\n',
+      },
+      {
+        name: "a commented-out table",
+        toml: '# [tool.pyright]\n# venvPath = "."\n# venv = ".other"\n',
+      },
+      {
+        name: "a table closed before the keys",
+        toml: '[tool.pyright]\n[tool.other]\nvenvPath = "."\nvenv = ".other"\n',
+      },
+    ])("ignores $name", (row) =>
+      inWorld(
+        { ...BASE, ...venv(".venv"), ...venv(".other"), "pyproject.toml": row.toml },
+        (world) =>
+          Effect.gen(function* () {
+            expect(yield* world.locate()).toMatchObject({ environment: world.at(".venv") });
+          }),
+      ),
+    );
+
+    it.effect(
+      "tries pyrightconfig.json, then [tool.pyright], then [tool.ty.environment] in one directory",
+      () =>
+        inWorld(
+          {
+            ...BASE,
+            ...venv("a"),
+            ...venv("b"),
+            ...venv("c"),
+            "pyrightconfig.json": JSON.stringify({ venvPath: ".", venv: "a" }),
+            "pyproject.toml":
+              '[tool.pyright]\nvenvPath = "."\nvenv = "b"\n[tool.ty.environment]\npython = "c"\n',
+          },
+          (world) =>
+            Effect.gen(function* () {
+              expect(yield* world.locate()).toMatchObject({ environment: world.at("a") });
+              NodeFS.rmSync(world.at("pyrightconfig.json"));
+              expect(yield* world.locate()).toMatchObject({ environment: world.at("b") });
+              NodeFS.rmSync(world.at("b"), { recursive: true });
+              expect(yield* world.locate()).toMatchObject({ environment: world.at("c") });
+            }),
+        ),
+    );
+
+    it.effect(
+      "prefers a config in the root over one in a subdirectory, and either over a bare venv",
+      () =>
+        inWorld(
+          {
+            ...BASE,
+            ...venv(".venv"),
+            ...venv("sub/own"),
+            ...venv("top"),
+            "sub/pyrightconfig.json": JSON.stringify({ venvPath: ".", venv: "own" }),
+          },
+          (world) =>
+            Effect.gen(function* () {
+              expect(yield* world.locate()).toMatchObject({ environment: world.at("sub", "own") });
+              yield* world.write({
+                "pyrightconfig.json": JSON.stringify({ venvPath: ".", venv: "top" }),
+              });
+              expect(yield* world.locate()).toMatchObject({ environment: world.at("top") });
+            }),
+        ),
     );
   });
 
@@ -370,24 +426,30 @@ describe("PythonEnvironment", () => {
       ),
     );
 
-    it.effect("skips dot-directories, node_modules, site-packages, __pycache__ and anything deeper", () => {
-      const skipped = [".hidden", "node_modules", "site-packages", "__pycache__", "a/deeper"];
-      return inWorld(
-        Object.fromEntries(
-          skipped.flatMap((name) => [
-            ...Object.entries(venv(`${name}/.venv`)),
-            ...Object.entries(venv(`${name}/venv`)),
-            [`${name}/pyrightconfig.json`, JSON.stringify({ venvPath: ".", venv: ".venv" })] as const,
-          ]),
-        ),
-        (world) =>
-          Effect.gen(function* () {
-            expect(yield* world.locate()).toEqual(NONE);
-            yield* world.write({ ...BASE, ...venv("z/.venv") });
-            expect(yield* world.locate()).toMatchObject({ environment: world.at("z", ".venv") });
-          }),
-      );
-    });
+    it.effect(
+      "skips dot-directories, node_modules, site-packages, __pycache__ and anything deeper",
+      () => {
+        const skipped = [".hidden", "node_modules", "site-packages", "__pycache__", "a/deeper"];
+        return inWorld(
+          Object.fromEntries(
+            skipped.flatMap((name) => [
+              ...Object.entries(venv(`${name}/.venv`)),
+              ...Object.entries(venv(`${name}/venv`)),
+              [
+                `${name}/pyrightconfig.json`,
+                JSON.stringify({ venvPath: ".", venv: ".venv" }),
+              ] as const,
+            ]),
+          ),
+          (world) =>
+            Effect.gen(function* () {
+              expect(yield* world.locate()).toEqual(NONE);
+              yield* world.write({ ...BASE, ...venv("z/.venv") });
+              expect(yield* world.locate()).toMatchObject({ environment: world.at("z", ".venv") });
+            }),
+        );
+      },
+    );
 
     it.effect("looks at no more than 64 subdirectories", () => {
       const names = Array.from({ length: 66 }, (_, index) => `d${String(index).padStart(2, "0")}`);
@@ -428,7 +490,10 @@ describe("PythonEnvironment", () => {
           const expected = {
             source: "main-checkout",
             environment: world.at("main", "backend", ".venv"),
-            interpreter: { path: world.at("main", "backend", ".venv", "bin", "python"), version: "3.12.1" },
+            interpreter: {
+              path: world.at("main", "backend", ".venv", "bin", "python"),
+              version: "3.12.1",
+            },
           };
           expect(yield* world.locate("wt")).toMatchObject(expected);
           expect(yield* world.locate("wt/backend")).toMatchObject(expected);
@@ -437,16 +502,20 @@ describe("PythonEnvironment", () => {
       ),
     );
 
-    it.effect("reads a gitdir written as a relative path, and a commondir written as an absolute one", () =>
-      inWorld(main, (world) =>
-        Effect.gen(function* () {
-          yield* world.write({ "wt/.git": "gitdir: ../main/.git/worktrees/wt\n" });
-          expect(yield* world.locate("wt")).toMatchObject({ source: "main-checkout" });
+    it.effect(
+      "reads a gitdir written as a relative path, and a commondir written as an absolute one",
+      () =>
+        inWorld(main, (world) =>
+          Effect.gen(function* () {
+            yield* world.write({ "wt/.git": "gitdir: ../main/.git/worktrees/wt\n" });
+            expect(yield* world.locate("wt")).toMatchObject({ source: "main-checkout" });
 
-          yield* world.write({ "main/.git/worktrees/wt/commondir": `${world.at("main", ".git")}\n` });
-          expect(yield* world.locate("wt")).toMatchObject({ source: "main-checkout" });
-        }),
-      ),
+            yield* world.write({
+              "main/.git/worktrees/wt/commondir": `${world.at("main", ".git")}\n`,
+            });
+            expect(yield* world.locate("wt")).toMatchObject({ source: "main-checkout" });
+          }),
+        ),
     );
 
     it.effect("keeps a virtualenv of its own ahead of the main checkout's", () =>
@@ -460,23 +529,31 @@ describe("PythonEnvironment", () => {
       ),
     );
 
-    it.effect("finds the worktree's .git from a root inside it, and applies the rule at that place only", () =>
-      inWorld(
-        { ...main, ...venv("main/.venv"), "main/other/app.py": "", "wt/other/app.py": "" },
-        (world) =>
-          Effect.gen(function* () {
-            // `main/backend` is where the root maps; the main checkout's root .venv is not there.
-            expect(yield* world.locate("wt/other")).toEqual(NONE);
-            expect(yield* world.locate("wt/backend")).toMatchObject({ source: "main-checkout" });
-          }),
-      ),
+    it.effect(
+      "finds the worktree's .git from a root inside it, and applies the rule at that place only",
+      () =>
+        inWorld(
+          { ...main, ...venv("main/.venv"), "main/other/app.py": "", "wt/other/app.py": "" },
+          (world) =>
+            Effect.gen(function* () {
+              // `main/backend` is where the root maps; the main checkout's root .venv is not there.
+              expect(yield* world.locate("wt/other")).toEqual(NONE);
+              expect(yield* world.locate("wt/backend")).toMatchObject({ source: "main-checkout" });
+            }),
+        ),
     );
 
     it.effect("gives none when the main checkout has no virtualenv", () =>
-      inWorld({ ...BASE, "main/.git/worktrees/wt/commondir": "../..\n", "wt/.git": "gitdir: @WORLD@/main/.git/worktrees/wt\n" }, (world) =>
-        Effect.gen(function* () {
-          expect(yield* world.locate("wt")).toEqual(NONE);
-        }),
+      inWorld(
+        {
+          ...BASE,
+          "main/.git/worktrees/wt/commondir": "../..\n",
+          "wt/.git": "gitdir: @WORLD@/main/.git/worktrees/wt\n",
+        },
+        (world) =>
+          Effect.gen(function* () {
+            expect(yield* world.locate("wt")).toEqual(NONE);
+          }),
       ),
     );
 
@@ -521,19 +598,17 @@ describe("PythonEnvironment", () => {
       ),
     );
 
-    for (const row of [
+    it.effect.each([
       { name: "a .git file with no gitdir line", git: "not a pointer\n" },
       { name: "a gitdir that does not exist", git: "gitdir: /nonexistent/place\n" },
       { name: "an empty .git file", git: "" },
-    ]) {
-      it.effect(`gives none for ${row.name}`, () =>
-        inWorld({ ...main, "wt/.git": row.git }, (world) =>
-          Effect.gen(function* () {
-            expect(yield* world.locate("wt")).toEqual(NONE);
-          }),
-        ),
-      );
-    }
+    ])("gives none for $name", (row) =>
+      inWorld({ ...main, "wt/.git": row.git }, (world) =>
+        Effect.gen(function* () {
+          expect(yield* world.locate("wt")).toEqual(NONE);
+        }),
+      ),
+    );
 
     it.effect("stops at the nearest .git: a directory there ends the search", () =>
       inWorld({ ...main, "wt/inner/.git/HEAD": "", "wt/inner/app.py": "" }, (world) =>
@@ -545,27 +620,35 @@ describe("PythonEnvironment", () => {
   });
 
   describe("the user's pythonEnvironments", () => {
-    it.effect("takes a virtualenv directory, describes it, and wins over what the workspace names", () =>
-      inWorld(
-        {
-          ...BASE,
-          ...venv(".venv"),
-          ...venv("custom/env", { cfg: "home = @WORLD@/base/bin\nversion = 3.12.1\n" }),
-          "pyrightconfig.json": JSON.stringify({ venvPath: ".", venv: ".venv" }),
-        },
-        (world) =>
-          Effect.gen(function* () {
-            const location = yield* world.locate("", { [world.dir]: world.at("custom", "env") });
+    it.effect(
+      "takes a virtualenv directory, describes it, and wins over what the workspace names",
+      () =>
+        inWorld(
+          {
+            ...BASE,
+            ...venv(".venv"),
+            ...venv("custom/env", { cfg: "home = @WORLD@/base/bin\nversion = 3.12.1\n" }),
+            "pyrightconfig.json": JSON.stringify({ venvPath: ".", venv: ".venv" }),
+          },
+          (world) =>
+            Effect.gen(function* () {
+              const location = yield* world.locate("", { [world.dir]: world.at("custom", "env") });
 
-            expect(location).toMatchObject({
-              source: "setting",
-              environment: world.at("custom", "env"),
-              interpreter: { path: world.at("custom", "env", "bin", "python"), version: "3.12.1" },
-            });
-            expect(location.libraryRoots.map((root) => root.kind)).toEqual(["site-packages", "stdlib"]);
-            expect(location.problem).toBeUndefined();
-          }),
-      ),
+              expect(location).toMatchObject({
+                source: "setting",
+                environment: world.at("custom", "env"),
+                interpreter: {
+                  path: world.at("custom", "env", "bin", "python"),
+                  version: "3.12.1",
+                },
+              });
+              expect(location.libraryRoots.map((root) => root.kind)).toEqual([
+                "site-packages",
+                "stdlib",
+              ]);
+              expect(location.problem).toBeUndefined();
+            }),
+        ),
     );
 
     it.effect("takes an interpreter inside a virtualenv as that virtualenv", () =>
@@ -593,26 +676,28 @@ describe("PythonEnvironment", () => {
       ),
     );
 
-    it.effect("says setting_path_missing for a path that does not exist, and never falls through", () =>
-      inWorld({ ...BASE, ...venv(".venv") }, (world) =>
-        Effect.gen(function* () {
-          expect(yield* world.locate("", { [world.dir]: world.at("gone") })).toEqual({
-            source: "none",
-            problem: "setting_path_missing",
-            libraryRoots: [],
-          });
-          expect(yield* world.locate()).toMatchObject({ source: "root" });
-        }),
-      ),
+    it.effect(
+      "says setting_path_missing for a path that does not exist, and never falls through",
+      () =>
+        inWorld({ ...BASE, ...venv(".venv") }, (world) =>
+          Effect.gen(function* () {
+            expect(yield* world.locate("", { [world.dir]: world.at("gone") })).toEqual({
+              source: "none",
+              problem: "setting_path_missing",
+              libraryRoots: [],
+            });
+            expect(yield* world.locate()).toMatchObject({ source: "root" });
+          }),
+        ),
     );
 
     it.effect("treats an empty path as unset, and ignores a setting for another root", () =>
       inWorld({ ...BASE, ...venv(".venv"), "other/app.py": "" }, (world) =>
         Effect.gen(function* () {
           expect(yield* world.locate("", { [world.dir]: "" })).toMatchObject({ source: "root" });
-          expect(
-            yield* world.locate("", { [world.at("other")]: world.at("gone") }),
-          ).toMatchObject({ source: "root" });
+          expect(yield* world.locate("", { [world.at("other")]: world.at("gone") })).toMatchObject({
+            source: "root",
+          });
         }),
       ),
     );
@@ -631,7 +716,7 @@ describe("PythonEnvironment", () => {
 
   describe("never failing, never running anything", () => {
     it.effect("gives none for a root that does not exist, or is a file", () =>
-      inWorld({ "afile": "text" }, (world) =>
+      inWorld({ afile: "text" }, (world) =>
         Effect.gen(function* () {
           expect(yield* world.locate("missing")).toEqual(NONE);
           expect(yield* world.locate("afile")).toEqual(NONE);
@@ -654,54 +739,69 @@ describe("PythonEnvironment", () => {
         },
         (world) =>
           Effect.gen(function* () {
-            expect(yield* world.locate()).toMatchObject({ source: "root", environment: world.at(".venv") });
-          }),
-      ),
-    );
-
-    it.effect("skips a config over 1 MB, and takes a pyvenv.cfg over 1 MB as a virtualenv with no details", () =>
-      inWorld(
-        {
-          ...BASE,
-          ...venv(".venv"),
-          ...venv("real"),
-          "pyproject.toml": `[tool.pyright]\nvenvPath = "."\nvenv = "real"\n# ${"x".repeat(1024 * 1024)}\n`,
-        },
-        (world) =>
-          Effect.gen(function* () {
-            expect(yield* world.locate()).toMatchObject({ environment: world.at(".venv") });
-
-            yield* world.write({
-              ".venv/pyvenv.cfg": `home = ${world.at("base", "bin")}\nversion = 3.12.1\n# ${"x".repeat(1024 * 1024)}\n`,
+            expect(yield* world.locate()).toMatchObject({
+              source: "root",
+              environment: world.at(".venv"),
             });
-            const location = yield* world.locate();
-            expect(location).toMatchObject({ source: "root", environment: world.at(".venv") });
-            expect(location.interpreter?.version).toBeUndefined();
-            expect(location.libraryRoots).toEqual([]);
           }),
       ),
     );
 
-    it.effect("treats a dangling symlink, or a file, where a virtualenv should be as no virtualenv", () =>
-      inWorld({ venv: "a file", ".git": "" }, (world) =>
-        Effect.gen(function* () {
-          NodeFS.symlinkSync(world.at("nowhere"), world.at(".venv"));
-          NodeFS.symlinkSync(world.at("nowhere"), world.at("pyrightconfig.json"));
-          expect(yield* world.locate()).toEqual(NONE);
-        }),
-      ),
+    it.effect(
+      "skips a config over 1 MB, and takes a pyvenv.cfg over 1 MB as a virtualenv with no details",
+      () =>
+        inWorld(
+          {
+            ...BASE,
+            ...venv(".venv"),
+            ...venv("real"),
+            "pyproject.toml": `[tool.pyright]\nvenvPath = "."\nvenv = "real"\n# ${"x".repeat(1024 * 1024)}\n`,
+          },
+          (world) =>
+            Effect.gen(function* () {
+              expect(yield* world.locate()).toMatchObject({ environment: world.at(".venv") });
+
+              yield* world.write({
+                ".venv/pyvenv.cfg": `home = ${world.at("base", "bin")}\nversion = 3.12.1\n# ${"x".repeat(1024 * 1024)}\n`,
+              });
+              const location = yield* world.locate();
+              expect(location).toMatchObject({ source: "root", environment: world.at(".venv") });
+              expect(location.interpreter?.version).toBeUndefined();
+              expect(location.libraryRoots).toEqual([]);
+            }),
+        ),
+    );
+
+    it.effect(
+      "treats a dangling symlink, or a file, where a virtualenv should be as no virtualenv",
+      () =>
+        inWorld({ venv: "a file", ".git": "" }, (world) =>
+          Effect.gen(function* () {
+            NodeFS.symlinkSync(world.at("nowhere"), world.at(".venv"));
+            NodeFS.symlinkSync(world.at("nowhere"), world.at("pyrightconfig.json"));
+            expect(yield* world.locate()).toEqual(NONE);
+          }),
+        ),
     );
 
     it.effect("never executes an interpreter, a ty or a git, whatever the workspace holds", () =>
       inWorld(
-        { ...BASE, ...venv("main/.venv"), "main/.git/worktrees/wt/commondir": "../..\n", "wt/.git": "gitdir: @WORLD@/main/.git/worktrees/wt\n" },
+        {
+          ...BASE,
+          ...venv("main/.venv"),
+          "main/.git/worktrees/wt/commondir": "../..\n",
+          "wt/.git": "gitdir: @WORLD@/main/.git/worktrees/wt\n",
+        },
         (world) =>
           Effect.gen(function* () {
             const marker = (name: string) => world.at(`${name}.ran`);
             const script = (name: string) => `#!/bin/sh\ntouch ${marker(name)}\n`;
             for (const venvName of ["main/.venv", "wt/.venv"]) {
               for (const binary of ["python", "python3", "python3.12", "ty"]) {
-                executable(world.at(venvName, "bin", binary), script(`${venvName.replace("/", "-")}-${binary}`));
+                executable(
+                  world.at(venvName, "bin", binary),
+                  script(`${venvName.replace("/", "-")}-${binary}`),
+                );
               }
             }
             executable(world.at("pathbin", "git"), script("git"));
@@ -710,9 +810,13 @@ describe("PythonEnvironment", () => {
             yield* world.locate("wt");
             yield* world.locate("main");
             yield* world.locate("", { [world.dir]: world.at("main", ".venv", "bin", "python") });
-            yield* world.locate("wt", { [world.at("wt")]: world.at("wt", ".venv", "bin", "python3.12") });
+            yield* world.locate("wt", {
+              [world.at("wt")]: world.at("wt", ".venv", "bin", "python3.12"),
+            });
 
-            expect(NodeFS.readdirSync(world.dir).filter((name) => name.endsWith(".ran"))).toEqual([]);
+            expect(NodeFS.readdirSync(world.dir).filter((name) => name.endsWith(".ran"))).toEqual(
+              [],
+            );
           }),
         { environment: (dir) => ({ PATH: `${NodePath.join(dir, "pathbin")}:/usr/bin:/bin` }) },
       ),

@@ -47,7 +47,9 @@ const python: LanguageRow = {
   initializationOptions: tyOptions,
   configuration: (section, context) => (section === "ty" ? tyOptions(context) : null),
   watches: (fileName) =>
-    hasExtension(fileName, [".py", ".pyi"]) || fileName === "pyproject.toml" || fileName === "ty.toml",
+    hasExtension(fileName, [".py", ".pyi"]) ||
+    fileName === "pyproject.toml" ||
+    fileName === "ty.toml",
   restartsOn: (fileName) =>
     fileName === "pyvenv.cfg" ||
     fileName === "uv.lock" ||

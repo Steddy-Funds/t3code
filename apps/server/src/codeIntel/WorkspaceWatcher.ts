@@ -45,7 +45,7 @@ export const IGNORED_DIRECTORIES: ReadonlySet<string> = new Set([
 ]);
 
 /** One inotify watch a directory on Linux, from a per-user budget every dev server shares. */
-export const WATCHED_DIRECTORY_CAP = 8_192;
+const WATCHED_DIRECTORY_CAP = 8_192;
 const DEBOUNCE_MS = 150;
 // A checkout or a bulk rewrite: telling the server file by file costs more than restarting it.
 const PENDING_PATH_CAP = 5_000;

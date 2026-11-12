@@ -114,129 +114,146 @@ const documentAt = (realPath: string, text: string): ServerSession.SessionDocume
 
 describe("ServerSession", () => {
   describe("one lock a document", () => {
-    it.effect("keeps one open copy when a change on disk closes a document that requests wait on", () =>
-      Effect.gen(function* () {
-        const local = yield* makeLocalSession("/repo");
-        const entered = yield* Deferred.make<void>();
-        const release = yield* Deferred.make<void>();
-        const first = yield* local.session
-          .withDocument(
-            documentAt("/repo/app.py", "one\n"),
-            Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release))),
-          )
-          .pipe(Effect.forkChild);
-        yield* Deferred.await(entered);
+    it.effect(
+      "keeps one open copy when a change on disk closes a document that requests wait on",
+      () =>
+        Effect.gen(function* () {
+          const local = yield* makeLocalSession("/repo");
+          const entered = yield* Deferred.make<void>();
+          const release = yield* Deferred.make<void>();
+          const first = yield* local.session
+            .withDocument(
+              documentAt("/repo/app.py", "one\n"),
+              Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release))),
+            )
+            .pipe(Effect.forkChild);
+          yield* Deferred.await(entered);
 
-        // The close queues behind the first request; the next request finds the document before
-        // the close removes it, and queues behind the close.
-        yield* local.changed("/repo/app.py");
-        yield* Effect.yieldNow;
-        const second = yield* local.session
-          .withDocument(documentAt("/repo/app.py", "two\n"), Effect.void)
-          .pipe(Effect.forkChild({ startImmediately: true }));
-        yield* Deferred.succeed(release, undefined);
-        yield* Fiber.join(first);
-        yield* Fiber.join(second);
-        yield* local.session.withDocument(documentAt("/repo/app.py", "two\n"), Effect.void);
+          // The close queues behind the first request; the next request finds the document before
+          // the close removes it, and queues behind the close.
+          yield* local.changed("/repo/app.py");
+          yield* Effect.yieldNow;
+          const second = yield* local.session
+            .withDocument(documentAt("/repo/app.py", "two\n"), Effect.void)
+            .pipe(Effect.forkChild({ startImmediately: true }));
+          yield* Deferred.succeed(release, undefined);
+          yield* Fiber.join(first);
+          yield* Fiber.join(second);
+          yield* local.session.withDocument(documentAt("/repo/app.py", "two\n"), Effect.void);
 
-        const lifecycle = local.told
-          .filter(({ method }) => method === "textDocument/didOpen" || method === "textDocument/didClose")
-          .map(({ method, params }) =>
-            params.textDocument.text === undefined ? method : `${method} ${params.textDocument.text}`,
-          );
-        expect(lifecycle).toEqual([
-          "textDocument/didOpen one\n",
-          "textDocument/didClose",
-          "textDocument/didOpen two\n",
-        ]);
-      }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+          const lifecycle = local.told
+            .filter(
+              ({ method }) =>
+                method === "textDocument/didOpen" || method === "textDocument/didClose",
+            )
+            .map(({ method, params }) =>
+              params.textDocument.text === undefined
+                ? method
+                : `${method} ${params.textDocument.text}`,
+            );
+          expect(lifecycle).toEqual([
+            "textDocument/didOpen one\n",
+            "textDocument/didClose",
+            "textDocument/didOpen two\n",
+          ]);
+        }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
     );
   });
 
   describe("without a watcher", () => {
-    it.effect("tells the server about a file first seen in an answer if it changed after the server started", () =>
-      Effect.gen(function* () {
-        const cwd = yield* makeWorkspace({ "lib.py": "def lib\n" });
-        const lib = NodePath.join(cwd, "lib.py");
-        const modifiedAt = NodeFS.statSync(lib).mtimeMs;
+    it.effect(
+      "tells the server about a file first seen in an answer if it changed after the server started",
+      () =>
+        Effect.gen(function* () {
+          const cwd = yield* makeWorkspace({ "lib.py": "def lib\n" });
+          const lib = NodePath.join(cwd, "lib.py");
+          const modifiedAt = NodeFS.statSync(lib).mtimeMs;
 
-        yield* TestClock.setTime(modifiedAt - 1_000);
-        const local = yield* makeLocalSession(cwd, "fallback");
-        yield* local.session.withDocument(documentAt(lib, "def lib\n"), Effect.void);
+          yield* TestClock.setTime(modifiedAt - 1_000);
+          const local = yield* makeLocalSession(cwd, "fallback");
+          yield* local.session.withDocument(documentAt(lib, "def lib\n"), Effect.void);
 
-        // Closed before the answer is asked again, so the server reads the file from disk.
-        expect(yield* local.session.refreshChangedFiles([lib])).toBe(true);
-        expect(local.told.map(({ method }) => method).slice(-2)).toEqual([
-          "textDocument/didClose",
-          "workspace/didChangeWatchedFiles",
-        ]);
-        expect(local.told.find(({ method }) => method === "workspace/didChangeWatchedFiles")?.params).toEqual({
-          changes: [{ uri: uriOf(cwd, "lib.py"), type: 2 }],
-        });
-        expect(yield* local.session.refreshChangedFiles([lib])).toBe(false);
-      }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+          // Closed before the answer is asked again, so the server reads the file from disk.
+          expect(yield* local.session.refreshChangedFiles([lib])).toBe(true);
+          expect(local.told.map(({ method }) => method).slice(-2)).toEqual([
+            "textDocument/didClose",
+            "workspace/didChangeWatchedFiles",
+          ]);
+          expect(
+            local.told.find(({ method }) => method === "workspace/didChangeWatchedFiles")?.params,
+          ).toEqual({
+            changes: [{ uri: uriOf(cwd, "lib.py"), type: 2 }],
+          });
+          expect(yield* local.session.refreshChangedFiles([lib])).toBe(false);
+        }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
     );
 
-    it.effect("trusts a file first seen in an answer that last changed before the server started", () =>
-      Effect.gen(function* () {
-        const cwd = yield* makeWorkspace({ "lib.py": "def lib\n" });
-        const lib = NodePath.join(cwd, "lib.py");
+    it.effect(
+      "trusts a file first seen in an answer that last changed before the server started",
+      () =>
+        Effect.gen(function* () {
+          const cwd = yield* makeWorkspace({ "lib.py": "def lib\n" });
+          const lib = NodePath.join(cwd, "lib.py");
 
-        yield* TestClock.setTime(NodeFS.statSync(lib).mtimeMs + 1_000);
-        const local = yield* makeLocalSession(cwd, "fallback");
+          yield* TestClock.setTime(NodeFS.statSync(lib).mtimeMs + 1_000);
+          const local = yield* makeLocalSession(cwd, "fallback");
 
-        expect(yield* local.session.refreshChangedFiles([lib])).toBe(false);
-        NodeFS.writeFileSync(lib, "def lib\ndef more\n");
-        expect(yield* local.session.refreshChangedFiles([lib])).toBe(true);
-      }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+          expect(yield* local.session.refreshChangedFiles([lib])).toBe(false);
+          NodeFS.writeFileSync(lib, "def lib\ndef more\n");
+          expect(yield* local.session.refreshChangedFiles([lib])).toBe(true);
+        }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
     );
   });
 
   describe("syncing documents", () => {
-    it.effect("opens a document once with the text on disk and reuses it at the same revision", () =>
-      inScenario({}, (s) =>
-        Effect.gen(function* () {
-          const cwd = yield* makeWorkspace({ "build/app.py": "greet\ndef greet\n" });
+    it.effect(
+      "opens a document once with the text on disk and reuses it at the same revision",
+      () =>
+        inScenario({}, (s) =>
+          Effect.gen(function* () {
+            const cwd = yield* makeWorkspace({ "build/app.py": "greet\ndef greet\n" });
 
-          yield* hoverAt(cwd, "build/app.py");
-          yield* hoverAt(cwd, "build/app.py");
-          yield* definitionAt(cwd, "build/app.py");
+            yield* hoverAt(cwd, "build/app.py");
+            yield* hoverAt(cwd, "build/app.py");
+            yield* definitionAt(cwd, "build/app.py");
 
-          const opened = recorded(s.record).filter((m) => m.method === "textDocument/didOpen");
-          expect(opened).toHaveLength(1);
-          expect(opened[0]!.params?.textDocument).toMatchObject({
-            uri: uriOf(cwd, "build/app.py"),
-            languageId: "python",
-            version: 1,
-            text: "greet\ndef greet\n",
-          });
-          expect(countOf(s.record, "textDocument/didChange")).toBe(0);
-        }),
-      ),
+            const opened = recorded(s.record).filter((m) => m.method === "textDocument/didOpen");
+            expect(opened).toHaveLength(1);
+            expect(opened[0]!.params?.textDocument).toMatchObject({
+              uri: uriOf(cwd, "build/app.py"),
+              languageId: "python",
+              version: 1,
+              text: "greet\ndef greet\n",
+            });
+            expect(countOf(s.record, "textDocument/didChange")).toBe(0);
+          }),
+        ),
     );
 
-    it.effect("sends the new text before the request when the file changed, and the answer is about it", () =>
-      inScenario({}, (s) =>
-        Effect.gen(function* () {
-          const cwd = yield* makeWorkspace({ "build/app.py": "greet\n" });
-          expect((yield* hoverAt(cwd, "build/app.py")).markdown).toBe("**greet**");
+    it.effect(
+      "sends the new text before the request when the file changed, and the answer is about it",
+      () =>
+        inScenario({}, (s) =>
+          Effect.gen(function* () {
+            const cwd = yield* makeWorkspace({ "build/app.py": "greet\n" });
+            expect((yield* hoverAt(cwd, "build/app.py")).markdown).toBe("**greet**");
 
-          yield* writeFiles(cwd, { "build/app.py": "fresh\n" });
-          const answer = yield* hoverAt(cwd, "build/app.py");
+            yield* writeFiles(cwd, { "build/app.py": "fresh\n" });
+            const answer = yield* hoverAt(cwd, "build/app.py");
 
-          expect(answer.markdown).toBe("**fresh**");
-          const messages = recorded(s.record);
-          const changeAt = messages.findIndex((m) => m.method === "textDocument/didChange");
-          const secondHover = messages.findLastIndex((m) => m.method === "textDocument/hover");
-          expect(messages[changeAt]!.params).toMatchObject({
-            textDocument: { uri: uriOf(cwd, "build/app.py"), version: 2 },
-            contentChanges: [{ text: "fresh\n" }],
-          });
-          expect(changeAt).toBeGreaterThan(-1);
-          expect(changeAt).toBeLessThan(secondHover);
-          expect(countOf(s.record, "textDocument/didOpen")).toBe(1);
-        }),
-      ),
+            expect(answer.markdown).toBe("**fresh**");
+            const messages = recorded(s.record);
+            const changeAt = messages.findIndex((m) => m.method === "textDocument/didChange");
+            const secondHover = messages.findLastIndex((m) => m.method === "textDocument/hover");
+            expect(messages[changeAt]!.params).toMatchObject({
+              textDocument: { uri: uriOf(cwd, "build/app.py"), version: 2 },
+              contentChanges: [{ text: "fresh\n" }],
+            });
+            expect(changeAt).toBeGreaterThan(-1);
+            expect(changeAt).toBeLessThan(secondHover);
+            expect(countOf(s.record, "textDocument/didOpen")).toBe(1);
+          }),
+        ),
     );
 
     it.effect("runs requests at one revision together, and a sync after them", () =>
@@ -270,7 +287,9 @@ describe("ServerSession", () => {
           });
 
           const messages = recorded(s.record);
-          const released = messages.findIndex((m) => m.method === "workspace/didChangeWatchedFiles");
+          const released = messages.findIndex(
+            (m) => m.method === "workspace/didChangeWatchedFiles",
+          );
           const changeAt = messages.findIndex((m) => m.method === "textDocument/didChange");
           expect(released).toBeGreaterThan(-1);
           expect(changeAt).toBeGreaterThan(released);
@@ -318,33 +337,37 @@ describe("ServerSession", () => {
   });
 
   describe("watching the workspace", () => {
-    it.effect("tells the server about a created, changed and deleted file, and closes the changed one", () =>
-      inScenario({}, (s) =>
-        Effect.gen(function* () {
-          const cwd = yield* makeWorkspace({ "app.py": "greet\n" });
-          yield* hoverAt(cwd, "app.py");
+    it.effect(
+      "tells the server about a created, changed and deleted file, and closes the changed one",
+      () =>
+        inScenario({}, (s) =>
+          Effect.gen(function* () {
+            const cwd = yield* makeWorkspace({ "app.py": "greet\n" });
+            yield* hoverAt(cwd, "app.py");
 
-          yield* writeFiles(cwd, { "lib.py": "def lib\n" });
-          yield* waitForChange(s.record, uriOf(cwd, "lib.py"), 1);
+            yield* writeFiles(cwd, { "lib.py": "def lib\n" });
+            yield* waitForChange(s.record, uriOf(cwd, "lib.py"), 1);
 
-          yield* writeFiles(cwd, { "app.py": "fresh\n" });
-          yield* waitForChange(s.record, uriOf(cwd, "app.py"), 2);
-          yield* waitForMethod(s.record, "textDocument/didClose");
-          expect(recorded(s.record).find((m) => m.method === "textDocument/didClose")?.params).toMatchObject({
-            textDocument: { uri: uriOf(cwd, "app.py") },
-          });
+            yield* writeFiles(cwd, { "app.py": "fresh\n" });
+            yield* waitForChange(s.record, uriOf(cwd, "app.py"), 2);
+            yield* waitForMethod(s.record, "textDocument/didClose");
+            expect(
+              recorded(s.record).find((m) => m.method === "textDocument/didClose")?.params,
+            ).toMatchObject({
+              textDocument: { uri: uriOf(cwd, "app.py") },
+            });
 
-          NodeFS.rmSync(NodePath.join(cwd, "lib.py"));
-          yield* waitForChange(s.record, uriOf(cwd, "lib.py"), 3);
+            NodeFS.rmSync(NodePath.join(cwd, "lib.py"));
+            yield* waitForChange(s.record, uriOf(cwd, "lib.py"), 3);
 
-          // The closed document comes back with what is on disk now.
-          expect((yield* hoverAt(cwd, "app.py")).markdown).toBe("**fresh**");
-          const opens = recorded(s.record).filter((m) => m.method === "textDocument/didOpen");
-          expect(opens).toHaveLength(2);
-          expect(opens[1]!.params?.textDocument).toMatchObject({ text: "fresh\n", version: 1 });
-          expect(countOf(s.record, "textDocument/didChange")).toBe(0);
-        }),
-      ),
+            // The closed document comes back with what is on disk now.
+            expect((yield* hoverAt(cwd, "app.py")).markdown).toBe("**fresh**");
+            const opens = recorded(s.record).filter((m) => m.method === "textDocument/didOpen");
+            expect(opens).toHaveLength(2);
+            expect(opens[1]!.params?.textDocument).toMatchObject({ text: "fresh\n", version: 1 });
+            expect(countOf(s.record, "textDocument/didChange")).toBe(0);
+          }),
+        ),
     );
 
     it.effect("tells the server only about files its language watches", () =>
@@ -364,24 +387,26 @@ describe("ServerSession", () => {
       ),
     );
 
-    it.effect("stops the server when a manifest changes, and starts a new one for the next request", () =>
-      inScenario({}, (s) =>
-        Effect.gen(function* () {
-          const cwd = yield* makeWorkspace({ "app.py": "greet\n" });
-          yield* hoverAt(cwd, "app.py");
-          const [pid] = startedPids(s.record);
-          const from = s.mark();
+    it.effect(
+      "stops the server when a manifest changes, and starts a new one for the next request",
+      () =>
+        inScenario({}, (s) =>
+          Effect.gen(function* () {
+            const cwd = yield* makeWorkspace({ "app.py": "greet\n" });
+            yield* hoverAt(cwd, "app.py");
+            const [pid] = startedPids(s.record);
+            const from = s.mark();
 
-          yield* writeFiles(cwd, { "pyproject.toml": "[project]\nname = 'x'\n" });
-          yield* s.waitForStop("dependencies", from);
+            yield* writeFiles(cwd, { "pyproject.toml": "[project]\nname = 'x'\n" });
+            yield* s.waitForStop("dependencies", from);
 
-          expect(isAlive(pid!)).toBe(false);
-          expect(s.heldWatchers()).toBe(0);
-          expect(methodsOf(s.record)).not.toContain("workspace/didChangeWatchedFiles");
-          expect((yield* hoverAt(cwd, "app.py")).markdown).toBe("**greet**");
-          expect(startedPids(s.record)).toHaveLength(2);
-        }),
-      ),
+            expect(isAlive(pid!)).toBe(false);
+            expect(s.heldWatchers()).toBe(0);
+            expect(methodsOf(s.record)).not.toContain("workspace/didChangeWatchedFiles");
+            expect((yield* hoverAt(cwd, "app.py")).markdown).toBe("**greet**");
+            expect(startedPids(s.record)).toHaveLength(2);
+          }),
+        ),
     );
   });
 });

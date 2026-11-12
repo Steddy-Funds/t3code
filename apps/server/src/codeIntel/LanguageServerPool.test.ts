@@ -36,7 +36,11 @@ const hoverAt = (cwd: string, path = "app.py") =>
 
 const definitionAt = (cwd: string, path = "app.py", line = 0, character = 1) =>
   Effect.flatMap(CodeIntel.CodeIntel, (codeIntel) =>
-    codeIntel.definition({ document: { cwd, path }, position: at(line, character), kind: "definition" }),
+    codeIntel.definition({
+      document: { cwd, path },
+      position: at(line, character),
+      kind: "definition",
+    }),
   );
 
 const stateOf = (cwd: string, languageId = "python") =>
@@ -69,7 +73,11 @@ describe("LanguageServerPool", () => {
       inScenario({}, (s) =>
         Effect.gen(function* () {
           const cwd = yield* makeWorkspace({ "app.py": "greet\n" });
-          expect(yield* stateOf(cwd)).toMatchObject({ state: "stopped", name: "fake", version: "1.2.3" });
+          expect(yield* stateOf(cwd)).toMatchObject({
+            state: "stopped",
+            name: "fake",
+            version: "1.2.3",
+          });
           expect(noWorkspaceStarted(s.record)).toBe(true);
 
           yield* hoverAt(cwd);
@@ -83,29 +91,33 @@ describe("LanguageServerPool", () => {
       ),
     );
 
-    it.effect("starts one server for requests that arrive together, however their fibers interleave", () =>
-      inScenario({}, (s) =>
-        Effect.gen(function* () {
-          // Released together, the requests take turns in step; each limit moves where a turn ends.
-          const limits = Array.from({ length: 29 }, (_, index) => index + 3);
-          for (const [index, limit] of limits.entries()) {
-            const cwd = yield* makeWorkspace({ "app.py": "greet\n" });
-            const gate = makeGate(3);
-            s.resolveGate = gate;
-            const requests = yield* Effect.forEach([1, 2, 3], () =>
-              forkRequest(hoverAt(cwd).pipe(Effect.provideService(Scheduler.MaxOpsBeforeYield, limit))),
-            );
-            yield* Deferred.await(gate.began);
-            s.resolveGate = undefined;
-            yield* Deferred.succeed(gate.letGo, undefined);
-            for (const request of requests) {
-              expect((yield* request.outcome)._tag).toBe("Success");
+    it.effect(
+      "starts one server for requests that arrive together, however their fibers interleave",
+      () =>
+        inScenario({}, (s) =>
+          Effect.gen(function* () {
+            // Released together, the requests take turns in step; each limit moves where a turn ends.
+            const limits = Array.from({ length: 29 }, (_, index) => index + 3);
+            for (const [index, limit] of limits.entries()) {
+              const cwd = yield* makeWorkspace({ "app.py": "greet\n" });
+              const gate = makeGate(3);
+              s.resolveGate = gate;
+              const requests = yield* Effect.forEach([1, 2, 3], () =>
+                forkRequest(
+                  hoverAt(cwd).pipe(Effect.provideService(Scheduler.MaxOpsBeforeYield, limit)),
+                ),
+              );
+              yield* Deferred.await(gate.began);
+              s.resolveGate = undefined;
+              yield* Deferred.succeed(gate.letGo, undefined);
+              for (const request of requests) {
+                expect((yield* request.outcome)._tag).toBe("Success");
+              }
+              expect(startedPids(s.record)).toHaveLength(index + 1);
+              yield* restart(cwd);
             }
-            expect(startedPids(s.record)).toHaveLength(index + 1);
-            yield* restart(cwd);
-          }
-        }),
-      ),
+          }),
+        ),
     );
 
     it.effect("is indexing for as long as the server reports progress", () =>
@@ -123,32 +135,34 @@ describe("LanguageServerPool", () => {
       ),
     );
 
-    it.effect("asks again every 250 ms while the server loads, and answers empty once it settled", () =>
-      inScenario({}, (s) =>
-        Effect.gen(function* () {
-          const cwd = yield* makeWorkspace({ "app.py": "greet\n", "other.py": "greet\n" });
+    it.effect(
+      "asks again every 250 ms while the server loads, and answers empty once it settled",
+      () =>
+        inScenario({}, (s) =>
+          Effect.gen(function* () {
+            const cwd = yield* makeWorkspace({ "app.py": "greet\n", "other.py": "greet\n" });
 
-          const definition = yield* forkRequest(definitionAt(cwd));
-          yield* waitForMethod(s.record, "textDocument/definition");
-          // The server answers in order, so this answer arrives after the empty definition one.
-          // Another document: the first request on app.py holds its lock while it loops.
-          yield* hoverAt(cwd, "other.py");
-          expect(yield* definition.settled).toBe(false);
-          yield* writeFiles(cwd, { "lib.py": "def greet\n" });
-          yield* TestClock.adjust(250);
+            const definition = yield* forkRequest(definitionAt(cwd));
+            yield* waitForMethod(s.record, "textDocument/definition");
+            // The server answers in order, so this answer arrives after the empty definition one.
+            // Another document: the first request on app.py holds its lock while it loops.
+            yield* hoverAt(cwd, "other.py");
+            expect(yield* definition.settled).toBe(false);
+            yield* writeFiles(cwd, { "lib.py": "def greet\n" });
+            yield* TestClock.adjust(250);
 
-          expect(yield* definition.outcome).toMatchObject({
-            _tag: "Success",
-            value: { locations: [{ path: "lib.py" }] },
-          });
-          expect(countOf(s.record, "textDocument/definition")).toBe(2);
+            expect(yield* definition.outcome).toMatchObject({
+              _tag: "Success",
+              value: { locations: [{ path: "lib.py" }] },
+            });
+            expect(countOf(s.record, "textDocument/definition")).toBe(2);
 
-          yield* TestClock.adjust(3_000);
-          const empty = yield* definitionAt(cwd, "app.py", 0, 20);
-          expect(empty.locations).toEqual([]);
-          expect(countOf(s.record, "textDocument/definition")).toBe(3);
-        }),
-      ),
+            yield* TestClock.adjust(3_000);
+            const empty = yield* definitionAt(cwd, "app.py", 0, 20);
+            expect(empty.locations).toEqual([]);
+            expect(countOf(s.record, "textDocument/definition")).toBe(3);
+          }),
+        ),
     );
 
     it.effect("is unavailable while the binary is missing, and starts once it is there", () =>
@@ -280,26 +294,28 @@ describe("LanguageServerPool", () => {
   });
 
   describe("crashes", () => {
-    it.effect("fails the request in flight when the server exits, and starts a new one for the next", () =>
-      inScenario({}, (s) =>
-        Effect.gen(function* () {
-          misbehaveOnce(s, "--crash-on=textDocument/hover");
-          const cwd = yield* makeWorkspace({ "app.py": "greet\n" });
+    it.effect(
+      "fails the request in flight when the server exits, and starts a new one for the next",
+      () =>
+        inScenario({}, (s) =>
+          Effect.gen(function* () {
+            misbehaveOnce(s, "--crash-on=textDocument/hover");
+            const cwd = yield* makeWorkspace({ "app.py": "greet\n" });
 
-          const error = yield* crashingHover(s, cwd);
+            const error = yield* crashingHover(s, cwd);
 
-          expect(error.reason).toBe("server_failed");
-          const failed = yield* stateOf(cwd);
-          expect(failed.state).toBe("failed");
-          expect(failed.message).toContain("exited (code 7)");
-          expect(isAlive(startedPids(s.record)[0]!)).toBe(false);
-          expect(s.heldWatchers()).toBe(0);
+            expect(error.reason).toBe("server_failed");
+            const failed = yield* stateOf(cwd);
+            expect(failed.state).toBe("failed");
+            expect(failed.message).toContain("exited (code 7)");
+            expect(isAlive(startedPids(s.record)[0]!)).toBe(false);
+            expect(s.heldWatchers()).toBe(0);
 
-          expect((yield* hoverAt(cwd)).markdown).toBe("**greet**");
-          expect(startedPids(s.record)).toHaveLength(2);
-          expect((yield* stateOf(cwd)).state).toBe("indexing");
-        }),
-      ),
+            expect((yield* hoverAt(cwd)).markdown).toBe("**greet**");
+            expect(startedPids(s.record)).toHaveLength(2);
+            expect((yield* stateOf(cwd)).state).toBe("indexing");
+          }),
+        ),
     );
 
     it.effect("holds a crashed server's place until its child is cleaned up", () =>
@@ -318,9 +334,14 @@ describe("LanguageServerPool", () => {
           const next = yield* forkRequest(hoverAt(cwd));
           yield* Deferred.succeed(gate.letGo, undefined);
 
-          expect(yield* next.outcome).toMatchObject({ _tag: "Success", value: { markdown: "**greet**" } });
+          expect(yield* next.outcome).toMatchObject({
+            _tag: "Success",
+            value: { markdown: "**greet**" },
+          });
           const exitAt = s.history.findIndex((entry, index) => index >= from && isExit(entry));
-          const restartAt = s.history.findLastIndex((entry) => entry.text === "Language server started");
+          const restartAt = s.history.findLastIndex(
+            (entry) => entry.text === "Language server started",
+          );
           expect(exitAt).toBeGreaterThan(-1);
           expect(restartAt).toBeGreaterThan(exitAt);
           expect(startedPids(s.record)).toHaveLength(2);
@@ -362,7 +383,9 @@ describe("LanguageServerPool", () => {
           // Time does not clear it; the server could start if it were asked to.
           s.flags = [`--record=${s.record}`];
           yield* TestClock.adjust(60 * MINUTE);
-          expect((yield* hoverAt(cwd).pipe(Effect.flip)).message).toContain("restart language servers");
+          expect((yield* hoverAt(cwd).pipe(Effect.flip)).message).toContain(
+            "restart language servers",
+          );
           expect(startedPids(s.record)).toHaveLength(3);
 
           expect((yield* restart(cwd)).servers.find((x) => x.languageId === "python")?.state).toBe(
@@ -374,35 +397,36 @@ describe("LanguageServerPool", () => {
       ),
     );
 
-    for (const [spacing, latches] of [
+    it.effect.each([
       [10 * MINUTE - 1, true],
       [10 * MINUTE, false],
-    ] as const) {
-      it.effect(
-        `counts an exit toward the latch for ten minutes: the third ${spacing} ms after the first ${latches ? "latches" : "does not"}`,
-        () =>
-          inScenario({ flags: ["--crash-on=textDocument/hover"] }, (s) =>
-            Effect.gen(function* () {
-              const cwd = yield* makeWorkspace({ "app.py": "greet\n" });
-              yield* crashingHover(s, cwd);
-              yield* crashingHover(s, cwd);
-              yield* TestClock.adjust(spacing);
-              yield* crashingHover(s, cwd);
+    ] as const)(
+      "counts an exit toward the latch for ten minutes: a third exit $0 ms after the first latches: $1",
+      ([spacing, latches]) =>
+        inScenario({ flags: ["--crash-on=textDocument/hover"] }, (s) =>
+          Effect.gen(function* () {
+            const cwd = yield* makeWorkspace({ "app.py": "greet\n" });
+            yield* crashingHover(s, cwd);
+            yield* crashingHover(s, cwd);
+            yield* TestClock.adjust(spacing);
+            yield* crashingHover(s, cwd);
 
-              const next = yield* hoverAt(cwd).pipe(Effect.flip);
+            const next = yield* hoverAt(cwd).pipe(Effect.flip);
 
-              expect(next.message.includes("restart language servers")).toBe(latches);
-              expect(startedPids(s.record)).toHaveLength(latches ? 3 : 4);
-            }),
-          ),
-      );
-    }
+            expect(next.message.includes("restart language servers")).toBe(latches);
+            expect(startedPids(s.record)).toHaveLength(latches ? 3 : 4);
+          }),
+        ),
+    );
 
     it.effect("latches one root and language and leaves the others alone", () =>
       inScenario({}, (s) =>
         Effect.gen(function* () {
           const typescript = s.recordFile("typescript");
-          s.flagsByLanguage.set("python", [`--record=${s.record}`, "--crash-on=textDocument/hover"]);
+          s.flagsByLanguage.set("python", [
+            `--record=${s.record}`,
+            "--crash-on=textDocument/hover",
+          ]);
           s.flagsByLanguage.set("typescript", [`--record=${typescript}`]);
           const first = yield* makeWorkspace({ "app.py": "greet\n", "app.ts": "greet\n" });
           const second = yield* makeWorkspace({ "app.py": "def greet\ngreet\n" });
@@ -423,13 +447,18 @@ describe("LanguageServerPool", () => {
       inScenario({}, (s) =>
         Effect.gen(function* () {
           const typescript = s.recordFile("typescript");
-          s.flagsByLanguage.set("python", [`--record=${s.record}`, "--crash-on=textDocument/hover"]);
+          s.flagsByLanguage.set("python", [
+            `--record=${s.record}`,
+            "--crash-on=textDocument/hover",
+          ]);
           s.flagsByLanguage.set("typescript", [`--record=${typescript}`]);
           const cwd = yield* makeWorkspace({ "app.py": "greet\n", "app.ts": "greet\n" });
           for (let crash = 0; crash < 3; crash += 1) yield* crashingHover(s, cwd);
           // A live server after the latched one, to know the switch has been through every slot.
           yield* hoverAt(cwd, "app.ts");
-          expect((yield* hoverAt(cwd).pipe(Effect.flip)).message).toContain("restart language servers");
+          expect((yield* hoverAt(cwd).pipe(Effect.flip)).message).toContain(
+            "restart language servers",
+          );
 
           const from = s.mark();
           yield* s.setEnabled(false);
@@ -485,7 +514,10 @@ describe("LanguageServerPool", () => {
         string,
         string,
         number,
-        (codeIntel: CodeIntel.CodeIntel["Service"], cwd: string) => Effect.Effect<unknown, CodeIntelError>,
+        (
+          codeIntel: CodeIntel.CodeIntel["Service"],
+          cwd: string,
+        ) => Effect.Effect<unknown, CodeIntelError>,
       ]
     > = [
       [
@@ -494,7 +526,12 @@ describe("LanguageServerPool", () => {
         10_000,
         (c, cwd) => c.definition({ document: document(cwd), position, kind: "definition" }),
       ],
-      ["hover", "textDocument/hover", 10_000, (c, cwd) => c.hover({ document: document(cwd), position })],
+      [
+        "hover",
+        "textDocument/hover",
+        10_000,
+        (c, cwd) => c.hover({ document: document(cwd), position }),
+      ],
       [
         "documentHighlights",
         "textDocument/documentHighlight",
@@ -528,28 +565,26 @@ describe("LanguageServerPool", () => {
       ],
     ];
 
-    for (const [name, method, deadline, call] of calls) {
-      it.effect(`${name} answers timeout after exactly ${deadline} ms`, () =>
-        inScenario({ flags: [`--ignore=${method}`] }, (s) =>
-          Effect.gen(function* () {
-            const codeIntel = yield* CodeIntel.CodeIntel;
-            const cwd = yield* makeWorkspace({ "app.py": "def greet\ngreet\n" });
-            const request = yield* forkRequest(call(codeIntel, cwd));
-            yield* waitForMethod(s.record, method);
+    it.effect.each(calls)("$0 answers timeout after exactly $2 ms", ([, method, deadline, call]) =>
+      inScenario({ flags: [`--ignore=${method}`] }, (s) =>
+        Effect.gen(function* () {
+          const codeIntel = yield* CodeIntel.CodeIntel;
+          const cwd = yield* makeWorkspace({ "app.py": "def greet\ngreet\n" });
+          const request = yield* forkRequest(call(codeIntel, cwd));
+          yield* waitForMethod(s.record, method);
 
-            yield* TestClock.adjust(deadline - 1);
-            expect(yield* request.settled).toBe(false);
-            yield* TestClock.adjust(1);
+          yield* TestClock.adjust(deadline - 1);
+          expect(yield* request.settled).toBe(false);
+          yield* TestClock.adjust(1);
 
-            expect(yield* request.outcome).toMatchObject({
-              _tag: "Failure",
-              error: { reason: "timeout" },
-            });
-            expect((yield* stateOf(cwd)).state).not.toBe("failed");
-          }),
-        ),
-      );
-    }
+          expect(yield* request.outcome).toMatchObject({
+            _tag: "Failure",
+            error: { reason: "timeout" },
+          });
+          expect((yield* stateOf(cwd)).state).not.toBe("failed");
+        }),
+      ),
+    );
 
     it.effect("does not let a hung request fail another request on the same server", () =>
       inScenario({ flags: ["--ignore=textDocument/hover"] }, (s) =>
@@ -564,7 +599,10 @@ describe("LanguageServerPool", () => {
           yield* TestClock.adjust(10_000);
 
           expect(found.locations).toHaveLength(1);
-          expect(yield* hover.outcome).toMatchObject({ _tag: "Failure", error: { reason: "timeout" } });
+          expect(yield* hover.outcome).toMatchObject({
+            _tag: "Failure",
+            error: { reason: "timeout" },
+          });
         }),
       ),
     );
@@ -576,7 +614,10 @@ describe("LanguageServerPool", () => {
         const hover = yield* forkRequest(hoverAt(cwd));
         yield* waitForMethod(s.record, "textDocument/hover", nth);
         yield* TestClock.adjust(10_000);
-        expect(yield* hover.outcome).toMatchObject({ _tag: "Failure", error: { reason: "timeout" } });
+        expect(yield* hover.outcome).toMatchObject({
+          _tag: "Failure",
+          error: { reason: "timeout" },
+        });
       });
 
     it.effect("kills a settled server that answers nothing three times, and starts a new one", () =>
@@ -753,36 +794,42 @@ describe("LanguageServerPool", () => {
       ),
     );
 
-    it.effect("stops one server for requests that arrive together at a fifth root, however their fibers interleave", () =>
-      inScenario({}, (s) =>
-        Effect.gen(function* () {
-          for (const root of yield* roots(4)) {
-            yield* hoverAt(root);
-            yield* TestClock.adjust(1);
-          }
-          // Each round is a new root over a full cap; each limit moves where a turn ends.
-          const limits = Array.from({ length: 29 }, (_, index) => index + 3);
-          for (const limit of limits) {
-            const [root] = yield* roots(1);
-            const from = s.mark();
-            const gate = makeGate(3);
-            s.resolveGate = gate;
-            const requests = yield* Effect.forEach([1, 2, 3], () =>
-              forkRequest(hoverAt(root!).pipe(Effect.provideService(Scheduler.MaxOpsBeforeYield, limit))),
-            );
-            yield* Deferred.await(gate.began);
-            s.resolveGate = undefined;
-            yield* Deferred.succeed(gate.letGo, undefined);
-            for (const request of requests) {
-              expect((yield* request.outcome)._tag).toBe("Success");
+    it.effect(
+      "stops one server for requests that arrive together at a fifth root, however their fibers interleave",
+      () =>
+        inScenario({}, (s) =>
+          Effect.gen(function* () {
+            for (const root of yield* roots(4)) {
+              yield* hoverAt(root);
+              yield* TestClock.adjust(1);
             }
+            // Each round is a new root over a full cap; each limit moves where a turn ends.
+            const limits = Array.from({ length: 29 }, (_, index) => index + 3);
+            for (const limit of limits) {
+              const [root] = yield* roots(1);
+              const from = s.mark();
+              const gate = makeGate(3);
+              s.resolveGate = gate;
+              const requests = yield* Effect.forEach([1, 2, 3], () =>
+                forkRequest(
+                  hoverAt(root!).pipe(Effect.provideService(Scheduler.MaxOpsBeforeYield, limit)),
+                ),
+              );
+              yield* Deferred.await(gate.began);
+              s.resolveGate = undefined;
+              yield* Deferred.succeed(gate.letGo, undefined);
+              for (const request of requests) {
+                expect((yield* request.outcome)._tag).toBe("Success");
+              }
 
-            expect(s.history.slice(from).filter((entry) => entry.fields.reason === "evicted")).toHaveLength(1);
-            expect(startedPids(s.record).filter(isAlive)).toHaveLength(4);
-            yield* TestClock.adjust(1);
-          }
-        }),
-      ),
+              expect(
+                s.history.slice(from).filter((entry) => entry.fields.reason === "evicted"),
+              ).toHaveLength(1);
+              expect(startedPids(s.record).filter(isAlive)).toHaveLength(4);
+              yield* TestClock.adjust(1);
+            }
+          }),
+        ),
     );
 
     it.effect("counts every language toward the cap", () =>
@@ -812,41 +859,42 @@ describe("LanguageServerPool", () => {
       ),
     );
 
-    it.effect("answers a request waiting on a server that is stopped for a newer one with server_unavailable", () =>
-      inScenario({}, (s) =>
-        Effect.gen(function* () {
-          const typescript = s.recordFile("typescript");
-          s.flagsByLanguage.set("python", [`--record=${s.record}`]);
-          s.flagsByLanguage.set("typescript", [`--record=${typescript}`, "--hang-initialize"]);
-          const [a, b, c, d, e] = yield* roots(5);
-          yield* writeFiles(a!, { "app.ts": "greet\n" });
+    it.effect(
+      "answers a request waiting on a server that is stopped for a newer one with server_unavailable",
+      () =>
+        inScenario({}, (s) =>
+          Effect.gen(function* () {
+            const typescript = s.recordFile("typescript");
+            s.flagsByLanguage.set("python", [`--record=${s.record}`]);
+            s.flagsByLanguage.set("typescript", [`--record=${typescript}`, "--hang-initialize"]);
+            const [a, b, c, d, e] = yield* roots(5);
+            yield* writeFiles(a!, { "app.ts": "greet\n" });
 
-          const hung = yield* forkRequest(hoverAt(a!, "app.ts"));
-          yield* waitForMethod(typescript, "initialize");
-          yield* TestClock.adjust(1);
-          for (const root of [b!, c!, d!]) {
-            yield* hoverAt(root);
+            const hung = yield* forkRequest(hoverAt(a!, "app.ts"));
+            yield* waitForMethod(typescript, "initialize");
             yield* TestClock.adjust(1);
-          }
-          expect(startedPids(s.record)).toHaveLength(3);
+            for (const root of [b!, c!, d!]) {
+              yield* hoverAt(root);
+              yield* TestClock.adjust(1);
+            }
+            expect(startedPids(s.record)).toHaveLength(3);
 
-          const from = s.mark();
-          yield* hoverAt(e!);
-          yield* s.waitForStop("evicted", from);
+            const from = s.mark();
+            yield* hoverAt(e!);
+            yield* s.waitForStop("evicted", from);
 
-          expect(yield* hung.outcome).toMatchObject({
-            _tag: "Failure",
-            error: { reason: "server_unavailable" },
-          });
-          expect(isAlive(startedPids(typescript)[0]!)).toBe(false);
-        }),
-      ),
+            expect(yield* hung.outcome).toMatchObject({
+              _tag: "Failure",
+              error: { reason: "server_unavailable" },
+            });
+            expect(isAlive(startedPids(typescript)[0]!)).toBe(false);
+          }),
+        ),
     );
   });
 
   describe("planned stops while a request is in flight", () => {
-    const hangFirstHover = (s: Scenario) =>
-      misbehaveOnce(s, "--ignore=textDocument/hover");
+    const hangFirstHover = (s: Scenario) => misbehaveOnce(s, "--ignore=textDocument/hover");
 
     it.effect("retries the request once on a fresh server after a restart", () =>
       inScenario({}, (s) =>
@@ -936,92 +984,105 @@ describe("LanguageServerPool", () => {
   });
 
   describe("the off switch", () => {
-    it.effect("stops live servers, answers server_unavailable, and starts again when turned on", () =>
-      inScenario({}, (s) =>
-        Effect.gen(function* () {
-          const cwd = yield* makeWorkspace({ "app.py": "greet\n", "app.ts": "greet\n" });
-          yield* hoverAt(cwd);
-          yield* hoverAt(cwd, "app.ts");
-          const live = startedPids(s.record);
-          expect(live).toHaveLength(2);
+    it.effect(
+      "stops live servers, answers server_unavailable, and starts again when turned on",
+      () =>
+        inScenario({}, (s) =>
+          Effect.gen(function* () {
+            const cwd = yield* makeWorkspace({ "app.py": "greet\n", "app.ts": "greet\n" });
+            yield* hoverAt(cwd);
+            yield* hoverAt(cwd, "app.ts");
+            const live = startedPids(s.record);
+            expect(live).toHaveLength(2);
 
-          const from = s.mark();
-          yield* s.setEnabled(false);
-          let stops = 0;
-          yield* s.waitForLog(
-            (entry) =>
-              entry.text === "Language server stopped" && entry.fields.reason === "off" && ++stops === 2,
-            from,
-          );
+            const from = s.mark();
+            yield* s.setEnabled(false);
+            let stops = 0;
+            yield* s.waitForLog(
+              (entry) =>
+                entry.text === "Language server stopped" &&
+                entry.fields.reason === "off" &&
+                ++stops === 2,
+              from,
+            );
 
-          const rows = (yield* Effect.flatMap(CodeIntel.CodeIntel, (c) => c.status({ cwd }))).servers;
-          expect(rows.map((row) => row.state)).toEqual(["unavailable", "unavailable"]);
-          expect(rows[0]!.message).toContain("turned off");
-          expect(live.some(isAlive)).toBe(false);
-          expect(s.heldWatchers()).toBe(0);
-          const refused = yield* hoverAt(cwd).pipe(Effect.flip);
-          expect(refused.reason).toBe("server_unavailable");
-          expect(refused.message).toContain("turned off");
-          expect((yield* definitionAt(cwd, "app.ts").pipe(Effect.flip)).reason).toBe("server_unavailable");
-          expect(startedPids(s.record)).toHaveLength(2);
+            const rows = (yield* Effect.flatMap(CodeIntel.CodeIntel, (c) => c.status({ cwd })))
+              .servers;
+            expect(rows.map((row) => row.state)).toEqual(["unavailable", "unavailable"]);
+            expect(rows[0]!.message).toContain("turned off");
+            expect(live.some(isAlive)).toBe(false);
+            expect(s.heldWatchers()).toBe(0);
+            const refused = yield* hoverAt(cwd).pipe(Effect.flip);
+            expect(refused.reason).toBe("server_unavailable");
+            expect(refused.message).toContain("turned off");
+            expect((yield* definitionAt(cwd, "app.ts").pipe(Effect.flip)).reason).toBe(
+              "server_unavailable",
+            );
+            expect(startedPids(s.record)).toHaveLength(2);
 
-          yield* s.setEnabled(true);
-          expect((yield* hoverAt(cwd)).markdown).toBe("**greet**");
-          expect(startedPids(s.record)).toHaveLength(3);
-        }),
-      ),
+            yield* s.setEnabled(true);
+            expect((yield* hoverAt(cwd)).markdown).toBe("**greet**");
+            expect(startedPids(s.record)).toHaveLength(3);
+          }),
+        ),
     );
 
-    it.effect("answers every request server_unavailable when it starts turned off, and status starts nothing", () =>
-      inScenario({ settings: { codeIntel: { enabled: false } } }, (s) =>
-        Effect.gen(function* () {
-          const codeIntel = yield* CodeIntel.CodeIntel;
-          const cwd = yield* makeWorkspace({ "app.py": "def greet\n" });
+    it.effect(
+      "answers every request server_unavailable when it starts turned off, and status starts nothing",
+      () =>
+        inScenario({ settings: { codeIntel: { enabled: false } } }, (s) =>
+          Effect.gen(function* () {
+            const codeIntel = yield* CodeIntel.CodeIntel;
+            const cwd = yield* makeWorkspace({ "app.py": "def greet\n" });
 
-          const states = (yield* codeIntel.status({ cwd })).servers.map((row) => row.state);
-          const errors = yield* Effect.all([
-            hoverAt(cwd).pipe(Effect.flip),
-            codeIntel.documentSymbols({ document: { cwd, path: "app.py" } }).pipe(Effect.flip),
-            codeIntel.workspaceSymbols({ cwd, query: "greet", limit: 5 }).pipe(Effect.flip),
-          ]);
+            const states = (yield* codeIntel.status({ cwd })).servers.map((row) => row.state);
+            const errors = yield* Effect.all([
+              hoverAt(cwd).pipe(Effect.flip),
+              codeIntel.documentSymbols({ document: { cwd, path: "app.py" } }).pipe(Effect.flip),
+              codeIntel.workspaceSymbols({ cwd, query: "greet", limit: 5 }).pipe(Effect.flip),
+            ]);
 
-          const install = yield* codeIntel.installServer({ languageId: "python" }).pipe(Effect.flip);
+            const install = yield* codeIntel
+              .installServer({ languageId: "python" })
+              .pipe(Effect.flip);
 
-          expect(states).toEqual(["unavailable", "unavailable"]);
-          expect(errors.map((error) => error.reason)).toEqual([
-            "server_unavailable",
-            "server_unavailable",
-            "server_unavailable",
-          ]);
-          expect(install.reason).toBe("server_unavailable");
-          expect(s.installs).toEqual([]);
-          expect(noWorkspaceStarted(s.record)).toBe(true);
-        }),
-      ),
+            expect(states).toEqual(["unavailable", "unavailable"]);
+            expect(errors.map((error) => error.reason)).toEqual([
+              "server_unavailable",
+              "server_unavailable",
+              "server_unavailable",
+            ]);
+            expect(install.reason).toBe("server_unavailable");
+            expect(s.installs).toEqual([]);
+            expect(noWorkspaceStarted(s.record)).toBe(true);
+          }),
+        ),
     );
 
-    it.effect("starts nothing for a request that was looking for its binary when it was turned off", () =>
-      inScenario({}, (s) => {
-        const gate = makeGate();
-        return Effect.gen(function* () {
-          const cwd = yield* makeWorkspace({ "app.py": "greet\n", "app.ts": "greet\n" });
-          yield* hoverAt(cwd, "app.ts");
-          s.resolveGate = gate;
-          const hover = yield* forkRequest(hoverAt(cwd));
-          yield* Deferred.await(gate.began);
+    it.effect(
+      "starts nothing for a request that was looking for its binary when it was turned off",
+      () =>
+        inScenario({}, (s) => {
+          const gate = makeGate();
+          return Effect.gen(function* () {
+            const cwd = yield* makeWorkspace({ "app.py": "greet\n", "app.ts": "greet\n" });
+            yield* hoverAt(cwd, "app.ts");
+            s.resolveGate = gate;
+            const hover = yield* forkRequest(hoverAt(cwd));
+            yield* Deferred.await(gate.began);
 
-          const from = s.mark();
-          yield* s.setEnabled(false);
-          yield* s.waitForStop("off", from);
-          yield* Deferred.succeed(gate.letGo, undefined);
+            const from = s.mark();
+            yield* s.setEnabled(false);
+            yield* s.waitForStop("off", from);
+            yield* Deferred.succeed(gate.letGo, undefined);
 
-          expect(yield* hover.outcome).toMatchObject({
-            _tag: "Failure",
-            error: { reason: "server_unavailable" },
-          });
-          expect(startedPids(s.record)).toHaveLength(1);
-        }).pipe(Effect.ensuring(Deferred.succeed(gate.letGo, undefined)));
-      }),
+            expect(yield* hover.outcome).toMatchObject({
+              _tag: "Failure",
+              error: { reason: "server_unavailable" },
+            });
+            expect(startedPids(s.record)).toHaveLength(1);
+          }).pipe(Effect.ensuring(Deferred.succeed(gate.letGo, undefined)));
+        }),
     );
 
     it.effect("answers a request in flight when it is turned off with server_unavailable", () =>

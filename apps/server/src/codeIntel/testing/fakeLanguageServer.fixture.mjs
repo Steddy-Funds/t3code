@@ -1,41 +1,10 @@
-// A language server for tests: speaks LSP over stdio and understands a toy language.
-//
-//   def NAME            defines NAME (a function)
-//   class NAME          defines NAME (a class); indented `def` lines are its methods
-//   extern NAME PATH N  NAME is defined at line N (1-based) of the file PATH
-//   any other word      a reference to the definition of that name
-//
-// Like the real servers it keeps what it read from disk until it is told the file changed
-// (`workspace/didChangeWatchedFiles`), and an open document hides the file on disk.
-//
-// Switches (argv):
-//   --record=FILE          append every message received, one JSON object a line
-//   --hang-initialize      never answer `initialize`
-//   --exit-on-initialize=N exit with code N instead of answering `initialize`
-//   --exit-after-initialize=N  answer `initialize`, then exit with code N
-//   --crash-on=METHOD      exit with code 7 when METHOD arrives
-//   --bad-frame-on=METHOD  answer METHOD with a frame that has no length, and keep running
-//                          after the pipe closes
-//   --ignore=METHOD        never answer METHOD
-//   --once-file=FILE       makes --crash-on, --bad-frame-on and --ignore apply to the first process that gets to
-//                          create FILE only, so a server started after it answers normally
-//   --ignore-shutdown      never answer `shutdown` and ignore `exit` and a closed pipe: only a signal ends it
-//   --encoding=NAME        claim this position encoding
-//   --no-semantic-tokens   advertise no semantic tokens
-//   --progress             report load progress from the first `didOpen` until `$/test/loaded`
-//   --stderr=TEXT          write TEXT to stderr at start
-//   --fuzzy-symbols        answer workspace symbols in reverse alphabetical order
-//   --extensions=a,b       read only files with these extensions from disk (default py,pyi,ts,tsx,js)
-//
-// With --record the file also gets `$/test/started` (with the pid) when the process starts and
-// `$/test/exited` when it ends by itself or by SIGTERM, so a test sees a process's life as events.
-//
-// Words with a meaning in any document:
-//   WAIT_FOR_WATCHED       a definition request on it is answered after the next watched-files event
-//   LOADED                 a definition request on it ends the load progress
-import { appendFileSync, existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
-import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+// A language server for tests, speaking LSP over stdio about a toy language: `def NAME` and
+// `class NAME` define (indented `def` lines are methods), `extern NAME PATH N` puts NAME at line N
+// of PATH, and any other word refers to a definition. Its switches are the `flag(...)` reads below;
+// `--record=FILE` appends every message, `$/test/started` and `$/test/exited` as JSON lines.
+import * as NodeFS from "node:fs";
+import * as NodePath from "node:path";
+import * as NodeURL from "node:url";
 
 const flags = new Map(
   process.argv.slice(2).map((argument) => {
@@ -52,8 +21,8 @@ let chosenToMisbehave;
 const misbehaves = () => {
   if (chosenToMisbehave !== undefined) return chosenToMisbehave;
   const onceFile = flag("once-file");
-  if (onceFile === undefined || !existsSync(onceFile)) {
-    if (onceFile !== undefined) writeFileSync(onceFile, "");
+  if (onceFile === undefined || !NodeFS.existsSync(onceFile)) {
+    if (onceFile !== undefined) NodeFS.writeFileSync(onceFile, "");
     chosenToMisbehave = true;
   } else {
     chosenToMisbehave = false;
@@ -71,26 +40,30 @@ let loading = false;
 
 const send = (message) => {
   const body = Buffer.from(JSON.stringify({ jsonrpc: "2.0", ...message }), "utf8");
-  process.stdout.write(Buffer.concat([Buffer.from(`Content-Length: ${body.length}\r\n\r\n`), body]));
+  process.stdout.write(
+    Buffer.concat([Buffer.from(`Content-Length: ${body.length}\r\n\r\n`), body]),
+  );
 };
 const record = (message) => {
-  if (flag("record")) appendFileSync(flag("record"), `${JSON.stringify(message)}\n`);
+  if (flag("record")) NodeFS.appendFileSync(flag("record"), `${JSON.stringify(message)}\n`);
 };
 
 const WORD = /[A-Za-z_][A-Za-z0-9_]*/g;
 const SKIPPED = new Set(["node_modules", ".git", ".venv"]);
-const served = new RegExp(`\\.(${(flag("extensions") ?? "py,pyi,ts,tsx,js").split(",").join("|")})$`);
+const served = new RegExp(
+  `\\.(${(flag("extensions") ?? "py,pyi,ts,tsx,js").split(",").join("|")})$`,
+);
 
 const sourceFiles = (directory) => {
   const files = [];
   let entries = [];
   try {
-    entries = readdirSync(directory, { withFileTypes: true });
+    entries = NodeFS.readdirSync(directory, { withFileTypes: true });
   } catch {
     return files;
   }
   for (const entry of entries) {
-    const entryPath = path.join(directory, entry.name);
+    const entryPath = NodePath.join(directory, entry.name);
     if (entry.isDirectory()) {
       if (!SKIPPED.has(entry.name)) files.push(...sourceFiles(entryPath));
     } else if (served.test(entry.name)) {
@@ -104,7 +77,7 @@ const textOf = (uri) => {
   if (openDocuments.has(uri)) return openDocuments.get(uri);
   if (!diskCache.has(uri)) {
     try {
-      diskCache.set(uri, readFileSync(fileURLToPath(uri), "utf8"));
+      diskCache.set(uri, NodeFS.readFileSync(NodeURL.fileURLToPath(uri), "utf8"));
     } catch {
       diskCache.set(uri, null);
     }
@@ -113,7 +86,10 @@ const textOf = (uri) => {
 };
 
 const allUris = () => [
-  ...new Set([...sourceFiles(root).map((file) => pathToFileURL(file).href), ...openDocuments.keys()]),
+  ...new Set([
+    ...sourceFiles(root).map((file) => NodeURL.pathToFileURL(file).href),
+    ...openDocuments.keys(),
+  ]),
 ];
 
 const wordAt = (uri, position) => {
@@ -143,7 +119,7 @@ const definitionsOf = (name) => {
       const external = /^extern\s+(\S+)\s+(\S+)\s+(\d+)/.exec(line);
       if (external && external[1] === name) {
         locations.push({
-          uri: pathToFileURL(external[2]).href,
+          uri: NodeURL.pathToFileURL(external[2]).href,
           range: range(Number(external[3]) - 1, 0, 0),
         });
       }
@@ -157,7 +133,8 @@ const occurrencesOf = (name, uris) => {
   for (const uri of uris) {
     (textOf(uri) ?? "").split("\n").forEach((line, index) => {
       for (const match of line.matchAll(WORD)) {
-        if (match[0] === name) locations.push({ uri, range: range(index, match.index, name.length) });
+        if (match[0] === name)
+          locations.push({ uri, range: range(index, match.index, name.length) });
       }
     });
   }
@@ -279,7 +256,8 @@ const answer = (method, params) => {
       let previousLine = 0;
       for (const symbol of symbolsOf(params.textDocument.uri).flatMap((s) => [s, ...s.children])) {
         const { line, character } = symbol.selectionRange.start;
-        if (params.range && (line < params.range.start.line || line > params.range.end.line)) continue;
+        if (params.range && (line < params.range.start.line || line > params.range.end.line))
+          continue;
         data.push(line - previousLine, character, symbol.name.length, symbol.kind === 5 ? 0 : 1, 1);
         previousLine = line;
       }
@@ -293,15 +271,38 @@ const answer = (method, params) => {
 const notified = (method, params) => {
   switch (method) {
     case "initialized":
-      send({ id: `s${nextRequestId++}`, method: "workspace/configuration", params: { items: [{ section: "js/ts" }, { section: "ty" }, { section: "unknown" }] } });
-      send({ id: `s${nextRequestId++}`, method: "client/registerCapability", params: { registrations: [{ id: "watch", method: "workspace/didChangeWatchedFiles", registerOptions: { watchers: [{ globPattern: "**" }] } }] } });
+      send({
+        id: `s${nextRequestId++}`,
+        method: "workspace/configuration",
+        params: { items: [{ section: "js/ts" }, { section: "ty" }, { section: "unknown" }] },
+      });
+      send({
+        id: `s${nextRequestId++}`,
+        method: "client/registerCapability",
+        params: {
+          registrations: [
+            {
+              id: "watch",
+              method: "workspace/didChangeWatchedFiles",
+              registerOptions: { watchers: [{ globPattern: "**" }] },
+            },
+          ],
+        },
+      });
       return;
     case "textDocument/didOpen":
       openDocuments.set(params.textDocument.uri, params.textDocument.text);
       if (flag("progress") && !loading) {
         loading = true;
-        send({ id: `s${nextRequestId++}`, method: "window/workDoneProgress/create", params: { token: "load" } });
-        send({ method: "$/progress", params: { token: "load", value: { kind: "begin", title: "Loading" } } });
+        send({
+          id: `s${nextRequestId++}`,
+          method: "window/workDoneProgress/create",
+          params: { token: "load" },
+        });
+        send({
+          method: "$/progress",
+          params: { token: "load", value: { kind: "begin", title: "Loading" } },
+        });
       }
       return;
     case "textDocument/didChange":
@@ -330,7 +331,8 @@ const handle = (message) => {
     setInterval(() => {}, 60_000);
     return;
   }
-  if (flag("ignore-shutdown") && (message.method === "shutdown" || message.method === "exit")) return;
+  if (flag("ignore-shutdown") && (message.method === "shutdown" || message.method === "exit"))
+    return;
   if (message.id === undefined) return notified(message.method, message.params ?? {});
   if (message.method === "initialize") {
     if (flag("hang-initialize")) return;
@@ -355,7 +357,9 @@ process.stdin.on("data", (chunk) => {
   for (;;) {
     const headerEnd = buffer.indexOf("\r\n\r\n");
     if (headerEnd < 0) return;
-    const length = Number(/Content-Length: (\d+)/i.exec(buffer.subarray(0, headerEnd).toString())[1]);
+    const length = Number(
+      /Content-Length: (\d+)/i.exec(buffer.subarray(0, headerEnd).toString())[1],
+    );
     if (buffer.length < headerEnd + 4 + length) return;
     const body = buffer.subarray(headerEnd + 4, headerEnd + 4 + length).toString("utf8");
     buffer = buffer.subarray(headerEnd + 4 + length);

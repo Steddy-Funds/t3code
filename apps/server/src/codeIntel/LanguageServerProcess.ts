@@ -21,7 +21,7 @@ import type { LanguageContext, LanguageRow } from "./LanguageRegistry.ts";
 import type { LaunchSpec } from "./LanguageServerBinaries.ts";
 import * as LspConnection from "./LspConnection.ts";
 
-export const INITIALIZE_DEADLINE = "30 seconds";
+const INITIALIZE_DEADLINE = "30 seconds";
 // `shutdown` and `exit` get this long; after it the process group is signalled.
 const SHUTDOWN_GRACE = "1500 millis";
 const KILL_GRACE = "2 seconds";
@@ -410,12 +410,14 @@ export const spawn = Effect.fn("LanguageServerProcess.spawn")(function* (
     // Only an initialized server may be asked to shut down. Registered after the spawn, so it
     // runs before the process group is signalled.
     yield* Effect.addFinalizer(() =>
-      connection.request("shutdown").pipe(
-        Effect.andThen(connection.notify("exit")),
-        Effect.andThen(Deferred.await(exited)),
-        Effect.timeoutOption(SHUTDOWN_GRACE),
-        Effect.ignore,
-      ),
+      connection
+        .request("shutdown")
+        .pipe(
+          Effect.andThen(connection.notify("exit")),
+          Effect.andThen(Deferred.await(exited)),
+          Effect.timeoutOption(SHUTDOWN_GRACE),
+          Effect.ignore,
+        ),
     );
 
     return {
@@ -445,13 +447,11 @@ export const spawn = Effect.fn("LanguageServerProcess.spawn")(function* (
               : Effect.succeedNone
             ).pipe(
               Effect.map(
-                Option.getOrElse(
-                  (): LanguageServerExit => ({
-                    code: undefined,
-                    signal: undefined,
-                    connection: closed.reason,
-                  }),
-                ),
+                Option.getOrElse((): LanguageServerExit => ({
+                  code: undefined,
+                  signal: undefined,
+                  connection: closed.reason,
+                })),
               ),
             ),
           ),

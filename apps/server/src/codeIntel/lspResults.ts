@@ -209,7 +209,9 @@ export const toSemanticTokenData = (result: unknown): ReadonlyArray<number> => {
 
 export const toSemanticTokensLegend = (
   provider: unknown,
-): { readonly tokenTypes: ReadonlyArray<string>; readonly tokenModifiers: ReadonlyArray<string> } | undefined => {
+):
+  | { readonly tokenTypes: ReadonlyArray<string>; readonly tokenModifiers: ReadonlyArray<string> }
+  | undefined => {
   const legend = isRecord(provider) ? provider.legend : undefined;
   if (!isRecord(legend)) return undefined;
   const strings = (value: unknown) =>

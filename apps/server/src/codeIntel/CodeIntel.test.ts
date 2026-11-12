@@ -140,37 +140,42 @@ describe("CodeIntel", () => {
       ),
     );
 
-    it.effect("answers hover, highlights, symbols and references with the document's revision", () =>
-      inScenario({}, () =>
-        Effect.gen(function* () {
-          const codeIntel = yield* CodeIntel.CodeIntel;
-          const text = "def greet\ngreet\nclass Box\n";
-          const cwd = yield* makeWorkspace({ "app.py": text });
-          const revision = fileContentRevision(text);
-          const document = { cwd, path: "app.py" };
+    it.effect(
+      "answers hover, highlights, symbols and references with the document's revision",
+      () =>
+        inScenario({}, () =>
+          Effect.gen(function* () {
+            const codeIntel = yield* CodeIntel.CodeIntel;
+            const text = "def greet\ngreet\nclass Box\n";
+            const cwd = yield* makeWorkspace({ "app.py": text });
+            const revision = fileContentRevision(text);
+            const document = { cwd, path: "app.py" };
 
-          const hover = yield* codeIntel.hover({ document, position: at(1, 1) });
-          const highlights = yield* codeIntel.documentHighlights({ document, position: at(1, 1) });
-          const symbols = yield* codeIntel.documentSymbols({ document });
-          const references = yield* codeIntel.references({
-            document,
-            position: at(1, 1),
-            includeDeclaration: true,
-            limit: 10,
-          });
+            const hover = yield* codeIntel.hover({ document, position: at(1, 1) });
+            const highlights = yield* codeIntel.documentHighlights({
+              document,
+              position: at(1, 1),
+            });
+            const symbols = yield* codeIntel.documentSymbols({ document });
+            const references = yield* codeIntel.references({
+              document,
+              position: at(1, 1),
+              includeDeclaration: true,
+              limit: 10,
+            });
 
-          expect(hover).toEqual({ markdown: "**greet**", revision });
-          expect(highlights.revision).toBe(revision);
-          expect(highlights.ranges.map((entry) => entry.range.start.line)).toEqual([0, 1]);
-          expect(symbols.revision).toBe(revision);
-          expect(symbols.symbols.map((symbol) => [symbol.name, symbol.kind])).toEqual([
-            ["greet", "function"],
-            ["Box", "class"],
-          ]);
-          expect(references.revision).toBe(revision);
-          expect(references.locations).toHaveLength(2);
-        }),
-      ),
+            expect(hover).toEqual({ markdown: "**greet**", revision });
+            expect(highlights.revision).toBe(revision);
+            expect(highlights.ranges.map((entry) => entry.range.start.line)).toEqual([0, 1]);
+            expect(symbols.revision).toBe(revision);
+            expect(symbols.symbols.map((symbol) => [symbol.name, symbol.kind])).toEqual([
+              ["greet", "function"],
+              ["Box", "class"],
+            ]);
+            expect(references.revision).toBe(revision);
+            expect(references.locations).toHaveLength(2);
+          }),
+        ),
     );
 
     it.effect("answers a type definition, and nothing for a kind the server does not offer", () =>
@@ -247,7 +252,9 @@ describe("CodeIntel", () => {
         Effect.gen(function* () {
           const codeIntel = yield* CodeIntel.CodeIntel;
           const fileSystem = yield* FileSystem.FileSystem;
-          const cwd = yield* fileSystem.makeTempDirectoryScoped({ prefix: UNKNOWN_WORKSPACE_PREFIX });
+          const cwd = yield* fileSystem.makeTempDirectoryScoped({
+            prefix: UNKNOWN_WORKSPACE_PREFIX,
+          });
           yield* writeFiles(cwd, { "app.py": "greet\n" });
           const calls = yield* documentCalls({ cwd, path: "app.py" });
 
@@ -334,20 +341,25 @@ describe("CodeIntel", () => {
   });
 
   describe("documents", () => {
-    it.effect("counts the deadline from the request, so a slow workspace check times it out too", () =>
-      inScenario({}, (s) => {
-        const gate = makeGate();
-        return Effect.gen(function* () {
-          const cwd = yield* makeWorkspace({ "app.py": "greet\n" });
-          s.knownGate = gate;
-          const hover = yield* forkRequest(hoverAt(cwd, "app.py"));
-          yield* Deferred.await(gate.began);
-          yield* TestClock.adjust(10_000);
+    it.effect(
+      "counts the deadline from the request, so a slow workspace check times it out too",
+      () =>
+        inScenario({}, (s) => {
+          const gate = makeGate();
+          return Effect.gen(function* () {
+            const cwd = yield* makeWorkspace({ "app.py": "greet\n" });
+            s.knownGate = gate;
+            const hover = yield* forkRequest(hoverAt(cwd, "app.py"));
+            yield* Deferred.await(gate.began);
+            yield* TestClock.adjust(10_000);
 
-          expect(yield* hover.outcome).toMatchObject({ _tag: "Failure", error: { reason: "timeout" } });
-          expect(noWorkspaceStarted(s.record)).toBe(true);
-        }).pipe(Effect.ensuring(Deferred.succeed(gate.letGo, undefined)));
-      }),
+            expect(yield* hover.outcome).toMatchObject({
+              _tag: "Failure",
+              error: { reason: "timeout" },
+            });
+            expect(noWorkspaceStarted(s.record)).toBe(true);
+          }).pipe(Effect.ensuring(Deferred.succeed(gate.letGo, undefined)));
+        }),
     );
 
     it.effect("answers stale_document, before any server starts, whatever the call", () =>
@@ -379,39 +391,43 @@ describe("CodeIntel", () => {
       ),
     );
 
-    it.effect("refuses a relative path that leaves the root, by a dot-dot or a link, and opens nothing", () =>
-      inScenario({}, (s) =>
-        Effect.gen(function* () {
-          const cwd = yield* makeWorkspace({ "app.py": "greet\n" });
-          const outside = NodePath.join(s.scratch, "outside.py");
-          NodeFS.writeFileSync(outside, "greet\n");
-          NodeFS.symlinkSync(outside, NodePath.join(cwd, "escape.py"));
-          NodeFS.symlinkSync(s.scratch, NodePath.join(cwd, "scratch-link"));
+    it.effect(
+      "refuses a relative path that leaves the root, by a dot-dot or a link, and opens nothing",
+      () =>
+        inScenario({}, (s) =>
+          Effect.gen(function* () {
+            const cwd = yield* makeWorkspace({ "app.py": "greet\n" });
+            const outside = NodePath.join(s.scratch, "outside.py");
+            NodeFS.writeFileSync(outside, "greet\n");
+            NodeFS.symlinkSync(outside, NodePath.join(cwd, "escape.py"));
+            NodeFS.symlinkSync(s.scratch, NodePath.join(cwd, "scratch-link"));
 
-          const outcomes = yield* Effect.forEach(
-            ["../outside.py", "escape.py", "scratch-link/outside.py"],
-            (path) =>
-              hoverAt(cwd, path).pipe(
-                Effect.match({ onSuccess: () => "served", onFailure: (error) => error.reason }),
-              ),
-          );
+            const outcomes = yield* Effect.forEach(
+              ["../outside.py", "escape.py", "scratch-link/outside.py"],
+              (path) =>
+                hoverAt(cwd, path).pipe(
+                  Effect.match({ onSuccess: () => "served", onFailure: (error) => error.reason }),
+                ),
+            );
 
-          expect(outcomes).toEqual(Array.from({ length: 3 }, () => "path_not_allowed"));
-          expect(noWorkspaceStarted(s.record)).toBe(true);
-        }),
-      ),
+            expect(outcomes).toEqual(Array.from({ length: 3 }, () => "path_not_allowed"));
+            expect(noWorkspaceStarted(s.record)).toBe(true);
+          }),
+        ),
     );
 
-    it.effect("serves a file named by an absolute path outside the root, as projects.readFile does", () =>
-      inScenario({}, (s) =>
-        Effect.gen(function* () {
-          const cwd = yield* makeWorkspace({ "app.py": "greet\n" });
-          const outside = NodePath.join(s.scratch, "outside.py");
-          NodeFS.writeFileSync(outside, "greet\n");
+    it.effect(
+      "serves a file named by an absolute path outside the root, as projects.readFile does",
+      () =>
+        inScenario({}, (s) =>
+          Effect.gen(function* () {
+            const cwd = yield* makeWorkspace({ "app.py": "greet\n" });
+            const outside = NodePath.join(s.scratch, "outside.py");
+            NodeFS.writeFileSync(outside, "greet\n");
 
-          expect((yield* hoverAt(cwd, outside)).markdown).toBe("**greet**");
-        }),
-      ),
+            expect((yield* hoverAt(cwd, outside)).markdown).toBe("**greet**");
+          }),
+        ),
     );
 
     it.effect("gives a server the real path of a file reached through a link inside the root", () =>
@@ -423,7 +439,9 @@ describe("CodeIntel", () => {
           yield* hoverAt(cwd, "alias/app.py");
 
           const opened = recorded(s.record).find((m) => m.method === "textDocument/didOpen");
-          expect(opened?.params?.textDocument.uri).toBe(`file://${NodePath.join(cwd, "real/app.py")}`);
+          expect(opened?.params?.textDocument.uri).toBe(
+            `file://${NodePath.join(cwd, "real/app.py")}`,
+          );
         }),
       ),
     );
@@ -447,7 +465,11 @@ describe("CodeIntel", () => {
                 ".t3home/userdata/state.sqlite.py",
                 NodePath.join(baseDir, "userdata/secrets/key.py"),
               ],
-              (path) => hoverAt(cwd, path).pipe(Effect.flip, Effect.map((error) => error.reason)),
+              (path) =>
+                hoverAt(cwd, path).pipe(
+                  Effect.flip,
+                  Effect.map((error) => error.reason),
+                ),
             );
             expect(reasons).toEqual(Array.from({ length: 3 }, () => "path_not_allowed"));
             expect(noWorkspaceStarted(s.record)).toBe(true);
@@ -465,7 +487,10 @@ describe("CodeIntel", () => {
           const cwd = yield* makeWorkspace({ "dir.py/inner.py": "x\n" });
 
           const reasons = yield* Effect.forEach(["missing.py", "dir.py"], (path) =>
-            hoverAt(cwd, path).pipe(Effect.flip, Effect.map((error) => error.reason)),
+            hoverAt(cwd, path).pipe(
+              Effect.flip,
+              Effect.map((error) => error.reason),
+            ),
           );
 
           expect(reasons).toEqual(["not_found", "not_found"]);
@@ -501,7 +526,10 @@ describe("CodeIntel", () => {
           NodeFS.writeFileSync(NodePath.join(cwd, "blob.py"), Buffer.from([0x67, 0, 0x68, 0]));
 
           const reasons = yield* Effect.forEach(["notes.txt", "missing.txt", "blob.py"], (path) =>
-            hoverAt(cwd, path).pipe(Effect.flip, Effect.map((error) => error.reason)),
+            hoverAt(cwd, path).pipe(
+              Effect.flip,
+              Effect.map((error) => error.reason),
+            ),
           );
 
           expect(reasons).toEqual(Array.from({ length: 3 }, () => "unsupported_language"));
@@ -601,7 +629,9 @@ describe("CodeIntel", () => {
             definitionAt(cwd, "app.py", line),
           );
 
-          expect(results.map((result) => result.locations.map((l) => [l.path, l.external]))).toEqual([
+          expect(
+            results.map((result) => result.locations.map((l) => [l.path, l.external])),
+          ).toEqual([
             [["node_modules/pkg/lib.py", true]],
             [[".venv/lib/site-packages/pkg/mod.py", true]],
             [["vendor/lib/third.py", true]],
@@ -634,30 +664,32 @@ describe("CodeIntel", () => {
       ),
     );
 
-    it.effect("reads a line preview from disk, 400 characters at most, and none for an empty line", () =>
-      inScenario({}, () =>
-        Effect.gen(function* () {
-          const long = `def ${"x".repeat(600)}`;
-          const cwd = yield* makeWorkspace({ "app.py": "xxx\nblank\ngone\n" });
-          yield* writeFiles(cwd, {
-            "defs.py": [
-              `extern xxx ${cwd}/target.py 1`,
-              `extern blank ${cwd}/target.py 2`,
-              `extern gone ${cwd}/target.py 9`,
-            ].join("\n"),
-            "target.py": `${long}\n\n`,
-          });
+    it.effect(
+      "reads a line preview from disk, 400 characters at most, and none for an empty line",
+      () =>
+        inScenario({}, () =>
+          Effect.gen(function* () {
+            const long = `def ${"x".repeat(600)}`;
+            const cwd = yield* makeWorkspace({ "app.py": "xxx\nblank\ngone\n" });
+            yield* writeFiles(cwd, {
+              "defs.py": [
+                `extern xxx ${cwd}/target.py 1`,
+                `extern blank ${cwd}/target.py 2`,
+                `extern gone ${cwd}/target.py 9`,
+              ].join("\n"),
+              "target.py": `${long}\n\n`,
+            });
 
-          const [first, second, third] = yield* Effect.forEach([0, 1, 2], (line) =>
-            definitionAt(cwd, "app.py", line),
-          );
+            const [first, second, third] = yield* Effect.forEach([0, 1, 2], (line) =>
+              definitionAt(cwd, "app.py", line),
+            );
 
-          expect(first?.locations[0]?.lineText).toHaveLength(400);
-          expect(first?.locations[0]?.lineText).toBe(long.slice(0, 400));
-          expect(second?.locations[0]).not.toHaveProperty("lineText");
-          expect(third?.locations[0]).not.toHaveProperty("lineText");
-        }),
-      ),
+            expect(first?.locations[0]?.lineText).toHaveLength(400);
+            expect(first?.locations[0]?.lineText).toBe(long.slice(0, 400));
+            expect(second?.locations[0]).not.toHaveProperty("lineText");
+            expect(third?.locations[0]).not.toHaveProperty("lineText");
+          }),
+        ),
     );
 
     it.effect("drops a location in the server's own files and keeps the others", () =>
@@ -714,22 +746,24 @@ describe("CodeIntel", () => {
   describe("workspace symbols", () => {
     const WORDS = "def greet\ndef greeting\ndef greeter\ndef xgreet\ndef mygreet\nclass Gree\n";
 
-    it.effect("ranks an exact name, then a prefix, then the rest, whatever order the server used", () =>
-      inScenario({ flags: ["--fuzzy-symbols"] }, () =>
-        Effect.gen(function* () {
-          const codeIntel = yield* CodeIntel.CodeIntel;
-          const cwd = yield* makeWorkspace({ "app.py": WORDS });
+    it.effect(
+      "ranks an exact name, then a prefix, then the rest, whatever order the server used",
+      () =>
+        inScenario({ flags: ["--fuzzy-symbols"] }, () =>
+          Effect.gen(function* () {
+            const codeIntel = yield* CodeIntel.CodeIntel;
+            const cwd = yield* makeWorkspace({ "app.py": WORDS });
 
-          const result = yield* codeIntel.workspaceSymbols({ cwd, query: "greet", limit: 10 });
-          const names = result.symbols.map((symbol) => symbol.name);
+            const result = yield* codeIntel.workspaceSymbols({ cwd, query: "greet", limit: 10 });
+            const names = result.symbols.map((symbol) => symbol.name);
 
-          expect(names[0]).toBe("greet");
-          expect(names.slice(1, 3).toSorted()).toEqual(["greeter", "greeting"]);
-          expect(names.slice(3).toSorted()).toEqual(["mygreet", "xgreet"]);
-          expect(result.truncated).toBe(false);
-          expect(result.symbols[0]).not.toHaveProperty("location.lineText");
-        }),
-      ),
+            expect(names[0]).toBe("greet");
+            expect(names.slice(1, 3).toSorted()).toEqual(["greeter", "greeting"]);
+            expect(names.slice(3).toSorted()).toEqual(["mygreet", "xgreet"]);
+            expect(result.truncated).toBe(false);
+            expect(result.symbols[0]).not.toHaveProperty("location.lineText");
+          }),
+        ),
     );
 
     it.effect("honours a limit and says when it cut the list", () =>
@@ -795,33 +829,35 @@ describe("CodeIntel", () => {
           // One language that cannot answer leaves the others' answers.
           s.missing.add("python");
           yield* codeIntel.restart({ cwd });
-          const typescriptOnly = yield* codeIntel.workspaceSymbols({ cwd, query: "alpha", limit: 10 });
+          const typescriptOnly = yield* codeIntel.workspaceSymbols({
+            cwd,
+            query: "alpha",
+            limit: 10,
+          });
           expect(typescriptOnly.symbols.map((symbol) => symbol.name)).toEqual(["alpha_ts"]);
         }),
       ),
     );
 
-    for (const [name, files] of [
+    it.effect.each([
       ["two folders down", { "a.py": "def alpha\n", "deep/er/b.ts": "def alpha\n" }],
       ["a dot folder", { "a.py": "def alpha\n", ".hidden/b.ts": "def alpha\n" }],
       ["node_modules", { "a.py": "def alpha\n", "node_modules/b.ts": "def alpha\n" }],
-    ] as const) {
-      it.effect(`does not look for a language in ${name}`, () =>
-        inScenario({}, (s) =>
-          Effect.gen(function* () {
-            const codeIntel = yield* CodeIntel.CodeIntel;
-            const typescript = s.recordFile("typescript");
-            s.flagsByLanguage.set("typescript", [`--record=${typescript}`]);
-            const cwd = yield* makeWorkspace(files);
+    ] as const)("does not look for a language in $0", ([, files]) =>
+      inScenario({}, (s) =>
+        Effect.gen(function* () {
+          const codeIntel = yield* CodeIntel.CodeIntel;
+          const typescript = s.recordFile("typescript");
+          s.flagsByLanguage.set("typescript", [`--record=${typescript}`]);
+          const cwd = yield* makeWorkspace(files);
 
-            const result = yield* codeIntel.workspaceSymbols({ cwd, query: "alpha", limit: 10 });
+          const result = yield* codeIntel.workspaceSymbols({ cwd, query: "alpha", limit: 10 });
 
-            expect(result.symbols.length).toBeGreaterThan(0);
-            expect(noWorkspaceStarted(typescript)).toBe(true);
-          }),
-        ),
-      );
-    }
+          expect(result.symbols.length).toBeGreaterThan(0);
+          expect(noWorkspaceStarted(typescript)).toBe(true);
+        }),
+      ),
+    );
 
     it.effect("takes a manifest alone as the sign of a language", () =>
       inScenario({}, (s) =>
@@ -940,9 +976,7 @@ describe("CodeIntel", () => {
           const failed = yield* codeIntel.installServer({ languageId: "python" });
           s.installFails = false;
           const installed = yield* codeIntel.installServer({ languageId: "python" });
-          const unknown = yield* codeIntel
-            .installServer({ languageId: "cobol" })
-            .pipe(Effect.flip);
+          const unknown = yield* codeIntel.installServer({ languageId: "cobol" }).pipe(Effect.flip);
 
           expect(failed).toMatchObject({ state: "unavailable" });
           expect(failed.message).toContain("download failed");
@@ -953,17 +987,19 @@ describe("CodeIntel", () => {
       ),
     );
 
-    it.effect("answers unsupported_language when told to restart a language it has no row for", () =>
-      inScenario({}, () =>
-        Effect.gen(function* () {
-          const codeIntel = yield* CodeIntel.CodeIntel;
-          const cwd = yield* makeWorkspace();
+    it.effect(
+      "answers unsupported_language when told to restart a language it has no row for",
+      () =>
+        inScenario({}, () =>
+          Effect.gen(function* () {
+            const codeIntel = yield* CodeIntel.CodeIntel;
+            const cwd = yield* makeWorkspace();
 
-          const error = yield* codeIntel.restart({ cwd, languageId: "cobol" }).pipe(Effect.flip);
+            const error = yield* codeIntel.restart({ cwd, languageId: "cobol" }).pipe(Effect.flip);
 
-          expect(error.reason).toBe("unsupported_language");
-        }),
-      ),
+            expect(error.reason).toBe("unsupported_language");
+          }),
+        ),
     );
 
     it.effect("restarts one language and leaves the other's server running", () =>

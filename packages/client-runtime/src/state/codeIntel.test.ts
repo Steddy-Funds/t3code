@@ -39,7 +39,10 @@ const makeHarness = Effect.fnUntraced(function* (initial: HoverHandler) {
         },
       },
     }) as unknown as RpcSession;
-  const supervisorFor = Effect.fnUntraced(function* (environmentId: EnvironmentId, handler: HoverHandler) {
+  const supervisorFor = Effect.fnUntraced(function* (
+    environmentId: EnvironmentId,
+    handler: HoverHandler,
+  ) {
     const session = yield* SubscriptionRef.make(Option.some(makeSession(environmentId, handler)));
     const state = yield* SubscriptionRef.make({
       ...AVAILABLE_CONNECTION_STATE,
@@ -62,9 +65,17 @@ const makeHarness = Effect.fnUntraced(function* (initial: HoverHandler) {
   const supervisorOf = (environmentId: EnvironmentId) => supervisors.get(environmentId)!;
   const environmentRegistry = {
     run: (environmentId, effect) =>
-      Effect.provideService(effect, EnvironmentSupervisor.EnvironmentSupervisor, supervisorOf(environmentId)),
+      Effect.provideService(
+        effect,
+        EnvironmentSupervisor.EnvironmentSupervisor,
+        supervisorOf(environmentId),
+      ),
     followStream: (environmentId, stream) =>
-      Stream.provideService(stream, EnvironmentSupervisor.EnvironmentSupervisor, supervisorOf(environmentId)),
+      Stream.provideService(
+        stream,
+        EnvironmentSupervisor.EnvironmentSupervisor,
+        supervisorOf(environmentId),
+      ),
   } as EnvironmentRegistry.EnvironmentRegistry["Service"];
   const runtime = Atom.runtime(
     Layer.succeed(EnvironmentRegistry.EnvironmentRegistry, environmentRegistry),
@@ -128,7 +139,9 @@ describe("code intelligence client calls", () => {
         const harness = yield* makeHarness(() => unknownTag);
         yield* harness.hover(0).pipe(Effect.flip);
 
-        expect(yield* harness.hover(0, OTHER_ENVIRONMENT_ID)).toMatchObject({ markdown: "**greet**" });
+        expect(yield* harness.hover(0, OTHER_ENVIRONMENT_ID)).toMatchObject({
+          markdown: "**greet**",
+        });
         yield* harness.reconnect(() => answer);
 
         expect(yield* harness.hover(1)).toMatchObject({ markdown: "**greet**" });

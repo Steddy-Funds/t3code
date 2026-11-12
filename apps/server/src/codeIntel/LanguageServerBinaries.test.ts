@@ -97,9 +97,9 @@ const rigLayer = (rig: Rig, options: RigOptions) => {
   const http = HttpClient.make((request) =>
     Effect.suspend(() => {
       rig.requests.push(request.url);
-      return rig.respond(request).pipe(
-        Effect.map((response) => HttpClientResponse.fromWeb(request, response)),
-      );
+      return rig
+        .respond(request)
+        .pipe(Effect.map((response) => HttpClientResponse.fromWeb(request, response)));
     }),
   );
   const settings: DeepPartial<ServerSettingsValue> = {
@@ -181,8 +181,9 @@ interface Services {
   readonly tyPath: string;
 }
 
-const inScratch = <A, E>(use: (directory: string) => Effect.Effect<A, E, FileSystem.FileSystem | Path.Path>) =>
-  Effect.flatMap(makeWorkspace({}), use).pipe(Effect.scoped, Effect.provide(NodeServices.layer));
+const inScratch = <A, E>(
+  use: (directory: string) => Effect.Effect<A, E, FileSystem.FileSystem | Path.Path>,
+) => Effect.flatMap(makeWorkspace({}), use).pipe(Effect.scoped, Effect.provide(NodeServices.layer));
 
 /** Returns once the call has begun waiting on the install, which it does without yielding the fiber. */
 const startInstall = Effect.fnUntraced(function* (
@@ -208,13 +209,15 @@ const putExecutable = (file: string, contents = TY_BYTES) =>
     NodeFS.chmodSync(file, 0o755);
   });
 
-const installFailure = <A>(effect: Effect.Effect<A, LanguageServerBinaries.LanguageServerInstallError>) =>
-  effect.pipe(Effect.flip);
+const installFailure = <A>(
+  effect: Effect.Effect<A, LanguageServerBinaries.LanguageServerInstallError>,
+) => effect.pipe(Effect.flip);
 
 describe("LanguageServerBinaries", () => {
   describe("resolve", () => {
-    for (const id of ["constructor", "__proto__", "toString", "hasOwnProperty", "ruby", ""]) {
-      it.effect(`says ${JSON.stringify(id)} is an unknown language that cannot be installed`, () =>
+    it.effect.each(["constructor", "__proto__", "toString", "hasOwnProperty", "ruby", ""])(
+      "says %j is an unknown language that cannot be installed",
+      (id) =>
         inRig({ serverPaths: { [id]: "/bin/sh" } }, ({ binaries }) =>
           Effect.gen(function* () {
             expect(yield* binaries.resolve(id)).toMatchObject({
@@ -225,158 +228,201 @@ describe("LanguageServerBinaries", () => {
             });
           }),
         ),
-      );
-    }
-
-    it.effect("reports a missing ty as installable, and sees it appear and disappear with no restart", () =>
-      inRig({}, ({ binaries, tyPath, tyDirectory }) =>
-        Effect.gen(function* () {
-          const missing = yield* binaries.resolve("python");
-          expect(missing).toMatchObject({
-            _tag: "Unavailable",
-            languageId: "python",
-            name: "ty",
-            reason: "not_installed",
-            installable: true,
-          });
-          expect(missing._tag === "Unavailable" ? missing.message : "").toContain("0.0.94");
-
-          yield* putExecutable(tyPath);
-          expect(yield* binaries.resolve("python")).toEqual({
-            _tag: "LaunchSpec",
-            languageId: "python",
-            name: "ty",
-            version: "0.0.94",
-            command: tyPath,
-            args: ["server"],
-            source: "managed",
-          });
-
-          NodeFS.rmSync(tyDirectory, { recursive: true });
-          expect(yield* binaries.resolve("python")).toMatchObject({
-            _tag: "Unavailable",
-            reason: "not_installed",
-          });
-        }),
-      ),
     );
 
-    it.effect("does not take a file that is not executable, or a directory, for the managed binary", () =>
-      inRig({}, ({ binaries, tyPath }) =>
-        Effect.gen(function* () {
-          yield* putExecutable(tyPath);
-          NodeFS.chmodSync(tyPath, 0o644);
-          expect(yield* binaries.resolve("python")).toMatchObject({ reason: "not_installed" });
-
-          NodeFS.rmSync(tyPath);
-          NodeFS.mkdirSync(tyPath);
-          NodeFS.chmodSync(tyPath, 0o755);
-          expect(yield* binaries.resolve("python")).toMatchObject({ reason: "not_installed" });
-        }),
-      ),
-    );
-
-    for (const row of [
-      { platform: "linux", arch: "x64", libc: "gnu", reason: "not_installed", installable: true },
-      { platform: "linux", arch: "arm64", libc: "gnu", reason: "not_installed", installable: true },
-      { platform: "darwin", arch: "arm64", libc: "gnu", reason: "not_installed", installable: true },
-      { platform: "darwin", arch: "x64", libc: "gnu", reason: "not_installed", installable: true },
-      { platform: "linux", arch: "x64", libc: "musl", reason: "unsupported_platform", installable: false },
-      { platform: "linux", arch: "arm64", libc: "musl", reason: "unsupported_platform", installable: false },
-      { platform: "win32", arch: "x64", libc: "gnu", reason: "unsupported_platform", installable: false },
-      { platform: "linux", arch: "ia32", libc: "gnu", reason: "unsupported_platform", installable: false },
-      { platform: "freebsd", arch: "x64", libc: "gnu", reason: "unsupported_platform", installable: false },
-    ] as const) {
-      it.effect(`resolves ty on ${row.platform}-${row.arch}${row.platform === "linux" ? `-${row.libc}` : ""} as ${row.reason}`, () =>
-        inRig(row, ({ binaries }) =>
+    it.effect(
+      "reports a missing ty as installable, and sees it appear and disappear with no restart",
+      () =>
+        inRig({}, ({ binaries, tyPath, tyDirectory }) =>
           Effect.gen(function* () {
+            const missing = yield* binaries.resolve("python");
+            expect(missing).toMatchObject({
+              _tag: "Unavailable",
+              languageId: "python",
+              name: "ty",
+              reason: "not_installed",
+              installable: true,
+            });
+            expect(missing._tag === "Unavailable" ? missing.message : "").toContain("0.0.94");
+
+            yield* putExecutable(tyPath);
+            expect(yield* binaries.resolve("python")).toEqual({
+              _tag: "LaunchSpec",
+              languageId: "python",
+              name: "ty",
+              version: "0.0.94",
+              command: tyPath,
+              args: ["server"],
+              source: "managed",
+            });
+
+            NodeFS.rmSync(tyDirectory, { recursive: true });
             expect(yield* binaries.resolve("python")).toMatchObject({
               _tag: "Unavailable",
-              reason: row.reason,
-              installable: row.installable,
+              reason: "not_installed",
             });
           }),
         ),
-      );
-    }
+    );
+
+    it.effect(
+      "does not take a file that is not executable, or a directory, for the managed binary",
+      () =>
+        inRig({}, ({ binaries, tyPath }) =>
+          Effect.gen(function* () {
+            yield* putExecutable(tyPath);
+            NodeFS.chmodSync(tyPath, 0o644);
+            expect(yield* binaries.resolve("python")).toMatchObject({ reason: "not_installed" });
+
+            NodeFS.rmSync(tyPath);
+            NodeFS.mkdirSync(tyPath);
+            NodeFS.chmodSync(tyPath, 0o755);
+            expect(yield* binaries.resolve("python")).toMatchObject({ reason: "not_installed" });
+          }),
+        ),
+    );
+
+    it.effect.each([
+      { platform: "linux", arch: "x64", libc: "gnu", reason: "not_installed", installable: true },
+      { platform: "linux", arch: "arm64", libc: "gnu", reason: "not_installed", installable: true },
+      {
+        platform: "darwin",
+        arch: "arm64",
+        libc: "gnu",
+        reason: "not_installed",
+        installable: true,
+      },
+      { platform: "darwin", arch: "x64", libc: "gnu", reason: "not_installed", installable: true },
+      {
+        platform: "linux",
+        arch: "x64",
+        libc: "musl",
+        reason: "unsupported_platform",
+        installable: false,
+      },
+      {
+        platform: "linux",
+        arch: "arm64",
+        libc: "musl",
+        reason: "unsupported_platform",
+        installable: false,
+      },
+      {
+        platform: "win32",
+        arch: "x64",
+        libc: "gnu",
+        reason: "unsupported_platform",
+        installable: false,
+      },
+      {
+        platform: "linux",
+        arch: "ia32",
+        libc: "gnu",
+        reason: "unsupported_platform",
+        installable: false,
+      },
+      {
+        platform: "freebsd",
+        arch: "x64",
+        libc: "gnu",
+        reason: "unsupported_platform",
+        installable: false,
+      },
+    ] as const)("resolves ty on $platform-$arch-$libc as $reason", (row) =>
+      inRig(row, ({ binaries }) =>
+        Effect.gen(function* () {
+          expect(yield* binaries.resolve("python")).toMatchObject({
+            _tag: "Unavailable",
+            reason: row.reason,
+            installable: row.installable,
+          });
+        }),
+      ),
+    );
 
     describe("the user's serverPaths", () => {
       it.effect("uses an existing file as given, with the default args and no version", () =>
-        inScratch((dir) => Effect.gen(function* () {
-          const ty = NodePath.join(dir, "my-ty");
-          const tsc = NodePath.join(dir, "my-tsc");
-          yield* putExecutable(ty);
-          yield* putExecutable(tsc);
-          yield* inRig({ serverPaths: { python: ty, typescript: tsc } }, ({ binaries }) =>
-            Effect.gen(function* () {
-              expect(yield* binaries.resolve("python")).toEqual({
-                _tag: "LaunchSpec",
-                languageId: "python",
-                name: "ty",
-                version: undefined,
-                command: ty,
-                args: ["server"],
-                source: "setting",
-              });
-              expect(yield* binaries.resolve("typescript")).toEqual({
-                _tag: "LaunchSpec",
-                languageId: "typescript",
-                name: "TypeScript",
-                version: undefined,
-                command: tsc,
-                args: ["--lsp", "--stdio"],
-                source: "setting",
-              });
-            }),
-          );
-        })),
+        inScratch((dir) =>
+          Effect.gen(function* () {
+            const ty = NodePath.join(dir, "my-ty");
+            const tsc = NodePath.join(dir, "my-tsc");
+            yield* putExecutable(ty);
+            yield* putExecutable(tsc);
+            yield* inRig({ serverPaths: { python: ty, typescript: tsc } }, ({ binaries }) =>
+              Effect.gen(function* () {
+                expect(yield* binaries.resolve("python")).toEqual({
+                  _tag: "LaunchSpec",
+                  languageId: "python",
+                  name: "ty",
+                  version: undefined,
+                  command: ty,
+                  args: ["server"],
+                  source: "setting",
+                });
+                expect(yield* binaries.resolve("typescript")).toEqual({
+                  _tag: "LaunchSpec",
+                  languageId: "typescript",
+                  name: "TypeScript",
+                  version: undefined,
+                  command: tsc,
+                  args: ["--lsp", "--stdio"],
+                  source: "setting",
+                });
+              }),
+            );
+          }),
+        ),
       );
 
       it.effect("wins over the managed binary, and never falls through when its file is gone", () =>
-        inScratch((dir) => Effect.gen(function* () {
-          const ty = NodePath.join(dir, "my-ty");
-          yield* putExecutable(ty);
-          yield* inRig({ serverPaths: { python: ty } }, ({ binaries, tyPath }) =>
-            Effect.gen(function* () {
-              yield* putExecutable(tyPath);
-              expect(yield* binaries.resolve("python")).toMatchObject({ source: "setting" });
+        inScratch((dir) =>
+          Effect.gen(function* () {
+            const ty = NodePath.join(dir, "my-ty");
+            yield* putExecutable(ty);
+            yield* inRig({ serverPaths: { python: ty } }, ({ binaries, tyPath }) =>
+              Effect.gen(function* () {
+                yield* putExecutable(tyPath);
+                expect(yield* binaries.resolve("python")).toMatchObject({ source: "setting" });
 
-              NodeFS.rmSync(ty);
-              expect(yield* binaries.resolve("python")).toMatchObject({
-                _tag: "Unavailable",
-                reason: "setting_path_missing",
-                installable: false,
-              });
-              NodeFS.mkdirSync(ty);
-              expect(yield* binaries.resolve("python")).toMatchObject({
-                reason: "setting_path_missing",
-              });
-            }),
-          );
-        })),
+                NodeFS.rmSync(ty);
+                expect(yield* binaries.resolve("python")).toMatchObject({
+                  _tag: "Unavailable",
+                  reason: "setting_path_missing",
+                  installable: false,
+                });
+                NodeFS.mkdirSync(ty);
+                expect(yield* binaries.resolve("python")).toMatchObject({
+                  reason: "setting_path_missing",
+                });
+              }),
+            );
+          }),
+        ),
       );
 
       it.effect("refuses a file inside a project, also through a link from outside it", () =>
-        inScratch((dir) => Effect.gen(function* () {
-          const project = NodePath.join(dir, "project");
-          const inside = NodePath.join(project, "bin", "ty");
-          const link = NodePath.join(dir, "ty-link");
-          yield* putExecutable(inside);
-          NodeFS.symlinkSync(inside, link);
-          for (const configured of [inside, link]) {
-            yield* inRig(
-              { serverPaths: { python: configured }, projects: [NodeFS.realpathSync(project)] },
-              ({ binaries }) =>
-                Effect.gen(function* () {
-                  expect(yield* binaries.resolve("python")).toMatchObject({
-                    _tag: "Unavailable",
-                    reason: "setting_path_in_project",
-                    installable: false,
-                  });
-                }),
-            );
-          }
-        })),
+        inScratch((dir) =>
+          Effect.gen(function* () {
+            const project = NodePath.join(dir, "project");
+            const inside = NodePath.join(project, "bin", "ty");
+            const link = NodePath.join(dir, "ty-link");
+            yield* putExecutable(inside);
+            NodeFS.symlinkSync(inside, link);
+            for (const configured of [inside, link]) {
+              yield* inRig(
+                { serverPaths: { python: configured }, projects: [NodeFS.realpathSync(project)] },
+                ({ binaries }) =>
+                  Effect.gen(function* () {
+                    expect(yield* binaries.resolve("python")).toMatchObject({
+                      _tag: "Unavailable",
+                      reason: "setting_path_in_project",
+                      installable: false,
+                    });
+                  }),
+              );
+            }
+          }),
+        ),
       );
 
       it.effect("does not fall through to the bundled TypeScript either", () =>
@@ -391,108 +437,135 @@ describe("LanguageServerBinaries", () => {
         ),
       );
 
-      for (const relative of ["package.json", "./package.json", "../server/package.json", "src"]) {
-        it.effect(`never takes the relative path ${JSON.stringify(relative)}, which would mean the server's cwd`, () =>
-          inRig({ serverPaths: { python: relative } }, ({ binaries }) =>
-            Effect.gen(function* () {
-              expect(NodeFS.existsSync(NodePath.resolve(NodeProcess.cwd(), relative))).toBe(true);
-              expect(yield* binaries.resolve("python")).toMatchObject({
-                _tag: "Unavailable",
-                reason: "setting_path_missing",
-                installable: false,
-              });
-            }),
-          ),
-        );
-      }
+      // Each one exists from the cwd the suite runs in, whether that is the repo or the package.
+      const cwd = NodeProcess.cwd();
+      it.effect.each([
+        { label: "a bare name", relative: "package.json" },
+        { label: "a ./ path", relative: "./package.json" },
+        { label: "a ../ path", relative: `../${NodePath.basename(cwd)}/package.json` },
+        { label: "a directory", relative: NodePath.relative(cwd, import.meta.dirname) },
+      ])("never takes $label, which would mean the server's cwd", ({ relative }) =>
+        inRig({ serverPaths: { python: relative } }, ({ binaries }) =>
+          Effect.gen(function* () {
+            expect(NodeFS.existsSync(NodePath.resolve(cwd, relative))).toBe(true);
+            expect(yield* binaries.resolve("python")).toMatchObject({
+              _tag: "Unavailable",
+              reason: "setting_path_missing",
+              installable: false,
+            });
+          }),
+        ),
+      );
 
       it.effect("treats an empty path as unset, and sees a setting change on the next call", () =>
-        inScratch((dir) => Effect.gen(function* () {
-          const ty = NodePath.join(dir, "my-ty");
-          yield* putExecutable(ty);
-          yield* inRig({ serverPaths: { python: "" } }, ({ binaries, settings }) =>
-            Effect.gen(function* () {
-              expect(yield* binaries.resolve("python")).toMatchObject({ reason: "not_installed" });
-              yield* settings.updateSettings({ codeIntel: { serverPaths: { python: ty } } });
-              expect(yield* binaries.resolve("python")).toMatchObject({
-                source: "setting",
-                command: ty,
-              });
-              yield* settings.updateSettings({ codeIntel: { serverPaths: { python: "" } } });
-              expect(yield* binaries.resolve("python")).toMatchObject({ reason: "not_installed" });
-            }),
-          );
-        })),
+        inScratch((dir) =>
+          Effect.gen(function* () {
+            const ty = NodePath.join(dir, "my-ty");
+            yield* putExecutable(ty);
+            yield* inRig({ serverPaths: { python: "" } }, ({ binaries, settings }) =>
+              Effect.gen(function* () {
+                expect(yield* binaries.resolve("python")).toMatchObject({
+                  reason: "not_installed",
+                });
+                yield* settings.updateSettings({ codeIntel: { serverPaths: { python: ty } } });
+                expect(yield* binaries.resolve("python")).toMatchObject({
+                  source: "setting",
+                  command: ty,
+                });
+                yield* settings.updateSettings({ codeIntel: { serverPaths: { python: "" } } });
+                expect(yield* binaries.resolve("python")).toMatchObject({
+                  reason: "not_installed",
+                });
+              }),
+            );
+          }),
+        ),
       );
 
       it.effect("expands a leading ~ against the home directory", () =>
-        inScratch((home) => Effect.gen(function* () {
-          yield* putExecutable(NodePath.join(home, "bin", "ty"));
-          yield* inRig({ home, serverPaths: { python: "~/bin/ty" } }, ({ binaries }) =>
-            Effect.gen(function* () {
-              expect(yield* binaries.resolve("python")).toMatchObject({
-                source: "setting",
-                command: NodePath.join(home, "bin", "ty"),
-              });
-            }),
-          );
-        })),
+        inScratch((home) =>
+          Effect.gen(function* () {
+            yield* putExecutable(NodePath.join(home, "bin", "ty"));
+            yield* inRig({ home, serverPaths: { python: "~/bin/ty" } }, ({ binaries }) =>
+              Effect.gen(function* () {
+                expect(yield* binaries.resolve("python")).toMatchObject({
+                  source: "setting",
+                  command: NodePath.join(home, "bin", "ty"),
+                });
+              }),
+            );
+          }),
+        ),
       );
 
       it.effect("follows a symlink to a file", () =>
-        inScratch((dir) => Effect.gen(function* () {
-          yield* putExecutable(NodePath.join(dir, "real-ty"));
-          NodeFS.symlinkSync(NodePath.join(dir, "real-ty"), NodePath.join(dir, "link-ty"));
-          yield* inRig({ serverPaths: { python: NodePath.join(dir, "link-ty") } }, ({ binaries }) =>
-            Effect.gen(function* () {
-              expect(yield* binaries.resolve("python")).toMatchObject({ source: "setting" });
-            }),
-          );
-        })),
+        inScratch((dir) =>
+          Effect.gen(function* () {
+            yield* putExecutable(NodePath.join(dir, "real-ty"));
+            NodeFS.symlinkSync(NodePath.join(dir, "real-ty"), NodePath.join(dir, "link-ty"));
+            yield* inRig(
+              { serverPaths: { python: NodePath.join(dir, "link-ty") } },
+              ({ binaries }) =>
+                Effect.gen(function* () {
+                  expect(yield* binaries.resolve("python")).toMatchObject({ source: "setting" });
+                }),
+            );
+          }),
+        ),
       );
     });
 
     describe("the bundled TypeScript", () => {
-      it.effect("is the package's binary and version, bundled, with the tsc language-server args", () =>
-        inRig({}, ({ binaries }) =>
-          Effect.gen(function* () {
-            expect(yield* binaries.resolve("typescript")).toEqual({
-              _tag: "LaunchSpec",
-              languageId: "typescript",
-              name: "TypeScript",
-              version: "7.0.2",
-              command: "/opt/tsc/tsc",
-              args: ["--lsp", "--stdio"],
-              source: "bundled",
-            });
-          }),
-        ),
+      it.effect(
+        "is the package's binary and version, bundled, with the tsc language-server args",
+        () =>
+          inRig({}, ({ binaries }) =>
+            Effect.gen(function* () {
+              expect(yield* binaries.resolve("typescript")).toEqual({
+                _tag: "LaunchSpec",
+                languageId: "typescript",
+                name: "TypeScript",
+                version: "7.0.2",
+                command: "/opt/tsc/tsc",
+                args: ["--lsp", "--stdio"],
+                source: "bundled",
+              });
+            }),
+          ),
       );
 
-      it.effect("is unsupported_platform, not installable, while its platform package is missing, and is not cached", () =>
-        inRig({ platform: "freebsd" }, (rig) =>
-          Effect.gen(function* () {
-            rig.typescript = undefined;
-            expect(yield* rig.binaries.resolve("typescript")).toMatchObject({
-              _tag: "Unavailable",
-              reason: "unsupported_platform",
-              installable: false,
-            });
-            rig.typescript = { command: "/opt/tsc/tsc", version: "7.0.2" };
-            expect(yield* rig.binaries.resolve("typescript")).toMatchObject({ _tag: "LaunchSpec" });
-            rig.typescript = undefined;
-            expect(yield* rig.binaries.resolve("typescript")).toMatchObject({
-              reason: "unsupported_platform",
-            });
-          }),
-        ),
+      it.effect(
+        "is unsupported_platform, not installable, while its platform package is missing, and is not cached",
+        () =>
+          inRig({ platform: "freebsd" }, (rig) =>
+            Effect.gen(function* () {
+              rig.typescript = undefined;
+              expect(yield* rig.binaries.resolve("typescript")).toMatchObject({
+                _tag: "Unavailable",
+                reason: "unsupported_platform",
+                installable: false,
+              });
+              rig.typescript = { command: "/opt/tsc/tsc", version: "7.0.2" };
+              expect(yield* rig.binaries.resolve("typescript")).toMatchObject({
+                _tag: "LaunchSpec",
+              });
+              rig.typescript = undefined;
+              expect(yield* rig.binaries.resolve("typescript")).toMatchObject({
+                reason: "unsupported_platform",
+              });
+            }),
+          ),
       );
 
       it.effect("is found through the installed typescript package, which resolves to a file", () =>
         inRig({ realTypeScript: true }, ({ binaries }) =>
           Effect.gen(function* () {
             const spec = yield* binaries.resolve("typescript");
-            expect(spec).toMatchObject({ _tag: "LaunchSpec", source: "bundled", name: "TypeScript" });
+            expect(spec).toMatchObject({
+              _tag: "LaunchSpec",
+              source: "bundled",
+              name: "TypeScript",
+            });
             if (spec._tag !== "LaunchSpec") return;
             expect(NodePath.isAbsolute(spec.command)).toBe(true);
             expect(NodeFS.statSync(spec.command).isFile()).toBe(true);
@@ -503,46 +576,52 @@ describe("LanguageServerBinaries", () => {
     });
 
     describe("what a workspace cannot do", () => {
-      it.effect("does not run what it finds: a setting path, the managed binary, or a ty on PATH", () =>
-        inScratch((dir) => Effect.gen(function* () {
-          const marker = (name: string) => NodePath.join(dir, `${name}.ran`);
-          const script = (name: string) => `#!/bin/sh\ntouch ${marker(name)}\n`;
-          yield* putExecutable(NodePath.join(dir, "bin", "ty"), script("path"));
-          yield* putExecutable(NodePath.join(dir, "setting-ty"), script("setting"));
-          yield* inRig(
-            {
-              serverPaths: { python: NodePath.join(dir, "setting-ty") },
-              environment: { PATH: NodePath.join(dir, "bin") },
-              workingDirectory: dir,
-            },
-            ({ binaries, settings, tyPath }) =>
-              Effect.gen(function* () {
-                yield* binaries.resolve("python");
-                yield* putExecutable(tyPath, script("managed"));
-                yield* settings.updateSettings({ codeIntel: { serverPaths: { python: "" } } });
-                expect(yield* binaries.resolve("python")).toMatchObject({ source: "managed" });
-              }),
-          );
-          expect(NodeFS.readdirSync(dir).filter((name) => name.endsWith(".ran"))).toEqual([]);
-        })),
+      it.effect(
+        "does not run what it finds: a setting path, the managed binary, or a ty on PATH",
+        () =>
+          inScratch((dir) =>
+            Effect.gen(function* () {
+              const marker = (name: string) => NodePath.join(dir, `${name}.ran`);
+              const script = (name: string) => `#!/bin/sh\ntouch ${marker(name)}\n`;
+              yield* putExecutable(NodePath.join(dir, "bin", "ty"), script("path"));
+              yield* putExecutable(NodePath.join(dir, "setting-ty"), script("setting"));
+              yield* inRig(
+                {
+                  serverPaths: { python: NodePath.join(dir, "setting-ty") },
+                  environment: { PATH: NodePath.join(dir, "bin") },
+                  workingDirectory: dir,
+                },
+                ({ binaries, settings, tyPath }) =>
+                  Effect.gen(function* () {
+                    yield* binaries.resolve("python");
+                    yield* putExecutable(tyPath, script("managed"));
+                    yield* settings.updateSettings({ codeIntel: { serverPaths: { python: "" } } });
+                    expect(yield* binaries.resolve("python")).toMatchObject({ source: "managed" });
+                  }),
+              );
+              expect(NodeFS.readdirSync(dir).filter((name) => name.endsWith(".ran"))).toEqual([]);
+            }),
+          ),
       );
 
       it.effect("never resolves a ty from PATH or the working directory", () =>
-        inScratch((dir) => Effect.gen(function* () {
-          yield* putExecutable(NodePath.join(dir, "bin", "ty"));
-          yield* putExecutable(NodePath.join(dir, ".venv", "bin", "ty"));
-          yield* putExecutable(NodePath.join(dir, "ty"));
-          yield* inRig(
-            { environment: { PATH: NodePath.join(dir, "bin") }, workingDirectory: dir },
-            ({ binaries }) =>
-              Effect.gen(function* () {
-                expect(yield* binaries.resolve("python")).toMatchObject({
-                  _tag: "Unavailable",
-                  reason: "not_installed",
-                });
-              }),
-          );
-        })),
+        inScratch((dir) =>
+          Effect.gen(function* () {
+            yield* putExecutable(NodePath.join(dir, "bin", "ty"));
+            yield* putExecutable(NodePath.join(dir, ".venv", "bin", "ty"));
+            yield* putExecutable(NodePath.join(dir, "ty"));
+            yield* inRig(
+              { environment: { PATH: NodePath.join(dir, "bin") }, workingDirectory: dir },
+              ({ binaries }) =>
+                Effect.gen(function* () {
+                  expect(yield* binaries.resolve("python")).toMatchObject({
+                    _tag: "Unavailable",
+                    reason: "not_installed",
+                  });
+                }),
+            );
+          }),
+        ),
       );
 
       it.effect("makes no request, from resolve, in any state", () =>
@@ -560,51 +639,57 @@ describe("LanguageServerBinaries", () => {
   });
 
   describe("install", () => {
-    it.effect("downloads the pinned asset, unpacks its one binary, and puts it in place executable", () => {
-      const archive = tyArchive();
-      return inRig({ tyRelease: releaseFor(archive), respond: serve(archive) }, (rig) =>
-        Effect.gen(function* () {
-          const spec = yield* rig.binaries.install("python");
+    it.effect(
+      "downloads the pinned asset, unpacks its one binary, and puts it in place executable",
+      () => {
+        const archive = tyArchive();
+        return inRig({ tyRelease: releaseFor(archive), respond: serve(archive) }, (rig) =>
+          Effect.gen(function* () {
+            const spec = yield* rig.binaries.install("python");
 
-          expect(rig.requests).toEqual([ASSET_URL]);
-          expect(spec).toEqual({
-            _tag: "LaunchSpec",
-            languageId: "python",
-            name: "ty",
-            version: "0.0.94",
-            command: rig.tyPath,
-            args: ["server"],
-            source: "managed",
-          });
-          expect(NodeFS.readFileSync(rig.tyPath, "utf8")).toBe(TY_BYTES);
-          expect(NodeFS.statSync(rig.tyPath).mode & 0o777).toBe(0o755);
-          expect(yield* listing(NodePath.join(rig.stateDir, "language-servers"))).toEqual([
-            "ty",
-            "ty/0.0.94",
-            "ty/0.0.94/ty",
-          ]);
-          expect(yield* rig.binaries.resolve("python")).toEqual(spec);
-          expect(yield* rig.binaries.installProgress("python")).toBeUndefined();
-        }),
-      );
-    });
+            expect(rig.requests).toEqual([ASSET_URL]);
+            expect(spec).toEqual({
+              _tag: "LaunchSpec",
+              languageId: "python",
+              name: "ty",
+              version: "0.0.94",
+              command: rig.tyPath,
+              args: ["server"],
+              source: "managed",
+            });
+            expect(NodeFS.readFileSync(rig.tyPath, "utf8")).toBe(TY_BYTES);
+            expect(NodeFS.statSync(rig.tyPath).mode & 0o777).toBe(0o755);
+            expect(yield* listing(NodePath.join(rig.stateDir, "language-servers"))).toEqual([
+              "ty",
+              "ty/0.0.94",
+              "ty/0.0.94/ty",
+            ]);
+            expect(yield* rig.binaries.resolve("python")).toEqual(spec);
+            expect(yield* rig.binaries.installProgress("python")).toBeUndefined();
+          }),
+        );
+      },
+    );
 
-    it.effect("finds the binary behind a pax header and a directory entry, and ignores a lookalike symlink", () => {
-      const members: ReadonlyArray<TarMember> = [
-        { name: "pax_global_header", type: "g", content: "52 comment=made by a test\n" },
-        { name: `${MEMBER_DIR}/`, type: "5" },
-        { name: `${MEMBER_DIR}/ty-link`, type: "2" },
-        { name: `${MEMBER_DIR}/README.md`, content: "x".repeat(700) },
-        { name: `${MEMBER_DIR}/ty`, content: TY_BYTES },
-      ];
-      const archive = tarGz(members);
-      return inRig({ tyRelease: releaseFor(archive), respond: serve(archive) }, (rig) =>
-        Effect.gen(function* () {
-          yield* rig.binaries.install("python");
-          expect(NodeFS.readFileSync(rig.tyPath, "utf8")).toBe(TY_BYTES);
-        }),
-      );
-    });
+    it.effect(
+      "finds the binary behind a pax header and a directory entry, and ignores a lookalike symlink",
+      () => {
+        const members: ReadonlyArray<TarMember> = [
+          { name: "pax_global_header", type: "g", content: "52 comment=made by a test\n" },
+          { name: `${MEMBER_DIR}/`, type: "5" },
+          { name: `${MEMBER_DIR}/ty-link`, type: "2" },
+          { name: `${MEMBER_DIR}/README.md`, content: "x".repeat(700) },
+          { name: `${MEMBER_DIR}/ty`, content: TY_BYTES },
+        ];
+        const archive = tarGz(members);
+        return inRig({ tyRelease: releaseFor(archive), respond: serve(archive) }, (rig) =>
+          Effect.gen(function* () {
+            yield* rig.binaries.install("python");
+            expect(NodeFS.readFileSync(rig.tyPath, "utf8")).toBe(TY_BYTES);
+          }),
+        );
+      },
+    );
 
     it.effect("makes no request when the binary is already installed", () =>
       inRig({ tyRelease: releaseFor(tyArchive()) }, (rig) =>
@@ -634,13 +719,14 @@ describe("LanguageServerBinaries", () => {
       );
     });
 
-    for (const row of [
+    it.effect.each([
       { platform: "linux", arch: "x64", target: "x86_64-unknown-linux-gnu" },
       { platform: "linux", arch: "arm64", target: "aarch64-unknown-linux-gnu" },
       { platform: "darwin", arch: "arm64", target: "aarch64-apple-darwin" },
       { platform: "darwin", arch: "x64", target: "x86_64-apple-darwin" },
-    ] as const) {
-      it.effect(`asks for the ${row.target} asset of 0.0.94 on ${row.platform}-${row.arch}, and refuses any other bytes`, () =>
+    ] as const)(
+      "asks for the $target asset of 0.0.94 on $platform-$arch, and refuses any other bytes",
+      (row) =>
         inRig({ ...row, respond: serve(new Uint8Array(1024)) }, (rig) =>
           Effect.gen(function* () {
             const error = yield* installFailure(rig.binaries.install("python"));
@@ -652,8 +738,7 @@ describe("LanguageServerBinaries", () => {
             expect(yield* listing(rig.stateDir)).not.toContain("language-servers");
           }),
         ),
-      );
-    }
+    );
 
     describe("a failure leaves the state directory as it was", () => {
       const good = tyArchive();
@@ -663,10 +748,30 @@ describe("LanguageServerBinaries", () => {
         readonly release: TyRelease;
         readonly respond: Respond;
       }> = [
-        { name: "an HTTP 404", reason: "download_failed", release: releaseFor(good), respond: status(404) },
-        { name: "an HTTP 500", reason: "download_failed", release: releaseFor(good), respond: status(500) },
-        { name: "a transport error", reason: "download_failed", release: releaseFor(good), respond: transportFailure },
-        { name: "a connection that drops mid-body", reason: "download_failed", release: releaseFor(good), respond: connectionReset },
+        {
+          name: "an HTTP 404",
+          reason: "download_failed",
+          release: releaseFor(good),
+          respond: status(404),
+        },
+        {
+          name: "an HTTP 500",
+          reason: "download_failed",
+          release: releaseFor(good),
+          respond: status(500),
+        },
+        {
+          name: "a transport error",
+          reason: "download_failed",
+          release: releaseFor(good),
+          respond: transportFailure,
+        },
+        {
+          name: "a connection that drops mid-body",
+          reason: "download_failed",
+          release: releaseFor(good),
+          respond: connectionReset,
+        },
         {
           name: "a body one byte short",
           reason: "checksum_mismatch",
@@ -707,7 +812,10 @@ describe("LanguageServerBinaries", () => {
           };
         })(),
         (() => {
-          const truncated = tarGz([{ name: `${MEMBER_DIR}/ty`, content: TY_BYTES }]).subarray(0, 30);
+          const truncated = tarGz([{ name: `${MEMBER_DIR}/ty`, content: TY_BYTES }]).subarray(
+            0,
+            30,
+          );
           return {
             name: "a gzip stream cut short",
             reason: "extract_failed",
@@ -716,11 +824,23 @@ describe("LanguageServerBinaries", () => {
           };
         })(),
         ...[
-          { name: "an archive without the member", members: [{ name: `${MEMBER_DIR}/README.md`, content: "x" }] },
+          {
+            name: "an archive without the member",
+            members: [{ name: `${MEMBER_DIR}/README.md`, content: "x" }],
+          },
           { name: "an empty archive", members: [] },
-          { name: "a member under another directory", members: [{ name: "ty-other-target/ty", content: TY_BYTES }] },
-          { name: "a member that is only a symlink", members: [{ name: `${MEMBER_DIR}/ty`, type: "2" }] },
-          { name: "a member that is a directory", members: [{ name: `${MEMBER_DIR}/ty`, type: "5" }] },
+          {
+            name: "a member under another directory",
+            members: [{ name: "ty-other-target/ty", content: TY_BYTES }],
+          },
+          {
+            name: "a member that is only a symlink",
+            members: [{ name: `${MEMBER_DIR}/ty`, type: "2" }],
+          },
+          {
+            name: "a member that is a directory",
+            members: [{ name: `${MEMBER_DIR}/ty`, type: "5" }],
+          },
         ].map(({ name, members }) => {
           const archive = tarGz(members);
           return {
@@ -750,29 +870,31 @@ describe("LanguageServerBinaries", () => {
         })(),
       ];
 
-      for (const row of rows) {
-        it.effect(`after ${row.name}: ${row.reason}, and nothing written`, () =>
-          inRig({ tyRelease: row.release, respond: row.respond }, (rig) =>
-            Effect.gen(function* () {
-              // A neighbour already installed must be untouched, and no staging directory may remain.
-              yield* putExecutable(NodePath.join(rig.stateDir, "language-servers", "ty", "0.0.93", "ty"));
-              const before = yield* listing(rig.stateDir);
+      it.effect.each(rows)("after $name: $reason, and nothing written", (row) =>
+        inRig({ tyRelease: row.release, respond: row.respond }, (rig) =>
+          Effect.gen(function* () {
+            // A neighbour already installed must be untouched, and no staging directory may remain.
+            yield* putExecutable(
+              NodePath.join(rig.stateDir, "language-servers", "ty", "0.0.93", "ty"),
+            );
+            const before = yield* listing(rig.stateDir);
 
-              const error = yield* installFailure(rig.binaries.install("python"));
+            const error = yield* installFailure(rig.binaries.install("python"));
 
-              expect(error).toMatchObject({
-                _tag: "LanguageServerInstallError",
-                languageId: "python",
-                reason: row.reason,
-              });
-              expect(yield* listing(rig.stateDir)).toEqual(before);
-              expect(yield* rig.binaries.installProgress("python")).toBeUndefined();
-              expect(yield* rig.binaries.resolve("python")).toMatchObject({ reason: "not_installed" });
-              expect(rig.requests).toHaveLength(1);
-            }),
-          ),
-        );
-      }
+            expect(error).toMatchObject({
+              _tag: "LanguageServerInstallError",
+              languageId: "python",
+              reason: row.reason,
+            });
+            expect(yield* listing(rig.stateDir)).toEqual(before);
+            expect(yield* rig.binaries.installProgress("python")).toBeUndefined();
+            expect(yield* rig.binaries.resolve("python")).toMatchObject({
+              reason: "not_installed",
+            });
+            expect(rig.requests).toHaveLength(1);
+          }),
+        ),
+      );
 
       it.effect("after a failed placement, because something else holds the path", () => {
         const archive = tyArchive();
@@ -807,7 +929,9 @@ describe("LanguageServerBinaries", () => {
         const archive = tyArchive();
         return inRig({ tyRelease: releaseFor(archive), respond: status(503) }, (rig) =>
           Effect.gen(function* () {
-            expect((yield* installFailure(rig.binaries.install("python"))).reason).toBe("download_failed");
+            expect((yield* installFailure(rig.binaries.install("python"))).reason).toBe(
+              "download_failed",
+            );
             rig.respond = serve(archive);
 
             expect(yield* rig.binaries.install("python")).toMatchObject({ source: "managed" });
@@ -818,8 +942,9 @@ describe("LanguageServerBinaries", () => {
     });
 
     describe("what cannot be installed", () => {
-      for (const id of ["typescript", "ruby", "constructor", "__proto__", ""]) {
-        it.effect(`says ${JSON.stringify(id)} is not_installable, with no request`, () =>
+      it.effect.each(["typescript", "ruby", "constructor", "__proto__", ""])(
+        "says %j is not_installable, with no request",
+        (id) =>
           inRig({ respond: serve(tyArchive()) }, (rig) =>
             Effect.gen(function* () {
               const error = yield* installFailure(rig.binaries.install(id));
@@ -829,26 +954,28 @@ describe("LanguageServerBinaries", () => {
               expect(yield* listing(rig.stateDir)).not.toContain("language-servers");
             }),
           ),
-        );
-      }
+      );
 
-      for (const row of [
+      it.effect.each([
         { platform: "linux", arch: "x64", libc: "musl" },
         { platform: "win32", arch: "x64", libc: "gnu" },
         { platform: "linux", arch: "ia32", libc: "gnu" },
-      ] as const) {
-        it.effect(`says ty is unsupported_platform on ${row.platform}-${row.arch}-${row.libc}, with no request`, () =>
+      ] as const)(
+        "says ty is unsupported_platform on $platform-$arch-$libc, with no request",
+        (row) =>
           inRig({ ...row, respond: serve(tyArchive()) }, (rig) =>
             Effect.gen(function* () {
               const error = yield* installFailure(rig.binaries.install("python"));
 
-              expect(error).toMatchObject({ languageId: "python", reason: "unsupported_platform" });
+              expect(error).toMatchObject({
+                languageId: "python",
+                reason: "unsupported_platform",
+              });
               expect(rig.requests).toEqual([]);
               expect(yield* listing(rig.stateDir)).not.toContain("language-servers");
             }),
           ),
-        );
-      }
+      );
     });
 
     describe("concurrent calls and progress", () => {
@@ -863,13 +990,13 @@ describe("LanguageServerBinaries", () => {
         return { requested, release, respond };
       });
 
-      it.effect("share one download, show progress only while it is in flight, and all get the answer", () => {
-        const archive = tyArchive();
-        return Effect.gen(function* () {
-          const gate = yield* gated(archive);
-          yield* inRig(
-            { tyRelease: releaseFor(archive), respond: gate.respond },
-            (rig) =>
+      it.effect(
+        "share one download, show progress only while it is in flight, and all get the answer",
+        () => {
+          const archive = tyArchive();
+          return Effect.gen(function* () {
+            const gate = yield* gated(archive);
+            yield* inRig({ tyRelease: releaseFor(archive), respond: gate.respond }, (rig) =>
               Effect.gen(function* () {
                 expect(yield* rig.binaries.installProgress("python")).toBeUndefined();
 
@@ -895,9 +1022,10 @@ describe("LanguageServerBinaries", () => {
                 expect(rig.requests).toHaveLength(1);
                 expect(yield* rig.binaries.installProgress("python")).toBeUndefined();
               }),
-          );
-        });
-      });
+            );
+          });
+        },
+      );
 
       it.effect("give every waiting caller the same failure, and clear the progress", () => {
         const archive = tyArchive();
@@ -924,54 +1052,61 @@ describe("LanguageServerBinaries", () => {
         });
       });
 
-      it.effect("do not share anything across languages: other ids fail at once while ty downloads", () => {
-        const archive = tyArchive();
-        return Effect.gen(function* () {
-          const gate = yield* gated(archive);
-          yield* inRig({ tyRelease: releaseFor(archive), respond: gate.respond }, (rig) =>
-            Effect.gen(function* () {
-              const ty = yield* startInstall(rig.binaries);
-              yield* Deferred.await(gate.requested);
-
-              expect((yield* installFailure(rig.binaries.install("typescript"))).reason).toBe(
-                "not_installable",
-              );
-              expect(yield* ty.settled).toBe(false);
-              yield* Deferred.succeed(gate.release, undefined);
-              expect(yield* ty.outcome).toMatchObject({ _tag: "Success" });
-            }),
-          );
-        });
-      });
-
-      it.effect("give up on a download that never answers after 10 minutes, as download_failed", () => {
-        const archive = tyArchive();
-        return Effect.gen(function* () {
-          const requested = yield* Deferred.make<void>();
-          yield* inRig(
-            {
-              tyRelease: releaseFor(archive),
-              respond: () => Deferred.succeed(requested, undefined).pipe(Effect.andThen(Effect.never)),
-            },
-            (rig) =>
+      it.effect(
+        "do not share anything across languages: other ids fail at once while ty downloads",
+        () => {
+          const archive = tyArchive();
+          return Effect.gen(function* () {
+            const gate = yield* gated(archive);
+            yield* inRig({ tyRelease: releaseFor(archive), respond: gate.respond }, (rig) =>
               Effect.gen(function* () {
-                const install = yield* startInstall(rig.binaries);
-                yield* Deferred.await(requested);
+                const ty = yield* startInstall(rig.binaries);
+                yield* Deferred.await(gate.requested);
 
-                yield* TestClock.adjust("599 seconds");
-                expect(yield* install.settled).toBe(false);
-                yield* TestClock.adjust("1 second");
-
-                expect(yield* install.outcome).toMatchObject({
-                  _tag: "Failure",
-                  error: { reason: "download_failed" },
-                });
-                expect(yield* rig.binaries.installProgress("python")).toBeUndefined();
-                expect(yield* listing(rig.stateDir)).not.toContain("language-servers");
+                expect((yield* installFailure(rig.binaries.install("typescript"))).reason).toBe(
+                  "not_installable",
+                );
+                expect(yield* ty.settled).toBe(false);
+                yield* Deferred.succeed(gate.release, undefined);
+                expect(yield* ty.outcome).toMatchObject({ _tag: "Success" });
               }),
-          );
-        });
-      });
+            );
+          });
+        },
+      );
+
+      it.effect(
+        "give up on a download that never answers after 10 minutes, as download_failed",
+        () => {
+          const archive = tyArchive();
+          return Effect.gen(function* () {
+            const requested = yield* Deferred.make<void>();
+            yield* inRig(
+              {
+                tyRelease: releaseFor(archive),
+                respond: () =>
+                  Deferred.succeed(requested, undefined).pipe(Effect.andThen(Effect.never)),
+              },
+              (rig) =>
+                Effect.gen(function* () {
+                  const install = yield* startInstall(rig.binaries);
+                  yield* Deferred.await(requested);
+
+                  yield* TestClock.adjust("599 seconds");
+                  expect(yield* install.settled).toBe(false);
+                  yield* TestClock.adjust("1 second");
+
+                  expect(yield* install.outcome).toMatchObject({
+                    _tag: "Failure",
+                    error: { reason: "download_failed" },
+                  });
+                  expect(yield* rig.binaries.installProgress("python")).toBeUndefined();
+                  expect(yield* listing(rig.stateDir)).not.toContain("language-servers");
+                }),
+            );
+          });
+        },
+      );
     });
   });
 

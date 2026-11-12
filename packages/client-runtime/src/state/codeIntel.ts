@@ -1,9 +1,4 @@
-import {
-  AuthFilesystemReadScope,
-  type CodeIntelStatusResult,
-  type CodeServerState,
-  WS_METHODS,
-} from "@t3tools/contracts";
+import { type CodeIntelStatusResult, type CodeServerState, WS_METHODS } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -15,9 +10,6 @@ import type { EnvironmentRegistry } from "../connection/registry.ts";
 import * as EnvironmentSupervisor from "../connection/supervisor.ts";
 import { type EnvironmentRpcInput, request } from "../rpc/client.ts";
 import { createEnvironmentQueryAtomFamily, createEnvironmentRpcCommand } from "./runtime.ts";
-
-/** The scope every code intelligence read needs; a connection without it gets no navigation. */
-export const CODE_INTEL_READ_SCOPE = AuthFilesystemReadScope;
 
 /** The connected server is older than code intelligence. Hide the feature for this connection. */
 export class CodeIntelUnsupportedError extends Schema.TaggedError<CodeIntelUnsupportedError>()(
@@ -40,27 +32,26 @@ const isUnknownRequestTag = (cause: Cause.Cause<unknown>) =>
 // Sessions known to lack the methods, so one refusal stops every later call on that connection.
 const unsupportedSessions = new WeakSet<object>();
 
-const whenSupported = <A, E, R>(
+const whenSupported = Effect.fn("codeIntel.whenSupported")(function* <A, E, R>(
   call: Effect.Effect<A, E, R>,
-): Effect.Effect<
+): Effect.fn.Return<
   A,
   E | CodeIntelUnsupportedError,
   R | EnvironmentSupervisor.EnvironmentSupervisor
-> =>
-  Effect.gen(function* () {
-    const supervisor = yield* EnvironmentSupervisor.EnvironmentSupervisor;
-    const session = Option.getOrNull(yield* SubscriptionRef.get(supervisor.session));
-    if (session !== null && unsupportedSessions.has(session)) {
-      return yield* new CodeIntelUnsupportedError();
-    }
-    return yield* call.pipe(
-      Effect.catchCause((cause): Effect.Effect<never, E | CodeIntelUnsupportedError> => {
-        if (!isUnknownRequestTag(cause)) return Effect.failCause(cause);
-        if (session !== null) unsupportedSessions.add(session);
-        return Effect.fail(new CodeIntelUnsupportedError());
-      }),
-    );
-  });
+> {
+  const supervisor = yield* EnvironmentSupervisor.EnvironmentSupervisor;
+  const session = Option.getOrNull(yield* SubscriptionRef.get(supervisor.session));
+  if (session !== null && unsupportedSessions.has(session)) {
+    return yield* new CodeIntelUnsupportedError();
+  }
+  return yield* call.pipe(
+    Effect.catchCause((cause): Effect.Effect<never, E | CodeIntelUnsupportedError> => {
+      if (!isUnknownRequestTag(cause)) return Effect.failCause(cause);
+      if (session !== null) unsupportedSessions.add(session);
+      return Effect.fail(new CodeIntelUnsupportedError());
+    }),
+  );
+});
 
 const SETTLED_SERVER_STATES: ReadonlySet<CodeServerState> = new Set([
   "unavailable",

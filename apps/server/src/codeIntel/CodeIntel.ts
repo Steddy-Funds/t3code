@@ -128,7 +128,9 @@ interface Deadline {
 }
 
 const startDeadline = (duration: Duration.Duration) =>
-  Effect.map(Clock.currentTimeMillis, (now): Deadline => ({ at: now + Duration.toMillis(duration) }));
+  Effect.map(Clock.currentTimeMillis, (now): Deadline => ({
+    at: now + Duration.toMillis(duration),
+  }));
 
 const remaining = (deadline: Deadline) =>
   Effect.map(Clock.currentTimeMillis, (now) => Duration.millis(Math.max(0, deadline.at - now)));
@@ -199,8 +201,7 @@ const make = Effect.gen(function* () {
             fail("path_not_allowed", "This path is outside what the server may read."),
           WorkspaceFilePathEscapeError: () =>
             fail("path_not_allowed", "This path resolves outside the project."),
-          WorkspaceBinaryFileError: () =>
-            fail("unsupported_language", "This file is not text."),
+          WorkspaceBinaryFileError: () => fail("unsupported_language", "This file is not text."),
           WorkspacePathNotFileError: () => fail("not_found", "This path is not a file."),
           WorkspaceFileSystemOperationError: () =>
             fail("not_found", "This file could not be read."),
@@ -250,25 +251,28 @@ const make = Effect.gen(function* () {
       }
       return yield* timedOut();
     });
-    const attempt = (retried: boolean): Effect.Effect<A, CodeIntelError> =>
-      Effect.gen(function* () {
-        const live = yield* pool.acquire(row, root);
-        const send: Send = (method, params) =>
-          Effect.suspend(() => {
-            waitingOn = live;
-            return live.server.request(method, params);
-          }).pipe(
-            // The deadline interrupts the request: `expire` still needs to see who never answered.
-            Effect.onExit((exit) =>
-              Exit.hasInterrupts(exit)
-                ? Effect.void
-                : Effect.sync(() => {
-                    waitingOn = undefined;
-                  }),
-            ),
-            Effect.tap(() => pool.reportOutcome(live, "answered")),
-          );
-        return yield* live.gate.withPermits(1)(use(live, send)).pipe(
+    const attempt = Effect.fn("CodeIntel.attempt")(function* (
+      retried: boolean,
+    ): Effect.fn.Return<A, CodeIntelError> {
+      const live = yield* pool.acquire(row, root);
+      const send: Send = (method, params) =>
+        Effect.suspend(() => {
+          waitingOn = live;
+          return live.server.request(method, params);
+        }).pipe(
+          // The deadline interrupts the request: `expire` still needs to see who never answered.
+          Effect.onExit((exit) =>
+            Exit.hasInterrupts(exit)
+              ? Effect.void
+              : Effect.sync(() => {
+                  waitingOn = undefined;
+                }),
+          ),
+          Effect.tap(() => pool.reportOutcome(live, "answered")),
+        );
+      return yield* live.gate
+        .withPermits(1)(use(live, send))
+        .pipe(
           Effect.catchTags({
             LspResponseError: (error) => Effect.fail(fail("server_failed", error.message)),
             LspConnectionClosedError: () => {
@@ -284,7 +288,7 @@ const make = Effect.gen(function* () {
             },
           }),
         );
-      });
+    });
     return Effect.flatMap(remaining(deadline), (duration) =>
       attempt(false).pipe(Effect.timeoutOrElse({ duration, orElse: expire })),
     );
@@ -642,7 +646,9 @@ const make = Effect.gen(function* () {
         ).pipe(Effect.result),
       { concurrency: "unbounded" },
     );
-    const answered = perRow.flatMap((result) => (result._tag === "Success" ? [result.success] : []));
+    const answered = perRow.flatMap((result) =>
+      result._tag === "Success" ? [result.success] : [],
+    );
     // A language that cannot answer leaves the others' answers; the status chip says why.
     const failure = perRow.find((result) => result._tag === "Failure");
     if (answered.length === 0 && failure !== undefined) return yield* failure.failure;
@@ -690,7 +696,10 @@ const make = Effect.gen(function* () {
         libraryRoots.push({ path: nodeModules, label: "node_modules", kind: "node_modules" });
       }
     }
-    if (snapshot.live !== undefined && (yield* snapshot.live.session.watchState).mode === "fallback") {
+    if (
+      snapshot.live !== undefined &&
+      (yield* snapshot.live.session.watchState).mode === "fallback"
+    ) {
       messages.push(
         "This project has too many folders to watch: changes on disk are picked up when an answer points at them.",
       );
@@ -716,36 +725,35 @@ const make = Effect.gen(function* () {
     return { servers: yield* Effect.forEach(LANGUAGE_ROWS, (row) => serverStatus(row, root)) };
   }, boundedBy(POSITION_DEADLINE));
 
-  const installServer: CodeIntel["Service"]["installServer"] = Effect.fn(
-    "CodeIntel.installServer",
-  )(function* (input) {
-    if (languageRow(input.languageId) === undefined) {
-      return yield* fail("unsupported_language", "No language server handles this language.");
-    }
-    yield* pool.assertEnabled;
-    return yield* binaries.install(input.languageId).pipe(
-      Effect.match({
-        onSuccess: (): CodeIntelInstallServerResult => ({ state: "stopped" }),
-        // An install that fails leaves nothing behind; the message says which step failed.
-        onFailure: (error): CodeIntelInstallServerResult => ({
-          state: "unavailable",
-          message: error.message,
-        }),
-      }),
-    );
-  });
-
-  const restart: CodeIntel["Service"]["restart"] = Effect.fn("CodeIntel.restart")(
+  const installServer: CodeIntel["Service"]["installServer"] = Effect.fn("CodeIntel.installServer")(
     function* (input) {
-      const root = yield* resolveRoot(input.cwd);
-      if (input.languageId !== undefined && languageRow(input.languageId) === undefined) {
+      if (languageRow(input.languageId) === undefined) {
         return yield* fail("unsupported_language", "No language server handles this language.");
       }
-      yield* pool.restart(root, input.languageId);
-      return { servers: yield* Effect.forEach(LANGUAGE_ROWS, (row) => serverStatus(row, root)) };
+      yield* pool.assertEnabled;
+      return yield* binaries.install(input.languageId).pipe(
+        Effect.match({
+          onSuccess: (): CodeIntelInstallServerResult => ({ state: "stopped" }),
+          // An install that fails leaves nothing behind; the message says which step failed.
+          onFailure: (error): CodeIntelInstallServerResult => ({
+            state: "unavailable",
+            message: error.message,
+          }),
+        }),
+      );
     },
-    boundedBy(POSITION_DEADLINE),
   );
+
+  const restart: CodeIntel["Service"]["restart"] = Effect.fn("CodeIntel.restart")(function* (
+    input,
+  ) {
+    const root = yield* resolveRoot(input.cwd);
+    if (input.languageId !== undefined && languageRow(input.languageId) === undefined) {
+      return yield* fail("unsupported_language", "No language server handles this language.");
+    }
+    yield* pool.restart(root, input.languageId);
+    return { servers: yield* Effect.forEach(LANGUAGE_ROWS, (row) => serverStatus(row, root)) };
+  }, boundedBy(POSITION_DEADLINE));
 
   return CodeIntel.of({
     status,

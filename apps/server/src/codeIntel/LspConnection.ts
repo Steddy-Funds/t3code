@@ -37,6 +37,8 @@ export class LspConnectionClosedError extends Schema.TaggedError<LspConnectionCl
 
 export type LspError = LspResponseError | LspConnectionClosedError;
 
+const isConnectionClosed = Schema.is(LspConnectionClosedError);
+
 export interface LspConnection {
   /** Interrupting the effect sends `$/cancelRequest`. */
   readonly request: (method: string, params?: unknown) => Effect.Effect<unknown, LspError>;
@@ -161,7 +163,7 @@ export const make = Effect.fn("LspConnection.make")(function* (
       onFailure: (cause) => {
         const failure = cause.reasons.find(Cause.isFailReason)?.error;
         return close(
-          Schema.is(LspConnectionClosedError)(failure)
+          isConnectionClosed(failure)
             ? failure
             : new LspConnectionClosedError({ reason: "read_failed", cause: Cause.squash(cause) }),
         );

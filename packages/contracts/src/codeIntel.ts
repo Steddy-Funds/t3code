@@ -1,10 +1,15 @@
 import * as Schema from "effect/Schema";
 
-import { NonNegativeInt, PositiveInt, TrimmedNonEmptyString, TrimmedString } from "./baseSchemas.ts";
+import {
+  NonNegativeInt,
+  PositiveInt,
+  TrimmedNonEmptyString,
+  TrimmedString,
+} from "./baseSchemas.ts";
 
-export const CODE_INTEL_REFERENCES_MAX_LIMIT = 500;
-export const CODE_INTEL_WORKSPACE_SYMBOLS_MAX_LIMIT = 200;
-export const CODE_INTEL_QUERY_MAX_LENGTH = 256;
+const CODE_INTEL_REFERENCES_MAX_LIMIT = 500;
+const CODE_INTEL_WORKSPACE_SYMBOLS_MAX_LIMIT = 200;
+const CODE_INTEL_QUERY_MAX_LENGTH = 256;
 export const CODE_INTEL_LINE_TEXT_MAX_LENGTH = 400;
 
 /** LSP's position: zero-based line, UTF-16 code unit within it. */
@@ -36,7 +41,9 @@ export const CodeLocation = Schema.Struct({
   /** Under a library root or outside `cwd`; `.venv/...` inside `cwd` is relative and external. */
   external: Schema.Boolean,
   range: CodeRange,
-  lineText: Schema.optional(Schema.String.check(Schema.isMaxLength(CODE_INTEL_LINE_TEXT_MAX_LENGTH))),
+  lineText: Schema.optional(
+    Schema.String.check(Schema.isMaxLength(CODE_INTEL_LINE_TEXT_MAX_LENGTH)),
+  ),
 });
 export type CodeLocation = typeof CodeLocation.Type;
 
@@ -126,7 +133,11 @@ export type CodeIntelStatusInput = typeof CodeIntelStatusInput.Type;
 export const CodeIntelStatusResult = Schema.Struct({ servers: Schema.Array(CodeServerStatus) });
 export type CodeIntelStatusResult = typeof CodeIntelStatusResult.Type;
 
-export const CodeDefinitionKind = Schema.Literals(["definition", "typeDefinition", "implementation"]);
+export const CodeDefinitionKind = Schema.Literals([
+  "definition",
+  "typeDefinition",
+  "implementation",
+]);
 export type CodeDefinitionKind = typeof CodeDefinitionKind.Type;
 
 export const CodeIntelDefinitionInput = Schema.Struct({

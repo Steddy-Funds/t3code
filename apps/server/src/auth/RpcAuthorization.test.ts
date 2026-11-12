@@ -502,7 +502,8 @@ describe("code intelligence scopes", () => {
       for (const tag of Object.keys(readCalls) as Array<keyof typeof readCalls>) {
         const group = WsRpcGroup.omit(
           ...[...WsRpcGroup.requests.keys()].filter(
-            (other): other is Exclude<keyof typeof RPC_REQUIRED_SCOPES, typeof tag> => other !== tag,
+            (other): other is Exclude<keyof typeof RPC_REQUIRED_SCOPES, typeof tag> =>
+              other !== tag,
           ),
         );
         const client = yield* RpcTest.makeClient(group).pipe(

@@ -311,6 +311,10 @@
       "types": "./src/state/relayDiscovery.ts",
       "default": "./src/state/relayDiscovery.ts"
     },
+    "./state/code-intel": {
+      "types": "./src/state/codeIntel.ts",
+      "default": "./src/state/codeIntel.ts"
+    },
     "./state/review": {
       "types": "./src/state/review.ts",
       "default": "./src/state/review.ts"

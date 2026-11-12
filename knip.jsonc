@@ -70,6 +70,7 @@
         "@napi-rs/keyring",
         "ffi-rs",
         "transcribe-cpp",
+        "typescript-lsp",
       ],
     },
     "apps/desktop": {

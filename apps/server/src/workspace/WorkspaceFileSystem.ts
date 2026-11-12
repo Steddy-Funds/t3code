@@ -121,6 +121,16 @@ export class WorkspaceFileSystem extends Context.Service<
       ProjectReadFileResult,
       WorkspaceFileSystemError | WorkspacePaths.WorkspacePathOutsideRootError
     >;
+    /**
+     * `readFile`, plus the symlink-resolved path that was read (`null` when the file is absent),
+     * for a caller that names the file to a tool and must name the one this policy approved.
+     */
+    readonly readFileWithRealPath: (
+      input: ProjectReadFileInput,
+    ) => Effect.Effect<
+      { readonly file: ProjectReadFileResult; readonly realPath: string | null },
+      WorkspaceFileSystemError | WorkspacePaths.WorkspacePathOutsideRootError
+    >;
     /** Writes inside a known workspace only. */
     readonly writeFile: (
       input: ProjectWriteFileInput,
@@ -336,11 +346,10 @@ export const make = Effect.gen(function* () {
     };
   });
 
-  const readFile: WorkspaceFileSystem["Service"]["readFile"] = Effect.fn(
-    "WorkspaceFileSystem.readFile",
-  )(function* (input) {
+  // Shared by both read methods, which carry the span.
+  const readTarget = Effect.fnUntraced(function* (input: ProjectReadFileInput) {
     const target = yield* resolveReadTarget(input);
-    const absentResult = {
+    const absentResult: ProjectReadFileResult = {
       relativePath: target.relativePath,
       contents: "",
       byteLength: 0,
@@ -348,7 +357,7 @@ export const make = Effect.gen(function* () {
       exists: false,
     };
     const realTargetPath = target.realTargetPath;
-    if (realTargetPath === null) return absentResult;
+    if (realTargetPath === null) return { file: absentResult, realPath: null };
     if (yield* isServerInternalPath(realTargetPath)) {
       return yield* new WorkspacePaths.WorkspacePathOutsideRootError({
         workspaceRoot: input.cwd,
@@ -356,7 +365,7 @@ export const make = Effect.gen(function* () {
       });
     }
 
-    return yield* Effect.acquireUseRelease(
+    const file: ProjectReadFileResult = yield* Effect.acquireUseRelease(
       Effect.tryPromise({
         // Non-blocking opens prevent FIFO hangs before stat rejects them; Windows lacks the flag.
         try: () =>
@@ -456,7 +465,18 @@ export const make = Effect.gen(function* () {
                 }),
             }),
     );
+    return { file, realPath: realTargetPath };
   });
+
+  const readFile: WorkspaceFileSystem["Service"]["readFile"] = Effect.fn(
+    "WorkspaceFileSystem.readFile",
+  )(function* (input) {
+    return (yield* readTarget(input)).file;
+  });
+
+  const readFileWithRealPath: WorkspaceFileSystem["Service"]["readFileWithRealPath"] = Effect.fn(
+    "WorkspaceFileSystem.readFileWithRealPath",
+  )(readTarget);
 
   // Resolve existing ancestors and reject dangling links so creation cannot follow symlinks outside root.
   const resolveWriteTarget = Effect.fn("WorkspaceFileSystem.resolveWriteTarget")(function* (
@@ -592,7 +612,7 @@ export const make = Effect.gen(function* () {
     return { relativePath: target.relativePath };
   });
 
-  return WorkspaceFileSystem.of({ getMetadata, readFile, writeFile });
+  return WorkspaceFileSystem.of({ getMetadata, readFile, readFileWithRealPath, writeFile });
 });
 
 export const layer = Layer.effect(WorkspaceFileSystem, make);

@@ -209,6 +209,7 @@ import * as ServedSites from "./servedSites/ServedSites.ts";
 import * as WorkspaceEntries from "./workspace/WorkspaceEntries.ts";
 import * as KnownWorkspaces from "./workspace/KnownWorkspaces.ts";
 import * as WorkspaceFileSystem from "./workspace/WorkspaceFileSystem.ts";
+import * as CodeIntel from "./codeIntel/CodeIntel.ts";
 import { readWorkflowScript } from "./orchestration-v2/workflowScriptQuery.ts";
 import * as WorkspacePaths from "./workspace/WorkspacePaths.ts";
 import * as VcsStatusBroadcaster from "./vcs/VcsStatusBroadcaster.ts";
@@ -1530,6 +1531,7 @@ export const layerWsRpc = (
       const startup = yield* ServerRuntimeStartup.ServerRuntimeStartup;
       const workspaceEntries = yield* WorkspaceEntries.WorkspaceEntries;
       const workspaceFileSystem = yield* WorkspaceFileSystem.WorkspaceFileSystem;
+      const codeIntel = yield* CodeIntel.CodeIntel;
       const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
       const backgroundPolicy = yield* BackgroundPolicy.BackgroundPolicy;
       const rpcClientIds = yield* Ref.make(new Set<RpcClientId>());
@@ -3069,6 +3071,16 @@ export const layerWsRpc = (
           ),
         [WS_METHODS.shellOpenInEditor]: (input) => externalLauncher.launchEditor(input),
         [WS_METHODS.filesystemGetMetadata]: (input) => workspaceFileSystem.getMetadata(input),
+        [WS_METHODS.codeIntelStatus]: (input) => codeIntel.status(input),
+        [WS_METHODS.codeIntelDefinition]: (input) => codeIntel.definition(input),
+        [WS_METHODS.codeIntelReferences]: (input) => codeIntel.references(input),
+        [WS_METHODS.codeIntelDocumentHighlights]: (input) => codeIntel.documentHighlights(input),
+        [WS_METHODS.codeIntelHover]: (input) => codeIntel.hover(input),
+        [WS_METHODS.codeIntelDocumentSymbols]: (input) => codeIntel.documentSymbols(input),
+        [WS_METHODS.codeIntelWorkspaceSymbols]: (input) => codeIntel.workspaceSymbols(input),
+        [WS_METHODS.codeIntelSemanticTokens]: (input) => codeIntel.semanticTokens(input),
+        [WS_METHODS.codeIntelInstallServer]: (input) => codeIntel.installServer(input),
+        [WS_METHODS.codeIntelRestart]: (input) => codeIntel.restart(input),
         [WS_METHODS.filesystemBrowse]: (input) =>
           workspaceEntries.browse(input).pipe(
             Effect.mapError(

@@ -19,7 +19,13 @@ const CLI_RUNTIME_EXTERNAL_PREFIXES = [
   "node-addon-api",
   "bufferutil",
   "utf-8-validate",
+  // The platform packages that hold the TypeScript language server binary.
+  "@typescript/",
 ] as const;
+
+// Its getExePath.js finds the platform binary beside the package on disk. An exact name, so
+// typescript-legacy and the other typescript-* packages stay bundled.
+const TYPESCRIPT_RUNTIME_PACKAGE = "typescript-lsp";
 
 // Match Cursor dependency boundaries so zod does not externalize zod-to-json-schema.
 const CURSOR_RUNTIME_DEPENDENCIES = [
@@ -37,7 +43,9 @@ const CURSOR_RUNTIME_DEPENDENCIES = [
 export function isRuntimeExternalCliDependency(id: string): boolean {
   return (
     CLI_RUNTIME_EXTERNAL_PREFIXES.some((prefix) => id.startsWith(prefix)) ||
-    CURSOR_RUNTIME_DEPENDENCIES.some((name) => id === name || id.startsWith(`${name}/`))
+    [TYPESCRIPT_RUNTIME_PACKAGE, ...CURSOR_RUNTIME_DEPENDENCIES].some(
+      (name) => id === name || id.startsWith(`${name}/`),
+    )
   );
 }
 

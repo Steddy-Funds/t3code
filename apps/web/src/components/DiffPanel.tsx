@@ -799,6 +799,8 @@ export default function DiffPanel({
     requestFile: (filePath) => {
       if (lazySource) requestFile(filePath);
     },
+    workspaceRoot: activeCwd,
+    repositoryRoot: activeRepositoryRoot,
   });
   const noteReveal = reviewNotes.reveal;
   const attachCodeView = useStableCallback((viewer: AnnotatableCodeViewHandle | null) => {

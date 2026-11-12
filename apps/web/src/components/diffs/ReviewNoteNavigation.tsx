@@ -5,6 +5,7 @@ import { type ReviewNote, reviewNoteRangeLabel } from "@t3tools/shared/reviewNot
 import { ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon, EyeOffIcon } from "lucide-react";
 import { type ReactNode, useEffect, useState } from "react";
 
+import { diffPathForWorkspaceFile } from "~/diffFileActions";
 import { useReviewNoteRevealStore, useThreadReviewNotes } from "~/reviewNotes";
 
 import { ReviewNoteExcerpt, ReviewNoteText } from "../chat/ReviewNoteCard";
@@ -33,16 +34,20 @@ const isPendingFileDiff = (fileDiff: FileDiffMetadata) =>
  */
 function createReviewNoteReveal(onUnplaced: () => void) {
   let viewer: NoteRevealViewer | null = null;
-  let pending: { readonly fileKey: string; readonly note: ReviewNote } | null = null;
+  let pending: {
+    readonly fileKey: string;
+    readonly note: ReviewNote;
+    readonly diffPath: string;
+  } | null = null;
   const flush = () => {
     if (pending === null || viewer === null || !viewer.getInstance()) return;
-    const { fileKey, note } = pending;
+    const { fileKey, note, diffPath } = pending;
     const item = viewer.getItem(fileKey);
     if (item?.type !== "diff" || item.collapsed === true || isPendingFileDiff(item.fileDiff)) {
       return;
     }
     pending = null;
-    const anchor = cachedReviewNoteAnchor(note, item.fileDiff);
+    const anchor = cachedReviewNoteAnchor(note, item.fileDiff, diffPath);
     if (anchor.kind === "unattached") {
       onUnplaced();
       return;
@@ -61,8 +66,8 @@ function createReviewNoteReveal(onUnplaced: () => void) {
       viewer = next;
       flush();
     },
-    request(fileKey: string, note: ReviewNote) {
-      pending = { fileKey, note };
+    request(fileKey: string, note: ReviewNote, diffPath: string) {
+      pending = { fileKey, note, diffPath };
       flush();
     },
     flush,
@@ -89,12 +94,17 @@ export function useDiffReviewNotes({
   files,
   unfoldFile,
   requestFile,
+  workspaceRoot,
+  repositoryRoot,
 }: {
   threadRef: ScopedThreadRef | null;
   files: ReadonlyArray<ShownFile>;
   unfoldFile: (fileKey: string) => void;
   /** Loads a lazily loaded file's patch. */
   requestFile: (filePath: string) => void;
+  workspaceRoot: string | undefined;
+  /** Set when the diff names files from a repository root above the workspace. */
+  repositoryRoot: string | undefined;
 }) {
   const { notes, answeredIds } = useThreadReviewNotes(threadRef);
   const { dismissedIds, dismiss, restore } = useReviewNoteDismissals(threadRef);
@@ -109,6 +119,7 @@ export function useDiffReviewNotes({
       fileKey,
       pending: isPendingFileDiff(fileDiff),
     })),
+    { workspaceRoot, repositoryRoot },
   );
   const shown = placed.filter(({ note }) => !dismissedIds.has(note.id));
   const dismissed = placed.filter(({ note }) => dismissedIds.has(note.id));
@@ -124,7 +135,11 @@ export function useDiffReviewNotes({
     unfoldFile(fileKey);
     const file = files.find((candidate) => candidate.fileKey === fileKey);
     if (file && anchor.kind === "pending") requestFile(file.filePath);
-    reveal.request(fileKey, note);
+    reveal.request(
+      fileKey,
+      note,
+      diffPathForWorkspaceFile({ filePath: note.path, workspaceRoot, repositoryRoot }),
+    );
   };
 
   const threadKey = threadRef ? scopedThreadKey(threadRef) : null;

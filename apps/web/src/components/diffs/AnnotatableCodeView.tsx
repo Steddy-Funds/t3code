@@ -9,7 +9,7 @@ import type {
 import type { CodeViewHandle } from "@pierre/diffs/react";
 import type { EnvironmentId, ProjectId, ScopedThreadRef, TurnItemId } from "@t3tools/contracts";
 import { type ReviewNote, reviewNoteSectionId } from "@t3tools/shared/reviewNote";
-import { useRef, useState, type ReactNode, type Ref } from "react";
+import { useEffect, useRef, useState, type ReactNode, type Ref } from "react";
 
 import type { DraftId } from "~/composerDraftStore";
 import { fnv1a32, resolveFileDiffPath, resolveFileDiffPreviousPath } from "~/lib/diffRendering";
@@ -217,9 +217,16 @@ export function AnnotatableCodeView({
         : notesBySection.get(annotation.comment.sectionId)?.id === noteId,
     );
   const noteDraft = noteReplies.annotations.find((annotation) => annotation.kind === "draft");
-  if (noteDraft && !attachedNotes.some(({ note }) => note.id === noteDraft.range.id)) {
-    noteReplies.cancel();
-  }
+  const orphanedReply =
+    noteDraft && !attachedNotes.some(({ note }) => note.id === noteDraft.range.id)
+      ? noteDraft
+      : null;
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- a reply whose note left its lines (the file changed under it) keeps its words in the composer's draft store
+  useEffect(() => {
+    if (!orphanedReply) return;
+    if (orphanedReply.text.trim() === "") noteReplies.cancel();
+    else noteReplies.addToMessage(orphanedReply.text);
+  }, [orphanedReply, noteReplies]);
 
   const items: CodeViewDiffItem<DiffCommentAnnotationGroup>[] = files.map(
     ({ fileDiff, filePath, fileKey, fileVersion, collapsed }) => {

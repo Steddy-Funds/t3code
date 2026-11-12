@@ -74,6 +74,8 @@ const FILE = "src/billing.ts";
 const FILE_TEXT = "one\ntwo\nthree\nfour\nfive\n";
 /** `git hash-object` of FILE_TEXT. */
 const FILE_BLOB = "b2f931a67315c95c5daab3aac6de62e534808476";
+/** `git hash-object` of "one\n" after a UTF-8 byte order mark. */
+const BOM_FILE_BLOB = "6a26b6375b2a756aff344c99b4dac1b52a6a2599";
 
 const adapter = {
   instanceId,
@@ -369,6 +371,15 @@ describe("flag_for_review", () => {
         expect((yield* a.notes).map((note) => note.input)).toEqual([
           expect.objectContaining({ note: args.note }),
         ]);
+
+        // The blob id is of the file's bytes, a byte order mark included.
+        yield* a.write(a.workspace, "src/bom.ts", "\uFEFFone\n");
+        const bom = { ...args, path: "src/bom.ts", startLine: 1, endLine: 1 };
+        const bomNoteId = noteIdOf(yield* a.flag(bom));
+        expect((yield* a.notes).find((note) => note.id === bomNoteId)?.input).toMatchObject({
+          excerpt: "one",
+          contentRevision: BOM_FILE_BLOB,
+        });
       }),
     ).pipe(Effect.provide(NodeServices.layer)),
   );
@@ -408,14 +419,22 @@ describe("flag_for_review", () => {
       Effect.gen(function* () {
         const a = yield* makeHarness();
         yield* a.write(a.outside, "secret.ts", "token\n");
+        yield* a.write(a.workspace, "src/logo.bin", "GIF\u0000\n");
         yield* a.symlink(a.path.join(a.outside, "secret.ts"), a.path.join(a.workspace, "link.ts"));
         const outside = /outside this thread's workspace/;
+        const secret = a.path.join(a.outside, "secret.ts");
         const refusals: ReadonlyArray<readonly [Record<string, unknown>, RegExp]> = [
-          [{ path: a.path.join(a.outside, "secret.ts") }, outside],
+          [{ path: secret }, outside],
+          // The reader trims a path, and reads an absolute one anywhere on the host.
+          [{ path: ` ${secret}` }, outside],
+          [{ path: `${a.path.join(a.workspace, " ")}${secret}` }, outside],
+          [{ path: " ~/secret.ts" }, outside],
           [{ path: "../secret.ts" }, outside],
           [{ path: "~/secret.ts" }, outside],
           [{ path: "link.ts" }, outside],
           [{ path: "src/missing.ts" }, /There is no file at src\/missing.ts/],
+          [{ path: "src" }, /src is not a file/],
+          [{ path: "src/logo.bin" }, /src\/logo.bin is a binary file/],
           [{ startLine: 4, endLine: 9 }, /has 5 lines; lines 4-9 are past its end/],
           [{ startLine: 1, endLine: 201 }, /at most 200 lines/],
           [{ startLine: 3, endLine: 2 }, /endLine is before startLine/],

@@ -199,7 +199,7 @@ function AgentReviewNotesRow() {
       serverScoped
       {...searchableSetting("agent-review-notes")}
       settingKeys={["agentReviewNotesEnabled"]}
-      description="Let agents pin a note or question to lines they changed, for you to weigh before it ships. You reply from the chat or the diff. Off applies to new agent sessions."
+      description="Let agents pin a note or question to lines they changed, for you to weigh before it ships. You reply from the chat or the diff. Off stops new notes at once."
       control={
         <ScopedSwitch
           settingKeys={["agentReviewNotesEnabled"]}

@@ -43,8 +43,15 @@ const failure = (code: OrchestratorMcpFailure["code"], message: string) =>
   new OrchestratorMcpFailure({ code, message });
 
 /** Git's blob id, so a client can match it against the `index` line of a diff. */
-const gitBlobId = (contents: string) => {
-  const bytes = Buffer.from(contents, "utf8");
+const UTF8_BYTE_ORDER_MARK = Buffer.from([0xef, 0xbb, 0xbf]);
+
+/** The file's git blob id. Decoding drops a leading byte order mark, which git's id counts. */
+const gitBlobId = (contents: string, fileByteLength: number) => {
+  const decoded = Buffer.from(contents, "utf8");
+  const bytes =
+    decoded.byteLength + UTF8_BYTE_ORDER_MARK.byteLength === fileByteLength
+      ? Buffer.concat([UTF8_BYTE_ORDER_MARK, decoded])
+      : decoded;
   return NodeCrypto.createHash("sha1")
     .update(`blob ${bytes.byteLength}\0`)
     .update(bytes)
@@ -147,10 +154,11 @@ const make = Effect.gen(function* () {
         "invalid_request",
         `${input.path} is outside this thread's workspace. Pass a workspace-relative path.`,
       );
-      // `readFile` reads any absolute host path; only a relative one is held inside the root.
-      const relativePath = path.isAbsolute(input.path)
-        ? path.relative(workspaceRoot, input.path)
-        : input.path;
+      // `readFile` trims a path and reads any absolute host path; only a relative one is held
+      // inside the root, so the checks below see the string it will read.
+      const relativePath = (
+        path.isAbsolute(input.path) ? path.relative(workspaceRoot, input.path) : input.path
+      ).trim();
       if (
         relativePath.length === 0 ||
         relativePath.startsWith("~") ||
@@ -199,7 +207,7 @@ const make = Effect.gen(function* () {
         endLine: input.endLine,
         note: input.note,
         ...(input.question === undefined ? {} : { question: input.question }),
-        contentRevision: gitBlobId(file.contents),
+        contentRevision: gitBlobId(file.contents, file.byteLength),
       };
       const { excerpt, excerptTruncated } = excerptOf(
         lines.slice(input.startLine - 1, input.endLine).map((line) => line.replace(/\r$/u, "")),

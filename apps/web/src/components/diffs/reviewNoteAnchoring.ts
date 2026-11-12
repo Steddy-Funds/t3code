@@ -1,6 +1,8 @@
 import type { FileDiffMetadata } from "@pierre/diffs";
 import type { ReviewNote } from "@t3tools/shared/reviewNote";
 
+import { diffPathForWorkspaceFile } from "~/diffFileActions";
+
 export type ReviewNoteAnchor =
   | { readonly kind: "exact" | "moved"; readonly startLine: number; readonly endLine: number }
   | { readonly kind: "unattached" };
@@ -78,8 +80,12 @@ function findExcerpt(fileDiff: FileDiffMetadata, note: ReviewNote): number[] {
  * the agent flagged; moved when the flagged lines occur exactly once on the new side. Anything
  * else stays unattached rather than sit on lines the note may not be about.
  */
-export function anchorReviewNote(note: ReviewNote, fileDiff: FileDiffMetadata): ReviewNoteAnchor {
-  if (fileDiff.type === "deleted" || fileDiff.name !== note.path) return UNATTACHED;
+export function anchorReviewNote(
+  note: ReviewNote,
+  fileDiff: FileDiffMetadata,
+  diffPath = note.path,
+): ReviewNoteAnchor {
+  if (fileDiff.type === "deleted" || fileDiff.name !== diffPath) return UNATTACHED;
   if (isRevisionOf(fileDiff.newObjectId, note.contentRevision)) {
     return showsLines(fileDiff, note.startLine, note.endLine)
       ? { kind: "exact", startLine: note.startLine, endLine: note.endLine }
@@ -101,16 +107,17 @@ const anchorCache = new WeakMap<FileDiffMetadata, Map<string, ReviewNoteAnchor>>
 export function cachedReviewNoteAnchor(
   note: ReviewNote,
   fileDiff: FileDiffMetadata,
+  diffPath: string,
 ): ReviewNoteAnchor {
   let byNote = anchorCache.get(fileDiff);
   if (!byNote) {
     byNote = new Map();
     anchorCache.set(fileDiff, byNote);
   }
-  const key = JSON.stringify([note.id, note.contentRevision, fileDiff.isPartial]);
+  const key = JSON.stringify([note.id, note.contentRevision, fileDiff.isPartial, diffPath]);
   let anchor = byNote.get(key);
   if (!anchor) {
-    anchor = anchorReviewNote(note, fileDiff);
+    anchor = anchorReviewNote(note, fileDiff, diffPath);
     byNote.set(key, anchor);
   }
   return anchor;
@@ -119,7 +126,10 @@ export function cachedReviewNoteAnchor(
 const placedLine = ({ note, anchor }: PlacedReviewNote) =>
   anchor.kind === "exact" || anchor.kind === "moved" ? anchor.startLine : note.startLine;
 
-/** The notes on the shown files, in the order the viewer shows them. */
+/**
+ * The notes on the shown files, in the order the viewer shows them. A note names its file from the
+ * workspace root, as the agent did; the diff names it from the repository root.
+ */
 export function placeReviewNotes(
   notes: ReadonlyArray<ReviewNote>,
   files: ReadonlyArray<{
@@ -127,12 +137,17 @@ export function placeReviewNotes(
     readonly fileKey: string;
     readonly pending: boolean;
   }>,
+  roots: {
+    readonly workspaceRoot: string | undefined;
+    readonly repositoryRoot: string | undefined;
+  },
 ): PlacedReviewNote[] {
   const placed: Array<{ readonly order: number; readonly placed: PlacedReviewNote }> = [];
   for (const note of notes) {
-    const named = files.findIndex(({ fileDiff }) => fileDiff.name === note.path);
+    const diffPath = diffPathForWorkspaceFile({ filePath: note.path, ...roots });
+    const named = files.findIndex(({ fileDiff }) => fileDiff.name === diffPath);
     const order =
-      named >= 0 ? named : files.findIndex(({ fileDiff }) => fileDiff.prevName === note.path);
+      named >= 0 ? named : files.findIndex(({ fileDiff }) => fileDiff.prevName === diffPath);
     const file = files[order];
     if (!file) continue;
     placed.push({
@@ -140,7 +155,9 @@ export function placeReviewNotes(
       placed: {
         note,
         fileKey: file.fileKey,
-        anchor: file.pending ? { kind: "pending" } : cachedReviewNoteAnchor(note, file.fileDiff),
+        anchor: file.pending
+          ? { kind: "pending" }
+          : cachedReviewNoteAnchor(note, file.fileDiff, diffPath),
       },
     });
   }

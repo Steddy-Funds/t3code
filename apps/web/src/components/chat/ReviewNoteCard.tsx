@@ -4,7 +4,9 @@ import { FileDiffIcon, ReplyIcon } from "lucide-react";
 import { type ReactNode, use } from "react";
 
 import type { DraftId } from "~/composerDraftStore";
+import { diffPathForWorkspaceFile } from "~/diffFileActions";
 import { cn } from "~/lib/utils";
+import { useProject, useQuietThreadShell } from "~/state/entities";
 import {
   buildReviewNoteReply,
   reviewNoteRangeLabel,
@@ -100,6 +102,10 @@ function ReviewNoteFrame({
   const { answeredIds } = useThreadReviewNotes(ctx.threadRef);
   const showInDiff = ctx.onOpenTurnDiff;
   const threadRef = ctx.threadRef;
+  const thread = useQuietThreadShell(threadRef);
+  const project = useProject(
+    thread?.projectId ? { environmentId: thread.environmentId, projectId: thread.projectId } : null,
+  );
   return (
     <div
       className="@container/review-note min-w-0 rounded-lg bg-secondary dark:bg-input/20"
@@ -126,7 +132,17 @@ function ReviewNoteFrame({
               label="Show in diff"
               wideLabel
               onClick={() => {
-                showInDiff(note.runId, note.path);
+                showInDiff(
+                  note.runId,
+                  diffPathForWorkspaceFile({
+                    filePath: note.path,
+                    workspaceRoot: ctx.workspaceRoot,
+                    repositoryRoot:
+                      thread?.worktreePath == null
+                        ? project?.repositoryIdentity?.rootPath
+                        : undefined,
+                  }),
+                );
                 useReviewNoteRevealStore.getState().request(threadRef, note.id);
               }}
             >

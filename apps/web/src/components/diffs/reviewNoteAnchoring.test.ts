@@ -146,12 +146,36 @@ describe("placeReviewNotes", () => {
         { fileDiff: shown, fileKey: "app", pending: false },
         { fileDiff: loading, fileKey: "later", pending: true },
       ],
+      { workspaceRoot: "/repo", repositoryRoot: undefined },
     );
 
     expect(placed.map(({ note, fileKey, anchor }) => [note.id, fileKey, anchor.kind])).toEqual([
       [earlier.id, "app", "exact"],
       [later.id, "app", "exact"],
       [pending.id, "later", "pending"],
+    ]);
+  });
+
+  it("finds a note from a project folder below the repository root under the diff's path", () => {
+    const fileDiff = diffOf([
+      "diff --git a/apps/web/src/app.ts b/apps/web/src/app.ts",
+      `index 1111111..${REVISION.slice(0, 7)} 100644`,
+      "--- a/apps/web/src/app.ts",
+      "+++ b/apps/web/src/app.ts",
+      "@@ -1,3 +1,4 @@",
+      " start",
+      "+retry()",
+      "+return",
+      " end",
+    ]);
+
+    const placed = placeReviewNotes([note()], [{ fileDiff, fileKey: "app", pending: false }], {
+      workspaceRoot: "/repo/apps/web",
+      repositoryRoot: "/repo",
+    });
+
+    expect(placed.map(({ fileKey, anchor }) => [fileKey, anchor])).toEqual([
+      ["app", { kind: "exact", startLine: 2, endLine: 3 }],
     ]);
   });
 });

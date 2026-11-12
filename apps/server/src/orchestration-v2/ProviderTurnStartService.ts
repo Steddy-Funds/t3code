@@ -858,12 +858,13 @@ export const layer: Layer.Layer<
             .filter((item) => mergedMessageIds.has(item.messageId))
             .toSorted((left, right) => left.ordinal - right.ordinal)
         : [];
+      const reviewReplies = yield* ServerSettings.reviewRepliesEnabled;
       const userText = mergedTurnText(
         [message, ...mergedItems].map((part) =>
-          projectComposerContextForProvider({
-            text: part.text,
-            records: part.context?.records ?? [],
-          }),
+          projectComposerContextForProvider(
+            { text: part.text, records: part.context?.records ?? [] },
+            { reviewReplies },
+          ),
         ),
       );
       // Codex and Claude parse /goal from the prompt, so it goes verbatim and history waits a turn.

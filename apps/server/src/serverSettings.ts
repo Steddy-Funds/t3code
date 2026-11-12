@@ -1494,3 +1494,15 @@ const make = Effect.gen(function* () {
 });
 
 export const layer = Layer.effect(ServerSettingsService, make);
+
+/** Whether agents may answer review comments inline. Off when settings are absent or unreadable. */
+export const reviewRepliesEnabled = Effect.serviceOption(ServerSettingsService).pipe(
+  Effect.flatMap(
+    Option.match({
+      onNone: () => Effect.succeed(false),
+      onSome: (settings) =>
+        settings.getSettings.pipe(Effect.map((current) => current.agentReviewNotesEnabled)),
+    }),
+  ),
+  Effect.orElseSucceed(() => false),
+);

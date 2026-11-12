@@ -17,6 +17,7 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
 import type * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
+import * as ServerSettings from "../serverSettings.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
 
@@ -366,6 +367,7 @@ export const layer: Layer.Layer<
               cause: "The persisted steering message or target run is missing.",
             });
           }
+          const reviewReplies = yield* ServerSettings.reviewRepliesEnabled;
           yield* loaded.session.value
             .steerTurn({
               threadId: input.threadId,
@@ -374,10 +376,10 @@ export const layer: Layer.Layer<
               providerTurnId: loaded.providerTurn.id,
               message: {
                 messageId: message.id,
-                text: projectComposerContextForProvider({
-                  text: message.text,
-                  records: message.context?.records ?? [],
-                }),
+                text: projectComposerContextForProvider(
+                  { text: message.text, records: message.context?.records ?? [] },
+                  { reviewReplies },
+                ),
                 attachments: message.attachments,
                 createdBy: message.createdBy,
                 creationSource: message.creationSource,

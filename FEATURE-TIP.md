@@ -47,6 +47,8 @@ upstream; a feature can, from its own branch, when Akiva decides.
 | Sidebar token burn rate (tokens per minute over 5 minutes, agents included) beside the bot count; the Working shelf sorts by it               | #76 | f813ada |
 | Review comments in the diff and the file viewer: Send straight to the agent, Send N, quoted selection                                         | #78 | d4019f5 |
 | JetBrains code keys (Cmd+B, Cmd+O, F7, Alt+F7…) scoped to code, diff and project-tree focus; existing installs migrate                        | #77 | b48cc35 |
+| Material Ocean theme (Settings → Appearance): Material Oceanic chrome; Deep Ocean code, terminal, diffs and syntax colours                    | #81 | 5f49f37 |
+| Hold Cmd on a thread for a quick reference of the shortcuts that work where focus is (Settings → Keybindings to turn off)                     | #79 | 613681d |
 
 Held: #38 (pods notes in the t3-orchestration skill). It edits
 `.agents/skills/t3-orchestration/`, which exists only on

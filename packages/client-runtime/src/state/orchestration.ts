@@ -1,5 +1,6 @@
 import {
   ORCHESTRATION_V2_WS_METHODS,
+  WS_METHODS,
   type EnvironmentId,
   type ThreadId,
   type OrchestrationV2ThreadLinkMetadata,
@@ -49,6 +50,9 @@ export function createOrchestrationEnvironmentAtoms<R, E>(
       ? {}
       : { onAnswer: options.onCheckpointDiffAnswer };
   const shellState = options.shellState;
+  const snoozeReasonsRecorded = Atom.family((_environmentId: EnvironmentId) =>
+    Atom.make(0).pipe(Atom.keepAlive),
+  );
   const refreshThreadLookup = ({
     environmentId,
     input,
@@ -239,6 +243,22 @@ export function createOrchestrationEnvironmentAtoms<R, E>(
       tag: ORCHESTRATION_V2_WS_METHODS.getThreadFamily,
       staleTimeMs: 0,
       idleTtlMs: 0,
+    }),
+    // Mounted only while a snooze list is open; snoozes change from any client.
+    snoozeLog: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:orchestration:snooze-log",
+      tag: WS_METHODS.threadsSnoozeLog,
+      staleTimeMs: 0,
+      idleTtlMs: 0,
+      refreshTrigger: ({ environmentId }) => snoozeReasonsRecorded(environmentId),
+    }),
+    recordSnooze: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:orchestration:record-snooze",
+      tag: WS_METHODS.threadsRecordSnooze,
+      onSuccess: ({ environmentId }, registry) =>
+        Effect.sync(() =>
+          registry.update(snoozeReasonsRecorded(environmentId), (count) => count + 1),
+        ),
     }),
     // Read right before deleting a worktree, so never served from cache.
     worktreeThreadIds: createEnvironmentRpcQueryAtomFamily(runtime, {

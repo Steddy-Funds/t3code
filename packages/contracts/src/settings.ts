@@ -22,6 +22,7 @@ import {
 } from "./baseSchemas.ts";
 import { UsageLimitSourceId } from "./usageLimitSourceId.ts";
 import { UsageModelFilter } from "./usage.ts";
+import { DEFAULT_SNOOZE_REASONS, SnoozeReasonSettings } from "./snoozeLog.ts";
 import { SecretProviderId, SecretProviderSlug } from "./secretReference.ts";
 import { SettingsSecretValue } from "./settingsSecretValue.ts";
 import { EnvironmentMachineKind, ThreadEnvMode, WorktreeSubmodules } from "./environment.ts";
@@ -465,6 +466,10 @@ export const ClientSettingsSchema = Schema.Struct({
   ),
   confirmThreadArchive: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   confirmThreadDelete: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  snoozeReasonPromptEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  snoozeReasons: SnoozeReasonSettings.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_SNOOZE_REASONS)),
+  ),
   confirmThreadUnpin: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   diffFilesCollapsed: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   diffIgnoreWhitespace: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
@@ -2093,6 +2098,8 @@ export const ClientSettingsPatch = Schema.Struct({
   confirmQuit: Schema.optionalKey(QuitConfirmationMode),
   confirmThreadArchive: Schema.optionalKey(Schema.Boolean),
   confirmThreadDelete: Schema.optionalKey(Schema.Boolean),
+  snoozeReasonPromptEnabled: Schema.optionalKey(Schema.Boolean),
+  snoozeReasons: Schema.optionalKey(SnoozeReasonSettings),
   confirmThreadUnpin: Schema.optionalKey(Schema.Boolean),
   diffFilesCollapsed: Schema.optionalKey(Schema.Boolean),
   diffIgnoreWhitespace: Schema.optionalKey(Schema.Boolean),

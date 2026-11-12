@@ -218,6 +218,7 @@ import * as CodexUsageHistory from "./usage/CodexUsageHistory.ts";
 import * as RuntimeLayer from "./orchestration-v2/runtimeLayer.ts";
 import * as ProjectStore from "./orchestration-v2/ProjectStore.ts";
 import * as ThreadSearch from "./orchestration-v2/ThreadSearch.ts";
+import * as ThreadSnoozeLog from "./orchestration-v2/ThreadSnoozeLog.ts";
 import * as ThreadSettlementService from "./orchestration-v2/ThreadSettlementService.ts";
 import * as IdleCompactionService from "./orchestration-v2/IdleCompactionService.ts";
 import * as ThreadPullRequestService from "./orchestration-v2/ThreadPullRequestService.ts";
@@ -751,7 +752,7 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
 ).pipe(
   Layer.provideMerge(layerOrchestrationApplication),
   Layer.provideMerge(RuntimeLayer.layerEventInfrastructure),
-  Layer.provideMerge(Layer.merge(ProjectStore.layer, ThreadSearch.layer)),
+  Layer.provideMerge(Layer.mergeAll(ProjectStore.layer, ThreadSearch.layer, ThreadSnoozeLog.layer)),
   Layer.provideMerge(SecretResolver.layer),
   Layer.provideMerge(layerServerSettings),
   Layer.provideMerge(layerSourceControlProviderRegistry),

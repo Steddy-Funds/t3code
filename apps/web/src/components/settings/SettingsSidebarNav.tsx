@@ -8,6 +8,7 @@ import {
   type KeyboardEvent,
 } from "react";
 import {
+  AlarmClockIcon,
   ArchiveIcon,
   FlaskConicalIcon,
   BotIcon,
@@ -97,6 +98,7 @@ const SETTINGS_SECTION_ICONS: Readonly<
   "/settings/snap-shot": SnapShotIcon,
   "/settings/providers": BotIcon,
   "/settings/threads": MessagesSquareIcon,
+  "/settings/snoozes": AlarmClockIcon,
   "/settings/browser": GlobeIcon,
   "/settings/devices": SmartphoneIcon,
   "/settings/scheduled-tasks": CalendarClockIcon,

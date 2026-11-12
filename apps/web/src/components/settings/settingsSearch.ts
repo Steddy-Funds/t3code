@@ -27,6 +27,7 @@ export type SettingsPath =
   | "/settings/snap-shot"
   | "/settings/providers"
   | "/settings/threads"
+  | "/settings/snoozes"
   | "/settings/browser"
   | "/settings/devices"
   | "/settings/scheduled-tasks"
@@ -104,6 +105,7 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/snap-shot": "SnapShots",
   "/settings/providers": "Providers",
   "/settings/threads": "Threads",
+  "/settings/snoozes": "Snooze history",
   "/settings/browser": "Browser",
   "/settings/devices": "Devices",
   "/settings/scheduled-tasks": "Scheduled tasks",
@@ -141,6 +143,7 @@ export const SETTINGS_NAV_GROUPS: ReadonlyArray<{
     paths: [
       "/settings/providers",
       "/settings/threads",
+      "/settings/snoozes",
       "/settings/browser",
       "/settings/devices",
       "/settings/scheduled-tasks",
@@ -455,6 +458,24 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["snooze presets times later tonight tomorrow next week remind"],
     environmentOnly: true,
     scope: "environment-defaults",
+  },
+  {
+    id: "snooze-reason-prompt",
+    title: "Ask why after snoozing",
+    to: "/settings/threads",
+    searchTerms: ["snooze reason prompt why retrospective adhd"],
+  },
+  {
+    id: "snooze-reasons",
+    title: "Snooze reasons",
+    to: "/settings/threads",
+    searchTerms: ["snooze reason not now later blocked other prompt choices"],
+  },
+  {
+    id: "snooze-history",
+    title: "Snooze history",
+    to: "/settings/snoozes",
+    searchTerms: ["snooze reasons retrospective log export csv json how long why"],
   },
   {
     id: "snooze-limited-threads",
@@ -1465,6 +1486,7 @@ const SETTINGS_CATEGORY_SCOPES: Readonly<Record<SettingsPath, SettingsSearchScop
   "/settings/keybindings": null,
   "/settings/providers": null,
   "/settings/threads": null,
+  "/settings/snoozes": null,
   "/settings/browser": null,
   "/settings/devices": null,
   "/settings/source-control": "environment-defaults",

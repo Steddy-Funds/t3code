@@ -1004,9 +1004,10 @@ describe("activating a token", () => {
     await using screen = await mount({ fileDiff: modified(), onTokenActivate });
     await vi.waitFor(() => expect(visibleTinted(screen, "additions")).toEqual(["30"]));
 
-    // `const changed030 = 30;`: the word-level tint splits the line into spans.
+    // `const changed030 = 30;`: the word-level tint splits the line into nodes before the
+    // highlighter, which comes later, adds its own.
     const code = one(rowByNumber(screen, "additions", 30)!, ".sbs-code")!;
-    expect(code.children.length).toBeGreaterThan(1);
+    expect(code.childNodes.length).toBeGreaterThan(1);
     await clickColumn(code, 15, ["Control"]);
 
     expect(onTokenActivate).toHaveBeenCalledOnce();

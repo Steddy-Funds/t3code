@@ -156,6 +156,7 @@ export const DEFAULT_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
   // (nothing falls through): a scope says what a surface is, a capability that a feature works.
   // A command is labelled with its last rule, so the shortcut JetBrains shows comes last.
   { key: "mod+b", command: "code.goToDeclaration", when: "codeFocus && codeNavigation" },
+  { key: "mod+b", command: "code.goToDeclaration", when: "diffFocus && codeNavigation" },
   { key: "mod+shift+b", command: "code.goToTypeDeclaration", when: "codeFocus && codeNavigation" },
   { key: "mod+alt+b", command: "code.goToImplementation", when: "codeFocus && codeNavigation" },
   { key: "mod+alt+f7", command: "code.findUsages", when: "codeFocus && codeNavigation" },

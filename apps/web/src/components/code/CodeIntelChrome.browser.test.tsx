@@ -64,17 +64,23 @@ function setup(saved: Record<string, string> = {}) {
   });
 }
 
-async function mount(options: { server?: CodeServerStatus; turnedOff?: boolean } = {}) {
-  const onChanged = vi.fn(() => mocks.order.push("changed"));
-  const screen = await render(
+type ChipOptions = { server?: CodeServerStatus; turnedOff?: boolean };
+
+function chip(options: ChipOptions, onChanged: () => void) {
+  return (
     <CodeIntelStatusChip
       environmentId={environmentId}
       cwd={CWD}
       server={options.server ?? server("python", "ty")}
       turnedOff={options.turnedOff ?? false}
       onChanged={onChanged}
-    />,
+    />
   );
+}
+
+async function mount(options: ChipOptions = {}) {
+  const onChanged = vi.fn(() => mocks.order.push("changed"));
+  const screen = await render(chip(options, onChanged));
   await page.getByRole("button", { name: new RegExp(`^${options.server?.name ?? "ty"}`) }).click();
   return { screen, onChanged };
 }
@@ -147,6 +153,19 @@ describe("the Python environment field in the code-intel chip", () => {
 
     await vi.waitFor(() => expect(mocks.restart).toHaveBeenCalledTimes(1));
     expect(mocks.updateSettings).toHaveBeenCalledExactlyOnceWith(patch(""));
+  });
+
+  it("shows a setting that loads after the popover opened, so Apply can't unset it", async () => {
+    setup();
+    const { screen, onChanged } = await mount();
+    await using _screen = screen;
+    await expect.element(field()).toHaveValue("");
+
+    settings = Atom.make({ codeIntel: { pythonEnvironments: { [CWD]: VENV } } });
+    await screen.rerender(chip({}, onChanged));
+
+    await expect.element(field()).toHaveValue(VENV);
+    await expect.element(apply()).toBeDisabled();
   });
 
   it.each([

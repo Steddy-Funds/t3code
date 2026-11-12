@@ -1,4 +1,6 @@
 import type { ToolCallDiffTarget } from "../../diffPanelStore";
+import type { DraftId } from "../../composerDraftStore";
+import type { SendReviewComments } from "../diffs/useReviewCommentDrafts";
 import type {
   ProviderApprovalDecision,
   RuntimeRequestId,
@@ -78,6 +80,13 @@ export interface TimelineRowSharedState {
   renderHtmlRender: ((row: Extract<TimelineRow, { kind: "html-render" }>) => ReactNode) | undefined;
   /** Unset, expanded rows read detail and command output from the environment. */
   turnItemSource: TurnItemSource | undefined;
+  /** Where a reply to a review note goes. Unset where the viewer cannot reply, as a guest. */
+  reviewNoteReplies:
+    | {
+        readonly draftTarget: ScopedThreadRef | DraftId;
+        readonly onSend: SendReviewComments | undefined;
+      }
+    | undefined;
   onOpenThread: (threadId: OrchestrationV2TurnItem["threadId"]) => void;
   workflowOpening: WorkflowOpening | null;
   /** Absent hides "Fork from this response", as in the guest view. */

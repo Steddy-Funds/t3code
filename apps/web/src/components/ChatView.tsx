@@ -3446,6 +3446,14 @@ export default function ChatView(props: ChatViewProps) {
                     ? {}
                     : { onOpenTurnDiff: onOpenTurnDiffStable, onForkFromRun: onForkFromRunStable })}
                   onOpenThread={onOpenRelatedThreadStable}
+                  {...(canOperateThread && isServerThread
+                    ? {
+                        reviewNoteReplies: {
+                          draftTarget: baseComposerDraftTarget,
+                          onSend: sendReviewCommentsStable,
+                        },
+                      }
+                    : {})}
                   parentThreadLink={parentThreadLink}
                   workflowOpening={workflowOpening}
                   supportsConversationRollback={supportsConversationRollback}

@@ -135,6 +135,10 @@
       "types": "./src/toolOutput.ts",
       "import": "./src/toolOutput.ts"
     },
+    "./reviewNote": {
+      "types": "./src/reviewNote.ts",
+      "import": "./src/reviewNote.ts"
+    },
     "./htmlRender": {
       "types": "./src/htmlRender.ts",
       "import": "./src/htmlRender.ts"

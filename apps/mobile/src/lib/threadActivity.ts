@@ -68,6 +68,7 @@ import { formatDuration } from "@t3tools/shared/orchestrationTiming";
 import { truncate } from "@t3tools/shared/String";
 import type { HtmlRenderReference } from "@t3tools/shared/htmlRender";
 import type { McpAppReference } from "@t3tools/shared/mcpApp";
+import { type ReviewNote, reviewNoteFromToolItem } from "@t3tools/shared/reviewNote";
 import {
   compactDynamicToolOutput,
   htmlRenderFromToolItem,
@@ -180,6 +181,13 @@ type RawThreadFeedEntry =
       readonly render: HtmlRenderReference;
     }
   | {
+      readonly type: "review-note";
+      readonly id: string;
+      readonly createdAt: string;
+      readonly runId: RunId | null;
+      readonly note: ReviewNote;
+    }
+  | {
       readonly type: "mcp-app";
       readonly id: string;
       readonly createdAt: string;
@@ -197,7 +205,7 @@ export type ThreadFeedEntry = ThreadFeedEntryContent & {
 };
 
 type ThreadFeedEntryContent =
-  | Extract<RawThreadFeedEntry, { type: "message" | "html-render" | "mcp-app" }>
+  | Extract<RawThreadFeedEntry, { type: "message" | "html-render" | "review-note" | "mcp-app" }>
   | {
       readonly type: "activity-group";
       readonly id: string;
@@ -1104,6 +1112,7 @@ function deriveThreadFeedRunFolds(
         ? (entry.message.runId ?? runlessKey)
         : entry.type === "activity-group" ||
             entry.type === "html-render" ||
+            entry.type === "review-note" ||
             entry.type === "mcp-app"
           ? (entry.runId ?? runlessKey)
           : null;
@@ -1157,6 +1166,7 @@ function deriveThreadFeedRunFolds(
           (entry) =>
             entry.id !== terminalAssistantId &&
             entry.type !== "html-render" &&
+            entry.type !== "review-note" &&
             entry.type !== "mcp-app" &&
             !(entry.type === "activity-group" && isContextCompactionActivityGroup(entry)) &&
             !(
@@ -2270,6 +2280,20 @@ export function buildThreadFeed(
         createdAt,
         runId: item.runId,
         render,
+      };
+      projectedEntriesCache.set(row, { attemptId, entry });
+      entries.push(entry);
+      entryRows.push(index);
+      continue;
+    }
+    const note = item.type === "dynamic_tool" ? reviewNoteFromToolItem(item) : undefined;
+    if (note) {
+      const entry: RawThreadFeedEntry = {
+        type: "review-note",
+        id: `review-note:${row.visibility}:${row.sourceThreadId}:${row.sourceItemId}`,
+        createdAt,
+        runId: item.runId,
+        note,
       };
       projectedEntriesCache.set(row, { attemptId, entry });
       entries.push(entry);

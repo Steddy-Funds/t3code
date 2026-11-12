@@ -26,6 +26,7 @@ import type { HtmlRenderReference } from "@t3tools/shared/htmlRender";
 import { turnItemDetailRevision } from "@t3tools/client-runtime/work-log/item-detail";
 import type { McpAppReference } from "@t3tools/shared/mcpApp";
 import { htmlRenderFromToolItem, mcpAppFromToolItem } from "@t3tools/shared/toolOutput";
+import { type ReviewNote, reviewNoteFromToolItem } from "@t3tools/shared/reviewNote";
 import {
   contextCompactionLabel,
   workEntryIndicatesToolFailure,
@@ -122,6 +123,13 @@ export type TimelineEntry = (
       readonly createdAt: string;
       readonly runId: RunId | null;
       readonly htmlRender: HtmlRenderReference;
+    }
+  | {
+      readonly id: string;
+      readonly kind: "review-note";
+      readonly createdAt: string;
+      readonly runId: RunId | null;
+      readonly note: ReviewNote;
     }
   | {
       readonly id: string;
@@ -625,6 +633,19 @@ export function deriveTimelineEntriesFromVisibleTurnItems(
         kind: "proposed-plan",
         createdAt,
         proposedPlan,
+        ...attemptMetadata,
+      });
+      continue;
+    }
+
+    const reviewNote = item.type === "dynamic_tool" ? reviewNoteFromToolItem(item) : undefined;
+    if (reviewNote !== undefined) {
+      entries.push({
+        id: item.id,
+        kind: "review-note",
+        createdAt,
+        runId: item.runId,
+        note: reviewNote,
         ...attemptMetadata,
       });
       continue;

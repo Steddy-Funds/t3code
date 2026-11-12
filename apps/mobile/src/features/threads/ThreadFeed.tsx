@@ -23,6 +23,7 @@ import {
 import { GuestBubbleTint, GuestMessageName } from "./guestMessageStyle";
 import { ThreadGuestPendingMessage, useThreadGuestShare } from "./ThreadGuestShareBar";
 import { LinkRequestCard } from "./LinkRequestCard";
+import { ReviewNoteCard } from "./ReviewNoteCard";
 import { SecretRequestCard } from "./SecretRequestCard";
 import { AppActivityIndicator } from "../../components/ui/AppActivityIndicator";
 import {
@@ -1727,6 +1728,10 @@ function renderFeedEntry(
         iconColor={iconSubtleColor}
       />
     );
+  }
+
+  if (entry.type === "review-note") {
+    return <ReviewNoteCard note={entry.note} />;
   }
 
   if (entry.type === "mcp-app") {

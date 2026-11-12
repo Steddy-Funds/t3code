@@ -459,6 +459,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["snooze reason not now later blocked other prompt choices"],
   },
   {
+    id: "snooze-history",
+    title: "Snooze history",
+    to: "/settings/snoozes",
+    searchTerms: ["snooze reasons retrospective log export csv json how long why"],
+  },
+  {
     id: "snooze-limited-threads",
     title: "Snooze until limits reset",
     to: "/settings/threads",
@@ -1328,12 +1334,6 @@ export const SETTINGS_SEARCH_ITEMS = [
     targetId: "secret-providers",
     searchTerms: ["new 1password vault op cli account"],
     secretsFeatureOnly: true,
-  },
-  {
-    id: "snooze-history",
-    title: "Snooze history",
-    to: "/settings/snoozes",
-    searchTerms: ["snooze reasons retrospective log export csv json how long why"],
   },
   {
     id: "archive",

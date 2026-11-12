@@ -114,9 +114,14 @@ const serviceLayer = (
             working,
           ) as never,
         ),
-      getShellSnapshot: () =>
+      getShellSnapshot: (options) =>
         Effect.succeed({
-          threads: [...threads.shells.values()].map((shell) => withWorking(shell, working)),
+          threads: [...threads.shells.values()]
+            .filter(
+              (shell) =>
+                (shell.archivedAt != null) === ((options?.location ?? "active") === "archive"),
+            )
+            .map((shell) => withWorking(shell, working)),
         } as never),
     }),
     Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
@@ -667,6 +672,18 @@ it.effect("sweeps finished auto-buckets threads left behind, at startup and befo
           parentThreadId: "thread:side-chatted",
           relationshipToParent: "fork",
           rootThreadId: "thread:side-chatted",
+          sideChat: true,
+        },
+      }),
+      // Deleting a thread deletes its side chats, archived ones too.
+      "thread:archived-side-chatted": bucketsThread("thread:archived-side-chatted"),
+      "thread:archived-side-chat": bucketsThread("thread:archived-side-chat", {
+        tags: [],
+        archivedAt: "2026-11-12T00:00:00Z",
+        lineage: {
+          parentThreadId: "thread:archived-side-chatted",
+          relationshipToParent: "fork",
+          rootThreadId: "thread:archived-side-chatted",
           sideChat: true,
         },
       }),

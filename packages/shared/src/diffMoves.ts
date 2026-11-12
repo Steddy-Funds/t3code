@@ -33,7 +33,7 @@ export interface DiffMove {
 const MIN_MOVE_LINES = 3;
 const MIN_MOVE_CHARACTERS = 40;
 /** A line this common in the added code ("}", "return;") starts no match, though one may cross it. */
-const MAX_SEED_CANDIDATES = 64;
+const MAX_SEED_CANDIDATES = 16;
 /** Past this many changed lines the diff is a rewrite or generated code; matching it says little. */
 const MAX_MOVE_DETECTION_LINES = 20_000;
 
@@ -136,6 +136,13 @@ function matchingSegments(removed: FlatLine[], added: FlatLine[]): Segment[] {
         weight += removed[r + length]!.weight;
         length += 1;
       } while (continues(removed, added, r + length - 1, a + length - 1, 1));
+      // Blank edges carry no code; trimmed, two pieces of a split don't fight over the line between.
+      while (length > 0 && removed[r]!.weight === 0) {
+        r += 1;
+        a += 1;
+        length -= 1;
+      }
+      while (length > 0 && removed[r + length - 1]!.weight === 0) length -= 1;
       if (length >= MIN_MOVE_LINES && weight >= MIN_MOVE_CHARACTERS) {
         const inPlace =
           removed[r]!.file === added[a]!.file && removed[r]!.block === added[a]!.block;
@@ -151,6 +158,10 @@ function overlaps(taken: Uint8Array, start: number, length: number): boolean {
   return false;
 }
 
+function spansMeet(start: number, length: number, otherStart: number, otherLength: number) {
+  return start < otherStart + otherLength && otherStart < start + length;
+}
+
 function take(taken: Uint8Array, start: number, length: number) {
   taken.fill(1, start, start + length);
 }
@@ -161,10 +172,14 @@ function take(taken: Uint8Array, start: number, length: number) {
  * since no pointer beats a wrong one.
  */
 export function findDiffMoves(files: ReadonlyArray<DiffMoveFile>): DiffMove[] {
+  let changedLines = 0;
+  for (const file of files) {
+    for (const lineRun of [...file.removed, ...file.added]) changedLines += lineRun.lines.length;
+  }
+  if (changedLines > MAX_MOVE_DETECTION_LINES) return [];
   const keys = new Map<string, number>();
   const removed = flatten(files, "removed", keys);
   const added = flatten(files, "added", keys);
-  if (removed.length + added.length > MAX_MOVE_DETECTION_LINES) return [];
   const segments = matchingSegments(removed, added).sort(
     (left, right) => right.weight - left.weight || left.removed - right.removed,
   );
@@ -180,7 +195,9 @@ export function findDiffMoves(files: ReadonlyArray<DiffMoveFile>): DiffMove[] {
     const claimed = [segment];
     for (let other = index + 1; segments[other]?.weight === segment.weight; other += 1) {
       const rival = segments[other]!;
-      const shares = rival.removed === segment.removed || rival.added === segment.added;
+      const shares =
+        spansMeet(rival.removed, rival.length, segment.removed, segment.length) ||
+        spansMeet(rival.added, rival.length, segment.added, segment.length);
       if (shares && free(rival)) claimed.push(rival);
     }
     // A tie claims every end it touches, so no leftover pairing of them reads as unique.

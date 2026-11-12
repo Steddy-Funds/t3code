@@ -697,7 +697,11 @@ export function SideBySideDiffView<T = unknown>(props: SideBySideDiffViewProps<T
       props.onFollowMove?.(mark.move);
       return;
     }
-    if (mark.counterpartRange) revealLineRange(otherSide(mark.move.side), mark.counterpartRange);
+    if (!mark.counterpartRange) return;
+    const side = otherSide(mark.move.side);
+    // The chip unmounts once it scrolls away, which would drop focus out of the diff's keys.
+    scrollers.current[side]?.focus({ preventScroll: true });
+    revealLineRange(side, mark.counterpartRange);
   };
 
   const revealPending = useEffectEvent(() => {

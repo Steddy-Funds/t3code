@@ -60,23 +60,33 @@ function moveFileOf({ filePath, fileDiff }: SbsMoveSource): DiffMoveFile {
   return { path: filePath, removed, added };
 }
 
-let lastSources: ReadonlyArray<SbsMoveSource> = [];
-let lastMoves: ReadonlyArray<DiffMove> = [];
+/** A few diffs at once: the thread's diff and a pull request's Code tab can both be mounted. */
+const RECENT_DIFFS = 4;
+const recentDiffs: Array<{
+  readonly sources: ReadonlyArray<SbsMoveSource>;
+  readonly moves: ReadonlyArray<DiffMove>;
+}> = [];
+
+function sameSources(left: ReadonlyArray<SbsMoveSource>, right: ReadonlyArray<SbsMoveSource>) {
+  return (
+    left.length === right.length &&
+    left.every(
+      (source, index) =>
+        source.fileDiff === right[index]!.fileDiff && source.filePath === right[index]!.filePath,
+    )
+  );
+}
 
 /** The moves across every file of a diff, kept while the same patches come back. */
 export function sbsDiffMovesOf(sources: ReadonlyArray<SbsMoveSource>): ReadonlyArray<DiffMove> {
-  const same =
-    sources.length === lastSources.length &&
-    sources.every(
-      (source, index) =>
-        source.fileDiff === lastSources[index]!.fileDiff &&
-        source.filePath === lastSources[index]!.filePath,
-    );
-  if (!same) {
-    lastSources = sources;
-    lastMoves = findDiffMoves(sources.map(moveFileOf));
-  }
-  return lastMoves;
+  const index = recentDiffs.findIndex((recent) => sameSources(recent.sources, sources));
+  const entry =
+    index >= 0
+      ? recentDiffs.splice(index, 1)[0]!
+      : { sources, moves: findDiffMoves(sources.map(moveFileOf)) };
+  recentDiffs.unshift(entry);
+  recentDiffs.length = Math.min(recentDiffs.length, RECENT_DIFFS);
+  return entry.moves;
 }
 
 function lineSpan(startLine: number, endLine: number): string {
@@ -109,8 +119,8 @@ export function sbsMovesForFile(
         counterpart: { filePath: to.path, sameFile, ...lineEnds(to) },
         label: `→ ${target}`,
         description: sameFile
-          ? `${size} moved to ${lineSpan(to.startLine, to.endLine)}, unchanged`
-          : `${size} moved to ${shownPath(to.path)} ${lineSpan(to.startLine, to.endLine)}, unchanged`,
+          ? `${size} moved to ${lineSpan(to.startLine, to.endLine)}, unchanged apart from indentation`
+          : `${size} moved to ${shownPath(to.path)} ${lineSpan(to.startLine, to.endLine)}, unchanged apart from indentation`,
       });
     }
     if (to.path === filePath) {
@@ -122,8 +132,8 @@ export function sbsMovesForFile(
         counterpart: { filePath: from.path, sameFile, ...lineEnds(from) },
         label: `← from ${source}`,
         description: sameFile
-          ? `${size} moved here from ${lineSpan(from.startLine, from.endLine)}, unchanged`
-          : `${size} moved here from ${shownPath(from.path)} ${lineSpan(from.startLine, from.endLine)}, unchanged`,
+          ? `${size} moved here from ${lineSpan(from.startLine, from.endLine)}, unchanged apart from indentation`
+          : `${size} moved here from ${shownPath(from.path)} ${lineSpan(from.startLine, from.endLine)}, unchanged apart from indentation`,
       });
     }
   }
@@ -224,7 +234,10 @@ export function sbsMoveLayerOf(document: SbsDocument, moves: ReadonlyArray<SbsMo
   document.changes.forEach((change, index) => {
     const moved = (["deletions", "additions"] as const).every((side) => {
       for (let line = change[side].start; line < change[side].end; line += 1) {
-        if (tints[side][line] === SBS_MOVE_NONE) return false;
+        // A move leaves out blank lines at its edges; they don't keep a change from moving whole.
+        if (tints[side][line] === SBS_MOVE_NONE && document.lines[side][line]!.trim() !== "") {
+          return false;
+        }
       }
       return true;
     });

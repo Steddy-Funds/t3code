@@ -471,6 +471,33 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
     }).pipe(Effect.provide(layerKeybindings())),
   );
 
+  it.effect("puts a default saved back from Settings in its default place", () =>
+    Effect.gen(function* () {
+      const { keybindingsConfigPath } = yield* ServerConfig.ServerConfig;
+      const keybindings = yield* Keybindings.Keybindings;
+      const onModB = Effect.map(readKeybindingsConfig(keybindingsConfigPath), (rules) =>
+        rules.filter((rule) => rule.key === "mod+b").map((rule) => rule.command),
+      );
+      yield* syncExisting(EXISTING_INSTALL_KEYBINDINGS);
+
+      // Settings' "Reset to default": the shortcut is changed, then changed back.
+      const moved = { key: "mod+shift+y", command: "sidebar.toggle" } as const;
+      const stock = { key: "mod+b", command: "sidebar.toggle" } as const;
+      yield* keybindings.upsertKeybindingRule({ ...moved, replace: stock });
+      assert.deepStrictEqual(yield* onModB, ["code.goToDeclaration"]);
+      yield* keybindings.upsertKeybindingRule({ ...stock, replace: moved });
+      assert.deepStrictEqual(yield* onModB, ["sidebar.toggle", "code.goToDeclaration"]);
+
+      // A rule of the user's own still goes last, above both.
+      yield* keybindings.upsertKeybindingRule({ key: "mod+b", command: "chat.newLocal" });
+      assert.deepStrictEqual(yield* onModB, [
+        "sidebar.toggle",
+        "code.goToDeclaration",
+        "chat.newLocal",
+      ]);
+    }).pipe(Effect.provide(layerKeybindings())),
+  );
+
   it.effect("adds whole commands only, as a full config gains room", () =>
     Effect.gen(function* () {
       const fillers = Array.from(

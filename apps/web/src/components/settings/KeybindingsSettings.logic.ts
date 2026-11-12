@@ -189,10 +189,16 @@ export function keybindingConflictLabels(
   if (!shortcut) return [];
   // Compare resolved chords so mod+k and ctrl+k collide where mod is Ctrl.
   const conflictKey = shortcutConflictKey(shortcut, platform);
+  // Defaults that share a shortcut are ordered on purpose (a scoped one refines a general one),
+  // so an untouched default is checked only against rules the user wrote.
+  const row = rows.find((candidate) => candidate.id === input.rowId);
+  const isUntouchedDefault =
+    row?.source === "Default" && row.key === input.key && row.when === input.when;
   const conflicts: Array<string> = [];
   for (const candidate of rows) {
     if (
       candidate.id !== input.rowId &&
+      !(isUntouchedDefault && candidate.source === "Default") &&
       shortcutConflictKey(candidate.binding.shortcut, platform) === conflictKey &&
       conflictsWithWhen(candidate.when, input.when)
     ) {
@@ -218,6 +224,7 @@ const KEYBINDING_GROUPS = [
   { id: "composer", title: "Composer", prefixes: ["composer", "modelPicker"] },
   { id: "terminal", title: "Terminal", prefixes: ["terminal"] },
   { id: "preview", title: "Preview & diff", prefixes: ["preview", "diff"] },
+  { id: "code", title: "Code", prefixes: ["code", "projectPane"] },
   { id: "appearance", title: "Appearance", prefixes: ["theme", "appearance", "themeEditor"] },
   { id: "scripts", title: "Project scripts", prefixes: ["script"] },
 ] as const;
@@ -368,7 +375,22 @@ export function buildKeybindingCommandOptions(
   return [...commands].toSorted((left, right) => compareCommands(left, right, commandLabel));
 }
 
+// Names the generated label would get wrong, or that JetBrains users know by another name.
+const CODE_COMMAND_LABELS: Partial<Record<KeybindingCommand, string>> = {
+  "code.goToDeclaration": "Code: Go to Declaration or Usages",
+  "code.goToTypeDeclaration": "Code: Go to Type Declaration",
+  "code.goToImplementation": "Code: Go to Implementation",
+  "code.highlightUsages": "Code: Highlight Usages in File",
+  "code.goToLine": "Code: Go to Line",
+  "code.goToClass": "Code: Go to Class",
+  "code.goToSymbol": "Code: Go to Symbol",
+  "diff.jumpToSource": "Diff: Jump to Source",
+  "projectPane.toggle": "Project Pane: Show or Return to Code",
+};
+
 export function commandLabel(command: KeybindingCommand): string {
+  const codeLabel = CODE_COMMAND_LABELS[command];
+  if (codeLabel) return codeLabel;
   if (command === "workspace.focusNext") return "Focus Next Workspace Area";
   if (command === "workspace.focusPrevious") return "Focus Previous Workspace Area";
   if (command === "composer.sendAlternate") return "Composer: Opposite Queue or Steer Action";

@@ -426,6 +426,8 @@ function PullRequestCodeTab({
     range: SelectedLineRange;
   } | null>(null);
   const [draft, setDraft] = useState<DraftAnchor | null>(null);
+  // Side by side unmounts the comment box with its file, so its words live here, with their draft.
+  const [draftWords, setDraftWords] = useState<{ draft: DraftAnchor; text: string } | null>(null);
   const [threadPending, setThreadPending] = useState(false);
   const [orphansOpen, setOrphansOpen] = useState(false);
   // Scope slices before reset to prevent using a previous pull request's data or cursor.
@@ -1105,7 +1107,8 @@ function PullRequestCodeTab({
           ownerKey={JSON.stringify([environmentId, reviewKey, draft])}
           kind="draft"
           rangeLabel={`${draft.path}:${getReviewPositionAnchor(draft.position).line}`}
-          text=""
+          text={draftWords?.draft === draft ? draftWords.text : ""}
+          onTextChange={(text) => setDraftWords({ draft, text })}
           completionScope={canCommentOnLines ? completionScope : null}
           submitLabel={canCommentOnLines ? "Add to review" : "Add to agent"}
           {...(canCommentOnLines && onAddToAgentSelection

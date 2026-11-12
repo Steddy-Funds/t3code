@@ -20,7 +20,8 @@ import {
 } from "@t3tools/contracts";
 import type { EffortDisplay } from "@t3tools/contracts/settings";
 import { cn } from "~/lib/utils";
-import { useRef } from "react";
+import { useEffect, useEffectEvent, useRef, useState } from "react";
+import { useClientSettings } from "../../hooks/useSettings";
 import { useComposerDraftStore } from "../../composerDraftStore";
 import { isGlintAvailable, presentGlint, type GlintModelSelection } from "../../lib/glint";
 import { buildGlintModelParams, resolveGlintModelOptions } from "./glintModelPicker";
@@ -167,8 +168,19 @@ export function ComposerControlsBar(props: {
   });
   const effort = describeComposerEffort(traitsInput, props.effortDisplay, controlSize);
   const setProviderModelOptions = useComposerDraftStore((store) => store.setProviderModelOptions);
-  // After the native picker fails, the next open is the web popup's.
-  const webPickerNextRef = useRef(false);
+  const modelTriggerRef = useRef<HTMLButtonElement>(null);
+  // Set once the native picker could not show, so this open goes to the web popup.
+  const [webPickerForced, setWebPickerForced] = useState(false);
+  if (webPickerForced && !modelPickerOpen) setWebPickerForced(false);
+  const glintEnabled = useClientSettings((settings) => settings.glintEnabled);
+  // Decided in render, so the web popup never mounts for an open the native picker takes.
+  const nativePickerOwnsOpen =
+    modelPickerOpen &&
+    glintEnabled &&
+    !webPickerForced &&
+    !providerCatalogPending &&
+    !isSendBusy &&
+    multipleModelSelections === null;
   const applyNativeModelPick = (pick: GlintModelSelection) => {
     const entry = providerInstanceEntries.find(
       (candidate) => candidate.instanceId === pick.provider,
@@ -199,33 +211,39 @@ export function ComposerControlsBar(props: {
     }
     writeTraitsModelOptions(target, change.modelOptions, setProviderModelOptions);
   };
-  const openNativeModelPicker = useStableCallback((trigger: HTMLElement) => {
-    if (webPickerNextRef.current) {
-      webPickerNextRef.current = false;
-      return false;
+  const presentNativeModelPicker = useEffectEvent(() => {
+    const trigger = modelTriggerRef.current;
+    const params =
+      trigger && isGlintAvailable()
+        ? buildGlintModelParams({
+            instanceEntries: providerInstanceEntries,
+            modelOptionsByInstance,
+            lockedProvider,
+            lockedContinuationGroupKey,
+            getModelDisabledReason,
+            selection: {
+              instanceId: selectedInstanceId,
+              model: selectedModelForPickerWithCustomFallback,
+            },
+            selectedTraits: traitsInput ? getTraitsSectionVisibility(traitsInput) : null,
+          })
+        : null;
+    if (!trigger || !params) {
+      setWebPickerForced(true);
+      return;
     }
-    if (multipleModelSelections !== null || !isGlintAvailable()) return false;
-    const params = buildGlintModelParams({
-      instanceEntries: providerInstanceEntries,
-      modelOptionsByInstance,
-      lockedProvider,
-      lockedContinuationGroupKey,
-      getModelDisabledReason,
-      selection: {
-        instanceId: selectedInstanceId,
-        model: selectedModelForPickerWithCustomFallback,
-      },
-      selectedTraits: traitsInput ? getTraitsSectionVisibility(traitsInput) : null,
-    });
-    if (!params) return false;
+    onModelPickerOpenChange(false);
     void presentGlint("model", trigger, params).then((outcome) => {
       if (outcome.type === "result") applyNativeModelPick(outcome.value.selection);
       if (outcome.type !== "unavailable") return;
-      webPickerNextRef.current = true;
+      setWebPickerForced(true);
       onModelPickerOpenChange(true);
     });
-    return true;
   });
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- shows the native picker, a window outside React, for every way the picker opens (trigger, keybinding, /model)
+  useEffect(() => {
+    if (nativePickerOwnsOpen) presentNativeModelPicker();
+  }, [nativePickerOwnsOpen]);
   const restingBlockDefs = showModeBlock
     ? [
         {
@@ -294,7 +312,7 @@ export function ComposerControlsBar(props: {
         />
       }
       terminalOpen={terminalOpen}
-      open={modelPickerOpen}
+      open={modelPickerOpen && !nativePickerOwnsOpen}
       instanceIndicatorBackground={
         composerControlsCollapsed
           ? "color-mix(in srgb, var(--chat-composer-glass-surface) var(--glass-opacity), transparent)"
@@ -306,7 +324,7 @@ export function ComposerControlsBar(props: {
       onOpenChange={onModelPickerOpenChange}
       getModelDisabledReason={getModelDisabledReason}
       onOpenProviderSetup={onOpenProviderSetup}
-      {...(providerCatalogPending || isSendBusy ? {} : { openNative: openNativeModelPicker })}
+      triggerRef={modelTriggerRef}
     />
   );
   return showProviderUnavailable ? (

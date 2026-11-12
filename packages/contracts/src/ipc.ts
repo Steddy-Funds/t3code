@@ -358,11 +358,20 @@ export const DesktopGlintAnchorSchema = Schema.Struct({
 export type DesktopGlintAnchor = typeof DesktopGlintAnchorSchema.Type;
 
 export const DesktopGlintPresentInputSchema = Schema.Struct({
+  /** Chosen by the renderer, so it can message the dialog while it is open. */
+  id: TrimmedNonEmptyString,
   kind: DesktopGlintKindSchema,
   anchor: DesktopGlintAnchorSchema,
   params: Schema.Unknown,
 });
 export type DesktopGlintPresentInput = typeof DesktopGlintPresentInputSchema.Type;
+
+/** A message to or from an open dialog, such as `update`, `input`, `key`, `dismiss` or `changed`. */
+export const DesktopGlintMessageSchema = Schema.StructWithRest(
+  Schema.Struct({ type: TrimmedNonEmptyString, id: TrimmedNonEmptyString }),
+  [Schema.Record(Schema.String, Schema.Unknown)],
+);
+export type DesktopGlintMessage = typeof DesktopGlintMessageSchema.Type;
 
 /** `unavailable` covers a missing, crashed or failing helper: the caller shows its web UI. */
 export const DesktopGlintOutcomeSchema = Schema.Union([
@@ -1190,11 +1199,11 @@ export interface DesktopBridge {
   glint: {
     /** True on macOS when Labs turns native dialogs on and the helper exists. */
     isAvailable: () => boolean;
-    present: (
-      kind: DesktopGlintKind,
-      anchor: DesktopGlintAnchor,
-      params: unknown,
-    ) => Promise<DesktopGlintOutcome>;
+    present: (input: DesktopGlintPresentInput) => Promise<DesktopGlintOutcome>;
+    /** To the open dialog only: false when `message.id` is no longer shown. */
+    send: (message: DesktopGlintMessage) => Promise<boolean>;
+    /** The open dialog's own messages, such as `changed`. Returns an unsubscribe. */
+    onEvent: (id: string, listener: (message: DesktopGlintMessage) => void) => () => void;
   };
 }
 

@@ -1,4 +1,8 @@
-import { DesktopGlintOutcomeSchema, DesktopGlintPresentInputSchema } from "@t3tools/contracts";
+import {
+  DesktopGlintMessageSchema,
+  DesktopGlintOutcomeSchema,
+  DesktopGlintPresentInputSchema,
+} from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
@@ -21,5 +25,14 @@ export const presentGlint = DesktopIpc.makeIpcMethod({
   result: DesktopGlintOutcomeSchema,
   handler: Effect.fn("desktop.ipc.glint.present")(function* (input) {
     return yield* (yield* DesktopGlint.DesktopGlint).present(input);
+  }),
+});
+
+export const sendGlint = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.GLINT_SEND_CHANNEL,
+  payload: DesktopGlintMessageSchema,
+  result: Schema.Boolean,
+  handler: Effect.fn("desktop.ipc.glint.send")(function* (message) {
+    return yield* (yield* DesktopGlint.DesktopGlint).send(message);
   }),
 });

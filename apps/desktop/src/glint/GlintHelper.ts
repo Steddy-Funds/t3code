@@ -2,35 +2,56 @@
 // @effect-diagnostics globalTimers:off -- The ready deadline runs in child-process callbacks outside any Effect fiber.
 
 import * as NodeChildProcess from "node:child_process";
-import * as NodeCrypto from "node:crypto";
 import * as NodeReadline from "node:readline";
 
-import type { DesktopGlintAnchor, DesktopGlintKind, DesktopGlintOutcome } from "@t3tools/contracts";
+import type {
+  DesktopGlintAnchor,
+  DesktopGlintKind,
+  DesktopGlintMessage,
+  DesktopGlintOutcome,
+} from "@t3tools/contracts";
 
 const PROTOCOL_VERSION = 1;
 const DEFAULT_READY_TIMEOUT_MS = 5_000;
+// The protocol's own lifecycle; every other message is a dialog's, passed through untouched.
+const LIFECYCLE_TYPES: ReadonlySet<string> = new Set([
+  "ready",
+  "present",
+  "result",
+  "cancelled",
+  "error",
+]);
 
 export interface GlintHelper {
   readonly path: string;
   /** `anchor` is in global screen points with a top-left origin. One dialog shows at a time. */
   readonly present: (
+    id: string,
     kind: DesktopGlintKind,
     anchor: DesktopGlintAnchor,
     params: unknown,
   ) => Promise<DesktopGlintOutcome>;
-  readonly dismiss: () => void;
+  /** Sends a message such as `update`, `input`, `key` or `dismiss` to the open dialog `id`. */
+  readonly send: (message: DesktopGlintMessage) => boolean;
   readonly dispose: () => void;
 }
 
 interface Pending {
   readonly id: string;
   readonly resolve: (outcome: DesktopGlintOutcome) => void;
+  /** Messages sent before the helper was ready, written after `present`. */
+  queue: Array<DesktopGlintMessage> | null;
 }
 
 /** Spawns the helper on the first `present`, and again after it exits. */
 export function makeGlintHelper(
   path: string,
-  options: { readonly readyTimeoutMs?: number; readonly log?: (message: string) => void } = {},
+  options: {
+    readonly readyTimeoutMs?: number;
+    readonly log?: (message: string) => void;
+    /** The open dialog's own messages, such as `changed`. */
+    readonly onEvent?: (message: DesktopGlintMessage) => void;
+  } = {},
 ): GlintHelper {
   const log = options.log ?? (() => {});
   let child: NodeChildProcess.ChildProcessWithoutNullStreams | null = null;
@@ -45,7 +66,7 @@ export function makeGlintHelper(
     pending.resolve(outcome);
   };
 
-  const send = (message: object) => {
+  const write = (message: object) => {
     if (!child?.stdin.writable) return false;
     child.stdin.write(`${JSON.stringify(message)}\n`);
     return true;
@@ -54,7 +75,11 @@ export function makeGlintHelper(
   const handleMessage = (message: unknown) => {
     if (typeof message !== "object" || message === null) return;
     const { type, id } = message as { type?: unknown; id?: unknown };
-    if (typeof id !== "string") return;
+    if (typeof id !== "string" || typeof type !== "string") return;
+    if (!LIFECYCLE_TYPES.has(type)) {
+      if (current?.id === id) options.onEvent?.(message as DesktopGlintMessage);
+      return;
+    }
     if (type === "result") {
       settle(id, { type: "result", value: (message as { value?: unknown }).value ?? null });
     } else if (type === "cancelled") {
@@ -67,6 +92,19 @@ export function makeGlintHelper(
       });
     }
   };
+
+  function send(message: DesktopGlintMessage): boolean {
+    const pending = current;
+    if (pending?.id !== message.id || LIFECYCLE_TYPES.has(message.type)) return false;
+    if (pending.queue) {
+      pending.queue.push(message);
+      if (message.type === "dismiss") settle(message.id, { type: "cancelled" });
+      return true;
+    }
+    if (!write(message)) return false;
+    if (message.type === "dismiss") settle(message.id, { type: "cancelled" });
+    return true;
+  }
 
   /** Resolves null once ready, or the reason it could not start. */
   const start = (): Promise<string | null> => {
@@ -132,25 +170,32 @@ export function makeGlintHelper(
 
   return {
     path,
-    present: async (kind, anchor, params) => {
-      if (disposed) return { type: "unavailable", message: "The Glint helper was stopped." };
-      const failure = await start();
-      if (failure !== null) return { type: "unavailable", message: failure };
+    present: (id, kind, anchor, params) => {
+      if (disposed) {
+        return Promise.resolve({ type: "unavailable", message: "The Glint helper was stopped." });
+      }
       // The helper closes the old dialog itself when a new one is presented.
       if (current) settle(current.id, { type: "cancelled" });
-      const id = NodeCrypto.randomUUID();
-      return new Promise((resolve) => {
-        current = { id, resolve };
-        if (!send({ type: "present", id, kind, anchor, params })) {
-          settle(id, { type: "unavailable", message: "The Glint helper is not running." });
+      const { promise: outcome, resolve } = Promise.withResolvers<DesktopGlintOutcome>();
+      const pending: Pending = { id, resolve, queue: [] };
+      current = pending;
+      void start().then((failure) => {
+        if (current !== pending) return;
+        if (failure !== null) {
+          settle(id, { type: "unavailable", message: failure });
+          return;
         }
+        if (!write({ type: "present", id, kind, anchor, params })) {
+          settle(id, { type: "unavailable", message: "The Glint helper is not running." });
+          return;
+        }
+        const queued = pending.queue ?? [];
+        pending.queue = null;
+        for (const message of queued) send(message);
       });
+      return outcome;
     },
-    dismiss: () => {
-      if (!current) return;
-      send({ type: "dismiss", id: current.id });
-      settle(current.id, { type: "cancelled" });
-    },
+    send,
     dispose: () => {
       disposed = true;
       if (current) settle(current.id, { type: "cancelled" });

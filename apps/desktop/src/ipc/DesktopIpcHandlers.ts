@@ -83,7 +83,7 @@ import {
   uninstallCliCommand,
   addCliCommandToPath,
 } from "./methods/cliCommand.ts";
-import { isGlintAvailable, presentGlint } from "./methods/glint.ts";
+import { isGlintAvailable, presentGlint, sendGlint } from "./methods/glint.ts";
 
 export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers")(function* () {
   const ipc = yield* DesktopIpc.DesktopIpc;
@@ -169,6 +169,7 @@ export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers"
   yield* ipc.handle(addCliCommandToPath);
   yield* ipc.handleSync(isGlintAvailable);
   yield* ipc.handle(presentGlint);
+  yield* ipc.handle(sendGlint);
   for (const previewMethod of PreviewIpc.methods) {
     // Explicit types preserve the error/service union of these heterogeneous preview methods.
     yield* ipc.handle<

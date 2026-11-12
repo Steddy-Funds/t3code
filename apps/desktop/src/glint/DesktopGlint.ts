@@ -1,6 +1,7 @@
 import {
   DEFAULT_CLIENT_SETTINGS,
   type ClientSettings,
+  type DesktopGlintMessage,
   type DesktopGlintOutcome,
   type DesktopGlintPresentInput,
 } from "@t3tools/contracts";
@@ -14,6 +15,7 @@ import * as Ref from "effect/Ref";
 
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import * as ElectronWindow from "../electron/ElectronWindow.ts";
+import * as IpcChannels from "../ipc/channels.ts";
 import * as DesktopClientSettings from "../settings/DesktopClientSettings.ts";
 import { makeGlintHelper, toScreenAnchor, type GlintHelper } from "./GlintHelper.ts";
 
@@ -26,6 +28,8 @@ export class DesktopGlint extends Context.Service<
     readonly configure: (settings: ClientSettings) => Effect.Effect<void>;
     readonly isAvailable: Effect.Effect<boolean>;
     readonly present: (input: DesktopGlintPresentInput) => Effect.Effect<DesktopGlintOutcome>;
+    /** False when `message.id` is not the open dialog. */
+    readonly send: (message: DesktopGlintMessage) => Effect.Effect<boolean>;
   }
 >()("@t3tools/desktop/glint/DesktopGlint") {}
 
@@ -49,6 +53,9 @@ const make = Effect.gen(function* () {
   const helperRef = yield* Ref.make<GlintHelper | null>(null);
   const runFork = Effect.runForkWith(yield* Effect.context<never>());
   const log = (message: string) => void runFork(Effect.logDebug(message));
+  // Dialog ids are unique, so every window can hear them and each renderer keeps its own.
+  const onEvent = (message: DesktopGlintMessage) =>
+    void runFork(electronWindow.sendAll(IpcChannels.GLINT_EVENT_CHANNEL, message));
 
   const configure = Effect.fn("desktop.glint.configure")(function* (settings: ClientSettings) {
     const path = resolveGlintHelperPath(environment.platform, settings, env);
@@ -58,7 +65,7 @@ const make = Effect.gen(function* () {
     const previous = yield* Ref.get(helperRef);
     if ((previous?.path ?? null) === next) return;
     previous?.dispose();
-    yield* Ref.set(helperRef, next === null ? null : makeGlintHelper(next, { log }));
+    yield* Ref.set(helperRef, next === null ? null : makeGlintHelper(next, { log, onEvent }));
   });
 
   yield* Effect.addFinalizer(() =>
@@ -80,13 +87,16 @@ const make = Effect.gen(function* () {
       window.value.getContentBounds(),
       window.value.webContents.getZoomFactor(),
     );
-    return yield* Effect.promise(() => helper.present(input.kind, anchor, input.params));
+    return yield* Effect.promise(() => helper.present(input.id, input.kind, anchor, input.params));
   });
 
   return DesktopGlint.of({
     configure,
     isAvailable: Ref.get(helperRef).pipe(Effect.map((helper) => helper !== null)),
     present,
+    send: Effect.fn("desktop.glint.send")(function* (message: DesktopGlintMessage) {
+      return (yield* Ref.get(helperRef))?.send(message) ?? false;
+    }),
   });
 });
 

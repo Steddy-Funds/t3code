@@ -343,8 +343,17 @@ contextBridge.exposeInMainWorld("desktopBridge", {
   },
   glint: {
     isAvailable: () => ipcRenderer.sendSync(IpcChannels.GLINT_IS_AVAILABLE_CHANNEL) === true,
-    present: (kind, anchor, params) =>
-      ipcRenderer.invoke(IpcChannels.GLINT_PRESENT_CHANNEL, { kind, anchor, params }),
+    present: (input) => ipcRenderer.invoke(IpcChannels.GLINT_PRESENT_CHANNEL, input),
+    send: (message) => ipcRenderer.invoke(IpcChannels.GLINT_SEND_CHANNEL, message),
+    onEvent: (id, listener) => {
+      const wrappedListener = (_event: Electron.IpcRendererEvent, message: unknown) => {
+        if (typeof message !== "object" || message === null) return;
+        if ((message as { id?: unknown }).id !== id) return;
+        listener(message as Parameters<typeof listener>[0]);
+      };
+      ipcRenderer.on(IpcChannels.GLINT_EVENT_CHANNEL, wrappedListener);
+      return () => ipcRenderer.removeListener(IpcChannels.GLINT_EVENT_CHANNEL, wrappedListener);
+    },
   },
   preview: {
     setForwardedShortcuts: (shortcuts) =>

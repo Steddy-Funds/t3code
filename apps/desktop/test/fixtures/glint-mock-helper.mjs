@@ -55,6 +55,17 @@ NodeReadline.createInterface({ input: process.stdin }).on("line", (line) => {
     finish(message.id, { type: "cancelled" });
     return;
   }
+  // Live input on an open dialog answers with a `changed`, as the palette's would.
+  if ((message.type === "input" || message.type === "key") && current?.id === message.id) {
+    send({
+      type: "changed",
+      id: message.id,
+      path: [],
+      highlighted: message.key ?? null,
+      text: message.text,
+    });
+    return;
+  }
   if (message.type !== "present") return;
   if (current) finish(current.id, { type: "cancelled" });
   if (mode === "crash") process.exit(3);

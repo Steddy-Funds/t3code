@@ -671,29 +671,33 @@ const make = Effect.gen(function* () {
           const customConfig = yield* loadWritableCustomKeybindingsConfig();
           const rule = keybindingRuleFromInput(input);
           const replaceTarget = replaceTargetFromUpsertInput(input);
-          const nextConfig = [
-            ...customConfig.filter(({ rule: entry }) => {
-              if (!entry) return true;
-              if (replaceTarget) {
-                return (
-                  !isSameKeybindingRule(entry, replaceTarget) && !isSameKeybindingRule(entry, rule)
-                );
-              }
-              return !isSameKeybindingRule(entry, rule);
-            }),
-            { value: rule, rule },
-          ];
-          const cappedConfig =
-            nextConfig.length > MAX_KEYBINDINGS_COUNT
-              ? nextConfig.slice(-MAX_KEYBINDINGS_COUNT)
-              : nextConfig;
-          if (nextConfig.length > MAX_KEYBINDINGS_COUNT) {
+          const kept = customConfig.filter(({ rule: entry }) => {
+            if (!entry) return true;
+            if (replaceTarget) {
+              return (
+                !isSameKeybindingRule(entry, replaceTarget) && !isSameKeybindingRule(entry, rule)
+              );
+            }
+            return !isSameKeybindingRule(entry, rule);
+          });
+          // The oldest entries make room, before the saved rule is placed among the rest.
+          const withRoom = kept.slice(-(MAX_KEYBINDINGS_COUNT - 1));
+          if (withRoom.length < kept.length) {
             yield* Effect.logWarning("truncating keybindings config to max entries", {
               path: keybindingsConfigPath,
               maxEntries: MAX_KEYBINDINGS_COUNT,
             });
           }
-          yield* writeConfigAtomically(cappedConfig.map(({ value }) => value));
+          const saved = { value: rule, rule };
+          // A rule saved back as a shipped default (Settings' reset) takes that default's place,
+          // so defaults that share its shortcut keep their order. Any other rule is the user's
+          // own and goes last.
+          const nextConfig = DEFAULT_KEYBINDINGS.some((entry) => isSameKeybindingRule(entry, rule))
+            ? insertMissingDefaultKeybindings(withRoom, [saved], (entry) =>
+                entry.rule ? compileResolvedKeybindingRule(entry.rule) : null,
+              )
+            : [...withRoom, saved];
+          yield* writeConfigAtomically(nextConfig.map(({ value }) => value));
           return yield* reloadAndEmit;
         }),
       ),

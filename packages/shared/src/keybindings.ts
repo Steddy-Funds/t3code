@@ -61,6 +61,10 @@ export const DEFAULT_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
   // Some browsers keep plain F6 for their own toolbars; mod+F6 reaches the page in all of them.
   { key: "mod+f6", command: "workspace.focusNext" },
   { key: "mod+shift+f6", command: "workspace.focusPrevious" },
+  // A command is labelled with its last rule, so these stay ahead of mod+[ and mod+]. Desktop
+  // only: browsers keep mod+alt+arrows for their tabs.
+  { key: "mod+alt+arrowleft", command: "navigation.back", when: "!terminalFocus && isDesktop" },
+  { key: "mod+alt+arrowright", command: "navigation.forward", when: "!terminalFocus && isDesktop" },
   { key: "mod+[", command: "navigation.back", when: "!terminalFocus" },
   { key: "mod+]", command: "navigation.forward", when: "!terminalFocus" },
   { key: "mod+j", command: "terminal.toggle" },
@@ -148,21 +152,18 @@ export const DEFAULT_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
   { key: "mod+shift+3", command: "usage.period.month", when: "usagePageOpen" },
   { key: "mod+shift+4", command: "usage.period.quarter", when: "usagePageOpen" },
   // JetBrains keys. The last match wins, so these stay below the defaults whose shortcuts they
-  // share and take over only inside their focus scope. A rule on a shared shortcut must not match
-  // before its command has a handler there: nothing falls through to the rule it out-ranks. A
-  // scope says what a surface is; codeNavigation, codeSymbols and projectPane say a feature works.
+  // share. A rule on a shared shortcut must not match before its command has a handler there
+  // (nothing falls through): a scope says what a surface is, a capability that a feature works.
+  // A command is labelled with its last rule, so the shortcut JetBrains shows comes last.
   { key: "mod+b", command: "code.goToDeclaration", when: "codeFocus && codeNavigation" },
   { key: "mod+shift+b", command: "code.goToTypeDeclaration", when: "codeFocus && codeNavigation" },
   { key: "mod+alt+b", command: "code.goToImplementation", when: "codeFocus && codeNavigation" },
-  { key: "alt+f7", command: "code.findUsages", when: "codeFocus && codeNavigation" },
   { key: "mod+alt+f7", command: "code.findUsages", when: "codeFocus && codeNavigation" },
+  { key: "alt+f7", command: "code.findUsages", when: "codeFocus && codeNavigation" },
   { key: "mod+shift+f7", command: "code.highlightUsages", when: "codeFocus && codeNavigation" },
   { key: "f1", command: "code.quickDocumentation", when: "codeFocus && codeNavigation" },
   { key: "alt+space", command: "code.quickDefinition", when: "codeFocus && codeNavigation" },
   { key: "mod+l", command: "code.goToLine", when: "codeFocus && codeNavigation" },
-  // Browsers keep mod+alt+arrows and mod+1 for their tabs.
-  { key: "mod+alt+arrowleft", command: "navigation.back", when: "!terminalFocus && isDesktop" },
-  { key: "mod+alt+arrowright", command: "navigation.forward", when: "!terminalFocus && isDesktop" },
   {
     key: "mod+o",
     command: "code.goToClass",
@@ -176,8 +177,9 @@ export const DEFAULT_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
   { key: "ctrl+shift+arrowup", command: "code.previousMethod", when: "codeFocus && codeSymbols" },
   { key: "f7", command: "diff.nextChange", when: "diffFocus" },
   { key: "shift+f7", command: "diff.previousChange", when: "diffFocus" },
-  { key: "f4", command: "diff.jumpToSource", when: "diffFocus" },
   { key: "mod+arrowdown", command: "diff.jumpToSource", when: "diffFocus" },
+  { key: "f4", command: "diff.jumpToSource", when: "diffFocus" },
+  // Desktop only: browsers keep mod+1 for their tabs.
   {
     key: "mod+1",
     command: "projectPane.toggle",

@@ -102,7 +102,6 @@ export function useCodeSymbolCommands(target: ActiveProjectTarget | null): void 
     const releaseCommands = installCodeSymbolCommands();
     const releaseDoubleShift = installDoubleShift({
       isOn: () => isDoubleShiftSearchOn(getClientSettings()),
-      isCodeFocused: () => focusedCodeViewer() !== undefined,
       onDoubleShift: () => {
         if (!useCommandPaletteStore.getState().open) {
           dispatchCommandPalette({ _tag: "SetOpen", open: true });

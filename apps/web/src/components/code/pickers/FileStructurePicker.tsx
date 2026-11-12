@@ -1,10 +1,23 @@
 import { useEffect, useState } from "react";
 
+import type { CodeServerStatus } from "@t3tools/contracts";
+
+import { codeIntelEnvironment } from "~/state/codeIntel";
+import { useEnvironmentQuery } from "~/state/query";
+
 import type { CommandPaletteActionItem } from "../../CommandPalette.logic";
+import { serverForPath } from "../codeLanguages";
+import { waitingMessage } from "../codeNavigationMessages";
 import { navigateToCodeLocation } from "../navigation";
 import { CodePicker } from "./CodePicker";
 import { fileStructureViewer } from "./codeSymbolCommands";
-import { fileName, rowAtPosition, structureRows, type StructureRow } from "./codePickers.logic";
+import {
+  fileName,
+  isServerBusy,
+  rowAtPosition,
+  structureRows,
+  type StructureRow,
+} from "./codePickers.logic";
 import { type DocumentSymbolsAnswer, documentSymbolsFor } from "./documentSymbols";
 import { HighlightedName } from "./HighlightedName";
 import { SymbolKindIcon } from "./SymbolKindIcon";
@@ -15,8 +28,12 @@ function rowValue(row: StructureRow): string {
   return `structure:${row.id}`;
 }
 
-function emptyMessage(answer: DocumentSymbolsAnswer | null, query: string): string {
-  if (answer === null) return "Loading structure…";
+function emptyMessage(
+  answer: DocumentSymbolsAnswer | null,
+  query: string,
+  server: CodeServerStatus | null,
+): string {
+  if (answer === null) return isServerBusy(server) ? waitingMessage(server) : "Loading structure…";
   switch (answer._tag) {
     case "none":
       return "Open a file to see its structure.";
@@ -35,6 +52,16 @@ export function FileStructurePicker(props: { readonly setOpen: (open: boolean) =
   );
   const [query, setQuery] = useState("");
   const [highlightedValue, setHighlightedValue] = useState<string | null>(null);
+  const [opened] = useState(() => viewer?.document() ?? null);
+  const status = useEnvironmentQuery(
+    opened === null
+      ? null
+      : codeIntelEnvironment.status({
+          environmentId: opened.environmentId,
+          input: { cwd: opened.cwd },
+        }),
+  );
+  const server = opened === null ? null : serverForPath(status.data?.servers ?? [], opened.path);
 
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- asks the language server for the outline once the popup opens, and drops the answer if it closes first
   useEffect(() => {
@@ -96,7 +123,7 @@ export function FileStructurePicker(props: { readonly setOpen: (open: boolean) =
       highlightedValue={highlightedValue}
       initialValue={caretRow === null ? null : rowValue(caretRow)}
       onHighlight={setHighlightedValue}
-      emptyStateMessage={emptyMessage(answer, query)}
+      emptyStateMessage={emptyMessage(answer, query, server)}
       onExecute={(item) => {
         props.setOpen(false);
         void item.run();

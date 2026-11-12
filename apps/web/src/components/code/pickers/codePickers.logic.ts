@@ -1,4 +1,10 @@
-import type { CodePosition, CodeRange, CodeSymbol, CodeSymbolKind } from "@t3tools/contracts";
+import type {
+  CodePosition,
+  CodeRange,
+  CodeServerStatus,
+  CodeSymbol,
+  CodeSymbolKind,
+} from "@t3tools/contracts";
 
 export const CLASS_SYMBOL_KINDS: ReadonlyArray<CodeSymbolKind> = [
   "class",
@@ -14,6 +20,13 @@ const METHOD_SYMBOL_KINDS: ReadonlySet<CodeSymbolKind> = new Set([
 
 export const WORKSPACE_SYMBOL_LIMIT = 100;
 export const WORKSPACE_SYMBOL_DEBOUNCE_MS = 150;
+
+/** A server still starting or indexing answers empty or late: say so instead of "nothing". */
+export function isServerBusy(
+  server: CodeServerStatus | null | undefined,
+): server is CodeServerStatus {
+  return server?.state === "starting" || server?.state === "indexing";
+}
 
 /** The query's characters in order in `value`, ignoring case: their indices, or null. */
 export function matchIndices(value: string, query: string): ReadonlyArray<number> | null {

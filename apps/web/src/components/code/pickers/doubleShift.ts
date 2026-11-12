@@ -5,6 +5,7 @@ import {
 } from "@t3tools/contracts";
 
 import { isEditableFocused } from "~/lib/editableFocus";
+import { readFocusScopes } from "~/lib/focusScopes";
 
 const DOUBLE_SHIFT_INTERVAL_MS = 300;
 
@@ -80,17 +81,16 @@ export function snapShotUsesShiftPair(
 }
 
 /**
- * Listens on the window and calls `onDoubleShift` while `isOn` holds. Text fields other than the
- * code viewer keep their Shift taps.
+ * Listens on the window and calls `onDoubleShift` while `isOn` holds. Text fields keep their
+ * Shift taps, a comment box or filter inside the code viewer too; the code editor does not.
  */
 export function installDoubleShift(options: {
   readonly isOn: () => boolean;
-  readonly isCodeFocused: () => boolean;
   readonly onDoubleShift: () => void;
 }): () => void {
   const detector = createDoubleShiftDetector();
   const onKey = (event: KeyboardEvent) => {
-    const inTextField = isEditableFocused(event.target) && !options.isCodeFocused();
+    const inTextField = isEditableFocused(event.target) && !readFocusScopes(event.target).codeFocus;
     if (event.isComposing || inTextField || !options.isOn()) {
       detector.reset();
       return;

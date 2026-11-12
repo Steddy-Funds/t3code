@@ -2,7 +2,6 @@ import { isCodeIntelUnsupportedError } from "@t3tools/client-runtime/state/code-
 import {
   CodeIntelError,
   type CodeIntelWorkspaceSymbolsResult,
-  type CodeServerStatus,
   type CodeWorkspaceSymbol,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
@@ -19,6 +18,8 @@ import { navigateToCodeLocation } from "../navigation";
 import { CodePicker } from "./CodePicker";
 import {
   CLASS_SYMBOL_KINDS,
+  isServerBusy,
+  matchIndices,
   WORKSPACE_SYMBOL_DEBOUNCE_MS,
   WORKSPACE_SYMBOL_LIMIT,
 } from "./codePickers.logic";
@@ -33,8 +34,6 @@ const COPY = {
 } as const;
 
 const isCodeIntelError = Schema.is(CodeIntelError);
-
-const BUSY_STATES: ReadonlySet<CodeServerStatus["state"]> = new Set(["starting", "indexing"]);
 
 interface ShownAnswer {
   readonly query: string;
@@ -107,38 +106,41 @@ function SymbolSearch(props: {
       ? failureMessage(search.failure, search.error)
       : null;
   const answer = typing && failure === null ? shown : null;
-  const busyServer = (status.data?.servers ?? []).find((server) => BUSY_STATES.has(server.state));
-  const items: CommandPaletteActionItem[] = projectFirst(answer?.result.symbols ?? []).map(
-    (symbol, index) => ({
-      kind: "action",
-      value: `symbol:${index}:${symbol.name}:${locationLabel(symbol)}`,
-      searchTerms: [symbol.name],
-      title: (
-        <>
-          <HighlightedName name={symbol.name} query={query} />
-          {symbol.containerName ? (
-            <span className="ms-1.5 text-muted-foreground/70">{symbol.containerName}</span>
-          ) : null}
-        </>
-      ),
-      description: locationLabel(symbol),
-      icon: <SymbolKindIcon kind={symbol.kind} />,
-      titleTrailingContent: (
-        <span className="shrink-0 text-muted-foreground/70 text-xs">
-          {symbolKindLabel(symbol.kind)}
-        </span>
-      ),
-      run: async () => {
-        navigateToCodeLocation(target.threadRef, symbol.location);
-      },
-    }),
+  // While the next query runs, the last answer keeps only the names that still match it.
+  const stale = answer !== null && answer.query !== query.trim();
+  const symbols = projectFirst(answer?.result.symbols ?? []).filter(
+    (symbol) => !stale || matchIndices(symbol.name, query.trim()) !== null,
   );
+  const busyServer = (status.data?.servers ?? []).find(isServerBusy);
+  const items: CommandPaletteActionItem[] = symbols.map((symbol, index) => ({
+    kind: "action",
+    value: `symbol:${index}:${symbol.name}:${locationLabel(symbol)}`,
+    searchTerms: [symbol.name],
+    title: (
+      <>
+        <HighlightedName name={symbol.name} query={query} />
+        {symbol.containerName ? (
+          <span className="ms-1.5 text-muted-foreground/70">{symbol.containerName}</span>
+        ) : null}
+      </>
+    ),
+    description: locationLabel(symbol),
+    icon: <SymbolKindIcon kind={symbol.kind} />,
+    titleTrailingContent: (
+      <span className="shrink-0 text-muted-foreground/70 text-xs">
+        {symbolKindLabel(symbol.kind)}
+      </span>
+    ),
+    run: async () => {
+      navigateToCodeLocation(target.threadRef, symbol.location);
+    },
+  }));
 
   const emptyStateMessage = !typing
     ? `Type to search ${copy.noun}`
     : failure !== null
       ? failure
-      : answer?.query !== query.trim() || search.isPending
+      : answer === null || stale || search.isPending
         ? busyServer
           ? waitingMessage(busyServer)
           : `Searching ${copy.noun}…`

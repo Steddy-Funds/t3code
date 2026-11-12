@@ -73,33 +73,30 @@ const excerptOf = (lines: ReadonlyArray<string>, fits: (excerpt: string) => bool
   return { excerpt, excerptTruncated: excerpt !== lines.join("\n") };
 };
 
-/**
- * The same note on the same lines of a thread is one note, whichever turn sends it again. The
- * hash holds the thread too: a reply finds its note by the hash alone (`reviewNoteSectionId`),
- * and a fork shows its source's notes beside its own.
- */
-const noteIdFor = (
-  threadId: string,
-  relativePath: string,
-  input: OrchestratorMcpFlagForReviewInput,
-) =>
+const noteIdOf = (threadId: string, key: ReadonlyArray<unknown>) =>
   TurnItemId.make(
     `${REVIEW_NOTE_TURN_ITEM_PREFIX}${encodeURIComponent(threadId)}:${NodeCrypto.createHash(
       "sha256",
     )
-      .update(
-        JSON.stringify([
-          threadId,
-          relativePath,
-          input.startLine,
-          input.endLine,
-          input.note,
-          input.question ?? null,
-        ]),
-      )
+      .update(JSON.stringify(key))
       .digest("hex")
       .slice(0, 32)}`,
   );
+
+/**
+ * The same note on the same lines of a thread is one note, whichever turn sends it again. The
+ * hash holds the thread too: a reply finds its note by the hash alone (`reviewNoteSectionId`),
+ * and a fork shows its source's notes beside its own. `legacyId` is the id a note got before
+ * the thread joined the hash.
+ */
+const noteIdsFor = (
+  threadId: string,
+  relativePath: string,
+  input: OrchestratorMcpFlagForReviewInput,
+) => {
+  const key = [relativePath, input.startLine, input.endLine, input.note, input.question ?? null];
+  return { noteId: noteIdOf(threadId, [threadId, ...key]), legacyId: noteIdOf(threadId, key) };
+};
 
 const make = Effect.gen(function* () {
   const threadManagement = yield* ThreadManagementService.ThreadManagementService;
@@ -228,7 +225,11 @@ const make = Effect.gen(function* () {
             "utf8",
           ) <= REVIEW_NOTE_MAX_INPUT_BYTES,
       );
-      const noteId = noteIdFor(threadId, file.relativePath, input);
+      const { noteId, legacyId } = noteIdsFor(threadId, file.relativePath, input);
+      const legacy = yield* threadManagement
+        .getTurnItem({ threadId, itemId: legacyId })
+        .pipe(Effect.mapError(unreadable));
+      if (legacy.item !== null) return { status: "recorded" as const, noteId: legacyId };
       yield* threadManagement
         .dispatch({
           type: "review_note.record",

@@ -40,7 +40,8 @@ export interface CodePickerProps {
   readonly label: string;
   readonly testId: string;
   readonly placeholder: string;
-  readonly footerActionLabel: string;
+  /** Null when Enter has nothing it could open. */
+  readonly footerActionLabel: string | null;
   readonly escapeLabel: "Back" | "Close";
   readonly query: string;
   readonly onQueryChange: (query: string) => void;
@@ -100,7 +101,7 @@ export function CodePicker(props: CodePickerProps) {
       aria-label={props.label}
       autoHighlight={false}
       escapeLabel={props.escapeLabel}
-      footerActionLabel={props.footerActionLabel}
+      {...(props.footerActionLabel === null ? {} : { footerActionLabel: props.footerActionLabel })}
       footerTrailing={props.footerTrailing}
       inputProps={{
         placeholder: props.placeholder,

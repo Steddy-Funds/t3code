@@ -2358,7 +2358,8 @@ code {
   --sbs-row-bg: var(--diff-block-modified-muted);
 }
 
-.sbs-row[data-selected] {
+.sbs-row[data-selected],
+[data-sbs-all-selected] .sbs-row {
   background: color-mix(in srgb, var(--primary) 16%, var(--sbs-row-bg));
 }
 

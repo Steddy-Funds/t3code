@@ -253,7 +253,8 @@ export default function DiffPanel({
   // The open commit menu keeps the list it opened with, so rows do not move under the pointer.
   const [openCommitMenu, setOpenCommitMenu] = useState<ReviewBranchCommitsResult | null>(null);
   const [codeViewRevision, setCodeViewRevision] = useState(0);
-  const [diffAreaWidth, setDiffAreaWidth] = useState<number | null>(null);
+  // A flag, not the width: a resize that keeps the side redraws nothing.
+  const [diffAreaNarrow, setDiffAreaNarrow] = useState(false);
   // The side-by-side layout shows one file: the one picked in this selection, else the first.
   const [sideBySideFile, setSideBySideFile] = useState<{
     scopeKey: string | null;
@@ -597,12 +598,11 @@ export default function DiffPanel({
     }
     return currentLoadWholeFiles(fileDiff);
   });
-  const sideBySide =
-    settings.diffSideBySide && (diffAreaWidth === null || diffAreaWidth >= SIDE_BY_SIDE_MIN_WIDTH);
+  const sideBySide = settings.diffSideBySide && !diffAreaNarrow;
   const observeDiffArea = useStableCallback((element: HTMLDivElement | null) => {
     if (!element) return;
     return observeResize(element, ([entry]) => {
-      if (entry) setDiffAreaWidth(entry.contentRect.width);
+      if (entry) setDiffAreaNarrow(entry.contentRect.width < SIDE_BY_SIDE_MIN_WIDTH);
     });
   });
 

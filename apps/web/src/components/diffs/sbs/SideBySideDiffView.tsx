@@ -3,10 +3,12 @@ import { LineDiffRangeCache, type FileContents, type FileDiffMetadata } from "@p
 import type { KeybindingCommand } from "@t3tools/contracts";
 import type { ThemeEditorColors } from "@t3tools/shared/themePalettes";
 import {
+  useEffect,
   useEffectEvent,
   useLayoutEffect,
   useRef,
   useState,
+  type ClipboardEvent,
   type CSSProperties,
   type KeyboardEvent,
   type MouseEvent,
@@ -17,6 +19,7 @@ import {
 import { useClientSettings } from "~/hooks/useSettings";
 import { useStableCallback } from "~/hooks/useStableCallback";
 import { resolveShortcutCommand, shortcutLabelForCommand } from "~/keybindings";
+import { isEditableFocused } from "~/lib/editableFocus";
 import { focusScopeProps } from "~/lib/focusScopes";
 import { observeResize } from "~/lib/observeResize";
 import { usePaintedThemeEditorColors } from "~/lib/paintedThemeEditorColors";
@@ -245,6 +248,47 @@ function lineIndexOf(node: EventTarget | Node | null): number | null {
   return index === null || index === undefined ? null : Number(index);
 }
 
+/** A place in one side's text: a line and a UTF-16 offset in it. */
+interface SbsTextPoint {
+  readonly side: SbsSide;
+  readonly line: number;
+  readonly offset: number;
+}
+
+interface SbsTextSelection {
+  readonly side: SbsSide;
+  readonly start: SbsTextPoint;
+  readonly end: SbsTextPoint;
+}
+
+/** A DOM position as a place in a pane's text; null outside a line's row. */
+function textPointOf(node: Node, offset: number): SbsTextPoint | null {
+  const row = elementOf(node)?.closest("[data-sbs-index]");
+  const code = row?.querySelector(".sbs-code");
+  const side = paneSideOf(node);
+  if (!row || !code || !side) return null;
+  const line = Number(row.getAttribute("data-sbs-index"));
+  const text = document.createRange();
+  text.selectNodeContents(code);
+  const place = text.comparePoint(node, offset);
+  // Before the code is the gutter, so the line's start; after it, its end.
+  if (place !== 0) return { side, line, offset: place < 0 ? 0 : Number.POSITIVE_INFINITY };
+  text.setEnd(node, offset);
+  return { side, line, offset: text.toString().length };
+}
+
+/**
+ * Keeps where the document's selection started while that row is drawn. Rows leave the DOM as
+ * the window moves, and the browser then moves the selection's start out of the text.
+ */
+function noteSelectionStart(start: { current: SbsTextPoint | null }) {
+  const selection = document.getSelection();
+  const node = selection?.anchorNode ?? null;
+  const point = node ? textPointOf(node, selection!.anchorOffset) : null;
+  if (point) start.current = point;
+  else if (!selection || selection.isCollapsed || paneSideOf(node) === null) start.current = null;
+}
+
 function caretAt(x: number, y: number): { node: Node; offset: number } | null {
   const position = document.caretPositionFromPoint?.(x, y);
   if (position) return { node: position.offsetNode, offset: position.offset };
@@ -347,6 +391,15 @@ export function SideBySideDiffView<T = unknown>(props: SideBySideDiffViewProps<T
   const opened = useRef(false);
   const dragSide = useRef<SbsSide | null>(null);
   const reportedTextSelection = useRef(false);
+  const selectionStart = useRef<SbsTextPoint | null>(null);
+  // Mod+A in a pane: its whole file, which is more rows than the window draws.
+  const [allSelected, setAllSelected] = useState<SbsSide | null>(null);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- follows the document's selection, which the browser owns
+  useEffect(() => {
+    const note = () => noteSelectionStart(selectionStart);
+    document.addEventListener("selectionchange", note);
+    return () => document.removeEventListener("selectionchange", note);
+  }, []);
   const columnProbe = useRef<HTMLSpanElement | null>(null);
   const pendingReveal = useRef<PendingReveal | null>(null);
 
@@ -465,7 +518,12 @@ export function SideBySideDiffView<T = unknown>(props: SideBySideDiffViewProps<T
     // The file on disk is the new side; a deletion opens it where the lines were.
     const side: SbsSide = single ?? "additions";
     const range = currentGroup === null ? undefined : groupRanges[currentGroup];
-    const line = range ? range[side].start : (sbsRowTarget(layout, side, anchorRow)?.line ?? 0);
+    const target = sbsRowTarget(layout, side, anchorRow);
+    // A fold's row opens at the first line it hides.
+    const line =
+      range?.[side].start ??
+      target?.line ??
+      (target ? layout.segments[target.segment]![side].start : 0);
     const lastLine = Math.max(0, model.lines[side].length - 1);
     props.onOpenSource?.({ side, line: sbsLineNumber(model, side, Math.min(line, lastLine)) });
   };
@@ -524,10 +582,16 @@ export function SideBySideDiffView<T = unknown>(props: SideBySideDiffViewProps<T
     if (top < element.scrollTop || top + lineHeight > element.scrollTop + element.clientHeight) {
       element.scrollTop = Math.max(0, top - Math.floor(element.clientHeight / 3));
     }
-    if (!reveal.columns) return;
-    const column = columnProbe.current?.getBoundingClientRect().width ?? 0;
-    const start = reveal.columns[0] * column;
-    const end = reveal.columns[1] * column;
+    const probe = columnProbe.current;
+    if (!reveal.columns || !probe) return;
+    const text = model.lines[reveal.side][reveal.line] ?? "";
+    const widthTo = (column: number) => {
+      probe.textContent = text.slice(0, column);
+      return probe.getBoundingClientRect().width;
+    };
+    const start = widthTo(reveal.columns[0]);
+    const end = widthTo(reveal.columns[1]);
+    probe.textContent = "";
     if (start < element.scrollLeft || end > element.scrollLeft + element.clientWidth * 0.8) {
       element.scrollLeft = Math.max(0, start - element.clientWidth / 3);
     }
@@ -591,45 +655,76 @@ export function SideBySideDiffView<T = unknown>(props: SideBySideDiffViewProps<T
     setFind(null);
   };
 
-  const reportTextSelection = () => {
-    if (!props.onSelectRange) return;
+  /** The selection in one pane, in its lines; null when it is not inside one pane's text. */
+  const textSelection = (): SbsTextSelection | null => {
+    if (allSelected) {
+      const end = Math.max(0, model.lines[allSelected].length - 1);
+      return {
+        side: allSelected,
+        start: { side: allSelected, line: 0, offset: 0 },
+        end: { side: allSelected, line: end, offset: Number.POSITIVE_INFINITY },
+      };
+    }
     const selection = window.getSelection();
-    const range = selection && !selection.isCollapsed ? selection.getRangeAt(0) : null;
-    const side = range ? paneSideOf(range.startContainer) : null;
-    const start = range ? lineIndexOf(range.startContainer) : null;
-    let end = range ? lineIndexOf(range.endContainer) : null;
-    if (
-      !range ||
-      !side ||
-      side !== paneSideOf(range.endContainer) ||
-      start === null ||
-      end === null
-    ) {
+    if (!selection?.anchorNode || !selection.focusNode || selection.isCollapsed) return null;
+    const focus = textPointOf(selection.focusNode, selection.focusOffset);
+    if (!focus) return null;
+    const anchor =
+      textPointOf(selection.anchorNode, selection.anchorOffset) ??
+      (paneSideOf(selection.anchorNode) === focus.side ? selectionStart.current : null);
+    if (anchor?.side !== focus.side) return null;
+    const forward =
+      anchor.line < focus.line || (anchor.line === focus.line && anchor.offset <= focus.offset);
+    return { side: focus.side, start: forward ? anchor : focus, end: forward ? focus : anchor };
+  };
+
+  /** Read from the file, not the DOM, which holds only the rows in the window. */
+  const selectedText = ({ side, start, end }: SbsTextSelection) => {
+    const lines = model.lines[side];
+    if (start.line === end.line) return (lines[start.line] ?? "").slice(start.offset, end.offset);
+    return [
+      (lines[start.line] ?? "").slice(start.offset),
+      ...lines.slice(start.line + 1, end.line),
+      (lines[end.line] ?? "").slice(0, end.offset),
+    ].join("\n");
+  };
+
+  const reportRange = (selected: SbsTextSelection | null) => {
+    if (!props.onSelectRange) return;
+    if (!selected) {
       if (reportedTextSelection.current) {
         reportedTextSelection.current = false;
         props.onSelectRange(null);
       }
       return;
     }
+    const { side, start, end } = selected;
     // A selection that stops before the first character of a line does not include that line.
-    const endCode = elementOf(range.endContainer)?.closest(".sbs-code");
-    if (end > start && endCode) {
-      const prefix = document.createRange();
-      prefix.setStart(endCode, 0);
-      prefix.setEnd(range.endContainer, range.endOffset);
-      if (prefix.toString().length === 0) end -= 1;
-    }
+    const endLine = end.line > start.line && end.offset === 0 ? end.line - 1 : end.line;
     reportedTextSelection.current = true;
     setGutterSelection(null);
     props.onSelectRange({
       side,
-      startLine: sbsLineNumber(model, side, start),
-      endLine: sbsLineNumber(model, side, end),
-      selectedText: selection?.toString() ?? "",
+      startLine: sbsLineNumber(model, side, start.line),
+      endLine: sbsLineNumber(model, side, endLine),
+      selectedText: selectedText(selected),
     });
   };
 
+  const reportTextSelection = () => {
+    noteSelectionStart(selectionStart);
+    reportRange(textSelection());
+  };
+
+  const handleCopy = (event: ClipboardEvent<HTMLDivElement>) => {
+    const selected = textSelection();
+    if (!selected) return;
+    event.preventDefault();
+    event.clipboardData.setData("text/plain", selectedText(selected));
+  };
+
   const handlePointerDown = (event: PointerEvent<HTMLDivElement>) => {
+    setAllSelected(null);
     if (event.button !== 0) return;
     const gutter = elementOf(event.target)?.closest("[data-sbs-gutter]");
     const side = paneSideOf(event.target);
@@ -730,6 +825,17 @@ export function SideBySideDiffView<T = unknown>(props: SideBySideDiffViewProps<T
 
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.defaultPrevented || MODIFIER_KEYS.has(event.key)) return;
+    const mod = event.metaKey || event.ctrlKey;
+    const plainMod = mod && !event.altKey && !event.shiftKey;
+    const key = event.key.toLowerCase();
+    if (allSelected && !(plainMod && (key === "a" || key === "c"))) {
+      setAllSelected(null);
+      reportRange(null);
+      if (event.key === "Escape") {
+        event.preventDefault();
+        return;
+      }
+    }
     const command = resolveShortcutCommand(event.nativeEvent, keybindings);
     const run = command === null ? undefined : commands[command];
     if (run) {
@@ -738,9 +844,24 @@ export function SideBySideDiffView<T = unknown>(props: SideBySideDiffViewProps<T
       return;
     }
     setEdgeHint(null);
-    const mod = event.metaKey || event.ctrlKey;
-    if (mod && !event.altKey && !event.shiftKey && event.key.toLowerCase() === "f") {
-      const side = paneSideOf(event.target) ?? find?.side ?? lead;
+    const editable = isEditableFocused(event.target);
+    // A field in a card keeps Mod+F and Escape; the find field is the view's own.
+    if (editable && !elementOf(event.target)?.closest("[data-sbs-find]")) return;
+    const pane = paneSideOf(event.target);
+    if (plainMod && key === "a" && pane && !editable) {
+      event.preventDefault();
+      window.getSelection()?.removeAllRanges();
+      setAllSelected(pane);
+      const end = Math.max(0, model.lines[pane].length - 1);
+      reportRange({
+        side: pane,
+        start: { side: pane, line: 0, offset: 0 },
+        end: { side: pane, line: end, offset: Number.POSITIVE_INFINITY },
+      });
+      return;
+    }
+    if (plainMod && key === "f") {
+      const side = pane ?? find?.side ?? lead;
       event.preventDefault();
       setFind((current) => (current?.side === side ? current : { side, query: "", index: -1 }));
       return;
@@ -803,6 +924,16 @@ export function SideBySideDiffView<T = unknown>(props: SideBySideDiffViewProps<T
         });
   const overlayLeft = `calc(${model.lineNumberDigits}ch + 2.5rem)`;
 
+  // Past its end a pane scrolls on by two thirds of the view and a line. The row the panes keep
+  // level, a third of the way down, then passes the last row, which takes the other side to its
+  // end, as passing an insertion's point does mid-file.
+  const tailHeight =
+    single === null &&
+    viewport.height > 0 &&
+    Math.max(rowCounts.deletions, rowCounts.additions) * lineHeight > viewport.height
+      ? viewport.height - Math.floor(viewport.height / 3) + lineHeight
+      : 0;
+  const scrolls = (side: SbsSide) => rowCounts[side] * lineHeight + tailHeight > viewport.height;
   const renderOverlays = (side: SbsSide) => {
     const card =
       openAnnotation && openAnnotationRange && openAnnotation.side === side
@@ -816,12 +947,13 @@ export function SideBySideDiffView<T = unknown>(props: SideBySideDiffViewProps<T
         {single === null &&
         highlightMode !== "none" &&
         viewport.height > 0 &&
-        rowCounts[side] * lineHeight > viewport.height ? (
+        scrolls(side) ? (
           <SbsScrollMarks
             side={side}
             document={model}
             layout={layout}
-            rowCount={rowCounts[side]}
+            // The marks span the scrollbar's track, which runs on through the room past the end.
+            rowCount={rowCounts[side] + tailHeight / lineHeight}
             viewportHeight={viewport.height}
           />
         ) : null}
@@ -885,6 +1017,7 @@ export function SideBySideDiffView<T = unknown>(props: SideBySideDiffViewProps<T
   );
   const paneProps = {
     document: model,
+    tailHeight,
     layout,
     lineHeight,
     gutterDigits: model.lineNumberDigits,
@@ -896,7 +1029,11 @@ export function SideBySideDiffView<T = unknown>(props: SideBySideDiffViewProps<T
   };
   const deletionsPane =
     single === "additions" ? null : (
-      <div className="relative min-w-0 flex-1" data-sbs-pane="deletions">
+      <div
+        className="relative min-w-0 flex-1"
+        data-sbs-pane="deletions"
+        data-sbs-all-selected={allSelected === "deletions" ? "" : undefined}
+      >
         <SbsPane
           {...paneProps}
           side="deletions"
@@ -910,7 +1047,7 @@ export function SideBySideDiffView<T = unknown>(props: SideBySideDiffViewProps<T
           selectedStart={gutterSelection?.side === "deletions" ? selectedStart : -1}
           selectedEnd={gutterSelection?.side === "deletions" ? selectedEnd : -1}
           // Kept when only this side runs past the view, or nothing would show it scrolls.
-          hideScrollbar={single === null && rowCounts.additions * lineHeight > viewport.height}
+          hideScrollbar={single === null && scrolls("additions")}
           scrollerRef={attachDeletions}
         />
         {renderOverlays("deletions")}
@@ -918,7 +1055,11 @@ export function SideBySideDiffView<T = unknown>(props: SideBySideDiffViewProps<T
     );
   const additionsPane =
     single === "deletions" ? null : (
-      <div className="relative min-w-0 flex-1" data-sbs-pane="additions">
+      <div
+        className="relative min-w-0 flex-1"
+        data-sbs-pane="additions"
+        data-sbs-all-selected={allSelected === "additions" ? "" : undefined}
+      >
         <SbsPane
           {...paneProps}
           side="additions"
@@ -988,18 +1129,17 @@ export function SideBySideDiffView<T = unknown>(props: SideBySideDiffViewProps<T
           if (event.shiftKey || event.key === "Shift") reportTextSelection();
         }}
         onMouseUp={reportTextSelection}
+        onCopy={handleCopy}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
       >
-        {/* One column wide: turns a match's column into a horizontal scroll position. */}
+        {/* Measures a line's text as drawn, tabs and wide glyphs included, to scroll to a match. */}
         <span
           ref={columnProbe}
-          className="pointer-events-none invisible absolute"
+          className="pointer-events-none invisible absolute whitespace-pre"
           aria-hidden="true"
-        >
-          0
-        </span>
+        />
         {deletionsPane}
         {single === null ? (
           <SbsDivider

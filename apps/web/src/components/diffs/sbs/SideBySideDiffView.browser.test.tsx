@@ -41,14 +41,16 @@ const edit = (
   insert: ReadonlyArray<string>,
 ) => lines.toSpliced(at - 1, remove, ...insert);
 
-/** Three separate one-line changes: lines 20, 100 and 180. */
-function threeChanges() {
-  const before = base();
-  const after = before
+/** The new side of `threeChanges`. */
+const threeChangesAfter = () =>
+  base()
     .with(19, "const changed020 = 20;")
     .with(99, "const changed100 = 100;")
     .with(179, "const changed180 = 180;");
-  return diffOf(before, after);
+
+/** Three separate one-line changes: lines 20, 100 and 180. */
+function threeChanges() {
+  return diffOf(base(), threeChangesAfter());
 }
 
 /** A unified diff of one file from hunks written as ` `/`-`/`+` lines. */
@@ -747,6 +749,28 @@ describe("scrolling the panes together", () => {
     );
   });
 
+  it.each([
+    { name: "lines added at the end", before: 300, after: 600, scrolled: "deletions" },
+    { name: "lines deleted at the end", before: 600, after: 300, scrolled: "additions" },
+  ] as const)(
+    "brings the longer side to its last line from the shorter one: $name",
+    async ({ before, after, scrolled }) => {
+      await using screen = await mount({ fileDiff: diffOf(base(before), base(after)) });
+      await vi.waitFor(() => expect(statusOf(screen)).toBe("1 of 1"));
+      const longer = scrolled === "deletions" ? "additions" : "deletions";
+      const last = Math.max(before, after);
+
+      const shorter = scrollerOf(screen, scrolled);
+      shorter.scrollTop = shorter.scrollHeight;
+
+      await vi.waitFor(() => {
+        const row = rowByNumber(screen, longer, last);
+        expect(row).toBeDefined();
+        expect(isVisible(row!, scrollerOf(screen, longer))).toBe(true);
+      });
+    },
+  );
+
   it("mirrors a horizontal scroll", async () => {
     const before = base(60);
     const wide = `const wide = "${"x".repeat(400)}";`;
@@ -806,7 +830,10 @@ describe("windowed rows", () => {
 
     const lineHeight = lineHeightOf(screen);
     const sheet = one(scrollerOf(screen, "additions"), ".sbs-sheet")!;
-    expect(sheet.getBoundingClientRect().height).toBeCloseTo(5000 * lineHeight, 0);
+    // Plus the room past the end that lets the level row reach the last line.
+    const tail = sheet.getBoundingClientRect().height - 5000 * lineHeight;
+    expect(tail).toBeGreaterThan(0);
+    expect(tail).toBeLessThan(scrollerOf(screen, "additions").clientHeight);
     for (const side of SIDES) {
       expect(rowsOf(screen, side).length).toBeGreaterThan(20);
       expect(rowsOf(screen, side).length).toBeLessThan(250);
@@ -1095,7 +1122,11 @@ describe("folds", () => {
   });
 
   it("opens a fold clicked in either pane and both panes gain the same rows", async () => {
-    await using screen = await mount({ fileDiff: threeChanges(), collapseUnchanged: true });
+    // Tall enough that both states fit, so the sheets have no room past the end to measure.
+    await using screen = await mount(
+      { fileDiff: threeChanges(), collapseUnchanged: true },
+      { height: 1400 },
+    );
     await vi.waitFor(() => expect(connectorsOf(screen)).toHaveLength(3));
     const rowsBefore = rowsOf(screen, "additions").length;
     const heightOf = (side: Side) =>
@@ -1149,9 +1180,11 @@ describe("folds", () => {
     await vi.waitFor(() => expect(foldsOf(screen, "additions")).toHaveLength(0));
     expect(foldsOf(screen, "deletions")).toHaveLength(0);
     await expect.element(toggle).toHaveAttribute("aria-pressed", "false");
-    expect(
-      one(scrollerOf(screen, "additions"), ".sbs-sheet")!.getBoundingClientRect().height,
-    ).toBeCloseTo(200 * lineHeightOf(screen), 0);
+    const past =
+      one(scrollerOf(screen, "additions"), ".sbs-sheet")!.getBoundingClientRect().height -
+      200 * lineHeightOf(screen);
+    expect(past).toBeGreaterThan(0);
+    expect(past).toBeLessThan(scrollerOf(screen, "additions").clientHeight);
 
     await userEvent.click(toggle);
     await vi.waitFor(() => expect(foldsOf(screen, "additions")).toHaveLength(4));
@@ -1241,6 +1274,25 @@ describe("find", () => {
     await vi.waitFor(() => expect(findCountOf(screen)).toBe("4/4"));
   });
 
+  it("scrolls sideways to a match after tabs, as wide as they are drawn", async () => {
+    const before = base(60);
+    await using screen = await mount({
+      fileDiff: diffOf(before, before.with(29, `${"\t".repeat(100)}needle`)),
+    });
+    await vi.waitFor(() => expect(statusOf(screen)).toBe("1 of 1"));
+
+    await press(screen, "additions", "{Control>}f{/Control}");
+    await userEvent.keyboard("needle");
+
+    const scroller = scrollerOf(screen, "additions");
+    await vi.waitFor(() => {
+      const view = scroller.getBoundingClientRect();
+      const match = one(scroller, ".sbs-match-current")!.getBoundingClientRect();
+      expect(match.left).toBeGreaterThanOrEqual(view.left);
+      expect(match.right).toBeLessThanOrEqual(view.right);
+    });
+  });
+
   it("marks the matches and the current one in the code", async () => {
     await using screen = await mount({ fileDiff: withNeedle() });
     await vi.waitFor(() => expect(statusOf(screen)).toBe("1 of 3"));
@@ -1323,6 +1375,17 @@ describe("find", () => {
     await vi.waitFor(() => expect(findBarOf(screen)).toBeNull());
     expect(document.activeElement).toBe(scrollerOf(screen, "additions"));
     expect(all(screen.container, ".sbs-match")).toHaveLength(0);
+  });
+
+  it("does not step through the differences from the find field", async () => {
+    await using screen = await mount({ fileDiff: withNeedle() });
+    await vi.waitFor(() => expect(statusOf(screen)).toBe("1 of 3"));
+    await press(screen, "additions", "{Control>}f{/Control}");
+
+    await userEvent.keyboard("{F7}");
+
+    expect(statusOf(screen)).toBe("1 of 3");
+    expect(document.activeElement).toBe(one(findBarOf(screen)!, "input"));
   });
 
   it("closes from the close button", async () => {
@@ -1486,6 +1549,30 @@ describe("annotations", () => {
 
     await vi.waitFor(() => expect(cardOf(screen)).toBeNull());
     expect(onOpenAnnotationChange).toHaveBeenCalledExactlyOnceWith(null);
+  });
+
+  it("leaves the diff's keys to a text field in the card", async () => {
+    const onOpenAnnotationChange = vi.fn();
+    await using screen = await mount({
+      fileDiff: threeChanges(),
+      annotations: [near],
+      openAnnotationId: "near",
+      renderAnnotation: () => <textarea aria-label="Reply" />,
+      onOpenAnnotationChange,
+    });
+    await vi.waitFor(() => expect(statusOf(screen)).toBe("1 of 3"));
+
+    const reply = screen.getByRole("textbox", { name: "Reply" });
+    await userEvent.click(reply);
+    await userEvent.keyboard("{F7}");
+    expect(statusOf(screen)).toBe("1 of 3");
+    await userEvent.keyboard("{Control>}f{/Control}");
+    expect(findBarOf(screen)).toBeNull();
+    await userEvent.keyboard("{Escape}");
+
+    expect(cardOf(screen)).not.toBeNull();
+    expect(onOpenAnnotationChange).not.toHaveBeenCalled();
+    await expect.element(reply).toHaveFocus();
   });
 
   it("shows no card without a renderer", async () => {
@@ -1676,6 +1763,53 @@ describe("annotations", () => {
       markersOf(screen).find((marker) => marker.dataset.sbsAnnotation === "near")!,
     );
     await vi.waitFor(() => expect(cardOf(screen)?.dataset.sbsAnnotationCard).toBe("near"));
+  });
+});
+
+describe("copy", () => {
+  const copyFrom = (target: Element) => {
+    const clipboardData = new DataTransfer();
+    target.dispatchEvent(
+      new ClipboardEvent("copy", { clipboardData, bubbles: true, cancelable: true }),
+    );
+    return clipboardData.getData("text/plain");
+  };
+
+  it("copies a selection whose first line has left the rendered rows", async () => {
+    await using screen = await mount({ fileDiff: threeChanges() });
+    await vi.waitFor(() => expect(rowByNumber(screen, "additions", 5)).toBeDefined());
+    const at = (line: number, column: number) =>
+      textPointAt(one(rowByNumber(screen, "additions", line)!, ".sbs-code")!, column);
+    const start = at(5, 2);
+    window.getSelection()!.setBaseAndExtent(start.node, start.offset, start.node, start.offset + 3);
+    one(screen.container, ".sbs-diff")!.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+
+    const right = scrollerOf(screen, "additions");
+    right.scrollTop = 150 * lineHeightOf(screen);
+    await vi.waitFor(() => expect(rowByNumber(screen, "additions", 160)).toBeDefined());
+    expect(rowByNumber(screen, "additions", 5)).toBeUndefined();
+    const end = at(160, 4);
+    window.getSelection()!.extend(end.node, end.offset);
+
+    const lines = threeChangesAfter();
+    expect(copyFrom(right)).toBe(
+      [lines[4]!.slice(2), ...lines.slice(5, 159), lines[159]!.slice(0, 4)].join("\n"),
+    );
+  });
+
+  it("selects one pane's whole file with Mod+A and copies it", async () => {
+    await using screen = await mount({ fileDiff: threeChanges() });
+    await vi.waitFor(() => expect(statusOf(screen)).toBe("1 of 3"));
+
+    await press(
+      screen,
+      "additions",
+      isMacPlatform(navigator.platform) ? "{Meta>}a{/Meta}" : "{Control>}a{/Control}",
+    );
+
+    expect(window.getSelection()?.toString() ?? "").toBe("");
+    expect(one(screen.container, '[data-sbs-pane="additions"][data-sbs-all-selected]')).not.toBeNull();
+    expect(copyFrom(scrollerOf(screen, "additions"))).toBe(threeChangesAfter().join("\n"));
   });
 });
 

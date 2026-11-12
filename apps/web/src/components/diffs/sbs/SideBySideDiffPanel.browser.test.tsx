@@ -763,7 +763,7 @@ describe("without a way to read whole files", () => {
     );
   });
 
-  it("shows a failed whole-file load over a truncated patch as the failure", async () => {
+  it("says both that the whole file failed and that the patch is cut off", async () => {
     await using screen = await mount({
       files: [twoHunkEntry()],
       loadFileContents: async () => Promise.reject(new Error("x")),
@@ -772,7 +772,7 @@ describe("without a way to read whole files", () => {
 
     await vi.waitFor(() =>
       expect(noticeOf(screen)).toContain(
-        "The whole file could not be loaded. Showing its changed lines only.",
+        "The whole file could not be loaded, and its patch is cut off. The changes shown are incomplete.",
       ),
     );
     await expect.element(screen.getByRole("button", { name: "Retry" })).toBeVisible();

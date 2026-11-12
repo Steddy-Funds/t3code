@@ -46,6 +46,8 @@ export interface SbsPaneProps {
   /** The lines picked in the gutter, as line indices; `selectedEnd` is exclusive. */
   readonly selectedStart: number;
   readonly selectedEnd: number;
+  /** Room below the last row to scroll into. */
+  readonly tailHeight: number;
   /** The other pane carries the one visible scrollbar. */
   readonly hideScrollbar: boolean;
   readonly scrollerRef: (element: HTMLDivElement | null) => void;
@@ -338,6 +340,7 @@ export function SbsPane({
   openAnnotationId,
   selectedStart,
   selectedEnd,
+  tailHeight,
   hideScrollbar,
   scrollerRef,
   onScroll,
@@ -380,7 +383,7 @@ export function SbsPane({
         className="sbs-sheet"
         style={
           {
-            height: rowCount * lineHeight,
+            height: rowCount * lineHeight + tailHeight,
             "--sbs-gutter-digits": gutterDigits,
             "--sbs-content-columns": contentColumns,
           } as CSSProperties

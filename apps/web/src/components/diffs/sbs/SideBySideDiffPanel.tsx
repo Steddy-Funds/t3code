@@ -345,7 +345,9 @@ export function SideBySideDiffPanel(props: SideBySideDiffPanelProps) {
   const notice = patchOnly ? (
     <Notice>
       {failure === "failed"
-        ? "The whole file could not be loaded. Showing its changed lines only."
+        ? patchState.truncated
+          ? "The whole file could not be loaded, and its patch is cut off. The changes shown are incomplete."
+          : "The whole file could not be loaded. Showing its changed lines only."
         : patchState.truncated
           ? "This file's patch is cut off. The changes shown are incomplete."
           : "Only the changed lines are available here."}

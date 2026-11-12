@@ -609,6 +609,25 @@ it("starts a comment from lines picked in the gutter, with its box open in the c
   ).toBe("additions:2");
 });
 
+it("keeps a comment's words while side by side steps to another file and back", async () => {
+  setup({ paged: true });
+  using _settings = withSettings({ diffSideBySide: true });
+  using _storage = withStorage({ [COLLAPSE_UNCHANGED_KEY]: "false" });
+  await using screen = await render(sbsTab({ shown: commentingDetail }), {
+    container: areaOf(1000),
+  });
+  await vi.waitFor(() => expect(sbsRow(screen, "additions", 5)).toBeDefined());
+  await userEvent.click(gutterOf(screen, "additions", 2));
+  const box = screen.getByRole("textbox", { name: "Comment on lines early-0.ts:2" });
+  await userEvent.type(box, "Half a thought");
+
+  await userEvent.click(screen.getByRole("button", { name: "Next file" }));
+  await vi.waitFor(() => expect(titleOf(screen)).not.toBe("early-0.ts"));
+  await userEvent.click(screen.getByRole("button", { name: "Previous file" }));
+
+  await expect.element(box).toHaveValue("Half a thought");
+});
+
 it("starts no comment from a line outside the changed hunks", async () => {
   setup({ paged: false });
   using _settings = withSettings({ diffSideBySide: true });

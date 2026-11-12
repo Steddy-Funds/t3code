@@ -119,11 +119,13 @@ export function anchorReviewNote(
       : UNATTACHED;
   }
   if (note.excerpt.length === 0) return UNATTACHED;
+  const shown = (startLine: number, endLine: number) =>
+    shownLines === "whole-file" || showsLines(fileDiff, startLine, endLine);
   // A comment has no revision to match; its quoted lines still where it left them stay put.
   if (
     note.contentRevision === null &&
     excerptAtOwnLines(fileDiff, note) &&
-    showsLines(fileDiff, note.startLine, note.startLine + excerptLines(note).length - 1)
+    shown(note.startLine, note.startLine + excerptLines(note).length - 1)
   ) {
     return {
       kind: "exact",
@@ -136,9 +138,7 @@ export function anchorReviewNote(
   if (startLine === undefined || starts.length > 1) return UNATTACHED;
   // Only the excerpt was matched; a shortened one covers fewer lines than the note did.
   const endLine = startLine + excerptLines(note).length - 1;
-  return showsLines(fileDiff, startLine, endLine)
-    ? { kind: "moved", startLine, endLine }
-    : UNATTACHED;
+  return shown(startLine, endLine) ? { kind: "moved", startLine, endLine } : UNATTACHED;
 }
 
 // A moved note scans its whole file, and a shown file keeps its object across renders. Hydrating
@@ -156,9 +156,11 @@ export function cachedReviewNoteAnchor(
     byNote = new Map();
     anchorCache.set(fileDiff, byNote);
   }
+  // A thread's quote can grow once its comment's message loads after a reply's shorter copy.
   const key = JSON.stringify([
     note.id,
     note.contentRevision,
+    note.kind === "review_comment_thread" ? note.excerpt : null,
     fileDiff.isPartial,
     diffPath,
     shownLines,

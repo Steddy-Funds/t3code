@@ -217,6 +217,9 @@ function textPointAt(code: HTMLElement, column: number) {
 
 const SCROLL_TOLERANCE = 1.5;
 
+/** The keymap's `mod+f`: Cmd on a Mac, Ctrl elsewhere. */
+const MOD_F = isMacPlatform(navigator.platform) ? "{Meta>}f{/Meta}" : "{Control>}f{/Control}";
+
 describe("stepping through differences", () => {
   it("draws one connector per change and counts them", async () => {
     await using screen = await mount({ fileDiff: threeChanges(), collapseUnchanged: true });
@@ -255,6 +258,17 @@ describe("stepping through differences", () => {
     await userEvent.keyboard("{Shift>}{F7}{/Shift}");
     await vi.waitFor(() => expect(statusOf(screen)).toBe("1 of 3"));
     await vi.waitFor(() => expect(visibleTinted(screen, "additions")).toEqual(["20"]));
+  });
+
+  it("draws the next change's rows with the step, not a frame later", async () => {
+    await using screen = await mount({ fileDiff: threeChanges() });
+    await vi.waitFor(() => expect(statusOf(screen)).toBe("1 of 3"));
+    expect(rowByNumber(screen, "additions", 100)).toBeUndefined();
+    using _frames = vi.spyOn(window, "requestAnimationFrame").mockReturnValue(0);
+
+    await press(screen, "additions", "{F7}");
+    await vi.waitFor(() => expect(statusOf(screen)).toBe("2 of 3"));
+    expect(rowByNumber(screen, "additions", 100)).toBeDefined();
   });
 
   it("steps with the toolbar buttons and takes keys while a toolbar button has focus", async () => {
@@ -379,6 +393,28 @@ describe("stepping past the last difference", () => {
     await press(screen, "additions", "{F7}");
     await vi.waitFor(() => expect(hintOf(screen)).not.toBeNull());
     await userEvent.keyboard("a");
+    await vi.waitFor(() => expect(hintOf(screen)).toBeNull());
+
+    await userEvent.keyboard("{F7}");
+    await vi.waitFor(() => expect(hintOf(screen)).not.toBeNull());
+    expect(onOpenAdjacentFile).not.toHaveBeenCalled();
+  });
+
+  it("drops the hint when F4 opens the source, so the next F7 only shows it again", async () => {
+    const onOpenAdjacentFile = vi.fn();
+    const onOpenSource = vi.fn();
+    await using screen = await mount({
+      fileDiff: oneChange(),
+      adjacentFiles: { next: true, previous: false },
+      onOpenAdjacentFile,
+      onOpenSource,
+    });
+    await vi.waitFor(() => expect(statusOf(screen)).toBe("1 of 1"));
+
+    await press(screen, "additions", "{F7}");
+    await vi.waitFor(() => expect(hintOf(screen)).not.toBeNull());
+    await userEvent.keyboard("{F4}");
+    expect(onOpenSource).toHaveBeenCalledOnce();
     await vi.waitFor(() => expect(hintOf(screen)).toBeNull());
 
     await userEvent.keyboard("{F7}");
@@ -790,6 +826,30 @@ describe("scrolling the panes together", () => {
     await vi.waitFor(() => expect(Math.abs(right.scrollLeft - 40)).toBeLessThan(1));
   });
 
+  it("keeps the other pane's height on a sideways scroll of the pane that waits", async () => {
+    const wide = (lines: ReadonlyArray<string>) =>
+      lines.map((line) => `${line} // ${"x".repeat(300)}`);
+    const before = wide(base(150));
+    await using screen = await mount({
+      fileDiff: diffOf(before, edit(before, 41, 0, wide(block))),
+    });
+    await vi.waitFor(() => expect(statusOf(screen)).toBe("1 of 1"));
+    const left = scrollerOf(screen, "deletions");
+    const right = scrollerOf(screen, "additions");
+    const lineHeight = lineHeightOf(screen);
+
+    // The right pane's level row is inside the inserted block, so the left one waits at its start.
+    right.scrollTop = 55 * lineHeight - Math.floor(right.clientHeight / 3);
+    await vi.waitFor(() =>
+      expect(Math.abs(right.scrollTop - left.scrollTop - 15 * lineHeight)).toBeLessThan(lineHeight),
+    );
+    const top = right.scrollTop;
+
+    left.scrollLeft = 100;
+    await vi.waitFor(() => expect(Math.abs(right.scrollLeft - 100)).toBeLessThan(1));
+    expect(right.scrollTop).toBe(top);
+  });
+
   it("keeps the connectors on their changes while scrolling", async () => {
     await using screen = await mount({ fileDiff: withBlock() });
     await vi.waitFor(() => expect(connectorsOf(screen)).toHaveLength(1));
@@ -878,7 +938,7 @@ describe("new and deleted files", () => {
     await using screen = await mount({ fileDiff: parseDiffFromFile(null, fileOf(base(30))) });
     await vi.waitFor(() => expect(statusOf(screen)).toBe("1 of 1"));
 
-    await press(screen, "additions", "{Control>}f{/Control}");
+    await press(screen, "additions", MOD_F);
     await vi.waitFor(() => expect(findBarOf(screen)).not.toBeNull());
     await userEvent.keyboard("value007");
     await vi.waitFor(() => expect(findBarOf(screen)?.textContent).toContain("1/1"));
@@ -1256,7 +1316,7 @@ describe("find", () => {
     await using screen = await mount({ fileDiff: withNeedle() });
     await vi.waitFor(() => expect(statusOf(screen)).toBe("1 of 3"));
 
-    await press(screen, "additions", "{Control>}f{/Control}");
+    await press(screen, "additions", MOD_F);
     await vi.waitFor(() => expect(findBarOf(screen)).not.toBeNull());
     expect(findBarOf(screen)?.parentElement?.dataset.sbsPane).toBe("additions");
     expect(document.activeElement).toBe(one(findBarOf(screen)!, "input"));
@@ -1281,7 +1341,7 @@ describe("find", () => {
     });
     await vi.waitFor(() => expect(statusOf(screen)).toBe("1 of 1"));
 
-    await press(screen, "additions", "{Control>}f{/Control}");
+    await press(screen, "additions", MOD_F);
     await userEvent.keyboard("needle");
 
     const scroller = scrollerOf(screen, "additions");
@@ -1297,7 +1357,7 @@ describe("find", () => {
     await using screen = await mount({ fileDiff: withNeedle() });
     await vi.waitFor(() => expect(statusOf(screen)).toBe("1 of 3"));
 
-    await press(screen, "additions", "{Control>}f{/Control}");
+    await press(screen, "additions", MOD_F);
     await userEvent.keyboard("needle");
 
     await vi.waitFor(() =>
@@ -1314,7 +1374,7 @@ describe("find", () => {
     await using screen = await mount({ fileDiff: withNeedle() });
     await vi.waitFor(() => expect(statusOf(screen)).toBe("1 of 3"));
 
-    await press(screen, "additions", "{Control>}f{/Control}");
+    await press(screen, "additions", MOD_F);
     await userEvent.keyboard("NEEDLE = 2");
 
     await vi.waitFor(() => expect(visibleTinted(screen, "additions")).toEqual(["50"]));
@@ -1335,7 +1395,7 @@ describe("find", () => {
     expect(labels("additions")).toContain("Show 31 unchanged lines");
     expect(rowByNumber(screen, "additions", 30)).toBeUndefined();
 
-    await press(screen, "additions", "{Control>}f{/Control}");
+    await press(screen, "additions", MOD_F);
     await userEvent.keyboard("value030");
 
     await vi.waitFor(() =>
@@ -1354,7 +1414,7 @@ describe("find", () => {
     await using screen = await mount({ fileDiff: withNeedle() });
     await vi.waitFor(() => expect(statusOf(screen)).toBe("1 of 3"));
 
-    await press(screen, "additions", "{Control>}f{/Control}");
+    await press(screen, "additions", MOD_F);
     await userEvent.keyboard("nothing like this");
 
     await vi.waitFor(() => expect(findCountOf(screen)).toBe("No results"));
@@ -1366,7 +1426,7 @@ describe("find", () => {
   it("closes on Escape, returns focus to the pane and drops the marks", async () => {
     await using screen = await mount({ fileDiff: withNeedle() });
     await vi.waitFor(() => expect(statusOf(screen)).toBe("1 of 3"));
-    await press(screen, "additions", "{Control>}f{/Control}");
+    await press(screen, "additions", MOD_F);
     await userEvent.keyboard("needle");
     await vi.waitFor(() => expect(all(screen.container, ".sbs-match").length).toBeGreaterThan(0));
 
@@ -1380,7 +1440,7 @@ describe("find", () => {
   it("does not step through the differences from the find field", async () => {
     await using screen = await mount({ fileDiff: withNeedle() });
     await vi.waitFor(() => expect(statusOf(screen)).toBe("1 of 3"));
-    await press(screen, "additions", "{Control>}f{/Control}");
+    await press(screen, "additions", MOD_F);
 
     await userEvent.keyboard("{F7}");
 
@@ -1391,18 +1451,18 @@ describe("find", () => {
   it("closes from the close button", async () => {
     await using screen = await mount({ fileDiff: withNeedle() });
     await vi.waitFor(() => expect(statusOf(screen)).toBe("1 of 3"));
-    await press(screen, "additions", "{Control>}f{/Control}");
+    await press(screen, "additions", MOD_F);
 
     await userEvent.click(screen.getByRole("button", { name: "Close find" }));
 
     await vi.waitFor(() => expect(findBarOf(screen)).toBeNull());
   });
 
-  it("searches the old file from the left pane, and Cmd+F opens it too", async () => {
+  it("searches the old file from the left pane", async () => {
     await using screen = await mount({ fileDiff: withNeedle() });
     await vi.waitFor(() => expect(statusOf(screen)).toBe("1 of 3"));
 
-    await press(screen, "deletions", "{Meta>}f{/Meta}");
+    await press(screen, "deletions", MOD_F);
     await vi.waitFor(() =>
       expect(findBarOf(screen)?.parentElement?.dataset.sbsPane).toBe("deletions"),
     );
@@ -1431,7 +1491,7 @@ describe("find", () => {
       onOpenAnnotationChange,
     });
     await vi.waitFor(() => expect(statusOf(screen)).toBe("1 of 3"));
-    await press(screen, "additions", "{Control>}f{/Control}");
+    await press(screen, "additions", MOD_F);
     await vi.waitFor(() => expect(findBarOf(screen)).not.toBeNull());
 
     await userEvent.keyboard("{Escape}");
@@ -1566,7 +1626,7 @@ describe("annotations", () => {
     await userEvent.click(reply);
     await userEvent.keyboard("{F7}");
     expect(statusOf(screen)).toBe("1 of 3");
-    await userEvent.keyboard("{Control>}f{/Control}");
+    await userEvent.keyboard(MOD_F);
     expect(findBarOf(screen)).toBeNull();
     await userEvent.keyboard("{Escape}");
 
@@ -1808,8 +1868,54 @@ describe("copy", () => {
     );
 
     expect(window.getSelection()?.toString() ?? "").toBe("");
-    expect(one(screen.container, '[data-sbs-pane="additions"][data-sbs-all-selected]')).not.toBeNull();
+    expect(
+      one(screen.container, '[data-sbs-pane="additions"][data-sbs-all-selected]'),
+    ).not.toBeNull();
     expect(copyFrom(scrollerOf(screen, "additions"))).toBe(threeChangesAfter().join("\n"));
+  });
+
+  it("keeps a selection dragged into the other pane in the pane it started in", async () => {
+    await using screen = await mount({ fileDiff: threeChanges() });
+    await vi.waitFor(() => expect(rowByNumber(screen, "deletions", 10)).toBeDefined());
+    const at = (side: Side, line: number, column: number) =>
+      textPointAt(one(rowByNumber(screen, side, line)!, ".sbs-code")!, column);
+    const focusPaneOf = () =>
+      window
+        .getSelection()
+        ?.focusNode?.parentElement?.closest("[data-sbs-pane]")
+        ?.getAttribute("data-sbs-pane");
+    const lines = base();
+
+    // Into the right pane: to the end of the left pane's line at that height.
+    const left = at("deletions", 5, 2);
+    const right = at("additions", 10, 4);
+    window.getSelection()!.setBaseAndExtent(left.node, left.offset, right.node, right.offset);
+    expect(copyFrom(scrollerOf(screen, "deletions"))).toBe(
+      [lines[4]!.slice(2), ...lines.slice(5, 10)].join("\n"),
+    );
+    await vi.waitFor(() => expect(focusPaneOf()).toBe("deletions"));
+
+    // Into the left pane: to the start of the right pane's line at that height.
+    const from = at("additions", 10, 4);
+    const to = at("deletions", 5, 2);
+    window.getSelection()!.setBaseAndExtent(from.node, from.offset, to.node, to.offset);
+    expect(copyFrom(scrollerOf(screen, "additions"))).toBe(
+      [...threeChangesAfter().slice(4, 9), threeChangesAfter()[9]!.slice(0, 4)].join("\n"),
+    );
+    await vi.waitFor(() => expect(focusPaneOf()).toBe("additions"));
+  });
+
+  it("copies the lines picked in the gutter, each with its line break", async () => {
+    await using screen = await mount({ fileDiff: threeChanges() });
+    await vi.waitFor(() => expect(rowByNumber(screen, "additions", 14)).toBeDefined());
+    const gutter = (line: number) => one(rowByNumber(screen, "additions", line)!, ".sbs-gutter")!;
+
+    await userEvent.click(gutter(12));
+    await userEvent.click(gutter(14), { modifiers: ["Shift"] });
+
+    expect(copyFrom(scrollerOf(screen, "additions"))).toBe(
+      `${threeChangesAfter().slice(11, 14).join("\n")}\n`,
+    );
   });
 });
 
@@ -2064,7 +2170,7 @@ describe("selecting a range", () => {
     expect(onSelectRange).toHaveBeenLastCalledWith(null);
   });
 
-  it("does not report a selection that spans both panes", async () => {
+  it("reports a selection dragged into the other pane in the pane it started in", async () => {
     const onSelectRange = vi.fn();
     await using screen = await mount({ fileDiff: threeChanges(), onSelectRange });
     await vi.waitFor(() => expect(rowByNumber(screen, "additions", 14)).toBeDefined());
@@ -2076,7 +2182,12 @@ describe("selecting a range", () => {
     window.getSelection()!.setBaseAndExtent(start.node, start.offset, end.node, end.offset);
     one(screen.container, ".sbs-diff")!.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
 
-    expect(onSelectRange).not.toHaveBeenCalled();
+    expect(onSelectRange).toHaveBeenCalledExactlyOnceWith({
+      side: "deletions",
+      startLine: 12,
+      endLine: 14,
+      selectedText: [base()[11]!.slice(2), ...base().slice(12, 14)].join("\n"),
+    });
   });
 
   it("numbers a patch-only selection by its hunk", async () => {

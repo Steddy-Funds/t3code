@@ -289,6 +289,30 @@ function noteSelectionStart(start: { current: SbsTextPoint | null }) {
   else if (!selection || selection.isCollapsed || paneSideOf(node) === null) start.current = null;
 }
 
+/**
+ * A selection stays in the pane it started in, as in an editor: dragged into the other pane, it
+ * ends at the end (or, leftwards, the start) of its own pane's line at that height.
+ */
+function keepSelectionInOnePane() {
+  const selection = document.getSelection();
+  if (!selection?.anchorNode || !selection.focusNode || selection.isCollapsed) return;
+  const pane = elementOf(selection.anchorNode)?.closest("[data-sbs-pane]");
+  const focus = elementOf(selection.focusNode);
+  if (!pane || !focus || pane.contains(focus) || !pane.parentElement?.contains(focus)) return;
+  const caret = document.createRange();
+  caret.setStart(selection.focusNode, selection.focusOffset);
+  const box = caret.getClientRects()[0] ?? focus.getBoundingClientRect();
+  const y = box.top + box.height / 2;
+  let code: Element | null = null;
+  for (const row of pane.querySelectorAll(".sbs-row[data-sbs-index]")) {
+    if (code && row.getBoundingClientRect().top > y) break;
+    code = row.querySelector(".sbs-code") ?? code;
+  }
+  if (!code) return;
+  const after = (pane.compareDocumentPosition(focus) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
+  selection.extend(code, after ? code.childNodes.length : 0);
+}
+
 function caretAt(x: number, y: number): { node: Node; offset: number } | null {
   const position = document.caretPositionFromPoint?.(x, y);
   if (position) return { node: position.offsetNode, offset: position.offset };
@@ -388,6 +412,8 @@ export function SideBySideDiffView<T = unknown>(props: SideBySideDiffViewProps<T
     additions: null,
   });
   const frame = useRef<number | null>(null);
+  // Each pane's scrollTop at its last scroll event: a sideways scroll leaves the other pane's.
+  const lastTop = useRef<Record<SbsSide, number>>({ deletions: 0, additions: 0 });
   const opened = useRef(false);
   const dragSide = useRef<SbsSide | null>(null);
   const reportedTextSelection = useRef(false);
@@ -396,7 +422,10 @@ export function SideBySideDiffView<T = unknown>(props: SideBySideDiffViewProps<T
   const [allSelected, setAllSelected] = useState<SbsSide | null>(null);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- follows the document's selection, which the browser owns
   useEffect(() => {
-    const note = () => noteSelectionStart(selectionStart);
+    const note = () => {
+      keepSelectionInOnePane();
+      noteSelectionStart(selectionStart);
+    };
     document.addEventListener("selectionchange", note);
     return () => document.removeEventListener("selectionchange", note);
   }, []);
@@ -454,19 +483,23 @@ export function SideBySideDiffView<T = unknown>(props: SideBySideDiffViewProps<T
       written !== null &&
       Math.abs(written.top - element.scrollTop) < 1 &&
       Math.abs(written.left - element.scrollLeft) < 1;
+    const movedVertically = element.scrollTop !== lastTop.current[side];
+    lastTop.current[side] = element.scrollTop;
     if (!isEcho) {
       const slave = scrollers.current[otherSide(side)];
       if (slave && single === null) {
         writeScroll(
           otherSide(side),
-          syncedScrollTop({
-            anchors,
-            master: side,
-            masterScrollTop: element.scrollTop,
-            slaveScrollTop: slave.scrollTop,
-            viewportHeight: element.clientHeight,
-            lineHeight,
-          }),
+          movedVertically
+            ? syncedScrollTop({
+                anchors,
+                master: side,
+                masterScrollTop: element.scrollTop,
+                slaveScrollTop: slave.scrollTop,
+                viewportHeight: element.clientHeight,
+                lineHeight,
+              })
+            : slave.scrollTop,
           element.scrollLeft,
         );
       }
@@ -496,7 +529,8 @@ export function SideBySideDiffView<T = unknown>(props: SideBySideDiffViewProps<T
     for (const side of sides) writeScroll(side, targets[side]);
     setSteppedGroup(group);
     setEdgeHint(null);
-    scheduleViewport();
+    // Now, not on the next frame: the rows commit with the scroll they belong to.
+    readViewport();
   };
 
   const step = (direction: SbsNavigationDirection) => {
@@ -528,10 +562,14 @@ export function SideBySideDiffView<T = unknown>(props: SideBySideDiffViewProps<T
     props.onOpenSource?.({ side, line: sbsLineNumber(model, side, Math.min(line, lastLine)) });
   };
 
-  const commands: Partial<Record<KeybindingCommand, () => void>> = {
+  const commands: Partial<Record<KeybindingCommand, (target: EventTarget) => void>> = {
     "diff.nextChange": () => step("next"),
     "diff.previousChange": () => step("previous"),
     "diff.jumpToSource": jumpToSource,
+    "diff.find": (target) => {
+      const side = paneSideOf(target) ?? find?.side ?? lead;
+      setFind((current) => (current?.side === side ? current : { side, query: "", index: -1 }));
+    },
   };
 
   const attachScroller = (side: SbsSide, element: HTMLDivElement | null) => {
@@ -712,15 +750,24 @@ export function SideBySideDiffView<T = unknown>(props: SideBySideDiffViewProps<T
   };
 
   const reportTextSelection = () => {
+    keepSelectionInOnePane();
     noteSelectionStart(selectionStart);
     reportRange(textSelection());
   };
 
   const handleCopy = (event: ClipboardEvent<HTMLDivElement>) => {
+    keepSelectionInOnePane();
     const selected = textSelection();
-    if (!selected) return;
+    if (selected) {
+      event.preventDefault();
+      event.clipboardData.setData("text/plain", selectedText(selected));
+      return;
+    }
+    if (!gutterSelection) return;
+    const { side, anchor, head } = gutterSelection;
+    const lines = model.lines[side].slice(Math.min(anchor, head), Math.max(anchor, head) + 1);
     event.preventDefault();
-    event.clipboardData.setData("text/plain", selectedText(selected));
+    event.clipboardData.setData("text/plain", lines.map((line) => `${line}\n`).join(""));
   };
 
   const handlePointerDown = (event: PointerEvent<HTMLDivElement>) => {
@@ -836,14 +883,15 @@ export function SideBySideDiffView<T = unknown>(props: SideBySideDiffViewProps<T
         return;
       }
     }
+    // A step reads the hint from this render, so it still sees the one this clears.
+    setEdgeHint(null);
     const command = resolveShortcutCommand(event.nativeEvent, keybindings);
     const run = command === null ? undefined : commands[command];
     if (run) {
       event.preventDefault();
-      run();
+      run(event.target);
       return;
     }
-    setEdgeHint(null);
     const editable = isEditableFocused(event.target);
     // A field in a card keeps Mod+F and Escape; the find field is the view's own.
     if (editable && !elementOf(event.target)?.closest("[data-sbs-find]")) return;
@@ -860,10 +908,9 @@ export function SideBySideDiffView<T = unknown>(props: SideBySideDiffViewProps<T
       });
       return;
     }
-    if (plainMod && key === "f") {
-      const side = pane ?? find?.side ?? lead;
+    // The keymap leaves a text field's keys alone; in the find field, Mod+F is not the browser's.
+    if (plainMod && key === "f" && editable) {
       event.preventDefault();
-      setFind((current) => (current?.side === side ? current : { side, query: "", index: -1 }));
       return;
     }
     if (event.key !== "Escape") return;
@@ -944,10 +991,7 @@ export function SideBySideDiffView<T = unknown>(props: SideBySideDiffViewProps<T
     return (
       <>
         {/* Beside a scrollbar only: in a file that fits there is nothing for the marks to map to. */}
-        {single === null &&
-        highlightMode !== "none" &&
-        viewport.height > 0 &&
-        scrolls(side) ? (
+        {single === null && highlightMode !== "none" && viewport.height > 0 && scrolls(side) ? (
           <SbsScrollMarks
             side={side}
             document={model}

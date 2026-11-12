@@ -141,6 +141,15 @@ const LATE_DEFAULT_KEYBINDINGS: ReadonlyArray<{
       when: "codeFocus || projectTreeFocus",
     },
   },
+  {
+    id: "code.goToDeclaration:mod+b:diff",
+    alongside: {
+      key: "mod+b",
+      command: "code.goToDeclaration",
+      when: "codeFocus && codeNavigation",
+    },
+    rule: { key: "mod+b", command: "code.goToDeclaration", when: "diffFocus && codeNavigation" },
+  },
 ];
 
 function keybindingShortcutContext(rule: KeybindingRule): string | null {

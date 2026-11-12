@@ -11,13 +11,13 @@ import { fileContentRevision } from "@t3tools/shared/fileContentRevision";
 import * as Cause from "effect/Cause";
 import { AsyncResult } from "effect/reactivity";
 import { describe, expect, it, vi } from "vite-plus/test";
-import { page } from "vite-plus/test/browser";
+import { page, userEvent } from "vite-plus/test/browser";
 
 import { act, fakeTimers, render } from "../../../test/render";
 
 // Each query waits until the test settles it, so a lookup can be dismissed while it runs.
 const mocks = vi.hoisted(() => ({
-  queries: [] as Array<{ settle: (result: unknown) => void }>,
+  queries: [] as Array<{ request: unknown; settle: (result: unknown) => void }>,
   navigateToCodeLocation: vi.fn(),
   scopes: [] as Array<{
     commands: Partial<Record<KeybindingCommand, (event: KeyboardEvent) => boolean | void>>;
@@ -27,9 +27,9 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock(import("@t3tools/client-runtime/state/runtime"), async (original) => ({
   ...(await original()),
-  executeAtomQuery: (() =>
+  executeAtomQuery: ((_registry: unknown, request: unknown) =>
     new Promise((resolve) => {
-      mocks.queries.push({ settle: resolve });
+      mocks.queries.push({ request, settle: resolve });
     })) as never,
 }));
 vi.mock(import("~/state/codeIntel"), () => ({
@@ -66,6 +66,7 @@ vi.mock(import("./navigation"), () => ({
   registerCodeViewer: () => () => {},
 }));
 
+import { useCodeNavigationStore } from "../../codeNavigationStore";
 import { type CodeEditorHandle, useCodeNavigation } from "./useCodeNavigation";
 
 const TEXT = "import { greet } from './greet';\ngreet('world');\n";
@@ -90,15 +91,21 @@ const editor: CodeEditorHandle = {
   }),
   focus: () => {},
 };
+// Pierre's editor can stop tracking clicks after focus leaves it, and then reports no caret.
+const editorWithoutCaret: CodeEditorHandle = { getViewState: () => ({}), focus: () => {} };
 
-function Viewer(props: { readonly path: string }) {
+function Viewer(props: {
+  readonly path: string;
+  readonly editor?: CodeEditorHandle;
+  readonly shown?: boolean;
+}) {
   const navigation = useCodeNavigation({
     environmentId: threadRef.environmentId,
     cwd: "/repo",
     threadRef,
     path: props.path,
     text: TEXT,
-    shown: true,
+    shown: props.shown ?? true,
     editable: true,
     intel: {
       supported: true,
@@ -114,9 +121,19 @@ function Viewer(props: { readonly path: string }) {
       <textarea
         aria-label="editor"
         ref={(node) => {
-          navigation.setEditor(node === null ? null : editor);
+          navigation.setEditor(node === null ? null : (props.editor ?? editor));
         }}
       />
+      <div
+        ref={(node) => {
+          if (node !== null) navigation.onPostRender(node, "mount");
+        }}
+      >
+        <div data-line="2">
+          <span data-char="0">greet</span>
+          <span data-char="5">(&apos;world&apos;);</span>
+        </div>
+      </div>
       {navigation.popup}
     </div>
   );
@@ -162,6 +179,26 @@ describe("useCodeNavigation lookups", () => {
     expect(mocks.navigateToCodeLocation).toHaveBeenCalledWith(threadRef, declaration);
   });
 
+  it("looks where the user clicked, not where an earlier jump landed, when the editor reports no caret", async () => {
+    setup();
+    await using _screen = await render(<Viewer path="src/main.ts" editor={editorWithoutCaret} />);
+    const landed = { start: { line: 0, character: 9 }, end: { line: 0, character: 14 } };
+    await act(() =>
+      useCodeNavigationStore.getState().reveal("thread", threadRef, "src/main.ts", landed),
+    );
+    await vi.waitFor(() =>
+      expect(useCodeNavigationStore.getState().revealByThreadKey.thread).toBeUndefined(),
+    );
+    await userEvent.click(page.getByText("greet", { exact: true }), { position: { x: 2, y: 4 } });
+    using _timers = fakeTimers();
+
+    await press("code.goToDeclaration");
+
+    expect(mocks.queries[0]?.request).toMatchObject({
+      input: { position: { line: 1, character: 0 } },
+    });
+  });
+
   it("drops a lookup dismissed with Escape while it waits", async () => {
     setup();
     await using _screen = await render(<Viewer path="src/main.ts" />);
@@ -177,6 +214,24 @@ describe("useCodeNavigation lookups", () => {
 
     expect(mocks.navigateToCodeLocation).not.toHaveBeenCalled();
     expect(page.getByText("Choose a target").query()).toBeNull();
+  });
+
+  it("keeps a list opened with Cmd+Enter, and its filter, while the next file loads", async () => {
+    setup();
+    await using screen = await render(<Viewer path="src/main.ts" />);
+    using _timers = fakeTimers();
+    const other = { ...declaration, path: "src/other.ts" };
+    await press("code.goToDeclaration");
+    await settle(0, answer([declaration, other]));
+    const filter = page.getByLabelText("Filter results");
+    await userEvent.fill(filter, "other");
+    await userEvent.keyboard("{Control>}{Enter}{/Control}");
+    expect(mocks.navigateToCodeLocation).toHaveBeenCalledWith(threadRef, other);
+
+    await screen.rerender(<Viewer path="src/other.ts" shown={false} />);
+    await screen.rerender(<Viewer path="src/other.ts" />);
+
+    await expect.element(page.getByLabelText("Filter results")).toHaveValue("other");
   });
 
   it("drops a lookup when Go to Line opens over it", async () => {

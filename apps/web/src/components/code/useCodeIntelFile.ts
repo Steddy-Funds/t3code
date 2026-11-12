@@ -1,6 +1,7 @@
 import { isCodeIntelUnsupportedError } from "@t3tools/client-runtime/state/code-intel";
 import type { CodeLibraryRoot, CodeServerStatus, EnvironmentId } from "@t3tools/contracts";
 import { resolvePathLinkTarget } from "@t3tools/shared/fileLinks";
+import { useState } from "react";
 
 import { codeIntelEnvironment } from "~/state/codeIntel";
 import { useEnvironmentQuery } from "~/state/query";
@@ -29,11 +30,15 @@ export function useCodeIntelFile(
   path: string | null,
   enabled: boolean,
 ): CodeIntelFile {
+  // Status retries every 2 s until it settles, and a refusal never does; stop asking here.
+  const [unsupportedIn, setUnsupportedIn] = useState<EnvironmentId | null>(null);
+  const unsupported = unsupportedIn === environmentId;
   const status = useEnvironmentQuery(
-    enabled && path !== null
+    enabled && path !== null && !unsupported
       ? codeIntelEnvironment.status({ environmentId, input: { cwd } })
       : null,
   );
+  if (!unsupported && isCodeIntelUnsupportedError(status.failure)) setUnsupportedIn(environmentId);
   const servers = status.data?.servers ?? NO_SERVERS;
   const supported = status.data !== null && !isCodeIntelUnsupportedError(status.failure);
   const libraryRoot =

@@ -162,7 +162,13 @@ function CodeLocationList(props: {
     event.preventDefault();
   };
 
-  let index = 0;
+  const groupStarts: number[] = [];
+  let rowCount = 0;
+  for (const group of groups) {
+    groupStarts.push(rowCount);
+    rowCount += group.locations.length;
+  }
+
   return (
     <div className="flex max-h-[min(28rem,60vh)] w-[min(36rem,80vw)] flex-col">
       <div className="flex shrink-0 items-baseline gap-2 px-3 pt-2 text-xs">
@@ -190,11 +196,11 @@ function CodeLocationList(props: {
         />
       </div>
       <div ref={listRef} role="listbox" className="min-h-0 overflow-auto pb-1">
-        {groups.map((group) => (
+        {groups.map((group, groupIndex) => (
           <div key={group.path} role="group" aria-label={group.path}>
             <FileLabel path={group.path} className="px-3 pt-1.5 pb-0.5" />
-            {group.locations.map((location) => {
-              const rowIndex = index++;
+            {group.locations.map((location, indexInGroup) => {
+              const rowIndex = (groupStarts[groupIndex] ?? 0) + indexInGroup;
               return (
                 <div
                   key={`${location.range.start.line}:${location.range.start.character}:${rowIndex}`}

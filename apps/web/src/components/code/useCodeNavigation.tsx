@@ -618,7 +618,8 @@ export function useCodeNavigation(options: CodeNavigationOptions) {
     }
     if (event.type !== "pointerdown") return;
     pressRef.current = null;
-    if (editable || target === null || path === null) return;
+    // Recorded for editable files too: Pierre's editor can stop reporting its caret.
+    if (target === null || path === null) return;
     const position = positionAtTarget(target);
     cursorRef.current = position === null ? null : { path, position };
   });
@@ -785,8 +786,9 @@ export function useCodeNavigation(options: CodeNavigationOptions) {
     });
   };
 
+  // A list kept open with Cmd+Enter stays up, filter and all, while the next file loads.
   const popupNode: ReactNode =
-    active && popup !== null ? (
+    popup !== null && (active || popup.kind === "locations") ? (
       <CodeNavigationPopup
         popup={popup}
         cwd={cwd}

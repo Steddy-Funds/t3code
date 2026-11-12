@@ -61,6 +61,7 @@ upstream; a feature can, from its own branch, when Akiva decides.
 | Diff and review stitch: Cmd+B and Cmd+click from side-by-side panes, the PR Code tab side by side, a fork's notes get their own ids               | #92 | 1dbc8a7 |
 | Snooze reasons: a "why?" prompt after each snooze, a per-thread snooze log, Settings → Snooze history with CSV/JSON export                        | #87 | pending |
 | Glint native dialogs (Labs, macOS): snooze Time from now, the model picker, /color; a generic helper bridge                                       | #93 | 5b4b111 |
+| Code stitch: External Libraries, a Python environment field, the quick reference by focus, Mod+B in side-by-side diffs, user docs                 | #91 | a143e08 |
 
 Held: #38 (pods notes in the t3-orchestration skill). It edits
 `.agents/skills/t3-orchestration/`, which exists only on
@@ -92,6 +93,7 @@ The Mac runs this tip, which already has them all.
 - #87 Snooze log (`threads.snoozeLog`, `threads.recordSnooze`, `t3 thread snoozes`, fork-only `thread_snooze_log` table): the whole branch, which starts from `main`
 - #90 Code intelligence follow-ups (cold `tsc` seeding, ty name ranges, libraryRoots per package, status backoff, optional `enabled` on status): server half only (11 picks), since the branch carries the tip
 - #92 Diff and review stitch (a fork's review notes get their own ids and reply sections; a note stored before keeps its id): server half only (3 picks), with the shared `reviewNote` module its test reads
+- #91 Code stitch (how each file changed in working-tree status, worktree renames, a Python environment set under a symlinked workspace, the side-by-side diff's Mod+B as a late default): server half only (8 picks), since the branch carries the tip
 
 A feature that changes `apps/server`, or a contract the server reads, is
 merged there too: its branch head with `--no-ff`, never this tip.

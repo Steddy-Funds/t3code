@@ -159,11 +159,24 @@ describe("collectQuickReferenceCommands against the keys", () => {
       unlisted: [...GOES_TO_CODE, "projectPane.toggle", "code.recentFiles"],
     },
     {
-      name: "a diff",
+      name: "the stacked diff",
+      context: { isDesktop: true, diffFocus: true },
+      capabilities: ["codeSymbols", "projectPane"],
+      listed: [
+        "diff.nextChange",
+        "diff.previousChange",
+        "diff.jumpToSource",
+        "diff.find",
+        "sidebar.toggle",
+      ],
+      unlisted: [...GOES_TO_CODE, "projectPane.toggle"],
+    },
+    {
+      name: "a side-by-side diff that navigates",
       context: { isDesktop: true, diffFocus: true },
       capabilities: ALL_CAPABILITIES,
-      listed: ["diff.nextChange", "diff.previousChange", "diff.jumpToSource", "diff.find"],
-      unlisted: [...GOES_TO_CODE, "projectPane.toggle"],
+      listed: ["diff.nextChange", "diff.find", "code.goToDeclaration"],
+      unlisted: ["sidebar.toggle", "code.fileStructure", "code.goToClass", "projectPane.toggle"],
     },
     {
       name: "a code pane that is also a diff",

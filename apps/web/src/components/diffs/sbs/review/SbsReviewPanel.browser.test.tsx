@@ -271,7 +271,7 @@ const cardText = (screen: Screen) => cardOf(screen)?.textContent ?? "";
 const noticesOf = (screen: Screen) =>
   all(screen.container, "p.border-b").map((notice) => notice.textContent ?? "");
 const lostLinesNotice = (screen: Screen) =>
-  noticesOf(screen).find((text) => text.includes("on lines this file no longer has"));
+  noticesOf(screen).find((text) => text.includes(" in the message "));
 
 function isVisible(element: HTMLElement, scroller: HTMLElement) {
   const box = scroller.getBoundingClientRect();
@@ -1238,6 +1238,7 @@ describe("one box at a time", () => {
 
     expect(cardText(screen)).toContain("Flagged note number 1.");
     expect(screen.getByRole("textbox").elements()).toHaveLength(1);
+    expect(screen.getByRole("button", { name: "Reply" }).elements()).toHaveLength(0);
   });
 
   it("lets the next pick through once the box is closed", async () => {
@@ -1378,6 +1379,40 @@ describe("words are never lost", () => {
 
     await expect.element(screen.getByRole("textbox")).toHaveValue("Still writing");
     expect(saved()).toEqual([]);
+  });
+
+  it("puts a box's words in the draft when the view goes", async () => {
+    using _drafts = setup();
+    await using screen = await mount({ files: [A] });
+    await openBox(screen, "additions", 12, 13, "Typed before the view went");
+
+    await screen.unmount();
+
+    expect(saved()).toHaveLength(1);
+    expect(saved()[0]).toMatchObject({
+      sectionId: SECTION,
+      filePath: "a.ts",
+      text: "Typed before the view went",
+      selection: SELECTION_OF(12, "additions", 13),
+    });
+  });
+
+  it("puts a reply's words in the draft when the view goes", async () => {
+    using _drafts = setup();
+    const note = noteOf(1, 12);
+    await using screen = await mount({ files: [A], reviewNotes: notesOf([exact(note)]) });
+    await vi.waitFor(() => expect(markersOf(screen)).toEqual([note.id]));
+    await userEvent.click(markerOf(screen, note.id));
+    await userEvent.click(screen.getByRole("button", { name: "Reply" }));
+    await userEvent.fill(screen.getByRole("textbox"), "Answer before the view went");
+
+    await screen.unmount();
+
+    expect(saved()).toHaveLength(1);
+    expect(saved()[0]).toMatchObject({
+      sectionId: reviewNoteSectionId(note.id),
+      text: "Answer before the view went",
+    });
   });
 
   it("puts a reply's words in the draft when another file is shown", async () => {
@@ -1646,7 +1681,7 @@ describe("a patch-only view", () => {
 
     await vi.waitFor(() => expect(markersOf(screen)).toEqual(["c3"]));
     expect(lostLinesNotice(screen)).toBe(
-      `2 comments in the message are on lines this file no longer has: ${between.rangeLabel}, ${straddling.rangeLabel}`,
+      `2 comments in the message are on lines outside the changes shown here: ${between.rangeLabel}, ${straddling.rangeLabel}`,
     );
     expect(saved()).toHaveLength(3);
     // The patch notice stays above it.

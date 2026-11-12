@@ -979,11 +979,15 @@ export const layer = Layer.effect(
     // Runs after each run ends, before the next and at startup, so one left by a restart or
     // a run that outlived the wait goes too.
     const sweepMachineBucketsThreads = Effect.suspend(() =>
-      threadManagement.getShellSnapshot({ location: "active" }),
+      Effect.all([
+        threadManagement.getShellSnapshot({ location: "active" }),
+        // Deleting a thread deletes its archived side chats too, so they count as children.
+        threadManagement.getShellSnapshot({ location: "archive" }),
+      ]),
     ).pipe(
-      Effect.flatMap(({ threads }) => {
+      Effect.flatMap(([{ threads }, archived]) => {
         const withChildren = new Set(
-          threads.flatMap(({ lineage }) =>
+          [...threads, ...archived.threads].flatMap(({ lineage }) =>
             lineage.parentThreadId === null ? [] : [lineage.parentThreadId],
           ),
         );

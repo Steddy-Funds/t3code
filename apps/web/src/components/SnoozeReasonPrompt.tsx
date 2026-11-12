@@ -30,19 +30,26 @@ export function SnoozeReasonPromptHost() {
   const open = useSnoozeReasonPrompt((state) => state.open);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- settles a pending reason request as skipped when the host unmounts
   useEffect(() => () => answerSnoozeReason(null), []);
-  return open ? (
-    <SnoozeReasonPrompt key={open.openedAtMs} anchor={open.anchor} reasons={open.reasons} />
+  return open && !open.native ? (
+    <SnoozeReasonPrompt
+      key={open.openedAtMs}
+      anchor={open.anchor}
+      reasons={open.reasons}
+      noteFor={open.noteFor ?? null}
+    />
   ) : null;
 }
 
 function SnoozeReasonPrompt({
   anchor,
   reasons,
+  noteFor,
 }: {
   anchor: SnoozeReasonAnchor | null;
   reasons: ReadonlyArray<SnoozeReasonSetting>;
+  noteFor: SnoozeReasonSetting | null;
 }) {
-  const [other, setOther] = useState<SnoozeReasonSetting | null>(null);
+  const [other, setOther] = useState(noteFor);
   const [note, setNote] = useState("");
   const [virtualAnchor] = useState(() => ({
     getBoundingClientRect: () =>

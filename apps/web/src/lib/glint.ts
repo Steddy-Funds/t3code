@@ -91,10 +91,19 @@ interface GlintDialog<K extends GlintKind> {
   readonly outcome: Promise<GlintOutcome<K>>;
 }
 
-/** Opens a dialog that can be fed and heard while it is up. Anchors at an element or a point. */
+type GlintAnchor =
+  | Element
+  | {
+      readonly x: number;
+      readonly y: number;
+      readonly width?: number;
+      readonly height?: number;
+    };
+
+/** Opens a dialog that can be fed and heard while it is up. Anchors at an element, point or rect. */
 function openGlint<K extends GlintKind>(
   kind: K,
-  anchor: Element | { readonly x: number; readonly y: number },
+  anchor: GlintAnchor,
   params: GlintParams[K],
 ): GlintDialog<K> {
   const glint = window.desktopBridge?.glint;
@@ -102,7 +111,7 @@ function openGlint<K extends GlintKind>(
   const rect: DesktopGlintAnchor =
     "getBoundingClientRect" in anchor
       ? (({ x, y, width, height }) => ({ x, y, width, height }))(anchor.getBoundingClientRect())
-      : { x: anchor.x, y: anchor.y, width: 0, height: 0 };
+      : { x: anchor.x, y: anchor.y, width: anchor.width ?? 0, height: anchor.height ?? 0 };
   const outcome = (async (): Promise<GlintOutcome<K>> => {
     if (!glint) return { type: "unavailable" };
     try {
@@ -127,7 +136,7 @@ function openGlint<K extends GlintKind>(
 
 export function presentGlint<K extends GlintKind>(
   kind: K,
-  anchor: Element | { readonly x: number; readonly y: number },
+  anchor: GlintAnchor,
   params: GlintParams[K],
 ): Promise<GlintOutcome<K>> {
   return openGlint(kind, anchor, params).outcome;

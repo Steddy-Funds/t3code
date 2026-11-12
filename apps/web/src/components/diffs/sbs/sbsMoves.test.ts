@@ -55,6 +55,20 @@ describe("sbsMovesForFile", () => {
     // Both changes moved whole, so the band between them stands in for their connectors.
     expect(layer.movedChanges.size).toBe(document.changes.length);
     expect(layer.marks.deletions[0]?.counterpartRange).toEqual({ start: 16, end: 20 });
+
+    // A blank line added elsewhere in the file keeps its own connector.
+    const spacedDiff = parseDiffFromFile(fileOf("a.ts", before), fileOf("a.ts", ["", ...after]));
+    const spacedDocument = buildSbsDocument(spacedDiff);
+    const spacedLayer = sbsMoveLayerOf(
+      spacedDocument,
+      sbsMovesForFile(
+        sbsDiffMovesOf([{ filePath: "a.ts", fileDiff: spacedDiff }]),
+        "a.ts",
+        shownPath,
+      ),
+    );
+    expect(spacedDocument.changes).toHaveLength(3);
+    expect(spacedLayer.movedChanges.size).toBe(2);
   });
 
   it("reads a patch's line numbers for a block that left for another file", () => {

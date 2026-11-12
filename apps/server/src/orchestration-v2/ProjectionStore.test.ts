@@ -18,6 +18,8 @@ import {
   NodeId,
   PlanId,
   ProjectId,
+  REVIEW_NOTE_TOOL_NAME,
+  REVIEW_NOTE_TURN_ITEM_PREFIX,
   ProviderDriverKind,
   ProviderInstanceId,
   ProviderSessionId,
@@ -3385,6 +3387,33 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
         );
         assert.isUndefined(page.items.find((row) => row.item.ordinal === 2)?.item.deferredWork);
       }
+      // The server's review note stays out; a provider row with its name and input folds in.
+      const [before] = yield* sql<{ readonly turn_item_id: string; readonly payload_json: string }>`
+        SELECT turn_item_id, payload_json FROM orchestration_v2_projection_turn_items
+        WHERE thread_id = ${threadId} AND ordinal = 2`;
+      const providerItemId = before!.turn_item_id;
+      for (const [itemId, firstDeferred] of [
+        [`${REVIEW_NOTE_TURN_ITEM_PREFIX}bounded-sql-history`, 3],
+        [providerItemId, 2],
+      ] as const) {
+        yield* sql`UPDATE orchestration_v2_projection_turn_items
+          SET type = 'dynamic_tool', turn_item_id = ${itemId},
+          payload_json = json_set(payload_json, '$.id', ${itemId}, '$.type', 'dynamic_tool',
+            '$.toolName', ${REVIEW_NOTE_TOOL_NAME}, '$.input', json('{"kind":"review_note"}'))
+          WHERE thread_id = ${threadId} AND ordinal = 2`;
+        const window = yield* projectionStore.getThreadSnapshotWindow(threadId, {
+          rowLimit: sqlPageLimit,
+          userTurnLimit: 10,
+          deferWork: true,
+        });
+        assert.strictEqual(
+          window.projection.visibleTurnItems.find((row) => row.item.deferredWork)?.item.ordinal,
+          firstDeferred,
+        );
+      }
+      yield* sql`UPDATE orchestration_v2_projection_turn_items
+        SET turn_item_id = ${providerItemId}, payload_json = ${before!.payload_json}
+        WHERE thread_id = ${threadId} AND ordinal = 2`;
       yield* sql`UPDATE orchestration_v2_projection_turn_items SET type = 'command_execution',
         payload_json = json_set(payload_json, '$.type', 'command_execution') WHERE thread_id = ${threadId} AND ordinal = 2`;
       const sharedRunId = "run:bounded-sql-history:1";

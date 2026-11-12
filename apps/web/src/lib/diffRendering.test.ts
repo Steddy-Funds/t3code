@@ -474,10 +474,10 @@ describe("themeEditorSurfaceCss", () => {
     lineNumber: "#010101",
     caretRow: "#020202",
     diff: {
-      inserted: { line: "#030303", muted: "#040404", word: "#050505" },
-      deleted: { line: "#060606", muted: "#070707", word: "#080808" },
-      modified: { line: "#090909", muted: "#0a0a0a", word: "#0b0b0b" },
-      conflict: { line: "#0c0c0c", muted: "#0d0d0d", word: "#0e0e0e" },
+      inserted: "#030303",
+      deleted: "#060606",
+      modified: "#090909",
+      modifiedMuted: "#0a0a0a",
     },
     find: { match: "#0f0f0f", currentMatch: "#101010", foreground: "#111111" },
   };
@@ -529,11 +529,6 @@ describe("themeEditorSurfaceCss", () => {
       /:has\(\[data-diff-span\]\)\s*\{\s*--diffs-computed-diff-line-bg:\s*#0a0a0a;/,
     );
     expect(css).toMatch(/\[data-diff-span\]\s*\{\s*background-color:\s*#090909;/);
-  });
-
-  it("never paints the inserted, deleted or conflict word colours onto a modified line", () => {
-    expect(css).not.toContain("#0b0b0b");
-    for (const unused of ["#0c0c0c", "#0d0d0d", "#0e0e0e"]) expect(css).not.toContain(unused);
   });
 
   it("paints the caret row", () => {

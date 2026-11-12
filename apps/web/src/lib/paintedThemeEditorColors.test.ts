@@ -162,7 +162,7 @@ describe("the painted theme, as applyThemePalette and applyThemeColorPreview pai
     const css = themeEditorSurfaceCss(getPaintedThemeEditorColors());
     expect(css).toContain(MATERIAL_DARK!.lineNumber);
     expect(css).toContain(MATERIAL_DARK!.caretRow);
-    expect(css).toContain(MATERIAL_DARK!.diff.inserted.line);
+    expect(css).toContain(MATERIAL_DARK!.diff.inserted);
   });
 
   it("falls back to the stock pair for an appearance the theme has no block for", () => {

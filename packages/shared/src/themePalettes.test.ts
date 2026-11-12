@@ -89,11 +89,7 @@ describe("material-ocean editor block", () => {
     const { lineNumber, caretRow, diff, find } = materialOceanEditor!;
     expect(lineNumber).toMatch(HEX);
     expect(caretRow).toMatch(HEX);
-    for (const kind of [diff.inserted, diff.deleted, diff.modified, diff.conflict]) {
-      expect(kind.line).toMatch(HEX);
-      expect(kind.muted).toMatch(HEX);
-      expect(kind.word).toMatch(HEX);
-    }
+    for (const colour of Object.values(diff)) expect(colour).toMatch(HEX);
     expect(find.match).toMatch(HEX);
     expect(find.currentMatch).toMatch(HEX);
     expect(find.foreground).toMatch(HEX);
@@ -119,6 +115,15 @@ describe("semanticTokenStyle", () => {
   it("gives null for no theme", () => {
     expect(semanticTokenStyle(null, "function")).toBeNull();
     expect(semanticTokenStyle(null, "function", ["static"])).toBeNull();
+  });
+
+  it("reads own entries only, whatever a server names a token type", () => {
+    for (const name of ["constructor", "toString", "hasOwnProperty", "__proto__"]) {
+      expect(semanticTokenStyle(materialOceanEditor, name)).toBeNull();
+      expect(semanticTokenStyle(materialOceanEditor, "function", [name])).toEqual({
+        color: "#82aaff",
+      });
+    }
   });
 
   it("gives null for a type the theme does not style", () => {

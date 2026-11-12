@@ -2,6 +2,7 @@
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 import * as NodeProcess from "node:process";
+import * as NodeURL from "node:url";
 
 import { describe, expect, it } from "@effect/vitest";
 import type { CodeIntelError } from "@t3tools/contracts";
@@ -31,6 +32,18 @@ import {
 } from "./testing/harness.ts";
 
 const at = (line: number, character: number) => ({ line, character });
+
+const openedPaths = (record: string, cwd: string) =>
+  recorded(record)
+    .filter((message) => message.method === "textDocument/didOpen")
+    .map((message) =>
+      NodePath.relative(
+        cwd,
+        NodeURL.fileURLToPath(
+          (message.params as { textDocument: { uri: string } }).textDocument.uri,
+        ),
+      ),
+    );
 
 const reasonOf = (call: Effect.Effect<unknown, CodeIntelError>) =>
   call.pipe(Effect.match({ onFailure: (error) => error.reason, onSuccess: () => "answered" }));
@@ -909,6 +922,244 @@ describe("CodeIntel", () => {
       ),
     );
 
+    it.effect("opens a file of the root's project before a fresh tsc's first answer", () =>
+      inScenario({}, (s) =>
+        Effect.gen(function* () {
+          const codeIntel = yield* CodeIntel.CodeIntel;
+          const typescript = s.recordFile("typescript");
+          s.flagsByLanguage.set("typescript", [`--record=${typescript}`, "--symbols-after-open"]);
+          const cwd = yield* makeWorkspace({
+            "tsconfig.json": '{ "include": ["src"] }\n',
+            "src/billing/invoice.ts": "class Invoice\n",
+          });
+
+          const result = yield* codeIntel.workspaceSymbols({
+            cwd,
+            languageId: "typescript",
+            query: "Invoice",
+            limit: 10,
+          });
+
+          expect(result.symbols.map((symbol) => symbol.location.path)).toEqual([
+            "src/billing/invoice.ts",
+          ]);
+        }),
+      ),
+    );
+
+    const ALPHA = "def alpha\n";
+    it.effect.each([
+      [
+        "the first file in the folder the tsconfig includes",
+        {
+          "tsconfig.json": '{ "include": ["src/**/*"] }\n',
+          "vite.config.ts": ALPHA,
+          "src/types.d.ts": ALPHA,
+          "src/app/main.ts": ALPHA,
+        },
+        [],
+        ["src/app/main.ts"],
+      ],
+      [
+        "the file a tsconfig with comments lists",
+        {
+          "tsconfig.json": '// app\n{ "files": ["lib/main.ts",], }\n',
+          "a.ts": ALPHA,
+          "lib/main.ts": ALPHA,
+        },
+        [],
+        ["lib/main.ts"],
+      ],
+      [
+        "a file of the project a solution references",
+        {
+          "tsconfig.json": '{ "files": [], "references": [{ "path": "./packages/b" }] }\n',
+          "packages/b/tsconfig.json": '{ "include": ["src"] }\n',
+          "packages/b/src/b.ts": ALPHA,
+        },
+        [],
+        ["packages/b/src/b.ts"],
+      ],
+      [
+        "a file of each project a solution references",
+        {
+          "tsconfig.json":
+            '{ "files": [], "references": [{ "path": "./packages/a" }, { "path": "./packages/b" }] }\n',
+          "packages/a/tsconfig.json": '{ "include": ["src"] }\n',
+          "packages/a/src/a.ts": ALPHA,
+          "packages/b/tsconfig.json": '{ "include": ["src"] }\n',
+          "packages/b/src/b.ts": ALPHA,
+        },
+        [],
+        ["packages/a/src/a.ts", "packages/b/src/b.ts"],
+      ],
+      [
+        "a file the include of a project's base names",
+        {
+          "tsconfig.json": '{ "extends": "./tsconfig.app.json" }\n',
+          "tsconfig.app.json": '{ "include": ["src"] }\n',
+          "vite.config.ts": ALPHA,
+          "src/main.ts": ALPHA,
+        },
+        [],
+        ["src/main.ts"],
+      ],
+      [
+        "the projects that import the most of a workspace, none that one of them loads",
+        {
+          "evals/package.json": '{ "name": "evals" }\n',
+          "evals/tsconfig.json": "{}\n",
+          "evals/run.ts": ALPHA,
+          "scripts/package.json": '{ "name": "scripts" }\n',
+          "scripts/tsconfig.json": "{}\n",
+          "scripts/build.ts": ALPHA,
+          "apps/desktop/package.json":
+            '{ "name": "desktop", "dependencies": { "contracts": "*" } }\n',
+          "apps/desktop/tsconfig.json": "{}\n",
+          "apps/desktop/main.ts": ALPHA,
+          "apps/server/package.json":
+            '{ "name": "server", "dependencies": { "contracts": "*", "shared": "*" }, "devDependencies": { "web": "*" } }\n',
+          "apps/server/tsconfig.json": "{}\n",
+          "apps/server/main.ts": ALPHA,
+          "apps/web/package.json":
+            '{ "name": "web", "dependencies": { "contracts": "*", "shared": "*", "ui": "*" } }\n',
+          "apps/web/tsconfig.json": "{}\n",
+          "apps/web/main.ts": ALPHA,
+          "packages/contracts/package.json": '{ "name": "contracts", "exports": "./index.ts" }\n',
+          "packages/contracts/tsconfig.json": "{}\n",
+          "packages/contracts/index.ts": ALPHA,
+          "packages/shared/package.json":
+            '{ "name": "shared", "exports": "./index.ts", "dependencies": { "contracts": "*" } }\n',
+          "packages/shared/tsconfig.json": "{}\n",
+          "packages/shared/index.ts": ALPHA,
+          "packages/ui/package.json":
+            '{ "name": "ui", "main": "./index.ts", "dependencies": { "contracts": "*", "shared": "*" } }\n',
+          "packages/ui/tsconfig.json": "{}\n",
+          "packages/ui/index.ts": ALPHA,
+        },
+        [],
+        ["apps/web/main.ts", "apps/server/main.ts", "apps/desktop/main.ts", "evals/run.ts"],
+      ],
+      [
+        "one file of each project below a root that has none",
+        {
+          "apps/web/tsconfig.json": "{}\n",
+          "apps/web/main.ts": ALPHA,
+          "packages/ui/tsconfig.json": "{}\n",
+          "packages/ui/index.ts": ALPHA,
+          "scripts/build.ts": ALPHA,
+        },
+        [],
+        ["apps/web/main.ts", "packages/ui/index.ts"],
+      ],
+      [
+        "a package whose importer may load only its built output, with room left",
+        {
+          "apps/web/package.json": '{ "name": "web", "dependencies": { "ui": "*" } }\n',
+          "apps/web/tsconfig.json": "{}\n",
+          "apps/web/main.ts": ALPHA,
+          "packages/ui/package.json": '{ "name": "ui", "exports": "./dist/index.js" }\n',
+          "packages/ui/tsconfig.json": '{ "include": ["src"] }\n',
+          "packages/ui/src/button.ts": ALPHA,
+        },
+        [],
+        ["apps/web/main.ts", "packages/ui/src/button.ts"],
+      ],
+      [
+        "the declaration file of a project with no other",
+        { "tsconfig.json": '{ "include": ["src"] }\n', "src/types.d.ts": ALPHA },
+        [],
+        ["src/types.d.ts"],
+      ],
+      ["nothing for a root without a project", { "a.ts": ALPHA }, [], []],
+      [
+        "the project's file while a file outside its include is open",
+        {
+          "tsconfig.json": '{ "include": ["src"] }\n',
+          "src/invoice.ts": ALPHA,
+          "scripts/scratch.ts": ALPHA,
+        },
+        ["scripts/scratch.ts"],
+        ["scripts/scratch.ts", "src/invoice.ts"],
+      ],
+    ] as const)("opens %s before tsc's first workspace answer", ([, files, openFirst, opened]) =>
+      inScenario({}, (s) =>
+        Effect.gen(function* () {
+          const codeIntel = yield* CodeIntel.CodeIntel;
+          const typescript = s.recordFile("typescript");
+          s.flagsByLanguage.set("typescript", [`--record=${typescript}`]);
+          const cwd = yield* makeWorkspace(files);
+          for (const path of openFirst) yield* hoverAt(cwd, path);
+
+          yield* codeIntel.workspaceSymbols({
+            cwd,
+            languageId: "typescript",
+            query: "alpha",
+            limit: 10,
+          });
+
+          expect(openedPaths(typescript, cwd)).toEqual(opened);
+        }),
+      ),
+    );
+
+    it.effect("opens no file outside the root that a project names, through a link either", () =>
+      inScenario({}, (s) =>
+        Effect.gen(function* () {
+          const codeIntel = yield* CodeIntel.CodeIntel;
+          const typescript = s.recordFile("typescript");
+          s.flagsByLanguage.set("typescript", [`--record=${typescript}`]);
+          const other = NodePath.join(s.scratch, "other");
+          NodeFS.mkdirSync(other, { recursive: true });
+          NodeFS.writeFileSync(
+            NodePath.join(other, "tsconfig.json"),
+            '{ "files": ["other.ts"] }\n',
+          );
+          NodeFS.writeFileSync(NodePath.join(other, "other.ts"), ALPHA);
+          const cwd = yield* makeWorkspace({
+            "packages/b/tsconfig.json": '{ "include": ["src"] }\n',
+            "packages/b/src/b.ts": ALPHA,
+          });
+          NodeFS.symlinkSync(other, NodePath.join(cwd, "linked"));
+          const references = [NodePath.relative(cwd, other), "./linked", "./packages/b"];
+          NodeFS.writeFileSync(
+            NodePath.join(cwd, "tsconfig.json"),
+            JSON.stringify({ files: [], references: references.map((path) => ({ path })) }),
+          );
+
+          yield* codeIntel.workspaceSymbols({
+            cwd,
+            languageId: "typescript",
+            query: "alpha",
+            limit: 10,
+          });
+
+          expect(openedPaths(typescript, cwd)).toEqual(["packages/b/src/b.ts"]);
+        }),
+      ),
+    );
+
+    it.effect("lands on the name of a symbol its server places at the whole declaration", () =>
+      inScenario({ flags: ["--symbol-full-range"] }, () =>
+        Effect.gen(function* () {
+          const codeIntel = yield* CodeIntel.CodeIntel;
+          const cwd = yield* makeWorkspace({
+            "models.py":
+              '@register("Ledger")\n@dataclass\nclass Ledger\n    @property\n    def ledger_total\ndef ledger_free\n',
+          });
+
+          const result = yield* codeIntel.workspaceSymbols({ cwd, query: "ledger", limit: 10 });
+
+          expect(result.symbols.map((symbol) => [symbol.name, symbol.location.range])).toEqual([
+            ["Ledger", { start: at(2, 6), end: at(2, 12) }],
+            ["ledger_free", { start: at(5, 4), end: at(5, 15) }],
+            ["ledger_total", { start: at(4, 8), end: at(4, 20) }],
+          ]);
+          expect(result.symbols[0]).not.toHaveProperty("location.lineText");
+        }),
+      ),
+    );
+
     it.effect("answers unsupported_language for a language it has no row for", () =>
       inScenario({}, (s) =>
         Effect.gen(function* () {
@@ -940,6 +1191,32 @@ describe("CodeIntel", () => {
             ["typescript", "stopped"],
           ]);
           expect(noWorkspaceStarted(s.record)).toBe(true);
+        }),
+      ),
+    );
+
+    it.effect("lists the root's node_modules and each package's own, root first", () =>
+      inScenario({}, () =>
+        Effect.gen(function* () {
+          const codeIntel = yield* CodeIntel.CodeIntel;
+          const cwd = yield* makeWorkspace({
+            "node_modules/react/index.js": "",
+            "packages/b/node_modules/dep/index.js": "",
+            "apps/web/node_modules/vite/index.js": "",
+            "three/folders/down/node_modules/x/index.js": "",
+            ".cache/node_modules/y/index.js": "",
+          });
+
+          const status = yield* codeIntel.status({ cwd });
+
+          const typescript = status.servers.find((server) => server.languageId === "typescript");
+          expect(typescript?.libraryRoots).toEqual(
+            ["node_modules", "apps/web/node_modules", "packages/b/node_modules"].map((label) => ({
+              path: NodePath.join(cwd, label),
+              label,
+              kind: "node_modules",
+            })),
+          );
         }),
       ),
     );

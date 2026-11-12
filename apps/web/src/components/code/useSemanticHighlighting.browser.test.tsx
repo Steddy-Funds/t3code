@@ -101,6 +101,7 @@ function Viewer(props: {
     intel: {
       supported: props.supported ?? true,
       servers: status === null ? [] : [status],
+      turnedOff: false,
       server: status,
       libraryRoot: null,
       libraryCode: false,

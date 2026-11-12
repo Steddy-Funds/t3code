@@ -49,23 +49,30 @@ export function libraryLocation(
   return { root, relativePath: slash === -1 ? "" : path.slice(slash + 1) };
 }
 
+/** A folder listing to ask for, and the prefix to strip from the paths that come back. */
+export interface LibraryListing {
+  readonly cwd: string;
+  readonly directoryPath: string;
+  readonly prefix: string;
+}
+
 /**
- * Where a folder under a root is listed, and the prefix to strip from what comes back. A root
- * inside the workspace lists through it: pnpm links each package's node_modules into the root
- * one, and a listing drops links that leave its cwd.
+ * Where to list a folder under a root, in order. A root inside the workspace lists through it
+ * first: pnpm links each package's node_modules into the root one, and a listing drops links that
+ * leave its cwd. Its own folder comes next, for a root that is itself a link out of the workspace.
  */
-export function libraryListing(
+export function libraryListings(
   root: ExternalLibraryRoot,
   relativePath: string,
   workspace: string,
-): { readonly cwd: string; readonly directoryPath: string; readonly prefix: string } {
+): LibraryListing[] {
+  const ownFolder = { cwd: root.path, directoryPath: relativePath, prefix: "" };
   const inWorkspace = workspaceRelativeFilePath(root.path, workspace);
-  if (inWorkspace === null || inWorkspace === ".") {
-    return { cwd: root.path, directoryPath: relativePath, prefix: "" };
-  }
-  return {
+  if (inWorkspace === null || inWorkspace === ".") return [ownFolder];
+  const throughWorkspace = {
     cwd: workspace,
     directoryPath: relativePath === "" ? inWorkspace : `${inWorkspace}/${relativePath}`,
     prefix: `${inWorkspace}/`,
   };
+  return [throughWorkspace, ownFolder];
 }

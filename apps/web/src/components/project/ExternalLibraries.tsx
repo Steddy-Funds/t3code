@@ -20,7 +20,8 @@ import { useEnvironmentQuery } from "~/state/query";
 import {
   type ExternalLibraryRoot,
   externalLibraryRoots,
-  libraryListing,
+  type LibraryListing,
+  libraryListings,
   libraryLocation,
   SHOWN_LIBRARY_ROOTS,
 } from "./externalLibraries";
@@ -46,6 +47,23 @@ function useLibraryEntries(
     return next;
   };
 
+  const listFirst = async (listings: ReadonlyArray<LibraryListing>) => {
+    for (const listing of listings) {
+      const atom = projectEnvironment.listEntries({
+        environmentId,
+        input: { cwd: listing.cwd, directoryPath: listing.directoryPath },
+      });
+      // One at a time: the next is only for a listing the server refused.
+      const result = await executeAtomQuery(appAtomRegistry, atom, {
+        refresh: true,
+        reportFailure: false,
+        reportDefect: false,
+      });
+      if (result._tag === "Success") return { listing, entries: result.value.entries };
+    }
+    return null;
+  };
+
   const load = (directory: string) => {
     const location = libraryLocation(roots, directory);
     if (location === null || requested.current.has(directory)) return;
@@ -53,23 +71,15 @@ function useLibraryEntries(
     setLoading((previous) => new Set(previous).add(directory));
     setFailed((previous) => without(previous, directory));
     const { root, relativePath } = location;
-    const listing = libraryListing(root, relativePath, workspace);
-    const atom = projectEnvironment.listEntries({
-      environmentId,
-      input: { cwd: listing.cwd, directoryPath: listing.directoryPath },
-    });
-    void executeAtomQuery(appAtomRegistry, atom, {
-      refresh: true,
-      reportFailure: false,
-      reportDefect: false,
-    }).then((result) => {
+    void listFirst(libraryListings(root, relativePath, workspace)).then((result) => {
       setLoading((previous) => without(previous, directory));
       // A failed folder stays requested until Retry, so tree events don't ask for it again.
-      if (result._tag !== "Success") {
+      if (result === null) {
         setFailed((previous) => new Set(previous).add(directory));
         return;
       }
-      const children = result.value.entries
+      const { listing, entries } = result;
+      const children = entries
         .filter((entry) => parentOf(entry.path) === listing.directoryPath)
         .map((entry) => ({
           ...entry,

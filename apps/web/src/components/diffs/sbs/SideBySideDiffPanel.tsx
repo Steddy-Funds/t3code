@@ -16,17 +16,25 @@ import {
 
 import { DiffFilePathCopyButton } from "../../DiffFilePathCopyButton";
 import { fileContentRevision } from "@t3tools/shared/fileContentRevision";
+import { workspaceRelativeFilePath } from "@t3tools/shared/path";
 import { DiffPanelLoadingState } from "../../DiffPanelShell";
 import { StartTruncatedPath } from "../../StartTruncatedPath";
 import { Button } from "../../ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../../ui/tooltip";
 import { SbsBar } from "./SbsToolbar";
-import { SideBySideDiffView, type SideBySideDiffViewProps } from "./SideBySideDiffView";
+import {
+  type SbsTokenActivation,
+  SideBySideDiffView,
+  type SideBySideDiffViewProps,
+} from "./SideBySideDiffView";
 import type { SbsNavigationDirection } from "./sbsNavigation";
 
 const COLLAPSE_UNCHANGED_STORAGE_KEY = "t3code.sbsDiff.collapseUnchanged";
 const HIGHLIGHT_MODE_STORAGE_KEY = "t3code.sbsDiff.highlightMode";
 const HighlightMode = Schema.Literals(["words", "lines", "none"]);
+
+/** Narrower than this, two panes and their divider leave too little of each line to read. */
+export const SIDE_BY_SIDE_MIN_WIDTH = 520;
 
 export interface SbsFileEntry {
   readonly fileKey: string;
@@ -58,7 +66,14 @@ export interface SideBySideDiffPanelProps {
   readonly patchState: (filePath: string) => SbsPatchState;
   readonly onRequestPatch: (filePath: string) => void;
   readonly onRetryPatch: (filePath: string) => void;
-  readonly onOpenFile: (filePath: string, line?: number) => void;
+  /** Absent where the files are not on this machine to open. */
+  readonly onOpenFile?: ((filePath: string, line?: number) => void) | undefined;
+  /** The project's root: a path under it shows relative to it, as an agent's edit records it absolute. */
+  readonly workspaceRoot?: string | undefined;
+  /** Go to Declaration in the file shown: a Cmd+click on a token, or its key at the caret. */
+  readonly onTokenActivate?:
+    | ((activation: SbsTokenActivation, filePath: string) => void)
+    | undefined;
   /**
    * Renders the view. A caller that adds comments or navigation wraps `SideBySideDiffView`
    * here and passes its annotation and selection props; nothing else reaches inside the view.
@@ -145,7 +160,15 @@ function Message({ children }: { children: ReactNode }) {
 }
 
 export function SideBySideDiffPanel(props: SideBySideDiffPanelProps) {
-  const { files, loadFileContents, scopeKey, contentsKey, ignoreWhitespace } = props;
+  const {
+    files,
+    loadFileContents,
+    scopeKey,
+    contentsKey,
+    ignoreWhitespace,
+    onOpenFile,
+    onTokenActivate,
+  } = props;
   const [collapseUnchanged, setCollapseUnchanged] = useLocalStorage(
     COLLAPSE_UNCHANGED_STORAGE_KEY,
     true,
@@ -174,6 +197,10 @@ export function SideBySideDiffPanel(props: SideBySideDiffPanelProps) {
   const patch = entry?.fileDiff;
   const patchState = entry ? props.patchState(filePath) : null;
   const patchPending = patchState?.pending === true;
+  const shownPath = (path: string) => {
+    const relative = workspaceRelativeFilePath(path, props.workspaceRoot);
+    return relative === null || relative === "." ? path : relative;
+  };
   const fileId = entry ? `${scopeKey}:${entry.fileKey}` : null;
   const loadKey = fileId === null ? null : `${fileId}:${contentsKey}:${attempt}`;
   const canLoad = loadFileContents !== undefined && entry !== undefined && !patchPending;
@@ -212,6 +239,18 @@ export function SideBySideDiffPanel(props: SideBySideDiffPanelProps) {
     setArrival({ fileKey: target.fileKey, from: direction });
     props.onSelectFile(target.fileKey);
   };
+
+  const title = (
+    <>
+      {patch?.prevName && patch.prevName !== patch.name ? (
+        <>
+          <StartTruncatedPath path={shownPath(patch.prevName)} className="text-muted-foreground" />
+          <span className="shrink-0 text-muted-foreground">{"->"}</span>
+        </>
+      ) : null}
+      <StartTruncatedPath path={shownPath(filePath)} />
+    </>
+  );
 
   const leading = entry ? (
     <>
@@ -253,20 +292,23 @@ export function SideBySideDiffPanel(props: SideBySideDiffPanelProps) {
           </Tooltip>
         </span>
       ) : null}
-      <button
-        type="button"
-        className="flex min-w-0 items-center gap-1 text-xs text-foreground hover:underline"
-        onClick={() => props.onOpenFile(filePath)}
-        data-sbs-file-title=""
-      >
-        {patch?.prevName && patch.prevName !== patch.name ? (
-          <>
-            <StartTruncatedPath path={patch.prevName} className="text-muted-foreground" />
-            <span className="shrink-0 text-muted-foreground">{"->"}</span>
-          </>
-        ) : null}
-        <StartTruncatedPath path={filePath} />
-      </button>
+      {onOpenFile ? (
+        <button
+          type="button"
+          className="flex min-w-0 items-center gap-1 text-xs text-foreground hover:underline"
+          onClick={() => onOpenFile(filePath)}
+          data-sbs-file-title=""
+        >
+          {title}
+        </button>
+      ) : (
+        <span
+          className="flex min-w-0 items-center gap-1 text-xs text-foreground"
+          data-sbs-file-title=""
+        >
+          {title}
+        </span>
+      )}
       <DiffFilePathCopyButton filePath={filePath} />
     </>
   ) : null;
@@ -377,10 +419,17 @@ export function SideBySideDiffPanel(props: SideBySideDiffPanelProps) {
     focusOnOpen: arrival?.fileKey === entry.fileKey,
     adjacentFiles: { next: index < files.length - 1, previous: index > 0 },
     onOpenAdjacentFile: selectFile,
-    onOpenSource: ({ side, line }) => {
-      // The old side of a file is not on disk to open at a line.
-      if (side === "additions") props.onOpenFile(filePath, line);
-    },
+    ...(onOpenFile
+      ? {
+          onOpenSource: ({ side, line }) => {
+            // The old side of a file is not on disk to open at a line.
+            if (side === "additions") onOpenFile(filePath, line);
+          },
+        }
+      : {}),
+    ...(onTokenActivate
+      ? { onTokenActivate: (activation) => onTokenActivate(activation, filePath) }
+      : {}),
   };
   return (
     <div

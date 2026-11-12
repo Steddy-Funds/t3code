@@ -179,8 +179,44 @@ describe("anchorReviewNote", () => {
       ]),
       expected: { kind: "unattached" },
     },
-  ])("is $state", ({ fileDiff, expected, overrides }) => {
-    expect(anchorReviewNote(note(overrides), fileDiff)).toEqual(expected);
+    {
+      state: "unattached on the flagged revision's lines outside the hunks when hunks are shown",
+      overrides: { startLine: 20, endLine: 21 },
+      fileDiff: changed(REVISION.slice(0, 7), ["@@ -1,3 +1,4 @@", " start", "+x", "+y", " end"]),
+      expected: { kind: "unattached" },
+    },
+    {
+      state: "exact on the flagged revision's lines outside the hunks when the whole file is shown",
+      overrides: { startLine: 20, endLine: 21 },
+      shownLines: "whole-file" as const,
+      fileDiff: changed(REVISION.slice(0, 7), ["@@ -1,3 +1,4 @@", " start", "+x", "+y", " end"]),
+      expected: { kind: "exact", startLine: 20, endLine: 21 },
+    },
+    {
+      state:
+        "moved as with hunks when the whole file is shown but the revision is not the flagged one",
+      shownLines: "whole-file" as const,
+      fileDiff: changed("2222222", [
+        "@@ -1,3 +1,6 @@",
+        " start",
+        "+added",
+        "+added again",
+        "+retry()",
+        "+return",
+        " end",
+      ]),
+      expected: { kind: "moved", startLine: 4, endLine: 5 },
+    },
+    {
+      state:
+        "unattached when the whole file is shown, the revision is not the flagged one and the lines are outside the hunks",
+      overrides: { startLine: 20, endLine: 21 },
+      shownLines: "whole-file" as const,
+      fileDiff: changed("2222222", ["@@ -1,3 +1,4 @@", " start", "+x", "+y", " end"]),
+      expected: { kind: "unattached" },
+    },
+  ])("is $state", ({ fileDiff, expected, overrides, shownLines }) => {
+    expect(anchorReviewNote(note(overrides), fileDiff, undefined, shownLines)).toEqual(expected);
   });
 });
 
@@ -239,6 +275,35 @@ describe("placeReviewNotes", () => {
 
     expect(placed.map(({ fileKey, anchor }) => [fileKey, anchor])).toEqual([
       ["app", { kind: "exact", startLine: 2, endLine: 3 }],
+    ]);
+  });
+});
+
+describe("placeReviewNotes with the lines the viewer shows", () => {
+  const roots = { workspaceRoot: "/repo", repositoryRoot: undefined };
+
+  it("places a note outside the hunks only for a viewer of whole files, and keeps the two apart in the cache", () => {
+    const fileDiff = changed(REVISION.slice(0, 7), [
+      "@@ -1,3 +1,4 @@",
+      " start",
+      "+x",
+      "+y",
+      " end",
+    ]);
+    const outside = note({ startLine: 20, endLine: 21 });
+    const files = [{ fileDiff, fileKey: "app", pending: false }];
+    const anchors = (shown?: "hunks" | "whole-file") =>
+      (shown === undefined
+        ? placeReviewNotes([outside], files, roots)
+        : placeReviewNotes([outside], files, roots, shown)
+      ).map(({ anchor }) => anchor.kind);
+
+    // The same diff and note, asked in turn: an answer for one must not serve the other.
+    expect([anchors(), anchors("whole-file"), anchors("hunks"), anchors("whole-file")]).toEqual([
+      ["unattached"],
+      ["exact"],
+      ["unattached"],
+      ["exact"],
     ]);
   });
 });

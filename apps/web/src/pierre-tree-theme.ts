@@ -1,3 +1,4 @@
+import type { ThemeEditorColors } from "@t3tools/shared/themePalettes";
 import type { CSSProperties } from "react";
 
 export const PIERRE_TREE_UNSAFE_CSS = `
@@ -19,9 +20,20 @@ export const PIERRE_TREE_UNSAFE_CSS = `
   @keyframes t3-tree-spin { to { transform: rotate(360deg); } }
 `;
 
-export function pierreTreeStyle(colorScheme: "light" | "dark"): CSSProperties {
-  return {
+/**
+ * A theme's file status colours go in Pierre's status variables, below its git ones, so the
+ * blue-orange diff colours still win where the user picked them.
+ */
+export function pierreTreeStyle(
+  colorScheme: "light" | "dark",
+  fileStatus?: ThemeEditorColors["fileStatus"],
+): CSSProperties {
+  const style: Record<string, string> = {
     colorScheme,
-    ["--trees-fg-override" as string]: "var(--contrast-foreground)",
+    "--trees-fg-override": "var(--contrast-foreground)",
   };
+  for (const [status, color] of Object.entries(fileStatus ?? {})) {
+    style[`--trees-status-${status}-override`] = color;
+  }
+  return style;
 }

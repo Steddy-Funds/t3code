@@ -266,6 +266,64 @@ describe("showing a file", () => {
     expect(title.textContent).toContain("->");
   });
 
+  it("shows paths under the workspace root relative to it, both names of a rename, and copies the raw path", async () => {
+    using write = vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue(undefined);
+    const texts = textsOf({ 10: "alpha" });
+    const entry = entryOf("/repo/src/new.ts", texts, { prevName: "/repo/src/old.ts" });
+    await using screen = await mount({
+      files: [entry],
+      loadFileContents: loaderOf({ "/repo/src/new.ts": texts }),
+      workspaceRoot: "/repo",
+    });
+    await showsFile(screen, "alpha");
+
+    const title = one(screen.container, "[data-sbs-file-title]")!.textContent!;
+    expect(title).toContain("src/old.ts");
+    expect(title).toContain("src/new.ts");
+    expect(title).not.toContain("/repo");
+
+    await userEvent.click(screen.getByRole("button", { name: "Copy file path" }));
+    await vi.waitFor(() => expect(write).toHaveBeenCalledExactlyOnceWith("/repo/src/new.ts"));
+  });
+
+  it.each([
+    { state: "outside the root", path: "/elsewhere/src/a.ts" },
+    { state: "beside the root, sharing its start", path: "/repo-other/src/a.ts" },
+    { state: "already relative", path: "src/a.ts" },
+  ])("shows a path $state as it is given", async ({ path }) => {
+    const texts = textsOf({ 10: "alpha" });
+    await using screen = await mount({
+      files: [entryOf(path, texts)],
+      loadFileContents: loaderOf({ [path]: texts }),
+      workspaceRoot: "/repo",
+    });
+    await showsFile(screen, "alpha");
+
+    expect(one(screen.container, "[data-sbs-file-title]")!.textContent).toContain(path);
+  });
+
+  it("shows the name as plain text, and opens nothing on F4, without a way to open files", async () => {
+    const errors = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const texts = textsOf({ 10: "alpha" });
+    await using screen = await mount({
+      files: [entryOf("src/a.ts", texts)],
+      loadFileContents: loaderOf({ "src/a.ts": texts }),
+      onOpenFile: undefined,
+    });
+    await showsFile(screen, "alpha");
+
+    const title = one(screen.container, "[data-sbs-file-title]")!;
+    expect(title.tagName).toBe("SPAN");
+    expect(title.textContent).toContain("src/a.ts");
+    expect(screen.getByRole("button", { name: "src/a.ts" }).elements()).toHaveLength(0);
+
+    await focusPane(screen, "additions");
+    await userEvent.keyboard("{F4}");
+
+    expect(errors).not.toHaveBeenCalled();
+    errors.mockRestore();
+  });
+
   it("shows a pure rename, which loads one file, as identical contents", async () => {
     const texts = textsOf({ 10: "alpha" });
     const renamed: FileDiffMetadata = {

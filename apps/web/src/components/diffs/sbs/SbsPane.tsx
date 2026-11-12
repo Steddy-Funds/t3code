@@ -235,14 +235,20 @@ function renderRow(context: RowContext, row: number): ReactNode {
   if (target === null) return null;
   const segment = layout.segments[target.segment]!;
   if (segment.kind === "fold") {
-    const hidden = segment[side].end - segment[side].start;
+    const { start, end } = segment[side];
+    const annotated = context.annotations.some((item) => item.start < end && start < item.end);
     return (
       <button
         key={`fold:${segment.fold}`}
         type="button"
         className="sbs-row sbs-fold"
         data-sbs-fold={segment.fold}
-        aria-label={`Show ${hidden} unchanged lines`}
+        data-annotated={annotated ? "" : undefined}
+        aria-label={
+          annotated
+            ? `Show ${end - start} unchanged lines, with a note among them`
+            : `Show ${end - start} unchanged lines`
+        }
       />
     );
   }

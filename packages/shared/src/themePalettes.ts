@@ -171,6 +171,15 @@ export type ThemeEditorColors = Readonly<{
     modifiedMarker: string;
   }>;
   find: Readonly<{ match: string; currentMatch: string; foreground: string }>;
+  /** A file name's colour in a file tree, by its working-tree change. */
+  fileStatus?: Readonly<{
+    added: string;
+    modified: string;
+    deleted: string;
+    renamed: string;
+    untracked: string;
+    ignored: string;
+  }>;
 }>;
 
 export type ThemeDefinition = Readonly<{
@@ -1213,6 +1222,15 @@ export const MATERIAL_OCEAN_THEME: ThemeDefinition = {
         modifiedMarker: "#43698d",
       },
       find: { match: "#f8e71c", currentMatch: "#84ffff", foreground: "#292d3e" },
+      // JetBrains has no renamed status: a moved file reads as modified.
+      fileStatus: {
+        added: "#c3e88d",
+        modified: "#80cbc4",
+        deleted: "#808080",
+        renamed: "#80cbc4",
+        untracked: "#f77669",
+        ignored: "#ab7967",
+      },
     },
   },
 };

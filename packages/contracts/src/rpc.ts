@@ -184,6 +184,12 @@ import {
 import { KeybindingsConfigError } from "./keybindings.ts";
 import { OrchestrationSearchThreadsError } from "./threadSearch.ts";
 import {
+  ThreadSnoozeLogError,
+  ThreadSnoozeLogListInput,
+  ThreadSnoozeLogListResult,
+  ThreadSnoozeLogRecordInput,
+} from "./snoozeLog.ts";
+import {
   ProviderUploadFeedbackError,
   ProviderUploadFeedbackInput,
   ProviderUploadFeedbackResult,
@@ -465,6 +471,9 @@ export const WS_METHODS = {
   projectsEnsureScratch: "projects.ensureScratch",
   projectsCreateNew: "projects.createNew",
   projectsCreateFromThread: "projects.createFromThread",
+
+  threadsSnoozeLog: "threads.snoozeLog",
+  threadsRecordSnooze: "threads.recordSnooze",
 
   shellOpenInEditor: "shell.openInEditor",
 
@@ -2246,7 +2255,21 @@ export class RpcScopeAuthorization extends RpcMiddleware.Service<RpcScopeAuthori
   { error: EnvironmentAuthorizationError },
 ) {}
 
+const WsThreadsSnoozeLogRpc = Rpc.make(WS_METHODS.threadsSnoozeLog, {
+  payload: ThreadSnoozeLogListInput,
+  success: ThreadSnoozeLogListResult,
+  error: ThreadSnoozeLogError,
+});
+
+const WsThreadsRecordSnoozeRpc = Rpc.make(WS_METHODS.threadsRecordSnooze, {
+  payload: ThreadSnoozeLogRecordInput,
+  success: Schema.Void,
+  error: ThreadSnoozeLogError,
+});
+
 export const WsRpcGroup = RpcGroup.make(
+  WsThreadsSnoozeLogRpc,
+  WsThreadsRecordSnoozeRpc,
   WsGuestShareCreateRpc,
   WsServerProbeRpc,
   WsServerGetConfigRpc,

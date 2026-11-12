@@ -172,6 +172,7 @@ import * as HostProcess from "@t3tools/shared/HostProcess";
 import { dedupeSnapshotBodies } from "@t3tools/shared/orchestrationV2DedupedBodies";
 import * as ProjectStore from "./orchestration-v2/ProjectStore.ts";
 import * as ThreadSearch from "./orchestration-v2/ThreadSearch.ts";
+import * as ThreadSnoozeLog from "./orchestration-v2/ThreadSnoozeLog.ts";
 import * as OrchestrationEventStore from "./persistence/OrchestrationEventStore.ts";
 import { userFacingDispatchErrorMessage } from "./orchestration-v2/UserFacingErrors.ts";
 import * as ProviderRegistry from "./provider/ProviderRegistry.ts";
@@ -1429,6 +1430,7 @@ export const layerWsRpc = (
       const scratchThreadPromotion = yield* ScratchThreadPromotion.ScratchThreadPromotion;
       const eventLoopMonitor = yield* EventLoopMonitor.EventLoopMonitor;
       const threadSearch = yield* ThreadSearch.ThreadSearch;
+      const snoozeLog = yield* ThreadSnoozeLog.ThreadSnoozeLog;
 
       const providerSessionsV2 = yield* ProviderSessionManager.ProviderSessionManagerV2;
       const mcpAppRequests = yield* McpAppRequests.McpAppRequests;
@@ -2168,6 +2170,9 @@ export const layerWsRpc = (
           threadManagement
             .searchThreadStream(input)
             .pipe(Stream.mapError((cause) => new OrchestrationV2SearchThreadError({ cause }))),
+        [WS_METHODS.threadsSnoozeLog]: (input) =>
+          snoozeLog.list(input).pipe(Effect.map((entries) => ({ entries }))),
+        [WS_METHODS.threadsRecordSnooze]: (input) => snoozeLog.record(input),
         [ORCHESTRATION_V2_WS_METHODS.searchThreads]: (input) =>
           ThreadSearch.searchThreadsWithOlderSettledRows({
             request: input,

@@ -337,3 +337,9 @@ A snoozed thread keeps working and stays hidden until its wake time, even while
 its agent wakes itself for background work. It comes back early for an approval,
 a new question, a failed run, or a message or answer you send. You can snooze an existing
 question and answer when the thread wakes; the question stays unanswered.
+
+On web and desktop, a small prompt asks why after each snooze. Pick a reason, or press Esc to
+skip it; the snooze happens either way. **Settings → Threads → Snooze** turns the prompt off and
+edits its reasons. **Settings → Snooze history** totals your snoozes by reason, lists when each
+one woke, and exports them as CSV or JSON. A thread's details panel lists its own snoozes.
+History starts once the server has this feature. Snoozes from mobile are logged without a reason.

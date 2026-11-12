@@ -114,6 +114,7 @@ import * as DatabaseStorage from "./persistence/DatabaseStorage.ts";
 import * as TerminalManager from "./terminal/Manager.ts";
 import * as ThreadLaunchService from "./orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadSearch from "./orchestration-v2/ThreadSearch.ts";
+import * as ThreadSnoozeLog from "./orchestration-v2/ThreadSnoozeLog.ts";
 import * as UsageLimitSources from "./usage/UsageLimitSources.ts";
 import * as ThreadUsageService from "./usage/ThreadUsageService.ts";
 import * as TokenBurnRates from "./usage/TokenBurnRates.ts";
@@ -843,6 +844,7 @@ const layerUnusedConfigRpcServices = Layer.mergeAll(
   Layer.mock(ThreadLaunchService.ThreadLaunchService)({}),
   Layer.mock(ThreadManagement.ThreadManagementService)({}),
   Layer.mock(ThreadSearch.ThreadSearch)({}),
+  Layer.mock(ThreadSnoozeLog.ThreadSnoozeLog)({}),
   Layer.mock(UsageService.UsageService)({}),
   Layer.mock(ThreadUsageService.ThreadUsageService)({}),
   Layer.mock(TokenBurnRates.TokenBurnRatesService)({}),

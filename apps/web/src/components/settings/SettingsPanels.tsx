@@ -62,6 +62,7 @@ import { scopedIdleCompaction } from "./scopedSettings";
 import { ProjectDefaultsSettings } from "./ProjectDefaultsSettings";
 import { ThreadTitleInstructionsSettings } from "./ThreadTitleInstructionsSettings";
 import { SnoozePresetsRow } from "./SnoozePresetsSettings";
+import { SnoozeReasonPromptRow, SnoozeReasonsRow } from "./SnoozeReasonsSettings";
 import { useDesktopUpdateState } from "../../state/desktopUpdate";
 import { managedTelemetryOffMessage, usePrimaryManagedPolicy } from "../../state/managedPolicy";
 import {
@@ -514,6 +515,12 @@ export function useSettingsRestore(onRestored?: () => void) {
     ...(!Equal.equals(settings.snoozePresets, DEFAULT_UNIFIED_SETTINGS.snoozePresets)
       ? ["Snooze options"]
       : []),
+    ...(settings.snoozeReasonPromptEnabled !== DEFAULT_UNIFIED_SETTINGS.snoozeReasonPromptEnabled
+      ? ["Ask why after snoozing"]
+      : []),
+    ...(!Equal.equals(settings.snoozeReasons, DEFAULT_UNIFIED_SETTINGS.snoozeReasons)
+      ? ["Snooze reasons"]
+      : []),
     ...(settings.wordWrap !== DEFAULT_UNIFIED_SETTINGS.wordWrap ? ["Word wrap"] : []),
     ...(settings.persistComposerContextStrip !==
     DEFAULT_UNIFIED_SETTINGS.persistComposerContextStrip
@@ -671,6 +678,8 @@ export function useSettingsRestore(onRestored?: () => void) {
       autoResumeLimitedThreads: DEFAULT_UNIFIED_SETTINGS.autoResumeLimitedThreads,
       snoozeLimitedThreads: DEFAULT_UNIFIED_SETTINGS.snoozeLimitedThreads,
       snoozePresets: DEFAULT_UNIFIED_SETTINGS.snoozePresets,
+      snoozeReasonPromptEnabled: DEFAULT_UNIFIED_SETTINGS.snoozeReasonPromptEnabled,
+      snoozeReasons: DEFAULT_UNIFIED_SETTINGS.snoozeReasons,
       responseStreamingMode: DEFAULT_UNIFIED_SETTINGS.responseStreamingMode,
       enableProviderUpdateChecks: DEFAULT_UNIFIED_SETTINGS.enableProviderUpdateChecks,
       continueThreadsAfterServerUpdate: DEFAULT_UNIFIED_SETTINGS.continueThreadsAfterServerUpdate,
@@ -1678,6 +1687,8 @@ export function ThreadsSettingsPanel() {
       {!isProjectScope ? (
         <SettingsSection id="snooze" title="Snooze">
           <SnoozePresetsRow />
+          <SnoozeReasonPromptRow />
+          <SnoozeReasonsRow />
         </SettingsSection>
       ) : null}
 

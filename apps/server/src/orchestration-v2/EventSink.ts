@@ -35,6 +35,7 @@ import * as EffectOutbox from "./EffectOutbox.ts";
 import * as EventStore from "./EventStore.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ProjectStore from "./ProjectStore.ts";
+import * as ThreadSnoozeLog from "./ThreadSnoozeLog.ts";
 import * as TurnItemPositionStore from "./TurnItemPositionStore.ts";
 
 export class EventSinkWriteError extends Schema.TaggedError<EventSinkWriteError>()(
@@ -248,6 +249,7 @@ const layerBase: Layer.Layer<
     const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
     const projectStore = yield* ProjectStore.ProjectStoreV2;
     const turnItemPositions = yield* TurnItemPositionStore.TurnItemPositionStoreV2;
+    yield* ThreadSnoozeLog.ensureThreadSnoozeLogTable.pipe(Effect.orDie);
     const liveEvents = yield* PubSub.unbounded<OrchestrationV2StoredEvent>();
     const liveEventsByType = new Map<
       OrchestrationV2DomainEvent["type"],
@@ -386,6 +388,9 @@ const layerBase: Layer.Layer<
         yield* Effect.forEach(storedEvents, (stored) => projectionStore.apply(stored.event), {
           concurrency: 1,
         });
+        yield* ThreadSnoozeLog.recordThreadSnoozeTransitions(storedEvents).pipe(
+          Effect.provideService(SqlClient.SqlClient, sql),
+        );
         const sequence = storedEvents.at(-1)?.sequence;
         if (sequence !== undefined) {
           const now = DateTime.formatIso(yield* DateTime.now);

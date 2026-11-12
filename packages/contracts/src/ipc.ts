@@ -341,6 +341,37 @@ export const DesktopCliCommandStateSchema = Schema.Struct({
 });
 export type DesktopCliCommandState = typeof DesktopCliCommandStateSchema.Type;
 
+/**
+ * A Glint native dialog kind, such as `timeFromNow`. The bridge passes kinds, params and values
+ * through untouched; the renderer owns their shapes, so a new kind needs no desktop change.
+ */
+export const DesktopGlintKindSchema = TrimmedNonEmptyString;
+export type DesktopGlintKind = typeof DesktopGlintKindSchema.Type;
+
+/** In the renderer's CSS pixels, relative to the viewport, like `getBoundingClientRect()`. */
+export const DesktopGlintAnchorSchema = Schema.Struct({
+  x: Schema.Finite,
+  y: Schema.Finite,
+  width: Schema.Finite,
+  height: Schema.Finite,
+});
+export type DesktopGlintAnchor = typeof DesktopGlintAnchorSchema.Type;
+
+export const DesktopGlintPresentInputSchema = Schema.Struct({
+  kind: DesktopGlintKindSchema,
+  anchor: DesktopGlintAnchorSchema,
+  params: Schema.Unknown,
+});
+export type DesktopGlintPresentInput = typeof DesktopGlintPresentInputSchema.Type;
+
+/** `unavailable` covers a missing, crashed or failing helper: the caller shows its web UI. */
+export const DesktopGlintOutcomeSchema = Schema.Union([
+  Schema.Struct({ type: Schema.Literal("result"), value: Schema.Unknown }),
+  Schema.Struct({ type: Schema.Literal("cancelled") }),
+  Schema.Struct({ type: Schema.Literal("unavailable"), message: Schema.String }),
+]);
+export type DesktopGlintOutcome = typeof DesktopGlintOutcomeSchema.Type;
+
 export interface DesktopUpdateActionResult {
   accepted: boolean;
   completed: boolean;
@@ -1156,6 +1187,15 @@ export interface DesktopBridge {
     onRequest: (listener: (request: DesktopAppActivationRequest) => void) => () => void;
   };
   preview: DesktopPreviewBridge;
+  glint: {
+    /** True on macOS when Labs turns native dialogs on and the helper exists. */
+    isAvailable: () => boolean;
+    present: (
+      kind: DesktopGlintKind,
+      anchor: DesktopGlintAnchor,
+      params: unknown,
+    ) => Promise<DesktopGlintOutcome>;
+  };
 }
 
 /** Renderer callback invoked by Electron with a fresh user gesture before display-media capture. */

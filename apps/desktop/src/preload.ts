@@ -341,6 +341,11 @@ contextBridge.exposeInMainWorld("desktopBridge", {
       };
     },
   },
+  glint: {
+    isAvailable: () => ipcRenderer.sendSync(IpcChannels.GLINT_IS_AVAILABLE_CHANNEL) === true,
+    present: (kind, anchor, params) =>
+      ipcRenderer.invoke(IpcChannels.GLINT_PRESENT_CHANNEL, { kind, anchor, params }),
+  },
   preview: {
     setForwardedShortcuts: (shortcuts) =>
       ipcRenderer.invoke(IpcChannels.PREVIEW_SET_FORWARDED_SHORTCUTS_CHANNEL, shortcuts),

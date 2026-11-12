@@ -135,6 +135,8 @@ export class LanguageServerPool extends Context.Service<
       live: LiveServer,
       outcome: "answered" | "timeout",
     ) => Effect.Effect<void>;
+    /** The off switch in settings, read on every call. */
+    readonly isEnabled: Effect.Effect<boolean>;
     /** `server_unavailable` while code intelligence is turned off in settings. */
     readonly assertEnabled: Effect.Effect<void, CodeIntelError>;
     /** Never starts anything. */
@@ -621,7 +623,14 @@ const make = Effect.gen(function* () {
     ),
   );
 
-  return LanguageServerPool.of({ acquire, reportOutcome, assertEnabled, snapshot, restart });
+  return LanguageServerPool.of({
+    acquire,
+    reportOutcome,
+    isEnabled,
+    assertEnabled,
+    snapshot,
+    restart,
+  });
 });
 
 export const layer = Layer.effect(LanguageServerPool, make);

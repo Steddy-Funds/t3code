@@ -187,7 +187,8 @@ describe("fitQuickReference", () => {
     Math.max(
       ...view.columns.map((column) =>
         column.reduce(
-          (lines, entry, index) => lines + entry.entries.length + (index > 0 ? 1.5 : 1),
+          (lines, entry, index) =>
+            lines + entry.entries.length + (entry.continued ? 0 : index > 0 ? 1.5 : 1),
           0,
         ),
       ),
@@ -210,18 +211,24 @@ describe("fitQuickReference", () => {
     expect(tallestColumn(view)).toBeLessThanOrEqual(33);
   });
 
-  it("splits only a group too long for one column, with its heading over each part", () => {
+  it("splits only a group too long for one column, and names it once", () => {
     const view = fitQuickReference([group("x", 40, 0), group("y", 5, 0)], {
       widthRem: 40,
       heightRem: 50,
     });
 
     expect(view.hiddenCount).toBe(0);
-    expect(view.columns.map((column) => column.map((entry) => entry.id))).toEqual([
-      ["x"],
-      ["x", "y"],
+    expect(
+      view.columns.map((column) =>
+        column.map((entry) => [entry.id, entry.entries.length, entry.continued]),
+      ),
+    ).toEqual([
+      [["x", 23, false]],
+      [
+        ["x", 17, true],
+        ["y", 5, false],
+      ],
     ]);
-    expect(view.columns.flat().map((entry) => entry.entries.length)).toEqual([24, 16, 5]);
   });
 
   it("uses more columns on a wide window instead of growing tall", () => {
@@ -240,6 +247,9 @@ describe("fitQuickReference", () => {
     expect(entries(view).filter((entry) => !entry.dimmed)).toHaveLength(48);
     expect(view.hiddenCount).toBe(96 - entries(view).length);
     expect(view.hiddenCount).toBeGreaterThanOrEqual(43);
+    // Space is short, so groups run on into the next column, each named once.
+    const headings = view.columns.flat().filter((entry) => !entry.continued);
+    expect(headings.map((entry) => entry.id)).toEqual(["a", "b", "c", "d", "e", "f", "g"]);
     // 33 lines fit the height, one of them for the count under the columns.
     expect(tallestColumn(view)).toBeLessThanOrEqual(32);
   });

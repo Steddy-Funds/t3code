@@ -14,6 +14,8 @@ export interface CodeIntelFile {
   /** The server answered status; false while it loads and on servers older than code intel. */
   readonly supported: boolean;
   readonly servers: ReadonlyArray<CodeServerStatus>;
+  /** Turned off in the environment's settings; false from servers older than the switch. */
+  readonly turnedOff: boolean;
   /** The language server for this file's language; null for languages without one. */
   readonly server: CodeServerStatus | null;
   /** The virtualenv, stdlib, stubs or node_modules root the file lies under. */
@@ -46,6 +48,7 @@ export function useCodeIntelFile(
   return {
     supported,
     servers,
+    turnedOff: status.data?.enabled === false,
     server: path === null ? null : serverForPath(servers, path),
     libraryRoot,
     libraryCode: libraryRoot !== null || (supported && path !== null && isLibraryPath(path)),

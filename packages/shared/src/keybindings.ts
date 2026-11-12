@@ -179,6 +179,8 @@ export const DEFAULT_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
   { key: "shift+f7", command: "diff.previousChange", when: "diffFocus" },
   { key: "mod+arrowdown", command: "diff.jumpToSource", when: "diffFocus" },
   { key: "f4", command: "diff.jumpToSource", when: "diffFocus" },
+  // After chat.find: in a diff, mod+f finds in the pane.
+  { key: "mod+f", command: "diff.find", when: "diffFocus" },
   // Desktop only: browsers keep mod+1 for their tabs.
   {
     key: "mod+1",

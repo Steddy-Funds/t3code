@@ -1113,6 +1113,8 @@ describe("JetBrains keymap defaults", () => {
     { key: "f7", context: { codeFocus: true, diffFocus: true }, command: "diff.nextChange" },
     { key: "f7", context: { codeFocus: true }, capabilities: navigation, command: null },
     { key: "mod+arrowdown", context: { diffFocus: true }, command: "diff.jumpToSource" },
+    { key: "mod+f", context: { diffFocus: true }, command: "diff.find" },
+    { key: "mod+f", context: {}, command: "chat.find" },
     { key: "mod+shift+o", context: { codeFocus: true }, command: "filePicker.toggle" },
     { key: "mod+shift+o", context: { projectTreeFocus: true }, command: "filePicker.toggle" },
     { key: "mod+o", context: { codeFocus: true }, command: "editor.openFavorite" },

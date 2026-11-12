@@ -56,6 +56,7 @@ upstream; a feature can, from its own branch, when Akiva decides.
 | Code navigation in the file viewer: Cmd+B and Cmd+click to the declaration (library code too), usages, quick doc and definition, back/forward     | #84 | b04708b |
 | Review in the side-by-side diff: comment on lines in either pane and send; draft comments as markers; agent notes with Reply, Dismiss, Next       | #85 | b0088d1 |
 | Semantic highlighting in the file viewer (Material Ocean): the language server's parameter, property, decorator and call colours over the lexer's | #89 | 57910cc |
+| Symbols and pickers: Go to class and symbol (Cmd+O), File structure, Recent files (Cmd+E), next/previous method, double Shift for search          | #88 | 95f8ea3 |
 | Snooze reasons: a "why?" prompt after each snooze, a per-thread snooze log, Settings → Snooze history with CSV/JSON export                        | #87 | pending |
 
 Held: #38 (pods notes in the t3-orchestration skill). It edits

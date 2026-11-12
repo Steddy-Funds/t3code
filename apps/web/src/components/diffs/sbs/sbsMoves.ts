@@ -232,16 +232,16 @@ export function sbsMoveLayerOf(document: SbsDocument, moves: ReadonlyArray<SbsMo
   }
   const movedChanges = new Set<number>();
   document.changes.forEach((change, index) => {
+    let tinted = false;
     const moved = (["deletions", "additions"] as const).every((side) => {
       for (let line = change[side].start; line < change[side].end; line += 1) {
+        if (tints[side][line] !== SBS_MOVE_NONE) tinted = true;
         // A move leaves out blank lines at its edges; they don't keep a change from moving whole.
-        if (tints[side][line] === SBS_MOVE_NONE && document.lines[side][line]!.trim() !== "") {
-          return false;
-        }
+        else if (document.lines[side][line]!.trim() !== "") return false;
       }
       return true;
     });
-    if (moved) movedChanges.add(index);
+    if (moved && tinted) movedChanges.add(index);
   });
   const layer = { tints, marks, movedChanges };
   byDocument.set(document, layer);

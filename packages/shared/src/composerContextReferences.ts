@@ -336,6 +336,7 @@ function formatComposerContextProviderPayload(record: KnownComposerContextRecord
       if (record.diff.trim()) {
         lines.push(`${record.fenceLanguage ?? "diff"}:`, indent(record.diff.replace(/\n+$/, "")));
       }
+      lines.push("Answer it inline: reply_to_review_comment with this entry's id.");
       return lines.join("\n");
     }
     case "mention":

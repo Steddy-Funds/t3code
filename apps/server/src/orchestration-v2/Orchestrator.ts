@@ -60,8 +60,10 @@ import {
   type OrchestrationV2Subagent,
   type OrchestrationV2ThreadProjection,
   type OrchestrationV2ReviewNote,
+  type OrchestrationV2ReviewReply,
   type OrchestrationV2TurnItem,
   REVIEW_NOTE_TOOL_NAME,
+  REVIEW_REPLY_TOOL_NAME,
   latestProviderTurnForAttempt,
   parseGoalCommand,
   orchestrationV2RunWorkStartedAt,
@@ -636,6 +638,7 @@ function commandThreadId(command: OrchestrationV2ServerCommand): ThreadId {
     case "thread.load-pause.set":
     case "thread.load-pause.clear":
     case "review_note.record":
+    case "review_reply.record":
       return command.threadId;
     case "thread.fork":
     case "thread.merge_back":
@@ -9672,9 +9675,12 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
    * build without notes shows it as a plain tool row. A retry of the same note
    * finds its item and records nothing.
    */
-  const dispatchReviewNoteRecord = Effect.fn("orchestrationV2.dispatch.reviewNoteRecord")(
+  const dispatchReviewItemRecord = Effect.fn("orchestrationV2.dispatch.reviewItemRecord")(
     function* (
-      command: Extract<OrchestrationV2InternalCommand, { readonly type: "review_note.record" }>,
+      command: Extract<
+        OrchestrationV2InternalCommand,
+        { readonly type: "review_note.record" | "review_reply.record" }
+      >,
       events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
     ) {
       const existing = yield* projectionStore
@@ -9703,11 +9709,26 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         });
       }
       const now = yield* DateTime.now;
-      const input: OrchestrationV2ReviewNote = {
-        kind: "review_note",
-        ...command.note,
-        runId: command.runId,
-      };
+      const record =
+        command.type === "review_note.record"
+          ? {
+              toolName: REVIEW_NOTE_TOOL_NAME,
+              title: "Review note",
+              input: {
+                kind: "review_note",
+                ...command.note,
+                runId: command.runId,
+              } satisfies OrchestrationV2ReviewNote,
+            }
+          : {
+              toolName: REVIEW_REPLY_TOOL_NAME,
+              title: "Review reply",
+              input: {
+                kind: "review_reply",
+                ...command.reply,
+                runId: command.runId,
+              } satisfies OrchestrationV2ReviewReply,
+            };
       yield* emit(
         events,
         command,
@@ -9729,13 +9750,13 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           parentItemId: null,
           ordinal: yield* nextTurnItemOrdinal(projection),
           status: "completed",
-          title: "Review note",
+          title: record.title,
           startedAt: now,
           completedAt: now,
           updatedAt: now,
           type: "dynamic_tool",
-          toolName: REVIEW_NOTE_TOOL_NAME,
-          input,
+          toolName: record.toolName,
+          input: record.input,
         },
       });
     },
@@ -14324,7 +14345,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         yield* dispatchLinkRequestRecord(command, events, effects);
         break;
       case "review_note.record":
-        yield* dispatchReviewNoteRecord(command, events);
+      case "review_reply.record":
+        yield* dispatchReviewItemRecord(command, events);
         break;
       default:
         return yield* dispatchUnsupported(command);
@@ -14436,8 +14458,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           command.type === "subagent.stop" ||
           // Closing a share again, or after it ended, is not an error.
           command.type === "thread.guest-share.close" ||
-          // A note the thread already has is recorded.
+          // A note or reply the thread already has is recorded.
           command.type === "review_note.record" ||
+          command.type === "review_reply.record" ||
           (command.type === "thread.delete" && command.onlyIfUnused === true),
         (_planned) =>
           new OrchestratorDispatchError({

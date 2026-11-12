@@ -137,7 +137,7 @@ function isQuickReferenceSuppressed(router: AnyRouter): boolean {
 function Entry({ entry }: { readonly entry: QuickReferenceEntry }) {
   return (
     <div
-      className="flex h-5.5 items-center gap-3 data-dimmed:opacity-50"
+      className="flex h-5.5 items-center gap-4 data-dimmed:opacity-50"
       data-dimmed={entry.dimmed ? "" : undefined}
     >
       <span className="min-w-0 flex-1 truncate">{entry.label}</span>
@@ -207,9 +207,11 @@ function QuickReferenceOverlay() {
             <div key={column[0]?.entries[0]?.id} className="min-w-0">
               {column.map((group) => (
                 <section key={group.id} className="mt-2.75 first:mt-0">
-                  <h2 className="flex h-5.5 items-center font-medium text-2xs text-muted-foreground uppercase tracking-wide">
-                    {group.title}
-                  </h2>
+                  {group.continued ? null : (
+                    <h2 className="flex h-5.5 items-center font-medium text-2xs text-muted-foreground uppercase tracking-wide">
+                      {group.title}
+                    </h2>
+                  )}
                   {group.entries.map((entry) => (
                     <Entry key={entry.id} entry={entry} />
                   ))}

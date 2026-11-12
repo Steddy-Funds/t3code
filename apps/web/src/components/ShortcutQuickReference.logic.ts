@@ -330,7 +330,7 @@ const MAX_COLUMNS = 8;
 // Widths at the panel's 12px text, rounded up: a letter, a modifier glyph, a row's gap and key padding.
 const CHARACTER_REM = 0.4;
 const MODIFIER_GLYPH_REM = 0.7;
-const ROW_CHROME_REM = 1.25;
+const ROW_CHROME_REM = 1.5;
 const MODIFIER_GLYPHS = "\u2303\u2325\u21e7\u2318";
 
 /** The narrowest area the panel is given beside the sidebar. */
@@ -342,9 +342,13 @@ export interface QuickReferenceArea {
   readonly heightRem: number;
 }
 
+export interface QuickReferenceColumnGroup extends QuickReferenceGroup {
+  /** The rest of a group whose heading is in the column before. */
+  readonly continued: boolean;
+}
+
 export interface QuickReferenceView {
-  /** A group too long for one column appears in each column it fills, under its heading. */
-  readonly columns: ReadonlyArray<ReadonlyArray<QuickReferenceGroup>>;
+  readonly columns: ReadonlyArray<ReadonlyArray<QuickReferenceColumnGroup>>;
   /** Entries left out because the window is too small to show them without scrolling. */
   readonly hiddenCount: number;
 }
@@ -408,21 +412,22 @@ function trimToLines(
 /**
  * Fills columns of at most `lines` lines in reading order. With `whole`, a group
  * that fits a column is never split. A split group keeps two shortcuts under
- * its heading.
+ * its heading, and its rest starts the next column without one.
  */
 function fillColumns(
   groups: ReadonlyArray<QuickReferenceGroup>,
   lines: number,
   whole: boolean,
-): Array<Array<QuickReferenceGroup>> {
-  const columns: Array<Array<QuickReferenceGroup>> = [[]];
+): Array<Array<QuickReferenceColumnGroup>> {
+  const columns: Array<Array<QuickReferenceColumnGroup>> = [[]];
   let used = 0;
   for (const group of groups) {
     let entries = group.entries;
+    let continued = false;
     const unsplit = whole && 1 + entries.length <= lines;
     while (entries.length > 0) {
       const column = columns.at(-1) ?? [];
-      const heading = 1 + (column.length > 0 ? GROUP_GAP_LINES : 0);
+      const heading = continued ? 0 : 1 + (column.length > 0 ? GROUP_GAP_LINES : 0);
       const room = Math.floor(lines - used - heading);
       if (room < (unsplit ? entries.length : Math.min(2, entries.length)) && column.length > 0) {
         columns.push([]);
@@ -430,9 +435,10 @@ function fillColumns(
         continue;
       }
       const taken = Math.max(1, Math.min(entries.length, room));
-      column.push({ ...group, entries: entries.slice(0, taken) });
+      column.push({ ...group, entries: entries.slice(0, taken), continued });
       used += heading + taken;
       entries = entries.slice(taken);
+      continued = true;
     }
   }
   return columns;

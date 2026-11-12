@@ -2107,25 +2107,28 @@ describe("annotations", () => {
       expect(card.getBoundingClientRect().width).toBeCloseTo(30 * remPx(), 0);
     });
 
-    it("stays inside a narrow body, 2rem narrower than it", async () => {
-      await using screen = await mount(
-        {
-          fileDiff: threeChanges(),
-          annotations: [near],
-          openAnnotationId: "near",
-          renderAnnotation,
-        },
-        { width: 400 },
-      );
-      await vi.waitFor(() => expect(cardOf(screen)).not.toBeNull());
-      const card = cardOf(screen)!.getBoundingClientRect();
-      const body = one(screen.container, ".sbs-diff")!.getBoundingClientRect();
+    // Its own gutter stays free, so a Shift+click there can still extend the picked lines.
+    it.each([400, 1000])(
+      "narrows to stay inside a %ipx body, clear of the right pane's gutter",
+      async (width) => {
+        await using screen = await mount(
+          {
+            fileDiff: threeChanges(),
+            annotations: [near],
+            openAnnotationId: "near",
+            renderAnnotation,
+          },
+          { width },
+        );
+        await vi.waitFor(() => expect(cardOf(screen)).not.toBeNull());
+        const card = cardOf(screen)!.getBoundingClientRect();
+        const body = one(screen.container, ".sbs-diff")!.getBoundingClientRect();
+        const gutter = one(scrollerOf(screen, "additions"), ".sbs-gutter")!.getBoundingClientRect();
 
-      expect(body.width).toBeLessThan(30 * remPx());
-      expect(card.width).toBeCloseTo(body.width - 2 * remPx(), 0);
-      expect(card.left).toBeGreaterThanOrEqual(body.left - 0.5);
-      expect(card.right).toBeLessThanOrEqual(body.right + 0.5);
-    });
+        expect(card.left).toBeGreaterThanOrEqual(gutter.right);
+        expect(card.right).toBeLessThanOrEqual(body.right - remPx() + 0.5);
+      },
+    );
 
     it.each([
       { side: "deletions" as const, annotation: onOld },

@@ -1108,8 +1108,8 @@ export function SideBySideDiffView<T = unknown>(props: SideBySideDiffViewProps<T
     );
   };
 
-  // The card sits over both panes, so a narrow pane does not squeeze it; it starts at its own
-  // pane's code and moves left only as far as it must to stay inside the view.
+  // The card sits over both panes, so the left pane's card may spread right. It starts at its own
+  // pane's code, never over its gutter, which takes a Shift+click extending the picked lines.
   const cardPlacement =
     openAnnotation && openAnnotationRange
       ? overlayPlacement(
@@ -1123,14 +1123,16 @@ export function SideBySideDiffView<T = unknown>(props: SideBySideDiffViewProps<T
     openAnnotation?.side === "additions" && single === null
       ? `50% + ${SBS_DIVIDER_WIDTH / 2}px`
       : "0px";
+  const cardLeft = `${cardPaneLeft} + ${overlayLeft}`;
   const card =
     cardPlacement && openAnnotation ? (
       <div
         ref={observeCard}
-        className="absolute z-10 w-[min(30rem,calc(100%-2rem))] rounded-md border border-border bg-popover font-sans text-popover-foreground shadow-lg"
+        className="absolute z-10 rounded-md border border-border bg-popover font-sans text-popover-foreground shadow-lg"
         style={{
           top: cardPlacement.top,
-          left: `min(calc(${cardPaneLeft} + ${overlayLeft}), calc(100% - min(30rem, calc(100% - 2rem)) - 1rem))`,
+          left: `calc(${cardLeft})`,
+          width: `min(30rem, calc(100% - (${cardLeft}) - 1rem))`,
         }}
         data-sbs-annotation-card={openAnnotation.id}
         data-docked={cardPlacement.docked ? "" : undefined}

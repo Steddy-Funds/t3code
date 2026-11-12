@@ -1,7 +1,7 @@
 import type { CodeLibraryRoot, CodeServerStatus } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import { externalLibraryRoots, libraryLocation } from "./externalLibraries";
+import { externalLibraryRoots, libraryLocation } from "./ExternalLibraries.logic";
 
 function server(
   languageId: string,

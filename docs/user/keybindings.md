@@ -121,8 +121,8 @@ keys for its other command everywhere, give the command in this table another sh
 **Settings → Keybindings**.
 
 Shortcuts come from your primary environment. If its server is older than this app,
-`mod+shift+o` and `mod+alt+arrowleft` / `mod+alt+arrowright` are missing until you update it;
-the rest of the table works.
+`mod+shift+o`, `mod+alt+arrowleft` / `mod+alt+arrowright`, and `mod+b` in a side-by-side diff
+are missing until you update it; the rest of the table works.
 
 ## iPad
 

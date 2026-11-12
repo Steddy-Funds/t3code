@@ -20,6 +20,11 @@ import {
 } from "@t3tools/contracts";
 import type { EffortDisplay } from "@t3tools/contracts/settings";
 import { cn } from "~/lib/utils";
+import { useRef } from "react";
+import { useComposerDraftStore } from "../../composerDraftStore";
+import { isGlintAvailable, presentGlint, type GlintModelSelection } from "../../lib/glint";
+import { buildGlintModelParams, resolveGlintModelOptions } from "./glintModelPicker";
+import { getTraitsSectionVisibility, writeTraitsModelOptions } from "./TraitsPicker";
 import { resolveComposerTraitsInput } from "./composerProviderState";
 import { useApplyThreadModelPick } from "./useApplyThreadModelPick";
 import { useStableCallback } from "../../hooks/useStableCallback";
@@ -161,6 +166,66 @@ export function ComposerControlsBar(props: {
     onPromptEdit,
   });
   const effort = describeComposerEffort(traitsInput, props.effortDisplay, controlSize);
+  const setProviderModelOptions = useComposerDraftStore((store) => store.setProviderModelOptions);
+  // After the native picker fails, the next open is the web popup's.
+  const webPickerNextRef = useRef(false);
+  const applyNativeModelPick = (pick: GlintModelSelection) => {
+    const entry = providerInstanceEntries.find(
+      (candidate) => candidate.instanceId === pick.provider,
+    );
+    if (!entry) return;
+    if (entry.instanceId !== selectedInstanceId || pick.model !== selectedModel) {
+      onMultipleModelSelectionsChange(null);
+      onProviderModelSelect(entry.instanceId, pick.model);
+    }
+    const target = resolveComposerTraitsInput({
+      provider: entry.driverKind,
+      instanceId: entry.instanceId,
+      ...(routeKind === "server"
+        ? { threadRef: routeThreadRef, onDraftModelOptionsChange: applyRouteThreadModelPick }
+        : {}),
+      ...(routeKind === "draft" && draftId ? { draftId } : {}),
+      model: pick.model,
+      models: entry.models,
+      modelOptions: composerModelOptions?.[entry.instanceId],
+      reportedModelSelection,
+      promptUltrathink,
+      onPromptEdit,
+    });
+    const change = target && resolveGlintModelOptions(getTraitsSectionVisibility(target), pick);
+    if (!target || !change) return;
+    if (change.stripUltrathinkPrefix) {
+      onPromptEdit((prompt) => prompt.replace(/^Ultrathink:\s*/i, ""));
+    }
+    writeTraitsModelOptions(target, change.modelOptions, setProviderModelOptions);
+  };
+  const openNativeModelPicker = useStableCallback((trigger: HTMLElement) => {
+    if (webPickerNextRef.current) {
+      webPickerNextRef.current = false;
+      return false;
+    }
+    if (multipleModelSelections !== null || !isGlintAvailable()) return false;
+    const params = buildGlintModelParams({
+      instanceEntries: providerInstanceEntries,
+      modelOptionsByInstance,
+      lockedProvider,
+      lockedContinuationGroupKey,
+      getModelDisabledReason,
+      selection: {
+        instanceId: selectedInstanceId,
+        model: selectedModelForPickerWithCustomFallback,
+      },
+      selectedTraits: traitsInput ? getTraitsSectionVisibility(traitsInput) : null,
+    });
+    if (!params) return false;
+    void presentGlint("model", trigger, params).then((outcome) => {
+      if (outcome.type === "result") applyNativeModelPick(outcome.value.selection);
+      if (outcome.type !== "unavailable") return;
+      webPickerNextRef.current = true;
+      onModelPickerOpenChange(true);
+    });
+    return true;
+  });
   const restingBlockDefs = showModeBlock
     ? [
         {
@@ -241,6 +306,7 @@ export function ComposerControlsBar(props: {
       onOpenChange={onModelPickerOpenChange}
       getModelDisabledReason={getModelDisabledReason}
       onOpenProviderSetup={onOpenProviderSetup}
+      {...(providerCatalogPending || isSendBusy ? {} : { openNative: openNativeModelPicker })}
     />
   );
   return showProviderUnavailable ? (

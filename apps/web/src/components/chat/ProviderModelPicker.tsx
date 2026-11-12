@@ -13,6 +13,7 @@ import {
   useContext,
   useEffect,
   useEffectEvent,
+  useLayoutEffect,
   useRef,
   useState,
 } from "react";
@@ -124,6 +125,8 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
    */
   effortColumn?: ReactNode;
   footer?: ReactNode;
+  /** Shows a native picker at the trigger instead of the popup; true when it took the open. */
+  openNative?: (trigger: HTMLElement) => boolean;
 }) {
   const composerFloatingLayerProps = useComposerMenuProps();
   const [uncontrolledIsMenuOpen, setUncontrolledIsMenuOpen] = useState(false);
@@ -181,6 +184,14 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
       setUncontrolledIsMenuOpen(open);
     }
   };
+  const openNative = useEffectEvent(() => {
+    const trigger = triggerRef.current;
+    if (trigger && props.openNative?.(trigger)) setIsMenuOpen(false);
+  });
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- hands any open (trigger, keybinding, /model) to the native picker before the popup paints
+  useLayoutEffect(() => {
+    if (isMenuOpen) openNative();
+  }, [isMenuOpen]);
 
   /**
    * Focuses the selected reasoning level, else the first level. With `rows: "any"` it falls back

@@ -232,6 +232,7 @@ import { observeResize } from "~/lib/observeResize";
 
 const isEnvironmentRequestInvalidError = Schema.is(EnvironmentRequestInvalidError);
 import { toastManager } from "../ui/toast";
+import { presentGlint } from "../../lib/glint";
 import { BuildingIcon, PlayIcon } from "lucide-react";
 import { Button } from "../ui/button";
 import { useManagedPolicy } from "../../state/managedPolicy";
@@ -1847,6 +1848,24 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     };
   };
 
+  /** `/color`: Glint's colour die inserts `#RRGGBB` at the cursor, or copies it. */
+  const insertPickedColor = async (anchor: Element) => {
+    const outcome = await presentGlint("color", anchor, {});
+    if (outcome.type === "cancelled") return;
+    if (outcome.type === "unavailable") {
+      toastManager.add({ type: "warning", title: "The native colour picker is unavailable" });
+      return;
+    }
+    const { hex, action } = outcome.value;
+    if (action === "copy") {
+      void navigator.clipboard.writeText(hex);
+      toastManager.add({ type: "success", title: `Copied ${hex}` });
+      return;
+    }
+    const { expandedCursor } = readComposerSnapshot();
+    applyPromptReplacement(expandedCursor, expandedCursor, `${hex} `);
+  };
+
   const { onUsageLimitsCommand } = props;
   const onSelectComposerItem = (item: ComposerCommandItem) => {
     if (composerSelectLockRef.current) return;
@@ -1882,6 +1901,17 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           setComposerHighlightedItemId(null);
           setIsComposerModelPickerOpen(true);
         }
+        return;
+      }
+      if (item.command === "color") {
+        const applied = applyPromptReplacement(trigger.rangeStart, trigger.rangeEnd, "", {
+          expectedText: snapshot.value.slice(trigger.rangeStart, trigger.rangeEnd),
+          focusEditorAfterReplace: false,
+        });
+        if (!applied) return;
+        setComposerHighlightedItemId(null);
+        const anchor = composerSurfaceRef.current ?? composerFormRef.current;
+        if (anchor) void insertPickedColor(anchor);
         return;
       }
       if (item.command === "clear") {

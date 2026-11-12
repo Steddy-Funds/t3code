@@ -468,6 +468,14 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["beta folders project tree classic sidebar"],
   },
   {
+    id: "native-trackpad-dialogs",
+    title: "Native trackpad dialogs (macOS, experimental)",
+    to: "/settings/labs",
+    searchTerms: ["beta glint native dialog trackpad dial snooze model picker colour color helper"],
+    desktopOnly: true,
+    macOnly: true,
+  },
+  {
     id: "boring-sidebar-multiline",
     title: "Two-line folder rows",
     to: "/settings/labs",

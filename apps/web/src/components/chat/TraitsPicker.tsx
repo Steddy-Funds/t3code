@@ -299,6 +299,32 @@ export interface TraitsMenuContentProps {
 
 export type TraitsSelectionInput = TraitsMenuContentProps & TraitsPersistence;
 
+/** Persists a traits pick where the picker would: its owner's handler, or the composer draft. */
+export function writeTraitsModelOptions(
+  input: {
+    readonly provider: ProviderDriverKind;
+    readonly instanceId?: ProviderInstanceId | undefined;
+    readonly model: string | null | undefined;
+  } & TraitsPersistence,
+  nextOptions: ProviderOptions | undefined,
+  setProviderModelOptions: ReturnType<
+    typeof useComposerDraftStore.getState
+  >["setProviderModelOptions"],
+) {
+  if ("onModelOptionsChange" in input) {
+    input.onModelOptionsChange(nextOptions);
+    return;
+  }
+  const threadTarget = input.threadRef ?? input.draftId;
+  if (!threadTarget) return;
+  setProviderModelOptions(threadTarget, input.provider, nextOptions, {
+    ...(input.instanceId ? { instanceId: input.instanceId } : {}),
+    model: input.model,
+    persistSticky: true,
+  });
+  input.onDraftModelOptionsChange?.();
+}
+
 /** The model's traits with their shown values, and writers that persist a change. */
 export function useTraitsSelection({
   provider,
@@ -317,22 +343,12 @@ export function useTraitsSelection({
   const modelSelection =
     instanceId && model ? { instanceId, model, options: modelOptions ?? [] } : null;
   const setProviderModelOptions = useComposerDraftStore((store) => store.setProviderModelOptions);
-  const updateModelOptions = (nextOptions: ProviderOptions | undefined) => {
-    if ("onModelOptionsChange" in persistence) {
-      persistence.onModelOptionsChange(nextOptions);
-      return;
-    }
-    const threadTarget = persistence.threadRef ?? persistence.draftId;
-    if (!threadTarget) {
-      return;
-    }
-    setProviderModelOptions(threadTarget, provider, nextOptions, {
-      ...(instanceId ? { instanceId } : {}),
-      model,
-      persistSticky: true,
-    });
-    persistence.onDraftModelOptionsChange?.();
-  };
+  const updateModelOptions = (nextOptions: ProviderOptions | undefined) =>
+    writeTraitsModelOptions(
+      { provider, instanceId, model, ...persistence },
+      nextOptions,
+      setProviderModelOptions,
+    );
   const selected = getTraitsSectionVisibility({
     provider,
     models,

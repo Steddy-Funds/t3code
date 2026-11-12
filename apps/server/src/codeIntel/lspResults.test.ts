@@ -324,6 +324,12 @@ describe("lspResults", () => {
       "    return ledger.balance",
       "LEDGER_LIMIT = 10",
       "export default class {}",
+      '@route("/receipt(")',
+      "class Receipt(Base):",
+      "    total = 0",
+      "@dataclass",
+      "# Payout rows, newest first",
+      "class Payout:",
     ];
     const span = (
       startLine: number,
@@ -355,6 +361,13 @@ describe("lspResults", () => {
         span(12, 0, 12, 17),
         range(12, 0, 12),
       ],
+      [
+        "a class past a decorator whose string holds a bracket",
+        "Receipt",
+        span(14, 0, 16, 13),
+        range(15, 6, 13),
+      ],
+      ["a class past a comment that names it", "Payout", span(17, 0, 19, 13), range(19, 6, 12)],
     ])("finds %s", (_name, name, given, expected) => {
       expect(nameRange(SOURCE, given, name)).toEqual(expected);
     });

@@ -981,6 +981,65 @@ describe("CodeIntel", () => {
         ["packages/b/src/b.ts"],
       ],
       [
+        "a file of each project a solution references",
+        {
+          "tsconfig.json":
+            '{ "files": [], "references": [{ "path": "./packages/a" }, { "path": "./packages/b" }] }\n',
+          "packages/a/tsconfig.json": '{ "include": ["src"] }\n',
+          "packages/a/src/a.ts": ALPHA,
+          "packages/b/tsconfig.json": '{ "include": ["src"] }\n',
+          "packages/b/src/b.ts": ALPHA,
+        },
+        [],
+        ["packages/a/src/a.ts", "packages/b/src/b.ts"],
+      ],
+      [
+        "a file the include of a project's base names",
+        {
+          "tsconfig.json": '{ "extends": "./tsconfig.app.json" }\n',
+          "tsconfig.app.json": '{ "include": ["src"] }\n',
+          "vite.config.ts": ALPHA,
+          "src/main.ts": ALPHA,
+        },
+        [],
+        ["src/main.ts"],
+      ],
+      [
+        "the projects that import the most of a workspace, none that one of them loads",
+        {
+          "evals/package.json": '{ "name": "evals" }\n',
+          "evals/tsconfig.json": "{}\n",
+          "evals/run.ts": ALPHA,
+          "scripts/package.json": '{ "name": "scripts" }\n',
+          "scripts/tsconfig.json": "{}\n",
+          "scripts/build.ts": ALPHA,
+          "apps/desktop/package.json": '{ "name": "desktop", "dependencies": { "contracts": "*" } }\n',
+          "apps/desktop/tsconfig.json": "{}\n",
+          "apps/desktop/main.ts": ALPHA,
+          "apps/server/package.json":
+            '{ "name": "server", "dependencies": { "contracts": "*", "shared": "*" }, "devDependencies": { "web": "*" } }\n',
+          "apps/server/tsconfig.json": "{}\n",
+          "apps/server/main.ts": ALPHA,
+          "apps/web/package.json":
+            '{ "name": "web", "dependencies": { "contracts": "*", "shared": "*", "ui": "*" } }\n',
+          "apps/web/tsconfig.json": "{}\n",
+          "apps/web/main.ts": ALPHA,
+          "packages/contracts/package.json": '{ "name": "contracts", "exports": "./index.ts" }\n',
+          "packages/contracts/tsconfig.json": "{}\n",
+          "packages/contracts/index.ts": ALPHA,
+          "packages/shared/package.json":
+            '{ "name": "shared", "exports": "./index.ts", "dependencies": { "contracts": "*" } }\n',
+          "packages/shared/tsconfig.json": "{}\n",
+          "packages/shared/index.ts": ALPHA,
+          "packages/ui/package.json":
+            '{ "name": "ui", "main": "./index.ts", "dependencies": { "contracts": "*", "shared": "*" } }\n',
+          "packages/ui/tsconfig.json": "{}\n",
+          "packages/ui/index.ts": ALPHA,
+        },
+        [],
+        ["apps/web/main.ts", "apps/server/main.ts", "apps/desktop/main.ts", "evals/run.ts"],
+      ],
+      [
         "one file of each project below a root that has none",
         {
           "apps/web/tsconfig.json": "{}\n",

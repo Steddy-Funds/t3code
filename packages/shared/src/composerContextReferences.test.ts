@@ -246,7 +246,9 @@ describe("provider projection", () => {
         },
       ],
     });
-    expect(projected).toContain("diff:\n  @@ -3,1 +2,2 @@\n  +two\t\n   \n</context>");
+    expect(projected).toContain(
+      "diff:\n  @@ -3,1 +2,2 @@\n  +two\t\n   \nAnswer it inline: reply_to_review_comment with this entry's id.\n</context>",
+    );
   });
 
   it("emits no terminal lines when the captured range is inverted", () => {

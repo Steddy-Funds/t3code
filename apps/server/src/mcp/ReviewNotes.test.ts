@@ -14,6 +14,10 @@ import {
   ProviderThreadId,
   REVIEW_NOTE_TOOL_NAME,
   REVIEW_NOTE_TURN_ITEM_PREFIX,
+  REVIEW_REPLY_TOOL_NAME,
+  REVIEW_REPLY_TURN_ITEM_PREFIX,
+  ComposerContextId,
+  type ReviewCommentContextRecord,
   RunId,
   ThreadId,
   TurnItemId,
@@ -27,7 +31,11 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import { McpSchema, McpServer } from "effect/ai";
-import { reviewNoteFromToolItem, reviewNoteSectionId } from "@t3tools/shared/reviewNote";
+import {
+  reviewNoteFromToolItem,
+  reviewNoteSectionId,
+  reviewReplyFromToolItem,
+} from "@t3tools/shared/reviewNote";
 import type * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 import * as ProviderContinuationRequests from "@t3tools/provider-core/server/ProviderContinuationRequests";
 
@@ -294,14 +302,53 @@ const makeHarness = (settings: Parameters<typeof ServerSettings.layerTest>[0] = 
             ),
           ),
         );
-    const flagAs =
-      (caller: McpInvocationContext.McpInvocationScope) => (args: Record<string, unknown>) =>
+    const callAs =
+      (name: string) =>
+      (caller: McpInvocationContext.McpInvocationScope) =>
+      (args: Record<string, unknown>) =>
         server
-          .callTool({ name: REVIEW_NOTE_TOOL_NAME, arguments: args })
+          .callTool({ name, arguments: args })
           .pipe(
             Effect.provideService(McpInvocationContext.McpInvocationContext, caller),
             Effect.provideService(McpSchema.McpServerClient, mcpClient),
           );
+    const flagAs = callAs(REVIEW_NOTE_TOOL_NAME);
+    // The user's message on the run, carrying review comments as the composer sends them.
+    const sendComments = (records: ReadonlyArray<ReviewCommentContextRecord>) =>
+      sink.write({
+        commandId: CommandId.make(`command:seed:comments:${records.length}`),
+        events: [
+          {
+            id: EventId.make(`event:seed-comments:${records.length}`),
+            type: "message.updated",
+            threadId,
+            runId,
+            occurredAt: now,
+            payload: {
+              id: MessageId.make(`message:seed-user:${runId}`),
+              threadId,
+              runId,
+              nodeId: rootNode,
+              role: "user",
+              text: "Review comments",
+              context: { version: 1, records },
+              attachments: [],
+              streaming: false,
+              createdBy: "user",
+              creationSource: "web",
+              createdAt: now,
+              updatedAt: now,
+            },
+          },
+        ],
+      });
+    const replies = orchestrator
+      .getThreadProjection(threadId)
+      .pipe(
+        Effect.map((projection) =>
+          projection.turnItems.flatMap((item) => reviewReplyFromToolItem(item) ?? []),
+        ),
+      );
     return {
       workspace,
       outside,
@@ -311,6 +358,9 @@ const makeHarness = (settings: Parameters<typeof ServerSettings.layerTest>[0] = 
       notesOf,
       seedRun,
       flagAs,
+      sendComments,
+      replies,
+      reply: callAs(REVIEW_REPLY_TOOL_NAME)(scope),
       write,
       symlink: (target: string, link: string) =>
         fileSystem.symlink(target, link).pipe(Effect.orDie),
@@ -574,6 +624,104 @@ describe("flag_for_review", () => {
           message: ReviewNotes.REVIEW_NOTES_OFF,
         });
         expect(yield* a.notes).toEqual([]);
+      }),
+    ).pipe(Effect.provide(NodeServices.layer)),
+  );
+});
+
+describe("reply_to_review_comment", () => {
+  const record = (
+    contextId: string,
+    overrides: Partial<ReviewCommentContextRecord> = {},
+  ): ReviewCommentContextRecord => ({
+    version: 1,
+    contextId: ComposerContextId.make(contextId),
+    kind: "review-comment",
+    label: "Comment",
+    sectionId: "turn:1",
+    sectionTitle: "Turn 1",
+    filePath: FILE,
+    startIndex: 1,
+    endIndex: 2,
+    rangeLabel: "L2 to L3",
+    text: "Why retry here?",
+    diff: "@@ -2,2 +2,2 @@\n two\n+three",
+    ...overrides,
+  });
+  const replyIdOf = (result: McpSchema.CallToolResult) => {
+    expect(errorOf(result)).toBeUndefined();
+    return (result.structuredContent as { readonly replyId: TurnItemId }).replyId;
+  };
+
+  it.effect("records the reply with its own copy of the comment it answers, once", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const a = yield* makeHarness();
+        yield* a.sendComments([record("ctx_1"), record("ctx_2", { text: "And here?" })]);
+        const args = { commentId: "ctx_2", reply: "Kept it: the sandbox flakes." };
+        const replyId = replyIdOf(yield* a.reply(args));
+        expect(replyId.startsWith(REVIEW_REPLY_TURN_ITEM_PREFIX)).toBe(true);
+        expect(replyIdOf(yield* a.reply(args))).toBe(replyId);
+        expect(yield* a.replies).toEqual([
+          {
+            id: replyId,
+            kind: "review_reply",
+            commentId: "ctx_2",
+            reply: args.reply,
+            comment: {
+              sectionId: "turn:1",
+              filePath: FILE,
+              rangeLabel: "L2 to L3",
+              startIndex: 1,
+              endIndex: 2,
+              text: "And here?",
+              diff: "@@ -2,2 +2,2 @@\n two\n+three",
+            },
+            runId,
+          },
+        ]);
+      }),
+    ).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("cuts a long comment's copy to whole lines that fit the wire", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const a = yield* makeHarness();
+        const diff = ["@@ -1,400 +1,400 @@", ...Array(400).fill(`+${'"é'.repeat(20)}`)].join("\n");
+        yield* a.sendComments([record("ctx_long", { text: "x".repeat(2_000), diff })]);
+        replyIdOf(yield* a.reply({ commentId: "ctx_long", reply: '"'.repeat(2_000) }));
+        const [reply] = yield* a.replies;
+        expect(reply!.comment.text.length).toBeLessThanOrEqual(600);
+        expect(reply!.comment.diff.length).toBeLessThan(diff.length);
+        expect(diff.startsWith(reply!.comment.diff)).toBe(true);
+        expect(diff.split("\n")).toContain(reply!.comment.diff.split("\n").at(-1));
+        const { id: _id, ...input } = reply!;
+        expect(Buffer.byteLength(JSON.stringify(input), "utf8")).toBeLessThanOrEqual(
+          ReviewNotes.REVIEW_NOTE_MAX_INPUT_BYTES,
+        );
+      }),
+    ).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("refuses a comment it cannot find, and while review notes are off", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const a = yield* makeHarness();
+        yield* a.sendComments([record("ctx_1")]);
+        expect(errorOf(yield* a.reply({ commentId: "ctx_9", reply: "Done." }))).toMatchObject({
+          code: "invalid_request",
+          message: expect.stringMatching(/No review comment ctx_9/),
+        });
+        expect(yield* a.replies).toEqual([]);
+
+        const off = yield* makeHarness({ agentReviewNotesEnabled: false });
+        yield* off.sendComments([record("ctx_1")]);
+        expect(errorOf(yield* off.reply({ commentId: "ctx_1", reply: "Done." }))).toMatchObject({
+          code: "capability_denied",
+          message: ReviewNotes.REVIEW_NOTES_OFF,
+        });
+        expect(yield* off.replies).toEqual([]);
       }),
     ).pipe(Effect.provide(NodeServices.layer)),
   );

@@ -10,7 +10,7 @@ import FileBrowserPanel, { type ProjectPaneOptions } from "./FileBrowserPanel";
 
 type DirectoryState = ReturnType<typeof import("./useDirectoryEntries").useDirectoryEntries>;
 
-const defaultEntries: readonly ProjectEntry[] = [
+const defaultEntries: ProjectEntry[] = [
   { path: "src", kind: "directory" },
   { path: "README.md", kind: "file" },
 ];
@@ -45,7 +45,7 @@ vi.mock("~/fileContextMenu", () => ({
 }));
 vi.mock("~/hooks/useWorkspaceMutationRefresh", () => ({ useWorkspaceMutationRefresh: () => {} }));
 
-const projectEntries: readonly ProjectEntry[] = [
+const projectEntries: ProjectEntry[] = [
   { path: "src", kind: "directory" },
   { path: "src/app.ts", kind: "file" },
   { path: "README.md", kind: "file" },

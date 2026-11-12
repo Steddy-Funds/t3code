@@ -197,6 +197,52 @@ describe("Go to class", () => {
     expect(mocks.navigateToCodeLocation).toHaveBeenCalledWith(threadRef, invoiceLine.location);
   });
 
+  it("shows the Enter hint only while a match is highlighted, and the Esc hint stays put", async () => {
+    setup();
+    await using _screen = await render(
+      <CommandDialog open>
+        <CommandDialogPopup aria-label="Command palette">
+          <WorkspaceSymbolPicker scope="classes" escapeLabel="Back" setOpen={vi.fn()} />
+        </CommandDialogPopup>
+      </CommandDialog>,
+    );
+    using _timers = fakeTimers();
+    const input = page.getByPlaceholder("Search classes…");
+    const footerHint = (label: string) =>
+      [...document.querySelectorAll<HTMLElement>('[data-slot="kbd-group"]')].find((group) =>
+        group.textContent?.startsWith(label),
+      )!;
+    const enterShown = () => {
+      const hint = footerHint("Enter");
+      return !hint.classList.contains("invisible") && !hint.hasAttribute("aria-hidden");
+    };
+    const escLeft = footerHint("Esc").getBoundingClientRect().left;
+
+    // Nothing typed: nothing for Enter to open, but the hint keeps its place.
+    expect(enterShown()).toBe(false);
+    expect(footerHint("Enter").textContent).toBe("EnterOpen");
+
+    await userEvent.type(input, "Inv");
+    await act(() => vi.advanceTimersByTimeAsync(150));
+    await vi.waitFor(() => expect(page.getByRole("option").elements()).toHaveLength(3));
+    expect(enterShown()).toBe(true);
+    expect(footerHint("Esc").getBoundingClientRect().left).toBe(escLeft);
+
+    await userEvent.type(input, "zz");
+    await act(() => vi.advanceTimersByTimeAsync(150));
+    await expect.element(page.getByText("No classes match")).toBeVisible();
+    expect(enterShown()).toBe(false);
+    expect(footerHint("Esc").getBoundingClientRect().left).toBe(escLeft);
+
+    // The same session finds matches again once the query does.
+    await userEvent.clear(input);
+    await userEvent.type(input, "InvoiceL");
+    await act(() => vi.advanceTimersByTimeAsync(150));
+    await vi.waitFor(() => expect(page.getByRole("option").elements()).toHaveLength(1));
+    expect(enterShown()).toBe(true);
+    expect(footerHint("Esc").getBoundingClientRect().left).toBe(escLeft);
+  });
+
   it("keeps focus in the code it was opened from once the pick closes the palette", async () => {
     setup();
     const href = window.location.href;

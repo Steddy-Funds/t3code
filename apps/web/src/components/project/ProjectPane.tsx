@@ -28,6 +28,7 @@ import { primaryServerKeybindingsAtom } from "~/state/server";
 import { environmentSession, sessionHasScope } from "~/state/session";
 import { vcsEnvironment } from "~/state/vcs";
 
+import ExternalLibraries from "./ExternalLibraries";
 import { workingTreeChangesAtom, workspaceRefreshToken } from "./projectGitChanges";
 import { useProjectPaneStore } from "./projectPaneStore";
 
@@ -143,26 +144,31 @@ function ProjectFiles({ target }: { target: ProjectPaneTarget }) {
 
   if (!canRead) return <PaneMessage>This connection can't browse files.</PaneMessage>;
   return (
-    <FileBrowserPanel
-      environmentId={environmentId}
-      cwd={cwd}
-      projectName={target.projectName}
-      selectedPath={openedPath}
-      selectedPathRevealId={openedRevealId}
-      onOpenFile={(relativePath) => useRightPanelStore.getState().openFile(threadRef, relativePath)}
-      workspaceMutationId={refreshToken}
-      projectPane={{
-        gitChanges,
-        focusPending,
-        onTreeFocused: () => useProjectPaneStore.getState().treeFocusHandled(),
-        onSelectOpenedFile: () => useProjectPaneStore.getState().focusTree(),
-        selectOpenedFileShortcut: shortcutLabelForCommand(
-          keybindings,
-          "projectPane.selectOpenedFile",
-          { context: { codeFocus: true, projectPane: true } },
-        ),
-      }}
-    />
+    <>
+      <FileBrowserPanel
+        environmentId={environmentId}
+        cwd={cwd}
+        projectName={target.projectName}
+        selectedPath={openedPath}
+        selectedPathRevealId={openedRevealId}
+        onOpenFile={(relativePath) =>
+          useRightPanelStore.getState().openFile(threadRef, relativePath)
+        }
+        workspaceMutationId={refreshToken}
+        projectPane={{
+          gitChanges,
+          focusPending,
+          onTreeFocused: () => useProjectPaneStore.getState().treeFocusHandled(),
+          onSelectOpenedFile: () => useProjectPaneStore.getState().focusTree(),
+          selectOpenedFileShortcut: shortcutLabelForCommand(
+            keybindings,
+            "projectPane.selectOpenedFile",
+            { context: { codeFocus: true, projectPane: true } },
+          ),
+        }}
+      />
+      <ExternalLibraries environmentId={environmentId} cwd={cwd} threadRef={threadRef} />
+    </>
   );
 }
 

@@ -702,6 +702,26 @@ describe("PythonEnvironment", () => {
       ),
     );
 
+    it.effect("takes a setting saved under a symlink to the root, after the root's own", () =>
+      inWorld({ ...BASE, ...venv("custom/env"), ...venv("other/env") }, (world) =>
+        Effect.gen(function* () {
+          NodeFS.symlinkSync(world.dir, world.at("alias"));
+          const viaAlias = { [world.at("alias")]: world.at("custom", "env") };
+
+          expect(yield* world.locate("", viaAlias)).toMatchObject({
+            source: "setting",
+            environment: world.at("custom", "env"),
+          });
+          expect(
+            yield* world.locate("", { ...viaAlias, [world.dir]: world.at("other", "env") }),
+          ).toMatchObject({ environment: world.at("other", "env") });
+          expect(yield* world.locate("", { ...viaAlias, [world.dir]: "" })).toMatchObject({
+            environment: world.at("custom", "env"),
+          });
+        }),
+      ),
+    );
+
     it.effect("expands a leading ~ against the home directory", () =>
       inWorld({ ...BASE, ...venv("home/envs/mine") }, (world) =>
         Effect.gen(function* () {

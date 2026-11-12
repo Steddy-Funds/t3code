@@ -111,7 +111,7 @@ export function RecentFilesPicker(props: {
         label="Recent files"
         testId="code-recent-files-picker"
         placeholder="Filter recent files…"
-        footerActionLabel={null}
+        footerActionLabel="Open file"
         escapeLabel={props.escapeLabel}
         query=""
         onQueryChange={() => undefined}

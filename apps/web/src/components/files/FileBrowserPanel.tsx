@@ -25,6 +25,7 @@ import { useStableCallback } from "~/hooks/useStableCallback";
 import { useTheme } from "~/hooks/useTheme";
 import { useWorkspaceMutationRefresh } from "~/hooks/useWorkspaceMutationRefresh";
 import { useFileContextMenu, type FileContextMenuAction } from "~/fileContextMenu";
+import { usePaintedThemeEditorColors } from "~/lib/paintedThemeEditorColors";
 import { readLocalApi } from "~/localApi";
 import { T3_PIERRE_ICONS } from "~/pierre-icons";
 import { cn } from "~/lib/utils";
@@ -209,6 +210,7 @@ export default function FileBrowserPanel({
   const panelPath = (relativePath: string) =>
     hostFolder ? joinHostPath(cwd, relativePath) : relativePath;
   const { resolvedTheme } = useTheme();
+  const fileStatusColors = usePaintedThemeEditorColors()?.fileStatus;
   const composerRef = useComposerHandleContext();
   const fileContextMenu = useFileContextMenu(environmentId);
   const {
@@ -239,6 +241,8 @@ export default function FileBrowserPanel({
   // Shadow-DOM row rects are unreliable; capture the composed contextmenu event's viewport position.
   const contextMenuPointerRef = useRef<{ x: number; y: number; at: number } | null>(null);
 
+  // The model keeps its first options, and the Project pane keeps this tree across threads.
+  const openFile = useStableCallback(onOpenFile);
   const showEntryContextMenu = useStableCallback(
     (item: TreeContextMenuItem, context: TreeContextMenuOpenContext) => {
       const api = readLocalApi();
@@ -346,7 +350,7 @@ export default function FileBrowserPanel({
       const selectedPath = selectedPaths.at(-1)?.replace(/\/$/, "");
       if (selectedPath && entryKindsRef.current.get(selectedPath) === "file") {
         treeSelectionPathRef.current = selectedPath;
-        onOpenFile(panelPath(selectedPath));
+        openFile(panelPath(selectedPath));
       }
     },
     paths: [],
@@ -772,7 +776,7 @@ export default function FileBrowserPanel({
           model={model}
           aria-label={`${projectName} files`}
           className="min-h-0 flex-1 overflow-hidden"
-          style={pierreTreeStyle(resolvedTheme)}
+          style={pierreTreeStyle(resolvedTheme, fileStatusColors)}
         />
       )}
     </div>

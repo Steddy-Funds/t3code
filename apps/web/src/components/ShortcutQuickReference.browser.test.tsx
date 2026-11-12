@@ -31,10 +31,15 @@ vi.mock(import("~/state/server"), async (original) => {
     command: `code.action${index + 1}` as never,
     when: "codeFocus",
   }));
+  const treeRule = {
+    key: "ctrl+alt+t",
+    command: "code.treeAction" as never,
+    when: "projectTreeFocus",
+  };
   return {
     ...actual,
     primaryServerKeybindingsAtom: Atom.make(
-      compileResolvedKeybindingsConfig([...DEFAULT_KEYBINDINGS, ...codeRules]),
+      compileResolvedKeybindingsConfig([...DEFAULT_KEYBINDINGS, ...codeRules, treeRule]),
     ),
   };
 });
@@ -128,6 +133,66 @@ describe("ShortcutQuickReference", () => {
     expect(row("Terminal: Split")?.textContent).toContain("⌘D");
     expect(row("Command Palette: Toggle")).toBeNull();
   });
+
+  it.each([
+    {
+      name: "a button in a diff",
+      field: "button",
+      scopes: "code diff",
+      listed: ["Diff: Next Change", "Code: Action1"],
+      unlisted: [],
+    },
+    {
+      name: "a checkbox in a diff's toolbar",
+      field: "checkbox",
+      scopes: "diff",
+      listed: ["Diff: Next Change"],
+      unlisted: ["Code: Action1"],
+    },
+    {
+      name: "a review comment box in a diff",
+      field: "textarea",
+      scopes: "code diff",
+      listed: ["Command Palette: Toggle"],
+      unlisted: ["Diff: Next Change", "Diff: Find", "Code: Action1"],
+    },
+    {
+      name: "a find field in a code pane",
+      field: "input",
+      scopes: "code",
+      listed: ["Command Palette: Toggle"],
+      unlisted: ["Code: Action1"],
+    },
+    {
+      name: "the Project tree's search field",
+      field: "input",
+      scopes: "project-tree",
+      listed: ["Code: Tree Action"],
+      unlisted: ["Code: Action1", "Diff: Next Change"],
+    },
+  ])(
+    "lists only the shortcuts that work with focus in $name",
+    async ({ field, scopes, listed, unlisted }) => {
+      await setup();
+      await page.viewport(1440, 900);
+      using _platform = macPlatform();
+      await using screen = await renderAt(THREAD_PATH);
+      const pane = append(screen.container, document.createElement("div"));
+      pane.dataset.focusScope = scopes;
+      const tag = field === "textarea" || field === "button" ? field : "input";
+      const focused = append(pane, document.createElement(tag));
+      if (field === "checkbox") (focused as HTMLInputElement).type = "checkbox";
+      focused.focus();
+      using _timers = fakeTimers();
+
+      await holdCmd();
+      await wait(700);
+
+      expect(overlay()).not.toBeNull();
+      for (const label of listed) expect(row(label), label).not.toBeNull();
+      for (const label of unlisted) expect(row(label), label).toBeNull();
+    },
+  );
 
   it("only watches: focus, keys and clicks go where they went before", async () => {
     await setup();

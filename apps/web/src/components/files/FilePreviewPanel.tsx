@@ -739,15 +739,30 @@ function EditableFileSurface({
   const { ready: editable, onPostRender: onEditablePostRender } =
     useEditableAfterHighlight(externalFile);
   const editorRef = useRef<Editor<"file", FileCommentAnnotationGroup, undefined> | null>(null);
+  // A new version detaches the editor until it is highlighted, and focus falls to the page
+  // without a blur. The editor takes it back on attach, unless something else has it by then.
+  const editorFocusedRef = useRef(false);
   const setCodeEditor = useContext(CodeEditorSlotContext);
   const editorOptions: EditorOptions<"file", FileCommentAnnotationGroup, undefined> = {
     onAttach: (editor) => {
       editorRef.current = editor;
       setCodeEditor?.(editor);
+      const wasFocused = editorFocusedRef.current;
+      editorFocusedRef.current = false;
+      const focused = document.activeElement;
+      if (wasFocused && (focused === null || focused === document.body)) {
+        editor.focus({ preventScroll: true, lineNumber: "first-visible" });
+      }
     },
     onComplete: () => {
       editorRef.current = null;
       setCodeEditor?.(null);
+    },
+    onFocus: () => {
+      editorFocusedRef.current = true;
+    },
+    onBlur: () => {
+      editorFocusedRef.current = false;
     },
   };
 

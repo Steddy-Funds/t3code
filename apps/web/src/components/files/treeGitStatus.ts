@@ -1,12 +1,9 @@
 import type { GitStatus, GitStatusEntry } from "@pierre/trees";
-import type { ProjectEntry, VcsStatusResult } from "@t3tools/contracts";
+import type { ProjectEntry, VcsStatusResult, VcsWorkingTreeFileChange } from "@t3tools/contracts";
 import { fileBasename, workspaceRelativeFilePath } from "@t3tools/shared/path";
 
-/**
- * What the working-tree line counts say about a path; the status carries no change kind. Untracked
- * files and folders count 0/0, a deleted file only removes lines.
- */
-export type WorkingTreeChange = "untracked" | "linesRemoved" | "modified";
+/** The server's change kind, or what older servers' line counts suggest (`linesRemoved`). */
+export type WorkingTreeChange = VcsWorkingTreeFileChange | "linesRemoved";
 
 export interface WorkingTreeChangeEntry {
   /** Relative to `rootPath`; an untracked folder ends in `/`. */
@@ -19,7 +16,11 @@ export interface WorkingTreeChanges {
   readonly changes: ReadonlyArray<WorkingTreeChangeEntry>;
 }
 
-function changeOf(file: { insertions: number; deletions: number }): WorkingTreeChange {
+type WorkingTreeFile = VcsStatusResult["workingTree"]["files"][number];
+
+// Older servers send no kind: untracked files and folders count 0/0, a deletion only removes lines.
+function changeOf(file: WorkingTreeFile): WorkingTreeChange {
+  if (file.change) return file.change;
   if (file.insertions === 0) return file.deletions === 0 ? "untracked" : "linesRemoved";
   return "modified";
 }
@@ -69,6 +70,11 @@ function nearestAncestorIn(path: string, directories: ReadonlySet<string>): bool
   return false;
 }
 
+function pierreStatus(change: WorkingTreeChange, onDisk: boolean): GitStatus {
+  if (change === "linesRemoved") return onDisk ? "modified" : "deleted";
+  return change;
+}
+
 /**
  * The Pierre git statuses for the loaded entries. A path with no row only marks its folders, so a
  * removed file shows as `deleted` there. A change wins over `ignored`.
@@ -90,13 +96,7 @@ export function treeGitStatus(
         untrackedDirectories.add(path.slice(0, -1));
         continue;
       }
-      const status: GitStatus =
-        change === "untracked"
-          ? "untracked"
-          : change === "linesRemoved" && !onDisk.has(path)
-            ? "deleted"
-            : "modified";
-      statuses.set(path, status);
+      statuses.set(path, pierreStatus(change, onDisk.has(path)));
     }
     // Git lists an untracked folder once; everything loaded under it is untracked too.
     if (untrackedDirectories.size > 0) {

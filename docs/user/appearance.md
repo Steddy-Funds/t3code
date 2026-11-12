@@ -21,6 +21,14 @@ Android uses **Material You Layout** by default unless you have turned it off in
 It changes shapes, spacing, and controls independently
 of the selected theme.
 
+## Material Ocean
+
+**Material Ocean** follows the JetBrains Material Theme: Material Oceanic for the app, and
+Material Deep Ocean with its syntax colors for code, diffs, and the terminal. It has a dark version
+only. Choose it in **Settings → Appearance**, then set the appearance to Dark, or to System while
+your system is dark. Under it, open files get [semantic highlighting](./code.md#semantic-highlighting)
+and the Project pane uses the theme's [file colors](./code.md#git-colors).
+
 ## Composer context
 
 Git-backed projects show branch and worktree controls below the composer while you create a thread.

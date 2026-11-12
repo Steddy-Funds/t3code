@@ -1066,11 +1066,19 @@ describe("JetBrains keymap defaults", () => {
       capabilities: navigation,
       command: "sidebar.toggle",
     },
+    // A navigable side-by-side diff provides code navigation; the stacked diff does not.
     {
       key: "mod+b",
       context: { diffFocus: true },
       capabilities: navigation,
-      command: "sidebar.toggle",
+      command: "code.goToDeclaration",
+    },
+    { key: "mod+b", context: { diffFocus: true }, command: "sidebar.toggle" },
+    {
+      key: "mod+shift+b",
+      context: { diffFocus: true },
+      capabilities: navigation,
+      command: "threadPanel.toggle",
     },
     {
       key: "mod+shift+b",
@@ -1432,9 +1440,9 @@ describe("defaults merged into a server's rules", () => {
     ];
 
     assert.deepStrictEqual(mergeWithDefaultKeybindings(full), full);
-    // With four free slots the first three missing commands fit; the two-shortcut fourth waits
+    // With five free slots the first three missing commands fit; the two-shortcut fourth waits
     // whole, as it does when the server writes its config.
-    const nearlyFull = full.slice(0, -4);
+    const nearlyFull = full.slice(0, -5);
     const merged = mergeWithDefaultKeybindings(nearlyFull);
     assert.deepStrictEqual(
       merged.filter((binding) => nearlyFull.includes(binding)),
@@ -1442,7 +1450,12 @@ describe("defaults merged into a server's rules", () => {
     );
     assert.sameMembers(
       merged.filter((binding) => !nearlyFull.includes(binding)).map(({ command }) => command),
-      ["code.goToDeclaration", "code.goToTypeDeclaration", "code.goToImplementation"],
+      [
+        "code.goToDeclaration",
+        "code.goToDeclaration",
+        "code.goToTypeDeclaration",
+        "code.goToImplementation",
+      ],
     );
   });
 });

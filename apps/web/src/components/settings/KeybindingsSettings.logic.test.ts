@@ -350,4 +350,15 @@ describe("KeybindingsSettings.logic", () => {
     expect(groupOf("projectPane.toggle")).toBe("Code");
     expect(groupOf("diff.nextChange")).toBe("Preview & diff");
   });
+
+  it("lists Back and Forward under Navigation", () => {
+    const groups = groupKeybindingRows(
+      buildKeybindingRows(DEFAULT_RESOLVED_KEYBINDINGS, "MacIntel"),
+    );
+    const groupOf = (command: string) =>
+      groups.find((group) => group.rows.some((row) => row.command === command))?.title;
+
+    expect(groupOf("navigation.back")).toBe("Navigation");
+    expect(groupOf("navigation.forward")).toBe("Navigation");
+  });
 });

@@ -3,6 +3,16 @@
 Customize shortcuts in **Settings → Keybindings** on web and desktop. That page
 also lists the command IDs and defaults available in your version.
 
+## Quick reference
+
+On a thread, hold Command on macOS or Ctrl on Windows and Linux for a moment to list the
+shortcuts that work where the keyboard is: the composer, a terminal, code, a diff, or the
+Project pane. Shortcuts on exactly the keys you hold stand out; add Shift or Alt to see theirs.
+Any other key, a click, or moving the pointer hides the list until you hold the key again. It
+does not open while the pointer rests on code, where the held key starts a `mod+click`, or while
+the command palette is open. Turn it off with **Show shortcuts while Cmd is held** (**Ctrl** on
+Windows and Linux) in **Settings → Keybindings**.
+
 ## Composer controls
 
 `mod+shift+d` starts dictation in the focused editor, or the composer, and finishes it on the next press;
@@ -76,12 +86,13 @@ keyboard is in. That one is the `diff.find` command, which you can rebind.
 
 Code navigation, the side-by-side diff, and the Project pane use the shortcuts of JetBrains
 IDEs. Each runs only where it applies, and the key keeps its other command everywhere else:
-`mod+b` goes to a declaration while the keyboard is in code, and toggles the sidebar anywhere
-else.
+`mod+b` goes to a declaration while the keyboard is in code or a turn's side-by-side diff, and
+toggles the sidebar anywhere else. The features are described in
+[Code and the Project pane](./code.md) and [Side-by-side diff](./source-control.md#side-by-side-diff).
 
 | Shortcut                                     | Command                                  | Runs while the keyboard is in        |
 | -------------------------------------------- | ---------------------------------------- | ------------------------------------ |
-| `mod+b`                                      | Go to Declaration or Usages              | code                                 |
+| `mod+b`                                      | Go to Declaration or Usages              | code or a turn's side-by-side diff   |
 | `mod+shift+b`                                | Go to Type Declaration                   | code                                 |
 | `mod+alt+b`                                  | Go to Implementation                     | code                                 |
 | `alt+f7`, `mod+alt+f7`                       | Find Usages                              | code                                 |
@@ -95,8 +106,8 @@ else.
 | `mod+e`                                      | Recent Files                             | anything but a terminal              |
 | `mod+f12`                                    | File Structure                           | code                                 |
 | `ctrl+shift+arrowdown`, `ctrl+shift+arrowup` | Next Method, Previous Method             | code                                 |
-| `f7`, `shift+f7`                             | Next Change, Previous Change             | a diff                               |
-| `f4`, `mod+arrowdown`                        | Jump to Source                           | a diff                               |
+| `f7`, `shift+f7`                             | Next Change, Previous Change             | a side-by-side diff                  |
+| `f4`, `mod+arrowdown`                        | Jump to Source                           | a turn's side-by-side diff           |
 | `mod+f`                                      | Find in that side of the diff            | a side-by-side diff                  |
 | `mod+1`                                      | Show the Project pane, or return to code | code or the Project pane, on desktop |
 | `alt+f1`                                     | Select Opened File in the Project pane   | code                                 |
@@ -109,9 +120,14 @@ and `mod+alt+arrowleft` / `mod+alt+arrowright` stay with the browser. To keep on
 keys for its other command everywhere, give the command in this table another shortcut in
 **Settings → Keybindings**.
 
+Go to Declaration has two rows there, one for code and one for the side-by-side diff, so give a
+new shortcut to both. If you had already moved it off `mod+b` before the side-by-side diff had
+its own row, you have only the code row: add your shortcut with the conditions `diffFocus` and
+`codeNavigation`.
+
 Shortcuts come from your primary environment. If its server is older than this app,
-`mod+shift+o` and `mod+alt+arrowleft` / `mod+alt+arrowright` are missing until you update it;
-the rest of the table works.
+`mod+shift+o`, `mod+alt+arrowleft` / `mod+alt+arrowright`, and `mod+b` in a side-by-side diff
+are missing until you update it; the rest of the table works.
 
 ## iPad
 

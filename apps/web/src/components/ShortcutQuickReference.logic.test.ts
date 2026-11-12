@@ -1,4 +1,4 @@
-import type { KeybindingCommand, KeybindingRule } from "@t3tools/contracts";
+import type { KeybindingCommand, KeybindingRule, KeybindingShortcut } from "@t3tools/contracts";
 import {
   compileResolvedKeybindingsConfig,
   DEFAULT_KEYBINDINGS,
@@ -6,7 +6,12 @@ import {
 } from "@t3tools/shared/keybindings";
 import { describe, expect, it } from "vite-plus/test";
 
-import type { ShortcutMatchContext } from "../keybindings";
+import {
+  provideShortcutCapability,
+  resolveShortcutCommand,
+  type ShortcutCapability,
+  type ShortcutMatchContext,
+} from "../keybindings";
 import {
   collectQuickReferenceCommands,
   fitQuickReference,
@@ -112,6 +117,144 @@ describe("collectQuickReferenceCommands", () => {
       ["Project scripts", ["script.build.run"]],
     ]);
     expect(groups[0]?.commands[0]?.shortcuts.map((shortcut) => shortcut.key)).toEqual(["j"]);
+  });
+});
+
+describe("collectQuickReferenceCommands against the keys", () => {
+  const ALL_CAPABILITIES = ["codeNavigation", "codeSymbols", "projectPane"] as const;
+  const GOES_TO_CODE = ["code.goToDeclaration", "code.fileStructure", "code.goToClass"];
+
+  // The event a chord is, on `platform`: Mod is Cmd on macOS and Ctrl elsewhere.
+  function pressing(shortcut: KeybindingShortcut, platform: string) {
+    const mac = platform === MAC;
+    return {
+      key: shortcut.key,
+      metaKey: shortcut.metaKey || (shortcut.modKey && mac),
+      ctrlKey: shortcut.ctrlKey || (shortcut.modKey && !mac),
+      shiftKey: shortcut.shiftKey,
+      altKey: shortcut.altKey,
+    };
+  }
+
+  const FOCI = [
+    {
+      name: "no focus scope",
+      context: { isDesktop: true },
+      capabilities: ALL_CAPABILITIES,
+      listed: ["commandPalette.toggle", "navigation.back"],
+      unlisted: [...GOES_TO_CODE, "diff.nextChange", "projectPane.toggle"],
+    },
+    {
+      name: "code with every capability",
+      context: { isDesktop: true, codeFocus: true },
+      capabilities: ALL_CAPABILITIES,
+      listed: [...GOES_TO_CODE, "projectPane.toggle", "projectPane.selectOpenedFile"],
+      unlisted: ["diff.nextChange", "diff.find"],
+    },
+    {
+      name: "code without the capabilities",
+      context: { isDesktop: true, codeFocus: true },
+      capabilities: [],
+      listed: ["filePicker.toggle"],
+      unlisted: [...GOES_TO_CODE, "projectPane.toggle", "code.recentFiles"],
+    },
+    {
+      name: "the stacked diff",
+      context: { isDesktop: true, diffFocus: true },
+      capabilities: ["codeSymbols", "projectPane"],
+      listed: [
+        "diff.nextChange",
+        "diff.previousChange",
+        "diff.jumpToSource",
+        "diff.find",
+        "sidebar.toggle",
+      ],
+      unlisted: [...GOES_TO_CODE, "projectPane.toggle"],
+    },
+    {
+      name: "a side-by-side diff that navigates",
+      context: { isDesktop: true, diffFocus: true },
+      capabilities: ALL_CAPABILITIES,
+      listed: ["diff.nextChange", "diff.find", "code.goToDeclaration"],
+      unlisted: ["sidebar.toggle", "code.fileStructure", "code.goToClass", "projectPane.toggle"],
+    },
+    {
+      name: "a code pane that is also a diff",
+      context: { isDesktop: true, codeFocus: true, diffFocus: true },
+      capabilities: ALL_CAPABILITIES,
+      listed: ["diff.nextChange", "code.goToDeclaration"],
+      unlisted: [],
+    },
+    {
+      name: "the Project tree",
+      context: { isDesktop: true, projectTreeFocus: true },
+      capabilities: ALL_CAPABILITIES,
+      listed: ["projectPane.toggle", "filePicker.toggle", "code.goToClass"],
+      unlisted: ["code.goToDeclaration", "diff.nextChange", "projectPane.selectOpenedFile"],
+    },
+  ] satisfies ReadonlyArray<{
+    name: string;
+    context: Partial<ShortcutMatchContext>;
+    capabilities: ReadonlyArray<ShortcutCapability>;
+    listed: ReadonlyArray<string>;
+    unlisted: ReadonlyArray<string>;
+  }>;
+
+  it.each(FOCI.flatMap((focus) => [MAC, "Linux"].map((platform) => ({ ...focus, platform }))))(
+    "lists $name on $platform, and each listed chord resolves to its command",
+    ({ context, capabilities, listed, unlisted, platform }) => {
+      using stack = new DisposableStack();
+      for (const capability of capabilities) stack.defer(provideShortcutCapability(capability));
+      const keybindings = compileResolvedKeybindingsConfig(DEFAULT_KEYBINDINGS);
+
+      const groups = collectQuickReferenceCommands({
+        keybindings,
+        scriptKeybindings: compileResolvedKeybindingsConfig([]),
+        context,
+        platform,
+      });
+
+      const commands = groups.flatMap((group) => group.commands.map((entry) => entry.command));
+      expect(commands).toEqual(expect.arrayContaining(listed));
+      for (const command of unlisted) expect(commands).not.toContain(command);
+      const disagreements = groups.flatMap((group) =>
+        group.commands.flatMap((entry) =>
+          entry.shortcuts.flatMap((shortcut) => {
+            const resolved = resolveShortcutCommand(pressing(shortcut, platform), keybindings, {
+              platform,
+              context,
+            });
+            return resolved === entry.command
+              ? []
+              : [`${entry.command} ${shortcut.key}: ${resolved}`];
+          }),
+        ),
+      );
+      expect(disagreements).toEqual([]);
+    },
+  );
+
+  it("takes the capabilities the features provide, and drops them once withdrawn", () => {
+    const keybindings = compileResolvedKeybindingsConfig(DEFAULT_KEYBINDINGS);
+    const listed = () =>
+      collectQuickReferenceCommands({
+        keybindings,
+        scriptKeybindings: compileResolvedKeybindingsConfig([]),
+        context: { isDesktop: true, codeFocus: true },
+        platform: MAC,
+      }).flatMap((group) => group.commands.map((entry) => entry.command));
+    let works = true;
+    const withdraw = provideShortcutCapability("codeNavigation", () => works);
+
+    try {
+      expect(listed()).toContain("code.goToDeclaration");
+      works = false;
+      expect(listed()).not.toContain("code.goToDeclaration");
+      works = true;
+    } finally {
+      withdraw();
+    }
+    expect(listed()).not.toContain("code.goToDeclaration");
   });
 });
 

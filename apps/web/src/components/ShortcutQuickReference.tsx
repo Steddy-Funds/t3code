@@ -8,6 +8,7 @@ import { useComposerDraftStore } from "../composerDraftStore";
 import { getClientSettings, useClientSettings } from "../hooks/useSettings";
 import type { ShortcutMatchContext } from "../keybindings";
 import { isEditableFocused } from "../lib/editableFocus";
+import { readFocusScopes } from "../lib/focusScopes";
 import { isPreviewFocused } from "../lib/previewFocus";
 import { isTerminalFocused } from "../lib/terminalFocus";
 import { isModelPickerOpen } from "../modelPickerVisibility";
@@ -31,7 +32,6 @@ import {
   QUICK_REFERENCE_MIN_WIDTH_REM,
   QUICK_REFERENCE_SHOW_DELAY_MS,
   quickReferenceGroupsForModifiers,
-  readFocusScopeContext,
   trackPointerPressed,
   watchQuickReferenceInterruptions,
   type QuickReferenceArea,
@@ -47,8 +47,9 @@ interface QuickReferenceSnapshot {
 }
 
 /**
- * The `when` context a key pressed now would resolve in. Each shortcut
- * listener builds its own; this mirrors the chat's, the widest one.
+ * The `when` context a key pressed now would resolve in. Each shortcut listener builds its own;
+ * this mirrors the chat's, the widest one. Focus scopes come from the reader key resolution uses,
+ * and capabilities join in `effectiveShortcutsForCommand`, so the list and the keys agree.
  */
 function readShortcutContext(router: AnyRouter): Partial<ShortcutMatchContext> {
   const target = resolveThreadRouteTarget(router.state.matches.at(-1)?.params ?? {});
@@ -67,7 +68,7 @@ function readShortcutContext(router: AnyRouter): Partial<ShortcutMatchContext> {
   const rightPanels = useRightPanelStore.getState().byThreadKey;
 
   return {
-    ...readFocusScopeContext(),
+    ...readFocusScopes(),
     terminalFocus: isTerminalFocused(),
     terminalOpen: threadRef
       ? selectThreadTerminalUiState(

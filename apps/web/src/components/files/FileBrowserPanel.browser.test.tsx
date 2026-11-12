@@ -181,6 +181,31 @@ describe("FileBrowserPanel", () => {
     await vi.waitFor(() => expect(onOpenFile).toHaveBeenCalledTimes(1));
   });
 
+  it("opens a file through the latest onOpenFile, as the Project pane keeps its tree across threads", async () => {
+    setup();
+    const first = vi.fn();
+    const latest = vi.fn();
+    const panel = (onOpenFile: (relativePath: string) => void) => (
+      <FileBrowserPanel
+        environmentId={EnvironmentId.make("env-files")}
+        cwd="/repo"
+        projectName="repo"
+        selectedPath={null}
+        selectedPathRevealId={0}
+        onOpenFile={onOpenFile}
+        workspaceMutationId={null}
+      />
+    );
+    await using screen = await render(panel(first));
+    await vi.waitFor(() => expect(findTreeRow("README.md")).not.toBeNull());
+
+    await screen.rerender(panel(latest));
+    findTreeRow("README.md")!.click();
+
+    await vi.waitFor(() => expect(latest).toHaveBeenCalledExactlyOnceWith("README.md"));
+    expect(first).not.toHaveBeenCalled();
+  });
+
   it("in the Project pane, colours changes and follows the opened file without taking focus, and after a search", async () => {
     setup({ entries: projectEntries });
     const pane = projectPane({

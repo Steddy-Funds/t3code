@@ -3867,29 +3867,50 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
           path: "HEAD",
           insertions: 1,
           deletions: 0,
+          change: "modified",
         });
       }),
     );
 
-    it.effect("reports renamed and non-ASCII files by paths that can be committed", () =>
+    it.effect("reports each file's change and paths that can be committed", () =>
       Effect.gen(function* () {
         const cwd = yield* makeTmpDir();
         yield* initRepoWithCommit(cwd);
         yield* writeTextFile(cwd, "src/old.ts", "one\ntwo\nthree\n");
+        yield* writeTextFile(cwd, "src/gone.ts", "gone\n");
         yield* writeTextFile(cwd, "café notes.md", "draft\n");
+        yield* writeTextFile(cwd, "lib/before.ts", "moved in the worktree\n");
+        yield* writeTextFile(cwd, "lib/briefly.ts", "renamed, then deleted\n");
         yield* git(cwd, ["add", "."]);
         yield* git(cwd, ["commit", "-m", "add files"]);
+        // Renamed in the worktree only: `.R`, which needs the new path known to the index.
+        NodeFS.renameSync(
+          (yield* Path.Path).join(cwd, "lib", "before.ts"),
+          (yield* Path.Path).join(cwd, "lib", "after.ts"),
+        );
+        yield* git(cwd, ["add", "--intent-to-add", "lib/after.ts"]);
+        // Renamed in the index, then the new path deleted: `RD`, listed as the old path's deletion.
+        yield* git(cwd, ["mv", "lib/briefly.ts", "lib/gone-again.ts"]);
+        NodeFS.rmSync((yield* Path.Path).join(cwd, "lib", "gone-again.ts"));
         yield* git(cwd, ["mv", "src/old.ts", "src/new.ts"]);
         yield* writeTextFile(cwd, "src/new.ts", "one\ntwo\nthree\nfour\n");
         yield* writeTextFile(cwd, "café notes.md", "draft\nedit\n");
+        yield* writeTextFile(cwd, "src/staged.ts", "staged\n");
+        yield* git(cwd, ["add", "src/staged.ts"]);
+        NodeFS.rmSync((yield* Path.Path).join(cwd, "src", "gone.ts"));
         const driver = yield* GitVcsDriver.GitVcsDriver;
 
         const status = yield* driver.statusDetails(cwd);
 
         assert.deepEqual(status.workingTree.files, [
-          { path: "café notes.md", insertions: 1, deletions: 0 },
-          { path: "src/new.ts", insertions: 1, deletions: 0 },
-          { path: "src/old.ts", insertions: 0, deletions: 0 },
+          { path: "café notes.md", insertions: 1, deletions: 0, change: "modified" },
+          { path: "lib/after.ts", insertions: 0, deletions: 0, change: "renamed" },
+          { path: "lib/before.ts", insertions: 0, deletions: 0, change: "deleted" },
+          { path: "lib/briefly.ts", insertions: 0, deletions: 1, change: "deleted" },
+          { path: "src/gone.ts", insertions: 0, deletions: 1, change: "deleted" },
+          { path: "src/new.ts", insertions: 1, deletions: 0, change: "renamed" },
+          { path: "src/old.ts", insertions: 0, deletions: 0, change: "deleted" },
+          { path: "src/staged.ts", insertions: 1, deletions: 0, change: "added" },
         ]);
         yield* driver.commit(cwd, "Commit selection", "", {
           stage: { filePaths: status.workingTree.files.map((file) => file.path) },
@@ -3917,9 +3938,9 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
         const status = yield* driver.statusDetails(nestedCwd);
 
         assert.deepEqual(status.workingTree.files, [
-          { path: "nested/new.txt", insertions: 0, deletions: 0 },
-          { path: "nested/tracked.txt", insertions: 1, deletions: 0 },
-          { path: "README.md", insertions: 1, deletions: 0 },
+          { path: "nested/new.txt", insertions: 0, deletions: 0, change: "untracked" },
+          { path: "nested/tracked.txt", insertions: 1, deletions: 0, change: "modified" },
+          { path: "README.md", insertions: 1, deletions: 0, change: "modified" },
         ]);
         // The root is what the paths above are relative to, not the nested cwd, and it keeps
         // the trailing space so the resolved editor target is the file that exists.
@@ -3952,8 +3973,8 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
         const status = yield* driver.statusDetails(nestedCwd);
 
         assert.deepEqual(status.workingTree.files, [
-          { path: "nested/new.txt", insertions: 0, deletions: 0 },
-          { path: "nested/tracked.txt", insertions: 1, deletions: 0 },
+          { path: "nested/new.txt", insertions: 0, deletions: 0, change: "untracked" },
+          { path: "nested/tracked.txt", insertions: 1, deletions: 0, change: "modified" },
         ]);
         assert.equal(
           NodeFS.realpathSync.native(status.workingTree.rootPath!),

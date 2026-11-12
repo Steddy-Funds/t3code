@@ -8,14 +8,14 @@ import {
 import { useState } from "react";
 
 import { Button } from "~/components/ui/button";
+import { Input } from "~/components/ui/input";
+import { SHOWN_LIBRARY_ROOTS } from "~/components/project/externalLibraries";
 import { Popover, PopoverPopup, PopoverTrigger } from "~/components/ui/popover";
 import { cn } from "~/lib/utils";
 import { codeIntelEnvironment } from "~/state/codeIntel";
 import { serverEnvironment } from "~/state/server";
 import { useEnvironmentScope } from "~/state/session";
 import { useAtomCommand } from "~/state/use-atom-command";
-
-const SHOWN_LIBRARY_ROOTS = 4;
 
 const STATE_LABEL: Record<CodeServerStatus["state"], string | null> = {
   ready: null,
@@ -35,6 +35,54 @@ const STATE_DOT: Record<CodeServerStatus["state"], string> = {
   unavailable: "bg-destructive",
 };
 
+/** The virtualenv or interpreter set for this workspace; empty finds one from the files. */
+function PythonEnvironmentField(props: {
+  readonly saved: string;
+  readonly detected: string | undefined;
+  readonly busy: boolean;
+  readonly applying: boolean;
+  readonly onApply: (value: string) => void;
+}) {
+  const [draft, setDraft] = useState(props.saved);
+  return (
+    <form
+      className="flex flex-col gap-1"
+      onSubmit={(event) => {
+        event.preventDefault();
+        props.onApply(draft.trim());
+      }}
+    >
+      <label className="flex flex-col gap-1">
+        <span className="text-muted-foreground">Python environment</span>
+        <Input
+          size="compact"
+          value={draft}
+          placeholder={
+            props.saved ? "Find one from the project's files" : (props.detected ?? "None found")
+          }
+          spellCheck={false}
+          onChange={(event) => setDraft(event.target.value)}
+        />
+      </label>
+      <div className="flex items-center gap-2">
+        <span className="flex-1 text-2xs text-muted-foreground">
+          {props.saved
+            ? "Set here. Clear it to find one again."
+            : "Found from the project's files."}
+        </span>
+        <Button
+          type="submit"
+          variant="outline"
+          size="xs"
+          disabled={props.busy || draft.trim() === props.saved}
+        >
+          {props.applying ? "Applying…" : "Apply"}
+        </Button>
+      </div>
+    </form>
+  );
+}
+
 /** The language server behind the viewer: its state, and the way to fix it when it is down. */
 export function CodeIntelStatusChip(props: {
   readonly environmentId: EnvironmentId;
@@ -52,8 +100,13 @@ export function CodeIntelStatusChip(props: {
   const canInstall = useAtomValue(
     codeIntelEnvironment.installServer.permissionAtom(props.environmentId),
   );
-  const canTurnOn = useEnvironmentScope(props.environmentId, AuthSettingsWriteScope);
-  const [pending, setPending] = useState<"restart" | "install" | "turnOn" | null>(null);
+  const canWriteSettings = useEnvironmentScope(props.environmentId, AuthSettingsWriteScope);
+  const savedEnvironment =
+    useAtomValue(serverEnvironment.settingsValueAtom(props.environmentId))?.codeIntel
+      .pythonEnvironments[props.cwd] ?? "";
+  const [pending, setPending] = useState<"restart" | "install" | "turnOn" | "environment" | null>(
+    null,
+  );
   const [allLibraries, setAllLibraries] = useState(false);
   const stateLabel = turnedOff ? "off" : STATE_LABEL[server.state];
   const libraryRoots = allLibraries
@@ -77,6 +130,17 @@ export function CodeIntelStatusChip(props: {
   const run = async (action: keyof typeof actions) => {
     setPending(action);
     await actions[action]();
+    setPending(null);
+    props.onChanged();
+  };
+  // A running server keeps the environment it started with; a restart locates it again.
+  const applyEnvironment = async (environment: string) => {
+    setPending("environment");
+    const saved = await updateSettings({
+      environmentId: props.environmentId,
+      input: { patch: { codeIntel: { pythonEnvironments: { [props.cwd]: environment } } } },
+    });
+    if (saved._tag === "Success" && canRestart) await actions.restart();
     setPending(null);
     props.onChanged();
   };
@@ -113,11 +177,11 @@ export function CodeIntelStatusChip(props: {
           {turnedOff ? (
             <div className="flex items-center gap-2">
               <p className="flex-1 text-muted-foreground">
-                {canTurnOn
+                {canWriteSettings
                   ? "Code intelligence is turned off in this environment's settings."
                   : "Code intelligence is turned off in this environment's settings, and this connection can't change them."}
               </p>
-              {canTurnOn ? (
+              {canWriteSettings ? (
                 <Button
                   type="button"
                   size="xs"
@@ -138,6 +202,17 @@ export function CodeIntelStatusChip(props: {
               <code className="font-mono text-foreground">{server.interpreter.path}</code>
               {server.interpreter.version ? ` (${server.interpreter.version})` : null}
             </p>
+          ) : null}
+          {server.languageId === "python" && canWriteSettings && !turnedOff ? (
+            <PythonEnvironmentField
+              // Settings can load after the popover opens; a stale draft would unset them.
+              key={savedEnvironment}
+              saved={savedEnvironment}
+              detected={server.interpreter?.path}
+              busy={pending !== null}
+              applying={pending === "environment"}
+              onApply={(environment) => void applyEnvironment(environment)}
+            />
           ) : null}
           {server.libraryRoots.length > 0 ? (
             <div className="flex flex-col gap-0.5">

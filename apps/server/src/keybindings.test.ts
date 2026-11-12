@@ -284,6 +284,61 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
     }).pipe(Effect.provide(layerKeybindings())),
   );
 
+  it.effect.each<ReadonlyArray<KeybindingRule>>([
+    [],
+    [{ key: "mod+b", command: "chat.newLocal" }],
+    [{ key: "mod+b", command: "chat.newLocal", when: "diffFocus" }],
+  ])("adds the side-by-side diff's go to declaration below the sidebar's mod+b, under %j", (own) =>
+    Effect.gen(function* () {
+      const { keybindingsConfigPath } = yield* ServerConfig.ServerConfig;
+      const keybindings = yield* Keybindings.Keybindings;
+      const sidebar = { key: "mod+b", command: "sidebar.toggle" } as const;
+      const inCode = {
+        key: "mod+b",
+        command: "code.goToDeclaration",
+        when: "codeFocus && codeNavigation",
+      } as const;
+      yield* writeKeybindingsConfig(keybindingsConfigPath, [sidebar, inCode, ...own]);
+
+      yield* keybindings.syncDefaultKeybindingsOnStartup;
+      const persisted = yield* readKeybindingsConfig(keybindingsConfigPath);
+      assert.deepStrictEqual(
+        persisted.filter((entry) => entry.key === "mod+b"),
+        [
+          sidebar,
+          inCode,
+          { key: "mod+b", command: "code.goToDeclaration", when: "diffFocus && codeNavigation" },
+          ...own,
+        ],
+      );
+    }).pipe(Effect.provide(layerKeybindings())),
+  );
+
+  it.effect("gives a rebound go to declaration no side-by-side diff rule, for good", () =>
+    Effect.gen(function* () {
+      const { keybindingsConfigPath } = yield* ServerConfig.ServerConfig;
+      const keybindings = yield* Keybindings.Keybindings;
+      const sidebar = { key: "mod+b", command: "sidebar.toggle" } as const;
+      const rebound = {
+        key: "f12",
+        command: "code.goToDeclaration",
+        when: "codeFocus && codeNavigation",
+      } as const;
+      const declarationRules = Effect.map(readKeybindingsConfig(keybindingsConfigPath), (rules) =>
+        rules.filter((entry) => entry.command === "code.goToDeclaration"),
+      );
+
+      yield* writeKeybindingsConfig(keybindingsConfigPath, [sidebar, rebound]);
+      yield* keybindings.syncDefaultKeybindingsOnStartup;
+      assert.deepStrictEqual(yield* declarationRules, [rebound]);
+
+      const inCode = { ...rebound, key: "mod+b" } as const;
+      yield* writeKeybindingsConfig(keybindingsConfigPath, [sidebar, inCode]);
+      yield* keybindings.syncDefaultKeybindingsOnStartup;
+      assert.deepStrictEqual(yield* declarationRules, [inCode]);
+    }).pipe(Effect.provide(layerKeybindings())),
+  );
+
   it.effect("leaves a customized command without the late default", () =>
     Effect.gen(function* () {
       const { keybindingsConfigPath } = yield* ServerConfig.ServerConfig;
@@ -434,7 +489,11 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
       );
       const onModB = persisted.filter((rule) => rule.key === "mod+b").map((rule) => rule.command);
 
-      assert.deepStrictEqual(onModB, ["sidebar.toggle", "code.goToDeclaration"]);
+      assert.deepStrictEqual(onModB, [
+        "sidebar.toggle",
+        "code.goToDeclaration",
+        "code.goToDeclaration",
+      ]);
     }).pipe(Effect.provide(layerKeybindings())),
   );
 
@@ -484,14 +543,19 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
       const moved = { key: "mod+shift+y", command: "sidebar.toggle" } as const;
       const stock = { key: "mod+b", command: "sidebar.toggle" } as const;
       yield* keybindings.upsertKeybindingRule({ ...moved, replace: stock });
-      assert.deepStrictEqual(yield* onModB, ["code.goToDeclaration"]);
+      assert.deepStrictEqual(yield* onModB, ["code.goToDeclaration", "code.goToDeclaration"]);
       yield* keybindings.upsertKeybindingRule({ ...stock, replace: moved });
-      assert.deepStrictEqual(yield* onModB, ["sidebar.toggle", "code.goToDeclaration"]);
+      assert.deepStrictEqual(yield* onModB, [
+        "sidebar.toggle",
+        "code.goToDeclaration",
+        "code.goToDeclaration",
+      ]);
 
-      // A rule of the user's own still goes last, above both.
+      // A rule of the user's own still goes last, above all of them.
       yield* keybindings.upsertKeybindingRule({ key: "mod+b", command: "chat.newLocal" });
       assert.deepStrictEqual(yield* onModB, [
         "sidebar.toggle",
+        "code.goToDeclaration",
         "code.goToDeclaration",
         "chat.newLocal",
       ]);
@@ -507,15 +571,20 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
       const full = [...EXISTING_INSTALL_KEYBINDINGS, ...fillers];
       assert.deepStrictEqual(yield* syncExisting(full), full);
 
-      // Four free slots end between the two shortcuts of code.findUsages. Once one of a
+      // Five free slots end between the two shortcuts of code.findUsages. Once one of a
       // command's rules is in the file the sync leaves the command alone, so it waits whole.
-      const nearlyFull = full.slice(0, -4);
+      const nearlyFull = full.slice(0, -5);
       const added = (yield* syncExisting(nearlyFull)).filter(
         (rule) => !nearlyFull.some((entry) => isSameRule(entry, rule)),
       );
       assert.sameMembers(
         added.map((rule) => rule.command),
-        ["code.goToDeclaration", "code.goToTypeDeclaration", "code.goToImplementation"],
+        [
+          "code.goToDeclaration",
+          "code.goToDeclaration",
+          "code.goToTypeDeclaration",
+          "code.goToImplementation",
+        ],
       );
 
       const persisted = yield* syncExisting(EXISTING_INSTALL_KEYBINDINGS);

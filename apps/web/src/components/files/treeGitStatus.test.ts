@@ -21,12 +21,14 @@ const byPath = (entries: ReturnType<typeof treeGitStatus>) =>
   Object.fromEntries(entries.map((entry) => [entry.path, entry.status]));
 
 describe("treeGitStatus", () => {
-  it("colours each change from its line counts and whether it is still on disk", () => {
+  it("colours each change by the server's kind, or by line counts from older servers", () => {
     const entries: ProjectEntry[] = [
       { path: "src", kind: "directory" },
       { path: "src/edited.ts", kind: "file" },
       { path: "src/trimmed.ts", kind: "file" },
       { path: "src/new.ts", kind: "file" },
+      { path: "src/staged.ts", kind: "file" },
+      { path: "src/moved.ts", kind: "file" },
       { path: "dist", kind: "directory", ignored: true },
       { path: "fresh", kind: "directory" },
       { path: "fresh/a.ts", kind: "file" },
@@ -43,6 +45,9 @@ describe("treeGitStatus", () => {
         { path: "src/gone.ts", insertions: 0, deletions: 9 },
         { path: "fresh/", insertions: 0, deletions: 0 },
         { path: ".env", insertions: 1, deletions: 0 },
+        { path: "src/staged.ts", insertions: 4, deletions: 0, change: "added" },
+        { path: "src/moved.ts", insertions: 0, deletions: 0, change: "renamed" },
+        { path: "src/was.ts", insertions: 0, deletions: 0, change: "deleted" },
       ]),
     );
 
@@ -58,6 +63,9 @@ describe("treeGitStatus", () => {
       "fresh/deep/b.ts": "untracked",
       "fresh/cache.log": "ignored",
       ".env": "modified",
+      "src/staged.ts": "added",
+      "src/moved.ts": "renamed",
+      "src/was.ts": "deleted",
     });
   });
 

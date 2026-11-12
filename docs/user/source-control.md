@@ -20,6 +20,47 @@ commit links follow your **Open links in** setting; on web, when that opens a ne
 shows an **Open link** button. Command/Ctrl+Click always opens the link in your browser. Commit links follow the **Open pull requests in T3 Code**
 setting in **Settings → Diffs**.
 
+### Side-by-side diff
+
+On web and desktop, choose the side-by-side layout in the toolbar of the Diff pane or a pull
+request's **Code** tab, or **Side by side** in **Settings → Diffs → Diff layout**, to compare one
+file at a time as two whole files: the old version on the left, the new one on the right,
+scrolling together. Unchanged stretches fold; click a fold to open it.
+
+With the keyboard in a pane, `F7` and `Shift+F7` step through the changes. Past the last one, the
+next press opens the next file. `Cmd/Ctrl+F` finds in that pane. A selection, and `Cmd/Ctrl+A`,
+stay in one pane.
+
+In the Diff pane, `F4` or `Cmd/Ctrl+Down` opens the file at that line. `Cmd/Ctrl+click` a name, or
+put the caret on it and press `Cmd/Ctrl+B`, to go to its declaration as in an
+[open file](./code.md#code-navigation). That works on the file as it is on disk: on the old side,
+or in a turn's diff of a file changed since, choose **Open file** instead. A pull request's
+**Code** tab doesn't open files, and a comment there starts from lines picked in the gutter.
+
+A panel too narrow for two files shows your stacked or split layout until you widen or maximize
+it. A file over 1 MB offers **Show changed lines only**, and a connection that can't read files
+shows only the changed lines.
+
+### Comment on changes
+
+Select lines in a diff or in an open file, by dragging in the gutter or selecting text, then
+choose **+** in the gutter, or **Comment** in the side-by-side layout. Text you selected is quoted
+at the top of the comment.
+
+**Send** (`Cmd/Ctrl+Enter`) sends the comment to the thread's agent right away, as a message of its
+own; text in the composer stays where it is. **Add to message** (`Cmd/Ctrl+Shift+Enter`) adds it
+to your next message instead, and it shows on its lines until then. **Send N** in the Diff pane's
+toolbar sends every comment waiting in the message at once. If a send can't go through, for
+example while an approval waits, the comment stays in your message and a notice says why.
+
+### Agent review notes in the diff
+
+An agent's [review notes](./composer.md#review-notes-from-the-agent) show on their lines in the
+Diff pane, on the new file in the side-by-side layout. **N notes** in the toolbar steps through
+them and lists the ones the diff can't place. **Reply** sends your answer to the agent with the
+lines quoted. **Dismiss** hides a note in this browser or app; the notes list keeps it under
+**Dismissed**, with **Restore**.
+
 ## Connect an account
 
 Install Git and configure authentication on the machine running your T3 Code server. For a remote

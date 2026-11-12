@@ -3,6 +3,7 @@ import {
   MessageId,
   PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
   ProjectId,
+  RunId,
   ScheduledTask,
   ScheduledTaskError,
   ScheduledTaskId,
@@ -406,6 +407,14 @@ const BUILT_IN_TASKS: ReadonlyMap<string, NonNullable<ScheduledTask["builtIn"]>>
 /** Background runs of the built-in start at most this often; its row's last run start survives restarts. */
 const MACHINE_BUCKETS_COOLDOWN_MS = 6 * 60 * 60 * 1000;
 const MACHINE_BUCKETS_MIN_NEW_SHARE = 0.3;
+/** Run endings that leave nothing to resume. */
+const MACHINE_BUCKETS_DONE_STATUSES: ReadonlySet<string> = new Set([
+  "completed",
+  "failed",
+  "cancelled",
+]);
+/** How long a run's thread is watched for deletion; a longer run waits for the next sweep. */
+const MACHINE_BUCKETS_RUN_WAIT_MS = 2 * 60 * 60 * 1000;
 
 /** A container counts as one program; any other process by its name. */
 export const unownedProcessKey = (process: {
@@ -571,6 +580,7 @@ export const layer = Layer.effect(
       readonly threadId: ThreadId | null;
       readonly unowned: ReadonlySet<string> | null;
     }>({ threadId: null, unowned: null });
+    const serviceScope = yield* Effect.scope;
     // Notifications re-emit the full list; slow subscribers need only the newest dirty signal.
     const changesPubSub = yield* PubSub.sliding<void>(1);
     const dueTasks = DueHint.make();
@@ -935,6 +945,89 @@ export const layer = Layer.effect(
       return null;
     });
 
+    // A finished auto-buckets thread holds nothing to read, so it is deleted. Only a run that
+    // ended for good counts: an interrupted one may be a user's Stop or a load pause that resumes.
+    // A thread someone touched (pinned, archived, wrote in, opened a side chat or fork on) stays.
+    const deleteIdleMachineBucketsThread = Effect.fnUntraced(function* (threadId: ThreadId) {
+      const shell = yield* threadManagement.getThreadShell(threadId);
+      if (
+        shell === null ||
+        shell.deletedAt != null ||
+        shell.archivedAt != null ||
+        shell.tags?.includes(MACHINE_BUCKETS_THREAD_TAG) !== true ||
+        shell.lineage.parentThreadId !== null ||
+        !MACHINE_BUCKETS_DONE_STATUSES.has(shell.status) ||
+        shell.activeRunId !== null ||
+        shell.activityRunStatus != null ||
+        shell.loadPause != null ||
+        shell.limitRecovery != null ||
+        shell.pendingRuntimeRequest !== null ||
+        (shell.pendingBackgroundTasks?.length ?? 0) > 0 ||
+        shell.pinnedAt != null ||
+        shell.latestUserAuthoredMessageAt != null ||
+        !(yield* managedFolders.isScratchProject(shell.projectId))
+      ) {
+        return;
+      }
+      yield* threadManagement.dispatch({
+        type: "thread.delete",
+        commandId: CommandId.make(`${MACHINE_BUCKETS_TASK_ID}:cleanup:${threadId}`),
+        threadId,
+      });
+    });
+
+    // Runs after each run ends, before the next and at startup, so one left by a restart or
+    // a run that outlived the wait goes too.
+    const sweepMachineBucketsThreads = Effect.suspend(() =>
+      Effect.all([
+        threadManagement.getShellSnapshot({ location: "active" }),
+        // Deleting a thread deletes its archived side chats too, so they count as children.
+        threadManagement.getShellSnapshot({ location: "archive" }),
+      ]),
+    ).pipe(
+      Effect.flatMap(([{ threads }, archived]) => {
+        const withChildren = new Set(
+          [...threads, ...archived.threads].flatMap(({ lineage }) =>
+            lineage.parentThreadId === null ? [] : [lineage.parentThreadId],
+          ),
+        );
+        return Effect.forEach(
+          threads.filter(
+            (thread) =>
+              thread.tags?.includes(MACHINE_BUCKETS_THREAD_TAG) === true &&
+              !withChildren.has(thread.id),
+          ),
+          (thread) =>
+            deleteIdleMachineBucketsThread(thread.id).pipe(
+              Effect.catchCause((cause) =>
+                Effect.logWarning("Could not delete a finished auto-buckets thread.", {
+                  threadId: thread.id,
+                  cause,
+                }),
+              ),
+            ),
+          { discard: true },
+        );
+      }),
+      Effect.catchCause((cause) =>
+        Effect.logWarning("Could not sweep finished auto-buckets threads.", cause),
+      ),
+    );
+
+    const sweepWhenRunEnds = (projectId: ProjectId, threadId: ThreadId, runId: RunId) =>
+      threadManagement
+        .waitForThread({ projectId, threadId, runId, timeoutMs: MACHINE_BUCKETS_RUN_WAIT_MS })
+        .pipe(
+          Effect.flatMap(({ timedOut }) => (timedOut ? Effect.void : sweepMachineBucketsThreads)),
+          Effect.catchCause((cause) =>
+            Effect.logWarning("Could not wait for an auto-buckets run to end.", {
+              threadId,
+              cause,
+            }),
+          ),
+          Effect.forkIn(serviceScope),
+        );
+
     // The run already started the thread, so a failed write only costs the binding.
     // A thread deleted before the binding landed already ran its task cleanup, so apply that
     // cleanup here; a later deletion finds the binding. An unconfirmed lookup keeps the binding.
@@ -1110,7 +1203,8 @@ export const layer = Layer.effect(
           creationSource: active.creationSource,
         };
         // Bucket writes are `auto` only from a tagged thread, so the tags land before the prompt.
-        const launchMachineBuckets = managedFolders.ensureScratchProject.pipe(
+        const launchMachineBuckets = sweepMachineBucketsThreads.pipe(
+          Effect.andThen(managedFolders.ensureScratchProject),
           Effect.flatMap(({ projectId }) =>
             threadLaunch
               .launch({ ...launchInput, projectId })
@@ -1131,18 +1225,20 @@ export const layer = Layer.effect(
             ),
           ),
           Effect.tap(({ projectId, threadId }) =>
-            threadManagement.sendToThread({
-              projectId,
-              commandId: CommandId.make(`${commandId}:message`),
-              threadId,
-              messageId,
-              scheduledTaskId: active.id,
-              text: prompt,
-              attachments: [],
-              mode: "queue",
-              createdBy: active.createdBy,
-              creationSource: active.creationSource,
-            }),
+            threadManagement
+              .sendToThread({
+                projectId,
+                commandId: CommandId.make(`${commandId}:message`),
+                threadId,
+                messageId,
+                scheduledTaskId: active.id,
+                text: prompt,
+                attachments: [],
+                mode: "queue",
+                createdBy: active.createdBy,
+                creationSource: active.creationSource,
+              })
+              .pipe(Effect.flatMap(({ run }) => sweepWhenRunEnds(projectId, threadId, run.id))),
           ),
           Effect.map(({ threadId }) => threadId),
         );
@@ -2136,8 +2232,6 @@ export const layer = Layer.effect(
       });
     });
 
-    const serviceScope = yield* Effect.scope;
-
     const releaseFailedDelivery = Effect.fn("ScheduledTaskService.releaseFailedDelivery")(
       function* (deliveryId: string) {
         yield* releaseReplay(deliveryId);
@@ -2758,6 +2852,9 @@ export const layer = Layer.effect(
       );
     });
     yield* scheduler.register("webhook-coalescing", dispatchPending());
+
+    // Threads left from runs before a restart.
+    yield* Effect.forkIn(sweepMachineBucketsThreads, serviceScope);
 
     return ScheduledTaskService.of({
       list,

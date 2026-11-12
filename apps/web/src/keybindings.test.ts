@@ -1306,6 +1306,9 @@ describe("defaults merged into a server's rules", () => {
       userCtrl: { key: "ctrl+1", command: "thread.pin" },
       userOnB: { key: "mod+b", command: "chat.newLocal" },
       userMetaB: { key: "meta+b", command: "thread.pin" },
+      backAlt: DEFAULT_KEYBINDINGS.find(({ key }) => key === "mod+alt+arrowleft")!,
+      back: DEFAULT_KEYBINDINGS.find(({ key }) => key === "mod+[")!,
+      userOnBracket: { key: "mod+[", command: "chat.newLocal" },
     } satisfies Record<string, KeybindingRule>).map(([name, rule]) => [
       name,
       compileResolvedKeybindingsConfig([rule])[0]!,
@@ -1341,6 +1344,11 @@ describe("defaults merged into a server's rules", () => {
       missing: "sidebar declaration",
       placed: "sidebar declaration jump user picker",
     },
+    // It also goes below its own command's earlier defaults, which would otherwise name it.
+    { config: "backAlt", missing: "back", placed: "backAlt back" },
+    { config: "backAlt userOnBracket", missing: "back", placed: "backAlt back userOnBracket" },
+    // Which command a key runs comes before which shortcut names a command.
+    { config: "userOnBracket backAlt", missing: "back", placed: "back userOnBracket backAlt" },
   ])("places $missing into [$config] as [$placed]", ({ config, missing, placed }) => {
     const named = (names: string) =>
       names
@@ -1371,6 +1379,34 @@ describe("defaults merged into a server's rules", () => {
       "projectPane.toggle",
     );
     assert.strictEqual(resolveIn(merged, "mod+1", { isDesktop: true }), "thread.jump.1");
+  });
+
+  // Settings' "Reset to default" saves one default back into a config that holds the rest.
+  it("puts every default back where a fresh config has it", () => {
+    const shortcutOf = ({ shortcut }: ResolvedKeybindingsConfig[number]) =>
+      [
+        shortcut.key,
+        shortcut.modKey || shortcut.metaKey || shortcut.ctrlKey,
+        shortcut.shiftKey,
+        shortcut.altKey,
+      ].join("|");
+    for (const [index, rule] of DEFAULT_RESOLVED_KEYBINDINGS.entries()) {
+      const restored = insertMissingDefaultKeybindings(
+        DEFAULT_RESOLVED_KEYBINDINGS.toSpliced(index, 1),
+        [rule],
+        (entry) => entry,
+      );
+      for (const sameGroup of [
+        (entry: ResolvedKeybindingsConfig[number]) => entry.command === rule.command,
+        (entry: ResolvedKeybindingsConfig[number]) => shortcutOf(entry) === shortcutOf(rule),
+      ]) {
+        assert.deepStrictEqual(
+          restored.filter(sameGroup),
+          DEFAULT_RESOLVED_KEYBINDINGS.filter(sameGroup),
+          `${rule.command} on ${shortcutOf(rule)}`,
+        );
+      }
+    }
   });
 
   it("puts a default the server lacks below the later defaults on its shortcut", () => {

@@ -65,5 +65,11 @@ export function symbolKindLabel(kind: CodeSymbolKind): string {
 
 export function SymbolKindIcon(props: { readonly kind: CodeSymbolKind }) {
   const Icon = KIND_ICONS[props.kind];
-  return <Icon aria-label={KIND_LABELS[props.kind]} className={ITEM_ICON_CLASS} />;
+  return (
+    <Icon
+      aria-label={KIND_LABELS[props.kind]}
+      className={ITEM_ICON_CLASS}
+      data-symbol-kind={props.kind}
+    />
+  );
 }

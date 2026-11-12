@@ -176,6 +176,7 @@ export function useCodeNavigation(options: CodeNavigationOptions) {
   const linkRef = useRef<CodeWordHit | null>(null);
   const modifierRef = useRef(false);
   const pressRef = useRef<CodeWordHit | null>(null);
+  const keepPopupFocusRef = useRef(false);
   const targetRef = useRef<PaintedRanges | null>(null);
   const usagesRef = useRef<PaintedRanges | null>(null);
   const requestRef = useRef<{ seq: number; controller: AbortController | null }>({
@@ -184,6 +185,12 @@ export function useCodeNavigation(options: CodeNavigationOptions) {
   });
   const [owner] = useState(() => ({}));
   const [popup, setPopup] = useState<CodePopup | null>(null);
+  const [hasEditor, setHasEditor] = useState(false);
+  // Stable, so the editor options that hand it the editor never change and never re-attach it.
+  const [setEditor] = useState(() => (editor: CodeEditorHandle | null) => {
+    editorRef.current = editor;
+    setHasEditor(editor !== null);
+  });
 
   const currentText = () =>
     path === null
@@ -242,9 +249,17 @@ export function useCodeNavigation(options: CodeNavigationOptions) {
   const hint = (position: CodePosition | null, message: string) =>
     setPopup({ kind: "hint", anchor: anchorAt(position), message });
 
+  // Pierre's editor takes focus a frame later. Until then the viewer holds it, so a popup
+  // that closes under the keyboard never drops focus to the page and on to the composer.
+  const holdFocus = () => {
+    const surface = surfaceRef.current;
+    if (surface && !surface.contains(document.activeElement))
+      surface.focus({ preventScroll: true });
+  };
+
   const focusViewer = () => {
-    if (editorRef.current) editorRef.current.focus();
-    else surfaceRef.current?.focus({ preventScroll: true });
+    holdFocus();
+    editorRef.current?.focus();
   };
 
   // A reveal waits for this viewer to show its file, and for the editor when the file is editable.
@@ -262,7 +277,7 @@ export function useCodeNavigation(options: CodeNavigationOptions) {
     const { start } = reveal.range;
     cursorRef.current = start;
     // Opening a result with Cmd+Enter keeps the list, and the keyboard, where they are.
-    if (isInsideCodePopup(document.activeElement)) return;
+    if (keepPopupFocusRef.current && isInsideCodePopup(document.activeElement)) return;
     if (editorRef.current) {
       editorRef.current.focus({ lineNumber: start.line + 1, character: start.character });
     } else {
@@ -521,6 +536,8 @@ export function useCodeNavigation(options: CodeNavigationOptions) {
       return false;
     }
     event.preventDefault();
+    // The editor's own Escape would also clear its selection and drop focus.
+    event.stopPropagation();
     return true;
   });
 
@@ -678,10 +695,10 @@ export function useCodeNavigation(options: CodeNavigationOptions) {
     applyReveal();
   };
 
-  const setEditor = (editor: CodeEditorHandle | null) => {
-    editorRef.current = editor;
-    if (editor !== null) applyReveal();
-  };
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- a reveal that waited for Pierre's editor applies once the editor attaches
+  useEffect(() => {
+    if (hasEditor) revealSoon();
+  }, [hasEditor]);
 
   const closePopup = (restoreFocus: boolean) => {
     setPopup(null);
@@ -689,11 +706,17 @@ export function useCodeNavigation(options: CodeNavigationOptions) {
   };
 
   const openLocation = (location: CodeLocation, keepOpen: boolean) => {
-    if (!keepOpen) setPopup(null);
+    keepPopupFocusRef.current = keepOpen;
+    if (!keepOpen) {
+      holdFocus();
+      setPopup(null);
+    }
     navigateToCodeLocation(threadRef, location);
   };
 
   const goToPosition = (position: CodePosition) => {
+    keepPopupFocusRef.current = false;
+    holdFocus();
     setPopup(null);
     if (path === null) return;
     navigateToCodeLocation(threadRef, {

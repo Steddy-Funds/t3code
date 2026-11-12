@@ -1577,7 +1577,7 @@ export default function DiffPanel({
                       onNoteRevealed={() => setSideBySideNoteReveal(null)}
                       onNoteUnplaced={() => {
                         setSideBySideNoteReveal(null);
-                        reviewNotes.toolbar?.onListOpenChange(true);
+                        reviewNotes.onNoteUnplaced();
                       }}
                       files={shownFileEntries.map(({ fileDiff, fileKey }) => ({
                         fileDiff,

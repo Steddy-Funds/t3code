@@ -1006,10 +1006,14 @@ describe("LanguageServerPool", () => {
               from,
             );
 
-            const rows = (yield* Effect.flatMap(CodeIntel.CodeIntel, (c) => c.status({ cwd })))
-              .servers;
+            const codeIntel = yield* CodeIntel.CodeIntel;
+            const off = yield* codeIntel.status({ cwd });
+            const rows = off.servers;
+            // An older client reads the rows alone: they still say why nothing answers.
+            expect(off.enabled).toBe(false);
             expect(rows.map((row) => row.state)).toEqual(["unavailable", "unavailable"]);
             expect(rows[0]!.message).toContain("turned off");
+            expect((yield* codeIntel.restart({ cwd })).enabled).toBe(false);
             expect(live.some(isAlive)).toBe(false);
             expect(s.heldWatchers()).toBe(0);
             const refused = yield* hoverAt(cwd).pipe(Effect.flip);
@@ -1021,6 +1025,7 @@ describe("LanguageServerPool", () => {
             expect(startedPids(s.record)).toHaveLength(2);
 
             yield* s.setEnabled(true);
+            expect((yield* codeIntel.status({ cwd })).enabled).toBe(true);
             expect((yield* hoverAt(cwd)).markdown).toBe("**greet**");
             expect(startedPids(s.record)).toHaveLength(3);
           }),

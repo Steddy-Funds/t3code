@@ -37,6 +37,7 @@ const watchedWaiters = [];
 let buffer = Buffer.alloc(0);
 let nextRequestId = 1;
 let loading = false;
+let anyOpened = false;
 
 const send = (message) => {
   const body = Buffer.from(JSON.stringify({ jsonrpc: "2.0", ...message }), "utf8");
@@ -144,15 +145,23 @@ const occurrencesOf = (name, uris) => {
 const symbolsOf = (uri) => {
   const symbols = [];
   let currentClass;
-  (textOf(uri) ?? "").split("\n").forEach((line, index) => {
+  const lines = (textOf(uri) ?? "").split("\n");
+  lines.forEach((line, index) => {
     const declared = /^(\s*)(def|class)\s+([A-Za-z_][A-Za-z0-9_]*)/.exec(line);
     if (!declared) return;
     const [, indent, keyword, name] = declared;
+    // ty's workspace symbol range: decorator lines above, the keyword, the line.
+    let first = index;
+    while (first > 0 && /^\s*@/.test(lines[first - 1])) first -= 1;
     const symbol = {
       name,
       kind: keyword === "class" ? 5 : indent.length > 0 && currentClass ? 6 : 12,
       range: range(index, 0, line.length),
       selectionRange: range(index, line.indexOf(name), name.length),
+      declarationRange: {
+        start: { line: first, character: indent.length },
+        end: { line: index, character: line.length },
+      },
       children: [],
     };
     if (keyword === "class") {
@@ -237,6 +246,8 @@ const answer = (method, params) => {
     case "textDocument/documentSymbol":
       return symbolsOf(params.textDocument.uri);
     case "workspace/symbol": {
+      // tsc: a project loads when one of its files opens, and nothing answers before.
+      if (flag("symbols-after-open") && !anyOpened) return [];
       const symbols = allUris().flatMap((uri) =>
         symbolsOf(uri)
           .flatMap((symbol) => [symbol, ...symbol.children])
@@ -244,7 +255,10 @@ const answer = (method, params) => {
           .map((symbol) => ({
             name: symbol.name,
             kind: symbol.kind,
-            location: { uri, range: symbol.selectionRange },
+            location: {
+              uri,
+              range: flag("symbol-full-range") ? symbol.declarationRange : symbol.selectionRange,
+            },
           })),
       );
       symbols.sort((left, right) => left.name.localeCompare(right.name));
@@ -292,6 +306,7 @@ const notified = (method, params) => {
       return;
     case "textDocument/didOpen":
       openDocuments.set(params.textDocument.uri, params.textDocument.text);
+      anyOpened = true;
       if (flag("progress") && !loading) {
         loading = true;
         send({

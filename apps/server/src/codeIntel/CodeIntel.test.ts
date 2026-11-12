@@ -1052,6 +1052,19 @@ describe("CodeIntel", () => {
         ["apps/web/main.ts", "packages/ui/index.ts"],
       ],
       [
+        "a package whose importer may load only its built output, with room left",
+        {
+          "apps/web/package.json": '{ "name": "web", "dependencies": { "ui": "*" } }\n',
+          "apps/web/tsconfig.json": "{}\n",
+          "apps/web/main.ts": ALPHA,
+          "packages/ui/package.json": '{ "name": "ui", "exports": "./dist/index.js" }\n',
+          "packages/ui/tsconfig.json": '{ "include": ["src"] }\n',
+          "packages/ui/src/button.ts": ALPHA,
+        },
+        [],
+        ["apps/web/main.ts", "packages/ui/src/button.ts"],
+      ],
+      [
         "the declaration file of a project with no other",
         { "tsconfig.json": '{ "include": ["src"] }\n', "src/types.d.ts": ALPHA },
         [],

@@ -22,6 +22,7 @@ const RIGHT_PANEL_KINDS = [
   "pull-request",
   "pull-requests",
   "side-chat",
+  "machine",
 ] as const;
 export type RightPanelKind = (typeof RIGHT_PANEL_KINDS)[number];
 
@@ -76,7 +77,14 @@ export type RightPanelSurface =
       detailTab?: PullRequestDetailTab;
     }
   | { id: "pull-requests"; kind: "pull-requests" }
-  | { id: `side-chat:${string}`; kind: "side-chat"; threadId: ThreadId };
+  | { id: `side-chat:${string}`; kind: "side-chat"; threadId: ThreadId }
+  | {
+      id: `machine:${string}`;
+      kind: "machine";
+      environmentId: EnvironmentId;
+      /** Thread details opens the tab on one thread's lineage; every other opener clears it. */
+      focusThreadId?: ThreadId;
+    };
 
 const RIGHT_PANEL_STORAGE_KEY = "t3code:right-panel-state:v2";
 const RIGHT_PANEL_STORAGE_VERSION = 14;
@@ -123,9 +131,14 @@ interface RightPanelStoreState {
   ) => boolean;
   open: (
     ref: ScopedThreadRef,
-    kind: Exclude<RightPanelKind, "file" | "terminal" | "pull-request" | "side-chat">,
+    kind: Exclude<RightPanelKind, "file" | "terminal" | "pull-request" | "side-chat" | "machine">,
   ) => void;
   openSideChat: (ref: ScopedThreadRef, threadId: ThreadId) => void;
+  openMachine: (
+    ref: ScopedThreadRef,
+    environmentId: EnvironmentId,
+    focusThreadId?: ThreadId,
+  ) => void;
   openDevice: (ref: ScopedThreadRef, target: DeviceTabTarget, automatic?: boolean) => void;
   renameDevice: (ref: ScopedThreadRef, surfaceId: string, title: string) => void;
   openBrowser: (ref: ScopedThreadRef, tabId: string | null) => void;
@@ -185,7 +198,7 @@ interface RightPanelStoreState {
   toggleVisibility: (ref: ScopedThreadRef) => void;
   toggle: (
     ref: ScopedThreadRef,
-    kind: Exclude<RightPanelKind, "file" | "terminal" | "pull-request" | "side-chat">,
+    kind: Exclude<RightPanelKind, "file" | "terminal" | "pull-request" | "side-chat" | "machine">,
   ) => void;
   setThreadPanelOpen: (
     ref: ScopedThreadRef,
@@ -208,7 +221,10 @@ const DEFAULT_THREAD_PANEL_VISIBILITY: ThreadPanelVisibility = {
 };
 
 const singletonSurface = (
-  kind: Exclude<RightPanelKind, "file" | "preview" | "terminal" | "pull-request" | "side-chat">,
+  kind: Exclude<
+    RightPanelKind,
+    "file" | "preview" | "terminal" | "pull-request" | "side-chat" | "machine"
+  >,
 ): RightPanelSurface => {
   switch (kind) {
     case "diff":
@@ -255,6 +271,23 @@ const terminalSurface = (terminalId: string): RightPanelSurface => ({
   terminalIds: [terminalId],
   activeTerminalId: terminalId,
 });
+
+export type MachineSurface = Extract<RightPanelSurface, { kind: "machine" }>;
+
+export function machineSurface(
+  environmentId: EnvironmentId,
+  focusThreadId?: ThreadId,
+): MachineSurface {
+  return {
+    id: `machine:${environmentId}`,
+    kind: "machine",
+    environmentId,
+    ...(focusThreadId === undefined ? {} : { focusThreadId }),
+  };
+}
+
+const isRightPanelKind = (kind: unknown): kind is RightPanelKind =>
+  RIGHT_PANEL_KINDS.some((known) => known === kind);
 
 export type PullRequestSurface = Extract<RightPanelSurface, { kind: "pull-request" }>;
 
@@ -488,8 +521,23 @@ export function migratePersistedRightPanelState(persistedState: unknown): {
                 threadState && typeof threadState === "object" ? threadState : null;
               const surfaces = Array.isArray(validThreadState?.surfaces)
                 ? validThreadState.surfaces.flatMap<RightPanelSurface>((surface) => {
-                    const kind = (surface as { kind?: string }).kind;
-                    if (kind === "plan" || kind === "agents") return [];
+                    // Older or newer builds may persist kinds this one can't render.
+                    if (!isRightPanelKind((surface as { kind?: unknown } | null)?.kind)) return [];
+                    if (surface.kind === "machine") {
+                      const environmentId: unknown = surface.environmentId;
+                      const focusThreadId: unknown = surface.focusThreadId;
+                      return typeof environmentId === "string" &&
+                        surface.id === `machine:${environmentId}`
+                        ? [
+                            machineSurface(
+                              EnvironmentId.make(environmentId),
+                              typeof focusThreadId === "string"
+                                ? ThreadId.make(focusThreadId)
+                                : undefined,
+                            ),
+                          ]
+                        : [];
+                    }
                     if (
                       (surface.kind === "file" || surface.kind === "files") &&
                       "folderTrail" in surface &&
@@ -717,6 +765,22 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
                 ),
               },
               existing ?? surface,
+            );
+          }),
+        ),
+      openMachine: (ref, environmentId, focusThreadId) =>
+        set((state) =>
+          userAction(state, scopedThreadKey(ref), (current) => {
+            // Replaced in place, so a new opener's focus (or none) wins over the open tab's.
+            const surface = machineSurface(environmentId, focusThreadId);
+            return upsertSurface(
+              {
+                ...current,
+                surfaces: current.surfaces.map((entry) =>
+                  entry.id === surface.id ? surface : entry,
+                ),
+              },
+              surface,
             );
           }),
         ),
@@ -1176,6 +1240,12 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
         ),
       }),
       migrate: migratePersistedRightPanelState,
+      // Validated on every load, not just on a version bump, so a surface kind this build
+      // doesn't know (or a malformed one) never reaches the panel.
+      merge: (persisted, current) => ({
+        ...current,
+        ...migratePersistedRightPanelState(persisted),
+      }),
     },
   ),
 );

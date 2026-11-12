@@ -487,6 +487,7 @@ function MachineRow(props: {
       onPress={props.onPress}
     >
       <EnvironmentMachineSymbol
+        environmentId={machine.environmentId}
         kind={machine.machine}
         size={18}
         tintColorClassName="accent-foreground-muted"

@@ -6,6 +6,7 @@ import * as Schema from "effect/Schema";
 import * as SchemaAST from "effect/SchemaAST";
 import * as SchemaGetter from "effect/SchemaGetter";
 import * as SchemaTransformation from "effect/SchemaTransformation";
+import * as Struct from "effect/Struct";
 
 import {
   CheckpointId,
@@ -52,6 +53,8 @@ import {
 import {
   OrchestrationGetFullThreadDiffInput,
   OrchestrationGetFullThreadDiffResult,
+  OrchestrationGetTurnDiffFileContentsInput,
+  OrchestrationGetTurnDiffFileContentsResult,
   OrchestrationGetTurnDiffInput,
   OrchestrationGetTurnDiffResult,
 } from "./checkpointDiff.ts";
@@ -136,6 +139,8 @@ export const OrchestrationV2DelegatedFrom = Schema.Struct({
   environmentId: EnvironmentId,
   threadId: ThreadId,
   title: Schema.String,
+  /** The parent's autonomy at launch; thread.create turns it into the child's tag. */
+  autonomy: Schema.optional(Schema.Literals(["on", "off"])),
 });
 export type OrchestrationV2DelegatedFrom = typeof OrchestrationV2DelegatedFrom.Type;
 
@@ -421,6 +426,32 @@ export const OrchestrationV2LimitRecoveryUpdate = Schema.Struct({
 );
 export type OrchestrationV2LimitRecoveryUpdate = typeof OrchestrationV2LimitRecoveryUpdate.Type;
 
+export const OrchestrationV2LoadPausedContainer = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  dockerHost: Schema.optional(TrimmedNonEmptyString),
+});
+export type OrchestrationV2LoadPausedContainer = typeof OrchestrationV2LoadPausedContainer.Type;
+
+export const OrchestrationV2LoadPauseReason = Schema.Struct({
+  // A MachineVerdictRule; a string so a rule added later still decodes on older servers.
+  rule: Schema.String,
+  value: Schema.Finite,
+  threshold: Schema.Finite,
+  /** This thread's owned plus claimed share of the machine's load, 0 to 1. */
+  shareOfLoad: Schema.Finite,
+});
+export type OrchestrationV2LoadPauseReason = typeof OrchestrationV2LoadPauseReason.Type;
+
+/** Set and cleared only by the server; `runId` is the run the pause interrupted. */
+export const OrchestrationV2LoadPause = Schema.Struct({
+  runId: RunId,
+  episodeId: TrimmedNonEmptyString,
+  pausedAt: IsoDateTime,
+  reason: OrchestrationV2LoadPauseReason,
+  containersPaused: Schema.Array(OrchestrationV2LoadPausedContainer),
+});
+export type OrchestrationV2LoadPause = typeof OrchestrationV2LoadPause.Type;
+
 /**
  * `score` is an open count that halves every two weeks, as of `openedAt`.
  * `picks` stores lowercase palette queries, newest first.
@@ -485,6 +516,7 @@ export const OrchestrationV2AppThread = Schema.Struct({
   snoozedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   lastSnoozeWakeAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   limitRecovery: Schema.optional(Schema.NullOr(OrchestrationV2LimitRecovery)),
+  loadPause: Schema.optional(Schema.NullOr(OrchestrationV2LoadPause)),
   guestShare: Schema.optional(Schema.NullOr(ThreadGuestShare)),
   pinnedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   autoSettleDisabledAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
@@ -700,6 +732,8 @@ export const OrchestrationV2Run = Schema.Struct({
   contextHandoffId: Schema.NullOr(ContextHandoffId),
   restartContinuationOfRunId: Schema.optional(RunId),
   usageLimitContinuationOfRunId: Schema.optional(RunId),
+  /** This queued run never started: its message was delivered in that run's turn. */
+  mergedIntoRunId: Schema.optional(RunId),
   delegatedTaskId: Schema.optional(NodeId),
   workStartedAt: Schema.optional(Schema.DateTimeUtc),
   restartCancelledBackgroundWork: Schema.optional(
@@ -1618,6 +1652,35 @@ const OrchestrationV2LinkRequestFields = {
   failure: Schema.optional(Schema.String),
 } as const;
 
+/** The MCP tool an agent leaves a review note with, and the `toolName` of the note's record. */
+export const REVIEW_NOTE_TOOL_NAME = "flag_for_review";
+
+/**
+ * Only the server's `review_note.record` writes turn item ids under this prefix
+ * (provider items are `turn-item:provider:…`), so clients key the note card on it.
+ */
+export const REVIEW_NOTE_TURN_ITEM_PREFIX = "turn-item:review-note:";
+
+/**
+ * A note an agent left on lines it changed: the `input` of a `dynamic_tool`
+ * item, so a build without notes reads it as a plain tool row.
+ */
+export const OrchestrationV2ReviewNote = Schema.Struct({
+  kind: Schema.Literal("review_note"),
+  path: TrimmedNonEmptyString,
+  startLine: PositiveInt,
+  endLine: PositiveInt,
+  note: Schema.String,
+  question: Schema.optional(Schema.String),
+  /** The lines at call time, cut to whole lines when `excerptTruncated`. */
+  excerpt: Schema.String,
+  excerptTruncated: Schema.Boolean,
+  /** The git blob id of the file at call time. */
+  contentRevision: TrimmedNonEmptyString,
+  runId: RunId,
+});
+export type OrchestrationV2ReviewNote = typeof OrchestrationV2ReviewNote.Type;
+
 export const OrchestrationV2TurnItem = Schema.Union([
   Schema.Struct({
     ...OrchestrationV2TurnItemBaseFields,
@@ -2140,6 +2203,8 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
   /** Excludes wakes and agent messages that advance latestUserMessageAt through the user role. */
   latestUserAuthoredMessageAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   hasActionableProposedPlan: Schema.Boolean,
+  /** Provider-native subagents that finished. They have no runs, so clients count their turns here. Omitted at 0. */
+  nativeSubagentsCompleted: Schema.optional(NonNegativeInt),
   pendingBackgroundTasks: Schema.optional(Schema.Array(OrchestrationV2PendingBackgroundTask)).pipe(
     Schema.withDecodingDefault(Effect.succeed([])),
   ),
@@ -2158,6 +2223,7 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
   snoozedUntil: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   snoozedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   limitRecovery: Schema.optional(Schema.NullOr(OrchestrationV2LimitRecovery)),
+  loadPause: Schema.optional(Schema.NullOr(OrchestrationV2LoadPause)),
   pinnedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   autoSettleDisabledAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   pinOrderKey: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
@@ -3091,6 +3157,8 @@ export const OrchestrationV2Command = Schema.Union([
     /** Reject unless no message or run has landed on this thread. */
     expectedEmpty: Schema.optional(Schema.Boolean),
     limitRecovery: Schema.optional(Schema.NullOr(OrchestrationV2LimitRecoveryUpdate)),
+    /** The only load-pause change a client can make: resume now. */
+    loadPause: Schema.optional(Schema.Struct({ resume: Schema.Literal(true) })),
     /** Link (object) or unlink (null) a pull request; absent leaves it unchanged. */
     linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
   }),
@@ -3203,6 +3271,7 @@ export const OrchestrationV2Command = Schema.Union([
     usageLimitContinuationOfRunId: Schema.optional(RunId),
     manualContinuationOfRunId: Schema.optional(RunId),
     usageLimitRecoveryRequestId: Schema.optional(CommandId),
+    loadPauseContinuationOfRunId: Schema.optional(RunId),
     deliveryIntent: Schema.optional(Schema.Literals(["auto", "steer", "restart"])),
     delegatedCompletion: Schema.optional(
       Schema.Struct({
@@ -3412,6 +3481,22 @@ export type OrchestrationV2Command = typeof OrchestrationV2Command.Type;
 
 // Excluded from dispatchCommand so only the server can send these.
 const OrchestrationV2InternalCommand = Schema.Union([
+  Schema.Struct({
+    type: Schema.Literal("thread.load-pause.set"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    runId: RunId,
+    episodeId: TrimmedNonEmptyString,
+    reason: OrchestrationV2LoadPauseReason,
+    containersPaused: Schema.Array(OrchestrationV2LoadPausedContainer),
+  }),
+  /** Idempotent; with `episodeId` it clears only that episode. */
+  Schema.Struct({
+    type: Schema.Literal("thread.load-pause.clear"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    episodeId: Schema.optional(TrimmedNonEmptyString),
+  }),
   // Guest share commands the server issues after checking T3 Connect and the guest token.
   Schema.Struct({
     type: Schema.Literal("thread.guest-share.open"),
@@ -3605,6 +3690,19 @@ const OrchestrationV2InternalCommand = Schema.Union([
       }),
     ),
   }),
+  /**
+   * Records a review note an agent left. Internal so the note card's item can
+   * only come from the server, whatever a provider records for the tool call.
+   */
+  Schema.Struct({
+    type: Schema.Literal("review_note.record"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    runId: RunId,
+    nodeId: NodeId,
+    turnItemId: TurnItemId,
+    note: OrchestrationV2ReviewNote.mapFields(Struct.omit(["kind", "runId"])),
+  }),
 ]);
 export type OrchestrationV2InternalCommand = typeof OrchestrationV2InternalCommand.Type;
 
@@ -3613,6 +3711,7 @@ export type OrchestrationV2ServerCommand = OrchestrationV2Command | Orchestratio
 export const ORCHESTRATION_V2_WS_METHODS = {
   dispatchCommand: "orchestration.dispatchCommand",
   getTurnDiff: "orchestration.getTurnDiff",
+  getTurnDiffFileContents: "orchestration.getTurnDiffFileContents",
   getFullThreadDiff: "orchestration.getFullThreadDiff",
   searchThreads: "orchestration.searchThreads",
   searchThread: "orchestration.searchThread",
@@ -4283,6 +4382,10 @@ export const OrchestrationV2RpcSchemas = {
   getTurnDiff: {
     input: OrchestrationGetTurnDiffInput,
     output: OrchestrationGetTurnDiffResult,
+  },
+  getTurnDiffFileContents: {
+    input: OrchestrationGetTurnDiffFileContentsInput,
+    output: OrchestrationGetTurnDiffFileContentsResult,
   },
   getFullThreadDiff: {
     input: OrchestrationGetFullThreadDiffInput,

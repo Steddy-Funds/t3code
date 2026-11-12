@@ -81,6 +81,10 @@ import {
   type ThreadListV2Status,
 } from "./threadListV2";
 import { QueuedMessageIcon } from "./queued-message-icon";
+import {
+  resolveThreadWait,
+  type ThreadWaitReason,
+} from "@t3tools/client-runtime/state/thread-relationships";
 import { shouldRecedeThreadRow } from "./thread-row-emphasis";
 import { ThreadSearchMatchExcerpt } from "./thread-search-match";
 import { useScaledTextRole } from "../settings/appearance/useScaledTextRole";
@@ -138,6 +142,25 @@ const STATUS_LABEL_BY_STATUS: Partial<Record<ThreadListV2Status, StatusLabel>> =
     iconTintClassName: "accent-warning-foreground",
   },
 };
+const WAIT_LABEL_BY_REASON: Partial<Record<ThreadWaitReason, Omit<StatusLabel, "label">>> = {
+  // Its agents are still working, so it reads as working rather than idle.
+  agents: {
+    icon: "person.2",
+    className: "text-adaptive-sky-600-400",
+    iconTintClassName: "accent-adaptive-sky-600-400",
+  },
+  pull_request: { ...STATUS_LABEL_BY_STATUS.waiting!, icon: PullRequestGlyph.pullRequest },
+};
+
+function waitingStatusLabel(thread: Parameters<typeof resolveThreadWait>[0]): StatusLabel {
+  const wait = resolveThreadWait(thread);
+  return {
+    ...STATUS_LABEL_BY_STATUS.waiting!,
+    ...WAIT_LABEL_BY_REASON[wait.reason],
+    label: wait.label,
+  };
+}
+
 const DONE_STATUS_LABEL: StatusLabel = {
   label: "Done",
   icon: "checkmark.circle",
@@ -531,6 +554,7 @@ export const ThreadListV2PendingRow = memo(function ThreadListV2PendingRow(props
         <View className="mt-1 flex-row items-center gap-1" style={{ paddingLeft: titleTextInset }}>
           {props.environmentLabel && props.environmentMachine ? (
             <EnvironmentMachineSymbol
+              environmentId={pendingTask.environmentId}
               kind={props.environmentMachine}
               size={machineIconSize}
               tintColorClassName={
@@ -773,7 +797,9 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   const statusLabel =
     (status === "working" && workingLabel !== undefined && thread.goal?.status === "active"
       ? { ...workingLabel, label: "Goal" }
-      : workingLabel) ?? (isUnread ? DONE_STATUS_LABEL : undefined);
+      : status === "waiting"
+        ? waitingStatusLabel(thread)
+        : workingLabel) ?? (isUnread ? DONE_STATUS_LABEL : undefined);
   const recede = shouldRecedeThreadRow({ status, selected });
   const isRegeneratingTitle = thread.titleRegeneration != null;
   const rowAccessibilityLabel = `${thread.title}${providerNameLabel ? `, ${providerNameLabel}` : ""}${props.hasQueuedMessages ? ", messages queued to send" : ""}${isRegeneratingTitle ? ", regenerating title" : ""}`;
@@ -1308,6 +1334,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
           <View className="min-w-0 flex-1 flex-row items-center gap-1">
             {props.environmentMachine ? (
               <EnvironmentMachineSymbol
+                environmentId={thread.environmentId}
                 kind={props.environmentMachine}
                 size={machineIconSize}
                 tintColorClassName={

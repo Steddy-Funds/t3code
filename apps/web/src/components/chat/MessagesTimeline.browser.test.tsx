@@ -52,6 +52,16 @@ import {
   decodeComposerContextFragment,
 } from "@t3tools/shared/composerContextClipboard";
 import { collectComposerContextReferences } from "@t3tools/shared/composerContextReferences";
+import { resolveAssistantCitationRange } from "~/lib/assistantTextSelection";
+import { type MessageReply } from "../../composer-logic";
+import {
+  SWIPE_REPLY_COOLDOWN_MS,
+  SWIPE_REPLY_RELEASE_IDLE_MS,
+  SWIPE_REPLY_SECTION_HOLD_MS,
+} from "./messageSwipeReply.logic";
+import { serializeAssistantCitation } from "@t3tools/shared/assistantCitations";
+import { DEFAULT_CLIENT_SETTINGS, type ClientSettings } from "@t3tools/contracts/settings";
+import { __setClientSettingsForTests } from "../../hooks/useSettings";
 
 const environmentQuery = vi.hoisted(() => ({
   error: "Pull request not found",
@@ -879,6 +889,339 @@ describe("MessagesTimeline citations", () => {
     );
     await expect.element(screen.getByText("the cited answer")).toBeVisible();
     expect(toast).not.toHaveBeenCalled();
+  });
+});
+
+// Unresolved in tests, so it renders as its unavailable box, which carries the same Markdown.
+const SHOT = "/work/shots/phone-after.png";
+
+describe("MessagesTimeline replies", () => {
+  function setup(swipeReplyTarget: ClientSettings["swipeReplyTarget"]) {
+    __setClientSettingsForTests({ ...DEFAULT_CLIENT_SETTINGS, swipeReplyTarget });
+    onTestFinished(() => __setClientSettingsForTests(DEFAULT_CLIENT_SETTINGS));
+  }
+  type Modifiers = Pick<WheelEventInit, "ctrlKey" | "metaKey" | "altKey" | "clientY">;
+  // Fingers still on the trackpad.
+  const drag = (
+    target: Element,
+    deltas: ReadonlyArray<readonly [number, number]>,
+    modifiers: Modifiers = {},
+  ) =>
+    act(() => {
+      for (const [deltaX, deltaY] of deltas) {
+        target.dispatchEvent(
+          new WheelEvent("wheel", { deltaX, deltaY, bubbles: true, ...modifiers }),
+        );
+      }
+    });
+  // The fingers lift when the wheel events stop.
+  const lift = () => act(() => vi.advanceTimersByTime(SWIPE_REPLY_RELEASE_IDLE_MS));
+  async function swipe(
+    target: Element,
+    deltas: ReadonlyArray<readonly [number, number]>,
+    modifiers: Modifiers = {},
+  ) {
+    await drag(target, deltas, modifiers);
+    await lift();
+  }
+  const highlighted = () => [...document.querySelectorAll("[data-swipe-reply-section]")];
+  const moved = () => [...document.querySelectorAll("[data-swipe-reply-release]")];
+  const pause = () => act(() => vi.advanceTimersByTime(SWIPE_REPLY_COOLDOWN_MS));
+  const swipeRight = Array.from({ length: 8 }, () => [-10, 0] as const);
+
+  it("replies to the swiped message once the fingers lift past the threshold", async () => {
+    setup("message");
+    const onReplyToMessage = vi.fn((_reply: unknown) => true);
+    await using screen = await renderTimeline(
+      [
+        message("Rename the **flag**", {}, "user-1"),
+        message("Renamed it.\n\nAnything else?", { role: "assistant" }, "assistant-1"),
+      ],
+      { onReplyToMessage },
+    );
+    const textIn = (id: string) => {
+      const row = screen.container.querySelector(`[data-message-id="${id}"]`);
+      return row?.querySelector("p:last-of-type") ?? null;
+    };
+    await vi.waitFor(() => expect(textIn("assistant-1")).not.toBeNull());
+    using _timers = fakeTimers();
+
+    await swipe(textIn("user-1")!, [[0, 12], ...swipeRight]);
+    expect(onReplyToMessage).not.toHaveBeenCalled();
+    // A scroll that never moved the row leaves it alone when it ends.
+    expect(
+      screen.container.querySelector<HTMLElement>('[data-message-id="user-1"]')!.dataset
+        .swipeReplyRelease,
+    ).toBeUndefined();
+
+    await swipe(textIn("user-1")!, swipeRight);
+    expect(onReplyToMessage).toHaveBeenLastCalledWith({
+      kind: "quote",
+      text: "Rename the **flag**",
+    });
+    // Resting fingers released it; moving on is the same swipe and must not reply twice.
+    await swipe(textIn("user-1")!, swipeRight);
+    expect(onReplyToMessage).toHaveBeenCalledTimes(1);
+
+    await pause();
+    // A short flick's momentum carries it past the threshold, and it replies right away.
+    const flick = [-6, -12, -10, -8, -6.4, -5.1, -4.1, -3.3, -2.6, -2.1];
+    await act(() => {
+      for (const deltaX of flick) {
+        textIn("assistant-1")!.dispatchEvent(
+          new WheelEvent("wheel", { deltaX, deltaY: 0, bubbles: true }),
+        );
+      }
+    });
+    expect(onReplyToMessage).toHaveBeenLastCalledWith({
+      kind: "citation",
+      citation: expect.objectContaining({
+        messageId: "assistant-1",
+        text: expect.stringMatching(/^Renamed it\.\s+Anything else\?$/),
+        start: 0,
+      }),
+    });
+    expect(onReplyToMessage).toHaveBeenCalledTimes(2);
+
+    await pause();
+    // Chromium reports a pinch as a vertical wheel with Control; Control over a swipe still replies.
+    const pinch = [
+      [0, -12],
+      [0, -14],
+    ] as const;
+    await swipe(textIn("user-1")!, pinch, { ctrlKey: true });
+    expect(onReplyToMessage).toHaveBeenCalledTimes(2);
+    await swipe(textIn("user-1")!, swipeRight, { ctrlKey: true });
+    expect(onReplyToMessage).toHaveBeenCalledTimes(3);
+  });
+
+  it("waits for the desktop app to report the lift, however long the fingers rest", async () => {
+    setup("message");
+    const lift = { end: () => {} };
+    using _desktop = stubGlobal("desktopBridge", {
+      onTrackpadScrollBegin: () => () => {},
+      onTrackpadScrollEnd: (listener: () => void) => {
+        lift.end = listener;
+        return () => {};
+      },
+    });
+    const onReplyToMessage = vi.fn((_reply: unknown) => true);
+    await using screen = await renderTimeline([message("Rename the flag", {}, "user-1")], {
+      onReplyToMessage,
+    });
+    const find = () => screen.container.querySelector('[data-message-id="user-1"] p');
+    await vi.waitFor(() => expect(find()).not.toBeNull());
+    const text = find();
+    using _timers = fakeTimers();
+
+    await swipe(text!, swipeRight);
+    await act(() => vi.advanceTimersByTime(SWIPE_REPLY_COOLDOWN_MS));
+    expect(onReplyToMessage).not.toHaveBeenCalled();
+    await act(() => lift.end());
+    expect(onReplyToMessage).toHaveBeenCalledWith({ kind: "quote", text: "Rename the flag" });
+  });
+
+  it("in whole-message mode, narrows the reply to the Markdown section or list item under the pointer while Cmd is held", async () => {
+    setup("message");
+    using _mac = vi.spyOn(navigator, "platform", "get").mockReturnValue("MacIntel");
+    const onReplyToMessage = vi.fn((_reply: unknown) => true);
+    await using screen = await renderTimeline(
+      [
+        message(
+          `First idea.\n\n3. first step\n4. second step\n\nSecond idea. ${serializeAssistantCitation(CITATION_REQUEST.citation)}`,
+          {},
+          "user-1",
+        ),
+        message(
+          "# Plan\n\n- one\n- two\n  - nested\n\nDone.",
+          { role: "assistant" },
+          "assistant-1",
+        ),
+        message(`Shots: ![Phone, after](${SHOT}) ![Desktop](${SHOT})`, {}, "user-2"),
+        message(
+          `- Compare ![Before](${SHOT}) with ![After](${SHOT})`,
+          { role: "assistant" },
+          "assistant-2",
+        ),
+      ],
+      { onReplyToMessage },
+    );
+    const find = (id: string, selector: string) =>
+      screen.container.querySelector(`[data-message-id="${id}"] .chat-markdown > ${selector}`);
+    await vi.waitFor(() => expect(find("assistant-1", "ul")).not.toBeNull());
+    using _timers = fakeTimers();
+    const hold = async (key: "Meta" | "Alt", target: Element) => {
+      const modifier = key === "Meta" ? { metaKey: true } : { altKey: true };
+      await act(() => {
+        window.dispatchEvent(new KeyboardEvent("keydown", { key, ...modifier }));
+        vi.advanceTimersByTime(SWIPE_REPLY_SECTION_HOLD_MS);
+        target.dispatchEvent(new PointerEvent("pointermove", { bubbles: true, ...modifier }));
+      });
+    };
+    const source = screen.container.querySelector<HTMLElement>(
+      '[data-assistant-citation-source="assistant-1"]',
+    )!;
+    const words = (text: string | undefined) => text?.replace(/\s+/g, " ");
+    // Returns the cited text after checking the citation resolves to the same words.
+    const citeOnCmdSwipe = async (target: Element) => {
+      await pause();
+      await hold("Meta", target);
+      expect(highlighted()).toEqual([target]);
+      await swipe(target, swipeRight, { metaKey: true });
+      // Only the target springs back, not its list or the row.
+      expect(moved()).toEqual([target]);
+      const { citation } = onReplyToMessage.mock.lastCall![0] as Extract<
+        MessageReply,
+        { kind: "citation" }
+      >;
+      expect(words(resolveAssistantCitationRange(source, citation)?.toString())).toBe(
+        words(citation.text),
+      );
+      return words(citation.text);
+    };
+
+    const [one, two] = find("assistant-1", "ul")!.querySelectorAll(":scope > li");
+    const nested = two!.querySelector("li")!;
+    expect(await citeOnCmdSwipe(one!)).toBe("one");
+    expect(onReplyToMessage.mock.lastCall?.[0]).toMatchObject({
+      citation: { prefix: expect.stringMatching(/Plan\s+$/) },
+    });
+    expect(highlighted()).toEqual([]);
+    expect(await citeOnCmdSwipe(nested)).toBe("nested");
+    // The parent item's own text quotes it with its nested items.
+    expect(await citeOnCmdSwipe(two!)).toBe("two nested");
+    expect(await citeOnCmdSwipe(find("assistant-1", "p")!)).toBe("Done.");
+
+    await pause();
+    const step = find("user-1", "ol")!.querySelectorAll("li")[1]!;
+    await swipe(step, swipeRight, { metaKey: true });
+    expect(onReplyToMessage).toHaveBeenLastCalledWith({ kind: "quote", text: "4. second step" });
+    await pause();
+    await swipe(find("user-1", "p:last-child")!, swipeRight, { metaKey: true });
+    expect(onReplyToMessage).toHaveBeenLastCalledWith({ kind: "quote", text: "Second idea." });
+
+    // An image is its own section: only it is highlighted and moves, and it quotes as its Markdown.
+    const imageOnCmdSwipe = async (id: string, alt: string) => {
+      const image = screen.container.querySelector(
+        `[data-message-id="${id}"] [data-markdown-copy^="![${alt}]"]`,
+      )!;
+      await pause();
+      await hold("Meta", image);
+      expect(highlighted()).toEqual([image]);
+      await swipe(image, swipeRight, { metaKey: true });
+      expect(moved()).toEqual([image]);
+      return onReplyToMessage.mock.lastCall?.[0];
+    };
+    expect(await imageOnCmdSwipe("user-2", "Desktop")).toEqual({
+      kind: "quote",
+      text: `![Desktop](${SHOT})`,
+    });
+    // A citation cannot point at an image, so the provider gets its path and alt text.
+    expect(await imageOnCmdSwipe("assistant-2", "Before")).toEqual({
+      kind: "quote",
+      text: `![Before](${SHOT})`,
+    });
+
+    // Option no longer narrows: it shows nothing and replies to the whole message.
+    await pause();
+    await hold("Alt", step);
+    expect(highlighted()).toEqual([]);
+    await swipe(step, swipeRight, { altKey: true });
+    expect(onReplyToMessage).toHaveBeenLastCalledWith({
+      kind: "quote",
+      text: "First idea.\n\n3. first step\n4. second step\n\nSecond idea.",
+    });
+  });
+
+  it("by default, replies to the section under the pointer and Cmd to the whole message, highlighting only while swiping", async () => {
+    setup("section");
+    using _mac = vi.spyOn(navigator, "platform", "get").mockReturnValue("MacIntel");
+    const onReplyToMessage = vi.fn((_reply: unknown) => true);
+    await using screen = await renderTimeline(
+      [
+        message("First idea.\n\n3. first step\n4. second step", {}, "user-1"),
+        message("# Plan\n\n- one\n- two", { role: "assistant" }, "assistant-1"),
+        message(`Shots: ![Desktop](${SHOT})`, {}, "user-2"),
+      ],
+      { onReplyToMessage },
+    );
+    const find = (id: string, selector: string) =>
+      screen.container.querySelector(`[data-message-id="${id}"] .chat-markdown > ${selector}`);
+    await vi.waitFor(() => expect(find("assistant-1", "ul")).not.toBeNull());
+    using _timers = fakeTimers();
+    const one = find("assistant-1", "ul")!.querySelector("li")!;
+
+    // Neither hovering nor holding Cmd highlights anything.
+    await act(() => {
+      one.dispatchEvent(new PointerEvent("pointermove", { bubbles: true }));
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "Meta", metaKey: true }));
+      vi.advanceTimersByTime(SWIPE_REPLY_SECTION_HOLD_MS);
+      one.dispatchEvent(new PointerEvent("pointermove", { bubbles: true, metaKey: true }));
+    });
+    expect(highlighted()).toEqual([]);
+    await act(() => window.dispatchEvent(new KeyboardEvent("keyup", { key: "Meta" })));
+
+    // Still deciding the axis: nothing yet. Once the swipe tracks, the section lights up and moves.
+    await drag(one, [[-2, 0]]);
+    expect(highlighted()).toEqual([]);
+    await drag(one, swipeRight);
+    expect(highlighted()).toEqual([one]);
+    await lift();
+    expect(highlighted()).toEqual([]);
+    expect(moved()).toEqual([one]);
+    expect(onReplyToMessage.mock.lastCall?.[0]).toMatchObject({
+      kind: "citation",
+      citation: { text: "one" },
+    });
+
+    await pause();
+    const step = find("user-1", "ol")!.querySelectorAll("li")[1]!;
+    await swipe(step, swipeRight);
+    expect(onReplyToMessage).toHaveBeenLastCalledWith({ kind: "quote", text: "4. second step" });
+
+    await pause();
+    const image = screen.container.querySelector(
+      '[data-message-id="user-2"] [data-markdown-copy^="!["]',
+    )!;
+    await swipe(image, swipeRight);
+    expect(onReplyToMessage).toHaveBeenLastCalledWith({
+      kind: "quote",
+      text: `![Desktop](${SHOT})`,
+    });
+
+    // Cmd swipes the whole message, without a highlight.
+    const wholeMessage = { kind: "quote", text: "First idea.\n\n3. first step\n4. second step" };
+    await pause();
+    await drag(step, swipeRight, { metaKey: true });
+    expect(highlighted()).toEqual([]);
+    await lift();
+    expect(onReplyToMessage).toHaveBeenLastCalledWith(wholeMessage);
+    expect(moved()).toEqual([screen.container.querySelector('[data-message-id="user-1"]')]);
+
+    // Outside any section, such as the row's padding, a plain swipe takes the nearest one.
+    await pause();
+    const row = screen.container.querySelector('[data-message-id="user-1"]')!;
+    await swipe(row, swipeRight, { clientY: row.getBoundingClientRect().bottom });
+    expect(onReplyToMessage).toHaveBeenLastCalledWith({ kind: "quote", text: "4. second step" });
+    await pause();
+    await swipe(row, swipeRight, { clientY: row.getBoundingClientRect().top });
+    expect(onReplyToMessage).toHaveBeenLastCalledWith({ kind: "quote", text: "First idea." });
+  });
+
+  it("off macOS, Meta does not turn a section swipe into a whole-message one", async () => {
+    setup("section");
+    using _linux = vi.spyOn(navigator, "platform", "get").mockReturnValue("Linux x86_64");
+    const onReplyToMessage = vi.fn((_reply: unknown) => true);
+    await using screen = await renderTimeline(
+      [message("First idea.\n\nSecond idea.", {}, "user-1")],
+      { onReplyToMessage },
+    );
+    const second = () =>
+      screen.container.querySelector('[data-message-id="user-1"] .chat-markdown > p:last-child');
+    await vi.waitFor(() => expect(second()).not.toBeNull());
+    using _timers = fakeTimers();
+    await swipe(second()!, swipeRight, { metaKey: true });
+    expect(onReplyToMessage).toHaveBeenLastCalledWith({ kind: "quote", text: "Second idea." });
   });
 });
 

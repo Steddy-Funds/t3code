@@ -5,12 +5,15 @@ import {
 } from "@t3tools/client-runtime/state/runtime";
 import type {
   EnvironmentId,
+  OrchestrationGetTurnDiffFileContentsInput,
+  OrchestrationGetTurnDiffFileContentsResult,
   PullRequestDiffFileContentsInput,
   PullRequestDiffFileContentsResult,
   PullRequestRef,
   ReviewDiffFileContentsInput,
   ReviewDiffFileContentsResult,
   ReviewDiffPreviewSourceKind,
+  ThreadId,
 } from "@t3tools/contracts";
 
 import { resolveFileDiffPath } from "./diffRendering";
@@ -30,6 +33,19 @@ interface PullRequestDiffFileContentsSource {
   readonly commit: string | null;
   readonly cacheKey: string;
 }
+
+interface TurnDiffFileContentsSource {
+  readonly environmentId: EnvironmentId;
+  readonly threadId: ThreadId;
+  readonly fromTurnCount: number;
+  readonly toTurnCount: number;
+  readonly cacheKey: string;
+}
+
+type GetTurnDiffFileContents<E> = (request: {
+  readonly environmentId: EnvironmentId;
+  readonly input: OrchestrationGetTurnDiffFileContentsInput;
+}) => Promise<AtomCommandResult<OrchestrationGetTurnDiffFileContentsResult, E>>;
 
 type GetDiffFileContents<E> = (request: {
   readonly environmentId: EnvironmentId;
@@ -118,4 +134,45 @@ export function createPullRequestDiffFileContentsLoader<E>(
     }
     return result.value;
   }, source.cacheKey);
+}
+
+/** Whole files of one turn range, read from its checkpoints. */
+export function createTurnDiffFileContentsLoader<E>(
+  getTurnDiffFileContents: GetTurnDiffFileContents<E>,
+  source: TurnDiffFileContentsSource,
+): FileDiffContentsLoader {
+  return createDiffFileContentsLoader(async ({ oldPath, newPath }) => {
+    const result = await getTurnDiffFileContents({
+      environmentId: source.environmentId,
+      input: {
+        threadId: source.threadId,
+        fromTurnCount: source.fromTurnCount,
+        toTurnCount: source.toTurnCount,
+        path: newPath,
+        ...(oldPath === newPath ? {} : { previousPath: oldPath }),
+      },
+    });
+    if (result._tag !== "Success") {
+      throw squashAtomCommandFailure(result);
+    }
+    return result.value;
+  }, source.cacheKey);
+}
+
+export type DiffFileContentsFailure = "binary" | "too-large" | "failed";
+
+/**
+ * Why a contents loader failed, as far as it tells. The turn loader names its reason; the git
+ * and pull request loaders report a size or binary refusal only in their error's text.
+ */
+export function classifyDiffFileContentsFailure(error: unknown): DiffFileContentsFailure {
+  if (typeof error !== "object" || error === null) return "failed";
+  const { _tag: tag, reason, detail } = error as Record<string, unknown>;
+  if (tag === "OrchestrationGetTurnDiffFileContentsError") {
+    return reason === "binary" ? "binary" : reason === "too_large" ? "too-large" : "failed";
+  }
+  if (tag === "VcsProcessOutputLimitError") return "too-large";
+  if (typeof detail !== "string") return "failed";
+  if (detail.includes("binary file")) return "binary";
+  return detail.includes("1 MB") ? "too-large" : "failed";
 }

@@ -6,6 +6,7 @@ import {
   AuthSettingsWriteScope,
   DEFAULT_SERVER_SETTINGS,
   ProviderDriverKind,
+  ORCHESTRATION_V2_WS_METHODS,
   ProviderInstanceId,
   SecretProviderId,
   ThreadId,
@@ -14,6 +15,8 @@ import {
   AuthSourceControlWriteScope,
   AuthTerminalReadScope,
   AuthTerminalOperateScope,
+  type CodeIntelError,
+  type EnvironmentAuthorizationError,
   WS_METHODS,
   WsRpcGroup,
 } from "@t3tools/contracts";
@@ -66,6 +69,16 @@ describe("RPC authorization scopes", () => {
     ]) {
       expect(requiredScopeForRpcMethod(method)).toBe(AuthTerminalOperateScope);
     }
+  });
+
+  it("lets any reader see the machine verdict but keeps process tables behind diagnostics", () => {
+    expect(requiredScopeForRpcMethod(WS_METHODS.subscribeMachine)).toBe(AuthOrchestrationReadScope);
+    expect(requiredScopeForRpcMethod(WS_METHODS.serverGetThreadResources)).toBe(
+      AuthOrchestrationReadScope,
+    );
+    expect(requiredScopeForRpcMethod(WS_METHODS.subscribeMachineProcesses)).toBe(
+      AuthDiagnosticsReadScope,
+    );
   });
 
   it("lets thread readers observe and refresh checkout branches", () => {
@@ -138,6 +151,53 @@ describe("RPC scope middleware", () => {
     }).pipe(Effect.scoped),
   );
 });
+
+it.effect.each([
+  { scopes: [], missing: AuthOrchestrationReadScope },
+  { scopes: [AuthOrchestrationReadScope], missing: AuthFilesystemReadScope },
+  { scopes: [AuthFilesystemReadScope], missing: AuthOrchestrationReadScope },
+  { scopes: [AuthOrchestrationReadScope, AuthFilesystemReadScope], missing: undefined },
+])("turn diff file contents with scopes [$scopes] misses $missing", ({ scopes, missing }) =>
+  Effect.gen(function* () {
+    const method = ORCHESTRATION_V2_WS_METHODS.getTurnDiffFileContents;
+    const group = WsRpcGroup.omit(
+      ...[...WsRpcGroup.requests.keys()].filter(
+        (tag): tag is Exclude<keyof typeof RPC_REQUIRED_SCOPES, typeof method> => tag !== method,
+      ),
+    );
+    let handled = 0;
+    const client = yield* RpcTest.makeClient(group).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          group.toLayerHandler(method, () =>
+            Effect.sync(() => {
+              handled++;
+              return { oldContents: "", newContents: "" };
+            }),
+          ),
+          RpcAuthorization.layer(scopes),
+        ),
+      ),
+    );
+    const result = yield* client[method]({
+      threadId: ThreadId.make("thread"),
+      fromTurnCount: 0,
+      toTurnCount: 1,
+      path: "file.txt",
+    }).pipe(Effect.exit);
+
+    if (missing === undefined) {
+      expect(result._tag).toBe("Success");
+      expect(handled).toBe(1);
+    } else {
+      expect(yield* Effect.flip(result)).toMatchObject({
+        _tag: "EnvironmentAuthorizationError",
+        requiredPermission: missing,
+      });
+      expect(handled).toBe(0);
+    }
+  }).pipe(Effect.scoped),
+);
 
 it.effect.each([WS_METHODS.subscribeVcsBranch, WS_METHODS.subscribeVcsStatus] as const)(
   "enforces read permission on stream %s",
@@ -468,3 +528,113 @@ it.effect("denies manual cleanup before the handler without settings permission"
     expect(handled).toBe(false);
   }).pipe(Effect.scoped),
 );
+
+describe("code intelligence scopes", () => {
+  const document = { cwd: "/repo", path: "app.py" };
+  const position = { line: 0, character: 0 };
+  const readCalls = {
+    [WS_METHODS.codeIntelStatus]: { cwd: "/repo" },
+    [WS_METHODS.codeIntelDefinition]: { document, position, kind: "definition" },
+    [WS_METHODS.codeIntelReferences]: { document, position, includeDeclaration: true, limit: 10 },
+    [WS_METHODS.codeIntelDocumentHighlights]: { document, position },
+    [WS_METHODS.codeIntelHover]: { document, position },
+    [WS_METHODS.codeIntelDocumentSymbols]: { document },
+    [WS_METHODS.codeIntelWorkspaceSymbols]: { cwd: "/repo", query: "greet", limit: 10 },
+    [WS_METHODS.codeIntelSemanticTokens]: { document },
+    [WS_METHODS.codeIntelRestart]: { cwd: "/repo" },
+  } as const;
+
+  it("asks filesystem read scope for every read and for restart, and settings write to install", () => {
+    for (const method of Object.keys(readCalls) as Array<keyof typeof readCalls>) {
+      expect(requiredScopeForRpcMethod(method)).toBe(AuthFilesystemReadScope);
+    }
+    expect(requiredScopeForRpcMethod(WS_METHODS.codeIntelInstallServer)).toBe(
+      AuthSettingsWriteScope,
+    );
+  });
+
+  it.effect("denies each call before its handler without filesystem read scope", () =>
+    Effect.gen(function* () {
+      let handled = 0;
+      const method = (tag: keyof typeof readCalls) => tag;
+      for (const tag of Object.keys(readCalls) as Array<keyof typeof readCalls>) {
+        const group = WsRpcGroup.omit(
+          ...[...WsRpcGroup.requests.keys()].filter(
+            (other): other is Exclude<keyof typeof RPC_REQUIRED_SCOPES, typeof tag> =>
+              other !== tag,
+          ),
+        );
+        const client = yield* RpcTest.makeClient(group).pipe(
+          Effect.provide(
+            Layer.mergeAll(
+              group.toLayerHandler(tag, () =>
+                Effect.sync(() => {
+                  handled++;
+                  return {} as never;
+                }),
+              ),
+              RpcAuthorization.layer([AuthOrchestrationReadScope, AuthSettingsWriteScope]),
+            ),
+          ),
+        );
+        const call = client[method(tag)] as (
+          input: unknown,
+        ) => Effect.Effect<object, EnvironmentAuthorizationError | CodeIntelError>;
+        expect(yield* call(readCalls[tag]).pipe(Effect.flip)).toMatchObject({
+          requiredPermission: AuthFilesystemReadScope,
+        });
+      }
+      expect(handled).toBe(0);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("denies installing a server before the handler without settings write scope", () =>
+    Effect.gen(function* () {
+      const group = WsRpcGroup.omit(
+        ...[...WsRpcGroup.requests.keys()].filter(
+          (
+            tag,
+          ): tag is Exclude<
+            keyof typeof RPC_REQUIRED_SCOPES,
+            typeof WS_METHODS.codeIntelInstallServer
+          > => tag !== WS_METHODS.codeIntelInstallServer,
+        ),
+      );
+      let handled = 0;
+      const client = yield* RpcTest.makeClient(group).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            group.toLayerHandler(WS_METHODS.codeIntelInstallServer, () =>
+              Effect.sync(() => {
+                handled++;
+                return { state: "stopped" as const };
+              }),
+            ),
+            RpcAuthorization.layer([AuthOrchestrationReadScope, AuthFilesystemReadScope]),
+          ),
+        ),
+      );
+
+      expect(
+        yield* client[WS_METHODS.codeIntelInstallServer]({ languageId: "python" }).pipe(
+          Effect.flip,
+        ),
+      ).toMatchObject({ requiredPermission: AuthSettingsWriteScope });
+      expect(handled).toBe(0);
+
+      const allowed = yield* RpcTest.makeClient(group).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            group.toLayerHandler(WS_METHODS.codeIntelInstallServer, () =>
+              Effect.succeed({ state: "stopped" as const }),
+            ),
+            RpcAuthorization.layer([AuthSettingsWriteScope]),
+          ),
+        ),
+      );
+      expect(yield* allowed[WS_METHODS.codeIntelInstallServer]({ languageId: "python" })).toEqual({
+        state: "stopped",
+      });
+    }).pipe(Effect.scoped),
+  );
+});

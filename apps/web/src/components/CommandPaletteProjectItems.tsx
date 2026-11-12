@@ -61,6 +61,7 @@ export function buildProjectSearchItems(input: ProjectItemsInput) {
         <span className="truncate">{metadata.environmentLabels.join(" · ")}</span>
       ) : (
         <ProjectLocationDescription
+          environmentId={project.environmentId}
           location={input.locationByEnvironmentId.get(project.environmentId)}
           workspaceRoot={project.workspaceRoot}
         />
@@ -89,6 +90,7 @@ export function buildNewThreadInProjectItems(
     },
     renderDescription: (project) => (
       <ProjectLocationDescription
+        environmentId={project.environmentId}
         location={input.locationByEnvironmentId.get(project.environmentId)}
         workspaceRoot={project.workspaceRoot}
         current={input.currentProjectKey === `${project.environmentId}:${project.id}`}
@@ -101,6 +103,7 @@ export function buildNewThreadInProjectItems(
 }
 
 function ProjectLocationDescription(props: {
+  readonly environmentId: EnvironmentId;
   readonly location: CommandPaletteProjectLocation | undefined;
   readonly workspaceRoot: string;
   readonly current?: boolean;
@@ -119,6 +122,7 @@ function ProjectLocationDescription(props: {
           <EnvironmentMachineIcon
             aria-hidden
             kind={location.machine}
+            environmentId={props.environmentId}
             className={COMMAND_PALETTE_META_ICON_CLASS}
           />
         ) : null}

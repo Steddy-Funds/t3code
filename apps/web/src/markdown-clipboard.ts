@@ -143,9 +143,12 @@ function serializeListItem(
   ].join("\n");
 }
 
+const listStart = (list: Element) => Number.parseInt(list.getAttribute("start") ?? "1", 10) || 1;
+const listItems = (list: Element) => [...list.children].filter((child) => child.tagName === "LI");
+
 function serializeList(list: Element, ordered: boolean, inTableCell: boolean): string {
-  const start = Number.parseInt(list.getAttribute("start") ?? "1", 10) || 1;
-  const items = [...list.children].filter((child) => child.tagName === "LI");
+  const start = listStart(list);
+  const items = listItems(list);
   if (items.length === 0) return "";
   return `${items.map((item, index) => serializeListItem(item, ordered, start + index, inTableCell)).join("\n")}\n\n`;
 }
@@ -333,6 +336,26 @@ export function serializeRenderedMarkdownFragment(container: Node): string {
   const codeBlock = soleCodeBlock(container);
   if (codeBlock) return (codeBlock.textContent ?? "").replace(/\n$/, "");
   return tidyMarkdown(serializeChildren(container));
+}
+
+/** A list item as a one-item list of its own kind, keeping its number. */
+function soleItemList(item: Element, list: Element): Element {
+  const copy = list.cloneNode(false) as Element;
+  copy.setAttribute("start", String(listStart(list) + listItems(list).indexOf(item)));
+  copy.append(item.cloneNode(true));
+  return copy;
+}
+
+/** One rendered block as Markdown. Unlike a copied fragment, a lone code block keeps its fence. */
+export function serializeRenderedMarkdownBlock(block: Element): string {
+  const list = block.parentElement;
+  const fragment = block.ownerDocument.createDocumentFragment();
+  fragment.append(
+    block.tagName === "LI" && (list?.tagName === "UL" || list?.tagName === "OL")
+      ? soleItemList(block, list)
+      : block.cloneNode(true),
+  );
+  return tidyMarkdown(serializeChildren(fragment));
 }
 
 export function serializeTableElementToMarkdown(table: Element): string {

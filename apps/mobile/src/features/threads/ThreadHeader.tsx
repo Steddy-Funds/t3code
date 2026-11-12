@@ -1,4 +1,6 @@
+import { EnvironmentId } from "@t3tools/contracts";
 import { AppBar } from "../../components/ui/AppBar";
+import { useMachineHeaderAction } from "../../components/machineResources/useMachineHeaderAction";
 import type { AppBarAction, AppBarMenu } from "../../components/ui/AppBar.types";
 import {
   useAdaptiveWorkspaceLayout,
@@ -27,8 +29,9 @@ export function ThreadHeader(props: {
   const { panes } = useWorkspacePaneState();
   const gitMenu = useThreadGitMenuDefinition(props.gitControls);
   const terminalMenu = threadTerminalMenu(props.gitControls);
+  const machine = useMachineHeaderAction(EnvironmentId.make(props.gitControls.environmentId));
   const filesVisible = props.inspectorMode === "files" && panes.auxiliaryPaneVisible;
-  const actions: AppBarAction[] = props.hasThreadCwd
+  const fileActions: AppBarAction[] = props.hasThreadCwd
     ? [
         {
           accessibilityLabel: filesVisible ? "Close files" : "Open files",
@@ -40,26 +43,30 @@ export function ThreadHeader(props: {
         },
       ]
     : [];
+  const actions = machine.action ? [machine.action, ...fileActions] : fileActions;
   const menus = [gitMenu, terminalMenu].filter((menu): menu is AppBarMenu => menu !== null);
 
   return (
-    <AppBar
-      title={props.title}
-      subtitle={props.subtitle}
-      onBackToList={goBack}
-      onCompose={props.draft ? undefined : startNewTask}
-      backInSplitView={
-        props.onReturnToThread
-          ? {
-              accessibilityLabel: "Return to chat",
-              icon: "chevron.left",
-              onPress: props.onReturnToThread,
-            }
-          : undefined
-      }
-      actions={actions}
-      menus={menus}
-      hideBottomBorder
-    />
+    <>
+      <AppBar
+        title={props.title}
+        subtitle={props.subtitle}
+        onBackToList={goBack}
+        onCompose={props.draft ? undefined : startNewTask}
+        backInSplitView={
+          props.onReturnToThread
+            ? {
+                accessibilityLabel: "Return to chat",
+                icon: "chevron.left",
+                onPress: props.onReturnToThread,
+              }
+            : undefined
+        }
+        actions={actions}
+        menus={menus}
+        hideBottomBorder
+      />
+      {machine.sheet}
+    </>
   );
 }

@@ -5,8 +5,10 @@ import {
   CheckpointScopeId,
   NodeId,
   PlanId,
+  ProviderDriverKind,
   ProviderInstanceId,
   ProviderThreadId,
+  REVIEW_NOTE_TOOL_NAME,
   RunAttemptId,
   RunId,
   ScheduledTaskId,
@@ -1288,6 +1290,46 @@ describe("HTML renders in the timeline", () => {
     ]);
   });
 
+  it("shows the server's review note through the turn fold, and a provider lookalike as work", () => {
+    const input = {
+      kind: "review_note",
+      path: "src/http/retry.ts",
+      startLine: 3,
+      endLine: 4,
+      note: "Every caller now retries **three** times. <b>Payments too.</b>",
+      excerpt: "export const DEFAULT_RETRIES = 3;",
+      excerptTruncated: false,
+      contentRevision: "a".repeat(40),
+      runId,
+    };
+    const note: OrchestrationV2TurnItem = {
+      ...base("turn-item:review-note:render-thread:n1", 2),
+      title: "Review note",
+      type: "dynamic_tool",
+      toolName: REVIEW_NOTE_TOOL_NAME,
+      input,
+    };
+    const entries = turn(note);
+    expect(entries.find((entry) => entry.kind === "review-note")).toMatchObject({
+      id: note.id,
+      runId,
+      note: { ...input, id: note.id },
+    });
+    expect(rowsFor(entries, false)).toEqual(["message", "turn-fold", "review-note", "message"]);
+
+    const lookalike = turn({
+      ...note,
+      id: TurnItemId.make("turn-item:provider:claude:native-item:toolu_1"),
+      nativeItemRef: {
+        driver: ProviderDriverKind.make("claude"),
+        nativeId: "toolu_1",
+        strength: "strong",
+      },
+    });
+    expect(lookalike.some((entry) => entry.kind === "review-note")).toBe(false);
+    expect(rowsFor(lookalike, false)).toEqual(["message", "turn-fold", "message"]);
+  });
+
   it("hosts a captured MCP app in place, from any provider's tool", () => {
     const mcpApp = {
       attachmentId: "render-thread-app-html",
@@ -1353,6 +1395,70 @@ describe("HTML renders in the timeline", () => {
   ] as const)("keeps a %s call in the work log", (_label, status, output) => {
     const entries = turn(renderCall(status, output));
     expect(entries.some((entry) => entry.kind === "html-render")).toBe(false);
+    expect(entries.find((entry) => entry.id === "render")?.kind).toBe("work");
+  });
+
+  const machineCard = {
+    environmentId: "environment:mac",
+    snapshot: { verdict: "ok", reason: null, totals: null },
+  };
+  const machineReadCall = (
+    status: OrchestrationV2TurnItem["status"],
+    output: unknown,
+    toolName = "mcp__t3-code__t3_machine_read",
+  ): OrchestrationV2TurnItem => ({
+    ...base("render", 2),
+    status,
+    type: "dynamic_tool",
+    toolName,
+    input: { show: true },
+    output,
+  });
+
+  it("shows a machine card in place, above the reply, through the turn fold", () => {
+    const entries = turn(
+      machineReadCall("completed", { structuredContent: { machineCard }, content: [] }),
+    );
+    expect(entries.find((entry) => entry.kind === "machine-card")).toMatchObject({
+      id: "render",
+      runId,
+      machineCard,
+    });
+    expect(rowsFor(entries, false)).toEqual(["message", "turn-fold", "machine-card", "message"]);
+  });
+
+  it("keeps a machine card visible when its superseded attempt folds", () => {
+    const attempt: OrchestrationV2RunAttempt = {
+      id: RunAttemptId.make("attempt-superseded"),
+      runId,
+      attemptOrdinal: 1,
+      rootNodeId: NodeId.make("node-superseded"),
+      providerInstanceId: ProviderInstanceId.make("codex-default"),
+      providerThreadId: ProviderThreadId.make("provider-thread"),
+      providerTurnId: null,
+      reason: "initial",
+      status: "superseded",
+      startedAt: at(0),
+      completedAt: at(4),
+    };
+    const entries = turn(machineReadCall("completed", { machineCard })).map((entry) =>
+      entry.kind === "message" && entry.message.role === "user" ? entry : { ...entry, attempt },
+    );
+    expect(rowsFor(entries, true)).toEqual([
+      "message",
+      "turn-fold",
+      "attempt-fold",
+      "machine-card",
+    ]);
+  });
+
+  it.each([
+    ["another server's tool", "completed", { machineCard }, "other.t3_machine_read"],
+    ["a failed read", "completed", { machineCard, isError: true }, undefined],
+    ["a running read", "running", { machineCard }, undefined],
+  ] as const)("keeps %s in the work log", (_label, status, output, toolName) => {
+    const entries = turn(machineReadCall(status, output, toolName));
+    expect(entries.some((entry) => entry.kind === "machine-card")).toBe(false);
     expect(entries.find((entry) => entry.id === "render")?.kind).toBe("work");
   });
 });

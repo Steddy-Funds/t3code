@@ -1,5 +1,5 @@
 import { Pressable } from "react-native";
-import type { EnvironmentMachineKind } from "@t3tools/contracts";
+import type { EnvironmentId, EnvironmentMachineKind } from "@t3tools/contracts";
 import type { EnvironmentConnectionPhase } from "@t3tools/client-runtime/connection";
 import { EnvironmentMachineSymbol } from "../../components/EnvironmentMachineSymbol";
 import { AppText as Text } from "../../components/ui/AppText";
@@ -8,6 +8,7 @@ import { SymbolView } from "../../components/ui/AppSymbol";
 import { ConnectionStatusDot } from "../connection/ConnectionStatusDot";
 
 export function DraftEnvironmentControl(props: {
+  readonly environmentId: EnvironmentId;
   readonly label: string;
   readonly connectionState: EnvironmentConnectionPhase;
   readonly machineKind: EnvironmentMachineKind;
@@ -24,6 +25,7 @@ export function DraftEnvironmentControl(props: {
       className="flex-row items-center gap-1.5 rounded-xl px-3 py-2 active:opacity-65"
     >
       <EnvironmentMachineSymbol
+        environmentId={props.environmentId}
         kind={props.machineKind}
         size={13}
         tintColorClassName="accent-icon-muted"

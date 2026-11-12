@@ -68,9 +68,12 @@ import { formatDuration } from "@t3tools/shared/orchestrationTiming";
 import { truncate } from "@t3tools/shared/String";
 import type { HtmlRenderReference } from "@t3tools/shared/htmlRender";
 import type { McpAppReference } from "@t3tools/shared/mcpApp";
+import { type ReviewNote, reviewNoteFromToolItem } from "@t3tools/shared/reviewNote";
 import {
   compactDynamicToolOutput,
   htmlRenderFromToolItem,
+  type MachineCard,
+  machineCardFromToolItem,
   mcpAppFromToolItem,
 } from "@t3tools/shared/toolOutput";
 import * as DateTime from "effect/DateTime";
@@ -180,6 +183,20 @@ type RawThreadFeedEntry =
       readonly render: HtmlRenderReference;
     }
   | {
+      readonly type: "machine-card";
+      readonly id: string;
+      readonly createdAt: string;
+      readonly runId: RunId | null;
+      readonly card: MachineCard;
+    }
+  | {
+      readonly type: "review-note";
+      readonly id: string;
+      readonly createdAt: string;
+      readonly runId: RunId | null;
+      readonly note: ReviewNote;
+    }
+  | {
       readonly type: "mcp-app";
       readonly id: string;
       readonly createdAt: string;
@@ -197,7 +214,10 @@ export type ThreadFeedEntry = ThreadFeedEntryContent & {
 };
 
 type ThreadFeedEntryContent =
-  | Extract<RawThreadFeedEntry, { type: "message" | "html-render" | "mcp-app" }>
+  | Extract<
+      RawThreadFeedEntry,
+      { type: "message" | "html-render" | "machine-card" | "review-note" | "mcp-app" }
+    >
   | {
       readonly type: "activity-group";
       readonly id: string;
@@ -1104,6 +1124,8 @@ function deriveThreadFeedRunFolds(
         ? (entry.message.runId ?? runlessKey)
         : entry.type === "activity-group" ||
             entry.type === "html-render" ||
+            entry.type === "machine-card" ||
+            entry.type === "review-note" ||
             entry.type === "mcp-app"
           ? (entry.runId ?? runlessKey)
           : null;
@@ -1157,6 +1179,8 @@ function deriveThreadFeedRunFolds(
           (entry) =>
             entry.id !== terminalAssistantId &&
             entry.type !== "html-render" &&
+            entry.type !== "machine-card" &&
+            entry.type !== "review-note" &&
             entry.type !== "mcp-app" &&
             !(entry.type === "activity-group" && isContextCompactionActivityGroup(entry)) &&
             !(
@@ -2259,10 +2283,22 @@ export function buildThreadFeed(
       continue;
     }
     const createdAt = DateTime.formatIso(item.startedAt ?? item.updatedAt);
-    const render =
-      item.type === "dynamic_tool" && item.status === "completed"
-        ? htmlRenderFromToolItem(item)
-        : undefined;
+    const completedTool = item.type === "dynamic_tool" && item.status === "completed";
+    const card = completedTool ? machineCardFromToolItem(item) : undefined;
+    if (card) {
+      const entry: RawThreadFeedEntry = {
+        type: "machine-card",
+        id: `machine-card:${row.visibility}:${row.sourceThreadId}:${row.sourceItemId}`,
+        createdAt,
+        runId: item.runId,
+        card,
+      };
+      projectedEntriesCache.set(row, { attemptId, entry });
+      entries.push(entry);
+      entryRows.push(index);
+      continue;
+    }
+    const render = completedTool ? htmlRenderFromToolItem(item) : undefined;
     if (render) {
       const entry: RawThreadFeedEntry = {
         type: "html-render",
@@ -2270,6 +2306,20 @@ export function buildThreadFeed(
         createdAt,
         runId: item.runId,
         render,
+      };
+      projectedEntriesCache.set(row, { attemptId, entry });
+      entries.push(entry);
+      entryRows.push(index);
+      continue;
+    }
+    const note = item.type === "dynamic_tool" ? reviewNoteFromToolItem(item) : undefined;
+    if (note) {
+      const entry: RawThreadFeedEntry = {
+        type: "review-note",
+        id: `review-note:${row.visibility}:${row.sourceThreadId}:${row.sourceItemId}`,
+        createdAt,
+        runId: item.runId,
+        note,
       };
       projectedEntriesCache.set(row, { attemptId, entry });
       entries.push(entry);

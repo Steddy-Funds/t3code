@@ -1,3 +1,4 @@
+import { useDiffThemeName } from "~/hooks/useDiffThemeName";
 import {
   capitalizeTerm,
   sourceControlClients,
@@ -63,7 +64,6 @@ import {
   fnv1a32,
   getDiffLineStat,
   getRenderablePatch,
-  resolveDiffThemeName,
   resolveFileDiffPath,
   resolveFileDiffPreviousPath,
   type RenderablePatch,
@@ -367,6 +367,7 @@ function PullRequestCodeTab({
   revealRequest?: { readonly path: string; readonly nonce: number } | null;
 }) {
   const resolvedTheme = useRenderedAppearance();
+  const diffThemeName = useDiffThemeName(resolvedTheme);
   // Initialize the shared tokenizer and workers while the diff request is still pending.
   useDiffWorkerPool();
   const settings = useClientSettings((settings) => ({
@@ -930,7 +931,7 @@ function PullRequestCodeTab({
     diffStyle: diffLayout === "split" ? ("split" as const) : ("unified" as const),
     lineDiffType: "none" as const,
     overflow: wordWrap ? ("wrap" as const) : ("scroll" as const),
-    theme: resolveDiffThemeName(resolvedTheme),
+    theme: diffThemeName,
     preferredHighlighter: PREFERRED_HIGHLIGHTER,
     themeType: resolvedTheme,
     stickyHeaders: true,

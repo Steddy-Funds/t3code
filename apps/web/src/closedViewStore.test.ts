@@ -8,6 +8,7 @@ import {
 import { beforeEach, describe, expect, it } from "vite-plus/test";
 
 import { type ClosedViewEntry, useClosedViewStore } from "./closedViewStore";
+import { machineSurface } from "./rightPanelStore";
 
 const refA = scopeThreadRef("env-1" as EnvironmentId, ThreadId.make("thread-A"));
 const refB = scopeThreadRef("env-2" as EnvironmentId, ThreadId.make("thread-A"));
@@ -60,6 +61,24 @@ describe("closedViewStore", () => {
       threadRef: refA,
       surface: { kind: "side-chat", id: "side-chat:x" },
     },
+    {
+      id: "bad",
+      kind: "panel-tab",
+      threadRef: refA,
+      surface: { kind: "machine", id: "machine:x" },
+    },
+    {
+      id: "bad",
+      kind: "panel-tab",
+      threadRef: refA,
+      surface: { kind: "machine", id: "machine:x", environmentId: 7 },
+    },
+    {
+      id: "bad",
+      kind: "panel-tab",
+      threadRef: refA,
+      surface: { kind: "machine", id: "machine:x", environmentId: "y" },
+    },
   ])("discards incomplete saved views %j while retaining valid history", async (entry) => {
     const id = useClosedViewStore.getState().remember(diff(refA));
     const { storage, name } = useClosedViewStore.persist.getOptions();
@@ -96,6 +115,11 @@ describe("closedViewStore", () => {
       threadRef: refA,
       surface: { id: "side-chat:side", kind: "side-chat", threadId: ThreadId.make("side") },
     });
+    const machineId = store.remember({
+      kind: "panel-tab",
+      threadRef: refA,
+      surface: machineSurface("env-2" as EnvironmentId),
+    });
     const publicId = store.remember(diff(refA));
     const browserId = store.remember({
       kind: "browser",
@@ -126,6 +150,7 @@ describe("closedViewStore", () => {
     expect(useClosedViewStore.getState().entries.map((entry) => entry.id)).toEqual([
       browserId,
       publicId,
+      machineId,
       sideChatId,
     ]);
     const saved = JSON.stringify(await storage!.getItem(name!));

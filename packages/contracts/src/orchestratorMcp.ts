@@ -6,6 +6,7 @@ import { AuthMcpClientAccess } from "./auth.ts";
 import {
   ContextTransferId,
   EnvironmentId,
+  ForwardCompatibleArray,
   IsoDateTime,
   MessageId,
   NodeId,
@@ -44,7 +45,10 @@ import {
 import { ProviderOptionSelection, ProviderOptionSelectionValue } from "./model.ts";
 import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
 
-const OrchestratorMcpPrompt = TrimmedNonEmptyString.check(Schema.isMaxLength(120_000));
+export const ORCHESTRATOR_MCP_PROMPT_MAX_CHARS = 120_000;
+const OrchestratorMcpPrompt = TrimmedNonEmptyString.check(
+  Schema.isMaxLength(ORCHESTRATOR_MCP_PROMPT_MAX_CHARS),
+);
 const OrchestratorMcpTitle = TrimmedNonEmptyString.check(Schema.isMaxLength(512));
 export const OrchestratorMcpClientRequestId = TrimmedNonEmptyString.check(Schema.isMaxLength(256))
   .check(
@@ -68,7 +72,7 @@ const OrchestratorMcpSchedule = Schema.Union([
   OrchestratorMcpScheduleFromJsonString,
 ]).annotate({
   description:
-    "Trigger: {type:'interval',everyMs}, {type:'fixed_time',timeOfDay,weekdays?}, {type:'once',runAt}, or {type:'webhook'}.",
+    "Trigger: {type:'interval',everyMs}, {type:'fixed_time',timeOfDay,weekdays?}, {type:'once',runAt}, {type:'webhook'}, or {type:'load',condition}.",
 });
 
 const OrchestratorMcpTargetOptionsFromRecord = Schema.Record(
@@ -379,6 +383,12 @@ export const OrchestratorMcpThreadListItem = Schema.Struct({
   settledAt: Schema.NullOr(IsoDateTime),
   snoozed: Schema.Boolean,
   snoozedUntil: Schema.NullOr(IsoDateTime),
+  /** Present only on backgrounded threads. */
+  backgrounded: Schema.optional(Schema.Literal(true)),
+  /** Present only while load management has the thread paused. */
+  loadPaused: Schema.optional(Schema.Literal(true)),
+  /** Load management may pause only low-priority threads. Absent from older servers. */
+  effectivePriority: Schema.optional(Schema.Literals(["low", "normal"])),
   parentThreadId: Schema.NullOr(ThreadId),
   relationshipToParent: Schema.NullOr(Schema.Literals(["fork", "subagent"])),
   itemCount: NonNegativeInt,
@@ -459,6 +469,12 @@ export const OrchestratorMcpThreadDetail = Schema.Struct({
   settledAt: Schema.NullOr(IsoDateTime),
   snoozed: Schema.Boolean,
   snoozedUntil: Schema.NullOr(IsoDateTime),
+  /** Present only on backgrounded threads. */
+  backgrounded: Schema.optional(Schema.Literal(true)),
+  /** Present only while load management has the thread paused. */
+  loadPaused: Schema.optional(Schema.Literal(true)),
+  /** Load management may pause only low-priority threads. Absent from older servers. */
+  effectivePriority: Schema.optional(Schema.Literals(["low", "normal"])),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });
@@ -733,7 +749,8 @@ export type OrchestratorMcpListScheduledTasksInput =
   typeof OrchestratorMcpListScheduledTasksInput.Type;
 
 export const OrchestratorMcpListScheduledTasksResult = Schema.Struct({
-  tasks: Schema.Array(OrchestratorMcpScheduledTask),
+  // A peer's newer schedule types drop out of a forwarded list instead of failing it.
+  tasks: ForwardCompatibleArray(OrchestratorMcpScheduledTask),
 });
 export type OrchestratorMcpListScheduledTasksResult =
   typeof OrchestratorMcpListScheduledTasksResult.Type;
@@ -812,6 +829,29 @@ export const OrchestratorMcpRequestSecretResult = Schema.Union([
   }),
 ]);
 export type OrchestratorMcpRequestSecretResult = typeof OrchestratorMcpRequestSecretResult.Type;
+
+export const REVIEW_NOTE_MAX_LINES = 200;
+
+export const OrchestratorMcpFlagForReviewInput = Schema.Struct({
+  path: TrimmedNonEmptyString.check(Schema.isMaxLength(1_024)).annotate({
+    description: "Workspace-relative.",
+  }),
+  startLine: PositiveInt.annotate({ description: "1-based, in the file as it is now." }),
+  endLine: PositiveInt.annotate({ description: "Inclusive; at most 200 lines." }),
+  note: TrimmedNonEmptyString.check(Schema.isMaxLength(600)).annotate({
+    description: "What changed and why it matters. Stands alone.",
+  }),
+  question: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(300))).annotate({
+    description: "Only a decision you need from the user.",
+  }),
+});
+export type OrchestratorMcpFlagForReviewInput = typeof OrchestratorMcpFlagForReviewInput.Type;
+
+export const OrchestratorMcpFlagForReviewResult = Schema.Struct({
+  status: Schema.Literal("recorded"),
+  noteId: TurnItemId,
+});
+export type OrchestratorMcpFlagForReviewResult = typeof OrchestratorMcpFlagForReviewResult.Type;
 
 export const OrchestratorMcpEnvironmentLinkInput = Schema.Struct({
   environmentId: Schema.optional(EnvironmentId).annotate({

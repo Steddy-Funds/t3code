@@ -22,6 +22,13 @@ import {
   webhookFilterDraftsChanged,
   type WebhookFilterDraft,
 } from "@t3tools/client-runtime/scheduled-task-webhook";
+import {
+  DEFAULT_LOAD_SCHEDULE_DRAFT,
+  LOAD_SCHEDULE_DRAFT_ERROR,
+  loadScheduleDraft,
+  loadScheduleFromDraft,
+  type LoadScheduleDraft,
+} from "@t3tools/client-runtime/scheduled-task-schedule";
 
 import {
   resolveProjectSettings,
@@ -56,7 +63,7 @@ export function validateScheduledTasksSearch(raw: Record<string, unknown>) {
   };
 }
 
-export type ScheduleMode = "fixed" | "once" | "interval" | "webhook";
+export type ScheduleMode = "fixed" | "once" | "interval" | "webhook" | "load";
 export type WorkspaceMode = "root" | "worktree" | "existing_worktree";
 
 export interface DraftState {
@@ -97,6 +104,7 @@ export interface DraftState {
   readonly filters: ReadonlyArray<WebhookFilterDraft>;
   /** The filter rows the form opened with. */
   readonly savedFilters: ReadonlyArray<WebhookFilterDraft>;
+  readonly load: LoadScheduleDraft;
 }
 
 export const WEBHOOK_SIGNATURE_DEFAULTS = {
@@ -123,6 +131,8 @@ export function scheduleDraftErrors(draft: DraftState) {
       ];
     return [];
   }
+  if (draft.scheduleMode === "load")
+    return loadScheduleFromDraft(draft.load) === null ? [LOAD_SCHEDULE_DRAFT_ERROR] : [];
   if (draft.scheduleMode !== "webhook") return [];
   if (parseMaxDeliveryAge(draft.maxDeliveryAgeMinutes) === undefined)
     return [
@@ -226,6 +236,7 @@ export function scheduleFromDraft(draft: DraftState): ScheduledTaskUpsertSchedul
         : {}),
     };
   }
+  if (draft.scheduleMode === "load") return loadScheduleFromDraft(draft.load);
   if (draft.scheduleMode === "interval") {
     const everyMs = Math.round(Number(draft.intervalMinutes) * 60_000);
     return { type: "interval", everyMs };
@@ -296,6 +307,7 @@ export function taskToDraft(task: ScheduledTask): DraftState {
         : "",
     filters,
     savedFilters: filters,
+    load: schedule.type === "load" ? loadScheduleDraft(schedule) : DEFAULT_LOAD_SCHEDULE_DRAFT,
   };
 }
 

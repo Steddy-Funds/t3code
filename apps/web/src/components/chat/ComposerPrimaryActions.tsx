@@ -1,5 +1,11 @@
 import { memo, type MouseEventHandler, type PointerEventHandler, type ReactNode } from "react";
-import { CheckIcon, ChevronLeftIcon, Minimize2Icon, PlayIcon } from "lucide-react";
+import {
+  CheckIcon,
+  ChevronLeftIcon,
+  MessageCircleQuestionMarkIcon,
+  Minimize2Icon,
+  PlayIcon,
+} from "lucide-react";
 import { CornerUpRight, ListPlus } from "lucide";
 import { MorphIcon } from "~/components/MorphIcon";
 import { useEnvironmentIdentificationMode } from "~/hooks/useSettings";
@@ -27,6 +33,8 @@ interface ComposerPrimaryActionsProps {
   /** Footer controls (dictation) that always sit right before the primary button. */
   children?: ReactNode;
   compact: boolean;
+  /** Sends a side question while a long prompt is docked. */
+  aside?: boolean;
   canOperateThread: boolean;
   pendingAction: PendingActionState | null;
   isRunning: boolean;
@@ -104,6 +112,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
   compactBeforeSendTokens = null,
   keepFullHistory = false,
   onToggleKeepFullHistory,
+  aside = false,
 }: ComposerPrimaryActionsProps) {
   const pointerFocusProps = preserveComposerFocusOnPointerDown
     ? { onPointerDown: preventPointerFocus }
@@ -282,6 +291,8 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
         <CheckIcon className="size-4" aria-hidden="true" />
       ) : isRunning ? (
         <MorphIcon className="size-4" icon={isQueuing ? ListPlus : CornerUpRight} />
+      ) : aside ? (
+        <MessageCircleQuestionMarkIcon className="size-4" aria-hidden="true" />
       ) : (
         <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
           <path

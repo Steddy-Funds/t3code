@@ -1,4 +1,6 @@
 import type { ToolCallDiffTarget } from "../../diffPanelStore";
+import type { DraftId } from "../../composerDraftStore";
+import type { SendReviewComments } from "../diffs/useReviewCommentDrafts";
 import type {
   ProviderApprovalDecision,
   RuntimeRequestId,
@@ -61,6 +63,8 @@ export interface TimelineRowSharedState {
   runs: ReadonlyArray<HandoffTimelineRun>;
   activeThreadEnvironmentId: EnvironmentId;
   onRevertToTurnCount: (targetTurnCount: number, messageId: MessageId) => void;
+  /** Absent hides "Reply", as in the guest view. */
+  onReplyToMessage: ((messageId: MessageId) => void) | undefined;
   onUseArtifactTemplate: (template: CodexArtifactTemplate) => void;
   onSendAppMessage: ((text: string) => Promise<void>) | undefined;
   onAppFullscreenChange: (rowId: string, fullscreen: boolean) => void;
@@ -76,8 +80,17 @@ export interface TimelineRowSharedState {
    * loads it through its own route.
    */
   renderHtmlRender: ((row: Extract<TimelineRow, { kind: "html-render" }>) => ReactNode) | undefined;
+  /** False where no machine is reachable, as for a guest: machine cards stay snapshots. */
+  liveMachineCards: boolean;
   /** Unset, expanded rows read detail and command output from the environment. */
   turnItemSource: TurnItemSource | undefined;
+  /** Where a reply to a review note goes. Unset where the viewer cannot reply, as a guest. */
+  reviewNoteReplies:
+    | {
+        readonly draftTarget: ScopedThreadRef | DraftId;
+        readonly onSend: SendReviewComments | undefined;
+      }
+    | undefined;
   onOpenThread: (threadId: OrchestrationV2TurnItem["threadId"]) => void;
   workflowOpening: WorkflowOpening | null;
   /** Absent hides "Fork from this response", as in the guest view. */

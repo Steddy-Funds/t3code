@@ -4,9 +4,11 @@ import {
   T3_CODE_LIGHT_THEME_COLORS,
   T3_CODE_DARK_THEME_COLORS,
   getThemeColorsForAppearance,
+  getThemeEditorColors,
   MOBILE_DEFAULT_THEME_ID,
   MOBILE_THEME_IDS as SHARED_MOBILE_THEME_IDS,
   type MobileThemeId as SharedMobileThemeId,
+  type ThemeAnsiColors,
   type ThemeAppearance,
   type ThemeColors,
 } from "@t3tools/shared/themePalettes";
@@ -34,9 +36,27 @@ export const MOBILE_THEME_OPTIONS: ReadonlyArray<{
 export type MobileThemeVariable = keyof ReturnType<typeof createMobileThemeVariables>;
 export type MobileThemeVariables = Readonly<Record<MobileThemeVariable, string>>;
 
-function normalizeMobileThemeId(value: unknown): MobileThemeId {
-  return typeof value === "string" && (MOBILE_THEME_IDS as readonly string[]).includes(value)
-    ? (value as MobileThemeId)
+const MOBILE_THEME_APPEARANCES: ReadonlyArray<MobileThemeAppearance> = ["light", "dark"];
+
+/** The appearances a theme has a palette for. A dark-only built-in fills the dark slot alone. */
+export function getMobileThemeAppearances(
+  themeId: MobileThemeId,
+): ReadonlyArray<MobileThemeAppearance> {
+  const theme = BUILT_IN_THEMES.find((candidate) => candidate.id === themeId);
+  return theme
+    ? MOBILE_THEME_APPEARANCES.filter(
+        (appearance) => getThemeColorsForAppearance(theme, appearance) !== null,
+      )
+    : MOBILE_THEME_APPEARANCES;
+}
+
+function normalizeMobileThemeId(value: unknown, appearance: MobileThemeAppearance): MobileThemeId {
+  const themeId =
+    typeof value === "string" && (MOBILE_THEME_IDS as readonly string[]).includes(value)
+      ? (value as MobileThemeId)
+      : DEFAULT_MOBILE_THEME_ID;
+  return getMobileThemeAppearances(themeId).includes(appearance)
+    ? themeId
     : DEFAULT_MOBILE_THEME_ID;
 }
 
@@ -49,16 +69,11 @@ export function resolveMobileThemeIds(preferences: {
   readonly lightThemeId?: unknown;
   readonly darkThemeId?: unknown;
 }): MobileThemeIds {
-  const legacyThemeId = normalizeMobileThemeId(preferences.themeId);
+  const slot = (stored: unknown, appearance: MobileThemeAppearance) =>
+    normalizeMobileThemeId(stored === undefined ? preferences.themeId : stored, appearance);
   return {
-    light:
-      preferences.lightThemeId === undefined
-        ? legacyThemeId
-        : normalizeMobileThemeId(preferences.lightThemeId),
-    dark:
-      preferences.darkThemeId === undefined
-        ? legacyThemeId
-        : normalizeMobileThemeId(preferences.darkThemeId),
+    light: slot(preferences.lightThemeId, "light"),
+    dark: slot(preferences.darkThemeId, "dark"),
   };
 }
 
@@ -457,6 +472,15 @@ export function getMobileThemeColors(
   }
   const theme = BUILT_IN_THEMES.find((candidate) => candidate.id === themeId) ?? T3_CHAT_THEME;
   return getThemeColorsForAppearance(theme, appearance) ?? theme.colors;
+}
+
+/** A theme's own terminal colours 0 to 15, when it has them for this appearance. */
+export function getMobileThemeAnsiColors(
+  themeId: MobileThemeId,
+  appearance: MobileThemeAppearance,
+): ThemeAnsiColors | null {
+  const theme = BUILT_IN_THEMES.find((candidate) => candidate.id === themeId) ?? null;
+  return getThemeEditorColors(theme, appearance)?.ansi ?? null;
 }
 
 export function getMobileThemeVariables(

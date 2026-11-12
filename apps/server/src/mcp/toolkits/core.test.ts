@@ -60,6 +60,7 @@ import * as EnvironmentHandlers from "./environment/handlers.ts";
 import * as AttachmentHandlers from "./attachment/handlers.ts";
 import * as PeerForwarding from "../../peer/PeerForwarding.ts";
 import * as PeerLinkRequests from "../../peer/PeerLinkRequests.ts";
+import * as ReviewNotes from "../ReviewNotes.ts";
 import * as PeerLinks from "../../peer/PeerLinks.ts";
 
 const layerOrchestratorToolkit = McpHttpServer.layerOrchestratorToolkit.pipe(
@@ -81,6 +82,7 @@ const layerThreadToolkit = McpHttpServer.layerThreadToolkit.pipe(
   Layer.provide(Layer.mock(ScheduledTaskService.ScheduledTaskService)({})),
   Layer.provide(Layer.mock(PeerForwarding.PeerForwarding)({})),
   Layer.provide(Layer.mock(PeerLinkRequests.PeerLinkRequests)({})),
+  Layer.provide(Layer.mock(ReviewNotes.ReviewNotes)({})),
   Layer.provide(Layer.mock(PeerLinks.PeerLinks)({})),
 );
 
@@ -421,6 +423,71 @@ it.effect("rejects an unknown organize target instead of archiving the calling t
   );
 });
 
+it.effect("background, set_priority and resume_load_pause dispatch tag and resume commands", () => {
+  const dispatched: Array<unknown> = [];
+  return Effect.gen(function* () {
+    const server = yield* McpServer.McpServer;
+    const organize = (args: Record<string, unknown>) =>
+      server
+        .callTool({ name: "t3_thread_organize", arguments: args })
+        .pipe(
+          Effect.provideService(McpInvocationContext.McpInvocationContext, scope),
+          Effect.provideService(McpSchema.McpServerClient, client),
+        );
+    for (const args of [
+      { action: "background" },
+      { action: "unbackground" },
+      { action: "set_priority", priority: "low" },
+      { action: "set_priority", priority: "normal" },
+      { action: "set_priority", priority: "default" },
+      { action: "resume_load_pause" },
+    ]) {
+      expect((yield* organize(args)).isError).not.toBe(true);
+    }
+    const tag = (name: string, tagged: boolean) => ({
+      type: "thread.tag.set",
+      threadId,
+      tag: name,
+      tagged,
+    });
+    expect(dispatched).toMatchObject([
+      tag("backgrounded", true),
+      tag("backgrounded", false),
+      tag("priority:low", true),
+      tag("priority:normal", false),
+      tag("priority:low", false),
+      tag("priority:normal", true),
+      tag("priority:low", false),
+      tag("priority:normal", false),
+      { type: "thread.metadata.update", threadId, loadPause: { resume: true } },
+    ]);
+    expect(declaredFailure(yield* organize({ action: "set_priority" }))).toMatchObject({
+      code: "invalid_request",
+    });
+    expect(dispatched).toHaveLength(9);
+  }).pipe(
+    Effect.provide(
+      layerThreadToolkit.pipe(
+        Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
+        Layer.provide(NodeCrypto.layer),
+        Layer.provide(
+          Layer.mock(ThreadManagement.ThreadManagementService)({
+            getThreadShell: (id) => Effect.succeed(McpToolAccessTestkit.liveThreadShell(id)),
+            getProjectThreadRecords: ({ threadId: id }) =>
+              Effect.succeed(
+                McpToolAccessTestkit.idleThreadProjection(McpToolAccessTestkit.liveThreadShell(id)),
+              ),
+            dispatch: (command) => {
+              dispatched.push(command);
+              return Effect.succeed({ sequence: 1 } as never);
+            },
+          }),
+        ),
+      ),
+    ),
+  );
+});
+
 it.effect("keeps unexpected handler defects private through the production registration", () =>
   Effect.gen(function* () {
     const server = yield* McpServer.McpServer;
@@ -678,6 +745,7 @@ it.effect("refuses act-as-caller tools to a client caller", () =>
         Layer.provide(Layer.mock(ScheduledTaskService.ScheduledTaskService)({})),
         Layer.provide(Layer.mock(PeerForwarding.PeerForwarding)({})),
         Layer.provide(Layer.mock(PeerLinkRequests.PeerLinkRequests)({})),
+        Layer.provide(Layer.mock(ReviewNotes.ReviewNotes)({})),
         Layer.provide(Layer.mock(PeerLinks.PeerLinks)({})),
         Layer.provide(Layer.mock(ProjectService.ProjectService)({})),
         Layer.provide(Layer.mock(SecretRequests.SecretRequests)({})),
@@ -739,6 +807,7 @@ it.effect("a caller cannot rewrite a scheduled task that runs above its own mode
         Layer.provide(Layer.mock(SecretRequests.SecretRequests)({})),
         Layer.provide(Layer.mock(PeerForwarding.PeerForwarding)({})),
         Layer.provide(Layer.mock(PeerLinkRequests.PeerLinkRequests)({})),
+        Layer.provide(Layer.mock(ReviewNotes.ReviewNotes)({})),
         Layer.provide(Layer.mock(PeerLinks.PeerLinks)({})),
         Layer.provide(Layer.mock(RemoteDelegation.RemoteDelegation)({})),
       ),
@@ -794,6 +863,7 @@ it.effect.each([
         Layer.provide(Layer.mock(ThreadSearch.ThreadSearch)({})),
         Layer.provide(Layer.mock(PeerForwarding.PeerForwarding)({})),
         Layer.provide(Layer.mock(PeerLinkRequests.PeerLinkRequests)({})),
+        Layer.provide(Layer.mock(ReviewNotes.ReviewNotes)({})),
         Layer.provide(Layer.mock(PeerLinks.PeerLinks)({})),
         Layer.provide(
           Layer.mock(ScheduledTaskService.ScheduledTaskService)({
@@ -888,6 +958,7 @@ it.effect.each(["t3_thread_interrupt", "t3_workflow_stop"])(
           Layer.provide(Layer.mock(RemoteDelegation.RemoteDelegation)({})),
           Layer.provide(Layer.mock(PeerForwarding.PeerForwarding)({})),
           Layer.provide(Layer.mock(PeerLinkRequests.PeerLinkRequests)({})),
+          Layer.provide(Layer.mock(ReviewNotes.ReviewNotes)({})),
           Layer.provide(Layer.mock(PeerLinks.PeerLinks)({})),
         ),
       ),
@@ -981,6 +1052,7 @@ it.effect("discovers workflow stop targets and requires orchestration capability
         Layer.provide(Layer.mock(ScheduledTaskService.ScheduledTaskService)({})),
         Layer.provide(Layer.mock(PeerForwarding.PeerForwarding)({})),
         Layer.provide(Layer.mock(PeerLinkRequests.PeerLinkRequests)({})),
+        Layer.provide(Layer.mock(ReviewNotes.ReviewNotes)({})),
         Layer.provide(Layer.mock(PeerLinks.PeerLinks)({})),
         Layer.provide(Layer.mock(ProjectService.ProjectService)({})),
         Layer.provide(Layer.mock(SecretRequests.SecretRequests)({})),
@@ -1095,6 +1167,7 @@ it.effect(
           Layer.provide(Layer.mock(SecretRequests.SecretRequests)({})),
           Layer.provide(Layer.mock(PeerForwarding.PeerForwarding)({})),
           Layer.provide(Layer.mock(PeerLinkRequests.PeerLinkRequests)({})),
+          Layer.provide(Layer.mock(ReviewNotes.ReviewNotes)({})),
           Layer.provide(Layer.mock(PeerLinks.PeerLinks)({})),
           Layer.provide(Layer.mock(RemoteDelegation.RemoteDelegation)({})),
         ),

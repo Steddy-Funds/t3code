@@ -112,8 +112,16 @@ function createActivityReport(
 function scopeForSubscription(
   observation: EnvironmentRpcSubscriptionObservation,
 ): BackgroundScope | null {
-  if (observation.method === WS_METHODS.subscribeResourceTelemetry) {
+  if (
+    observation.method === WS_METHODS.subscribeResourceTelemetry ||
+    observation.method === WS_METHODS.subscribeMachineProcesses
+  ) {
     return { type: "diagnostics" };
+  }
+  // The always-on verdict creates no demand; only live samples for an open view lease.
+  if (observation.method === WS_METHODS.subscribeMachine) {
+    const input = observation.input as { readonly intervalMs?: unknown };
+    return input.intervalMs === undefined ? null : { type: "diagnostics" };
   }
   if (observation.method !== WS_METHODS.subscribeVcsStatus) {
     return null;
@@ -123,7 +131,10 @@ function scopeForSubscription(
   return typeof input.cwd === "string" ? { type: "vcs-status", cwd: input.cwd } : null;
 }
 
-function retainBackgroundScope(environmentId: EnvironmentId, scope: BackgroundScope): () => void {
+export function retainBackgroundScope(
+  environmentId: EnvironmentId,
+  scope: BackgroundScope,
+): () => void {
   const key = stableScopeKey(environmentId, scope);
   const existing = retainedScopes.get(key);
   if (existing) {
@@ -133,7 +144,10 @@ function retainBackgroundScope(environmentId: EnvironmentId, scope: BackgroundSc
     notifyRetainedScopesChanged();
   }
 
+  let released = false;
   return () => {
+    if (released) return;
+    released = true;
     const current = retainedScopes.get(key);
     if (!current) return;
     current.refCount -= 1;

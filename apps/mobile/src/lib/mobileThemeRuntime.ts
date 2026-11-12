@@ -1,15 +1,16 @@
 import { resolveTextScaleVariables } from "./appearancePreferences";
-import { BUILT_IN_THEME_IDS, type BuiltInThemeId } from "@t3tools/shared/themePalettes";
+import { BUILT_IN_THEME_IDS } from "@t3tools/shared/themePalettes";
+import type { UniwindConfig } from "uniwind";
 import {
   DEFAULT_MOBILE_THEME_ID,
+  getMobileThemeAppearances,
   type MobileThemeAppearance,
   type MobileThemeId,
   type MobileThemeMode,
 } from "./mobileTheme";
 
-export type MobileUniwindThemeName =
-  | MobileThemeAppearance
-  | `${BuiltInThemeId}-${MobileThemeAppearance}`;
+/** The themes the stylesheet was generated with: a dark-only built-in has no light variant. */
+export type MobileUniwindThemeName = UniwindConfig["themes"][number];
 
 export interface MobileThemeRuntimeState {
   readonly baseFontSize: number;
@@ -32,19 +33,22 @@ export type MobileThemeRuntimeOperation =
 const UNIWIND_THEME_NAMES: ReadonlyArray<"light" | "dark" | MobileUniwindThemeName> = [
   "light",
   "dark",
-  ...BUILT_IN_THEME_IDS.flatMap((themeId) => [
-    `${themeId}-light` as const,
-    `${themeId}-dark` as const,
-  ]),
+  ...BUILT_IN_THEME_IDS.flatMap((themeId) =>
+    getMobileThemeAppearances(themeId).map((appearance) =>
+      getMobileUniwindThemeName(themeId, appearance),
+    ),
+  ),
 ];
 
 export function getMobileUniwindThemeName(
   themeId: MobileThemeId,
   appearance: MobileThemeAppearance,
 ): MobileUniwindThemeName {
-  return themeId === DEFAULT_MOBILE_THEME_ID || themeId === "material-you"
+  return themeId === DEFAULT_MOBILE_THEME_ID ||
+    themeId === "material-you" ||
+    !getMobileThemeAppearances(themeId).includes(appearance)
     ? appearance
-    : `${themeId}-${appearance}`;
+    : (`${themeId}-${appearance}` as MobileUniwindThemeName);
 }
 
 export function createMobileThemeRuntimeOperations(

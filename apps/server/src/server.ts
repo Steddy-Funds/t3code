@@ -81,6 +81,7 @@ import * as McpHttpServer from "./mcp/McpHttpServer.ts";
 import * as PeerForwarding from "./peer/PeerForwarding.ts";
 import * as RemoteDelegation from "./peer/RemoteDelegation.ts";
 import * as PeerLinkRequests from "./peer/PeerLinkRequests.ts";
+import * as ReviewNotes from "./mcp/ReviewNotes.ts";
 import * as PeerLinks from "./peer/PeerLinks.ts";
 import * as PeerMcpClient from "./peer/PeerMcpClient.ts";
 import * as McpSessionRegistry from "./mcp/McpSessionRegistry.ts";
@@ -89,11 +90,13 @@ import * as DeviceService from "./device/DeviceService.ts";
 import * as DeviceHubProxy from "./device/DeviceHubProxy.ts";
 import * as PreviewManager from "./preview/Manager.ts";
 import * as PortScanner from "./preview/PortScanner.ts";
+import * as ServedSites from "./servedSites/ServedSites.ts";
 import * as ServerBrowser from "./preview/ServerBrowser.ts";
 import * as PreviewAgentActivity from "./preview/PreviewAgentActivity.ts";
 import * as DesktopBrowserChannel from "./preview/DesktopBrowserChannel.ts";
 import * as ServerBrowserStream from "./preview/ServerBrowserStream.ts";
 import * as PreviewBrowser from "./preview/PreviewBrowser.ts";
+import * as BrowserRun from "./preview/BrowserRun.ts";
 import * as ProcessRunner from "./processRunner.ts";
 import * as GitManager from "./git/GitManager.ts";
 import * as EnvironmentTheme from "./environmentTheme.ts";
@@ -121,6 +124,11 @@ import * as RepositoryIdentityResolver from "./project/RepositoryIdentityResolve
 import * as WorkspaceEntries from "./workspace/WorkspaceEntries.ts";
 import * as KnownWorkspaces from "./workspace/KnownWorkspaces.ts";
 import * as WorkspaceFileSystem from "./workspace/WorkspaceFileSystem.ts";
+import * as CodeIntel from "./codeIntel/CodeIntel.ts";
+import * as LanguageServerBinaries from "./codeIntel/LanguageServerBinaries.ts";
+import * as LanguageServerPool from "./codeIntel/LanguageServerPool.ts";
+import * as PythonEnvironment from "./codeIntel/PythonEnvironment.ts";
+import * as WorkspaceWatcher from "./codeIntel/WorkspaceWatcher.ts";
 import * as WorkspacePaths from "./workspace/WorkspacePaths.ts";
 import * as GitVcsDriver from "./vcs/GitVcsDriver.ts";
 import * as VcsDriverRegistry from "./vcs/VcsDriverRegistry.ts";
@@ -148,6 +156,9 @@ import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
 import * as CodexManagedTokenBroker from "./provider/CodexManagedTokenBroker.ts";
 import * as WebhookRoute from "./scheduledTasks/webhookRoute.ts";
 import * as RelayDeliveryProof from "./scheduledTasks/RelayDeliveryProof.ts";
+import * as LoadMonitor from "./scheduledTasks/LoadMonitor.ts";
+import * as LoadPauseDocker from "./orchestration-v2/LoadPauseDocker.ts";
+import * as LoadPauseWorker from "./orchestration-v2/LoadPauseWorker.ts";
 import * as HeldHooksWaker from "./relay/HeldHooksWaker.ts";
 import * as McpOAuth from "./auth/McpOAuth.ts";
 import * as McpOAuthHttp from "./auth/mcpOAuthHttp.ts";
@@ -182,6 +193,7 @@ import * as ServerSelfUpdate from "./cloud/selfUpdate.ts";
 import * as DesktopAppUpdate from "./desktopUpdate/DesktopAppUpdate.ts";
 import * as ServiceLauncherClient from "./cloud/serviceLauncherClient.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
+import * as HostProcesses from "./resourceTelemetry/HostProcesses.ts";
 import * as HostResources from "./resourceTelemetry/HostResources.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
@@ -191,11 +203,16 @@ import * as NativeTelemetryClient from "./resourceTelemetry/NativeTelemetryClien
 import * as ResourceAttribution from "./resourceTelemetry/ResourceAttribution.ts";
 import * as ResourceMonitorBinary from "./resourceTelemetry/ResourceMonitorBinary.ts";
 import * as ProcessGroupMetrics from "./resourceTelemetry/ProcessGroupMetrics.ts";
+import * as ProcessOwnership from "./resourceTelemetry/ProcessOwnership.ts";
+import * as LoadGuard from "./resourceTelemetry/LoadGuard.ts";
+import * as ThreadResources from "./resourceTelemetry/ThreadResources.ts";
 import * as ResourceTelemetry from "./resourceTelemetry/ResourceTelemetry.ts";
 import * as AntigravityUsage from "./provider/Drivers/AntigravityUsage.ts";
 import { MuseUsageHome } from "@t3tools/provider-muse/server";
 import * as CursorAccountReader from "@t3tools/provider-cursor/server/CursorAccountReader";
 import * as CursorUsageAccounts from "@t3tools/provider-cursor/server/CursorUsageAccounts";
+import * as ThreadUsageService from "./usage/ThreadUsageService.ts";
+import * as TokenBurnRates from "./usage/TokenBurnRates.ts";
 import * as UsageService from "./usage/UsageService.ts";
 import * as CodexUsageHistory from "./usage/CodexUsageHistory.ts";
 import * as RuntimeLayer from "./orchestration-v2/runtimeLayer.ts";
@@ -220,6 +237,7 @@ import {
   readTailscaleStatus,
 } from "@t3tools/tailscale";
 import * as ServerActivation from "./serverActivation.ts";
+import * as Scheduler from "./scheduling/Scheduler.ts";
 
 // Escaped MCP handoff provenance can exceed find-my-way's 100-character segment default.
 const HTTP_ROUTER_CONFIG = {
@@ -302,8 +320,31 @@ const layerUsage = UsageService.layer.pipe(
   Layer.provide(layerServerSettings),
 );
 
+const layerThreadUsage = ThreadUsageService.layer.pipe(
+  Layer.provide(ProjectionStoreV2.layer),
+  Layer.provideMerge(layerUsage),
+);
+
+const layerProcessOwnership = ProcessOwnership.layer.pipe(
+  Layer.provide(layerNativeTelemetry),
+  Layer.provide(layerServerSettings),
+);
+
+const layerThreadResources = ThreadResources.layer.pipe(
+  Layer.provide(layerProcessOwnership),
+  Layer.provide(layerNativeTelemetry),
+  Layer.provide(ProjectionStoreV2.layer.pipe(Layer.provide(layerServerSettings))),
+);
+
 const layerResourceDiagnostics = Layer.mergeAll(
-  HostResources.layer,
+  HostResources.layer.pipe(Layer.provide(layerServerSettings), Layer.provide(layerNativeTelemetry)),
+  HostProcesses.layer.pipe(
+    Layer.provide(layerResourceTelemetry),
+    Layer.provide(layerProcessOwnership),
+    Layer.provide(layerThreadResources),
+  ),
+  layerProcessOwnership,
+  layerThreadResources,
   layerResourceTelemetry,
   ProcessDiagnostics.layer.pipe(Layer.provide(layerResourceTelemetry)),
   ProcessResourceMonitor.layer.pipe(Layer.provide(layerResourceTelemetry)),
@@ -514,10 +555,21 @@ const layerWorkspaceFileSystem = WorkspaceFileSystem.layer.pipe(
   Layer.provide(layerKnownWorkspaces),
 );
 
+// Building these starts nothing: a language server and its watcher exist only after a request.
+const layerCodeIntel = CodeIntel.layer.pipe(
+  Layer.provide(LanguageServerPool.layer),
+  Layer.provide(WorkspaceWatcher.layer),
+  Layer.provide(Layer.mergeAll(LanguageServerBinaries.layer, PythonEnvironment.layer)),
+  Layer.provide(layerServerSettings),
+  Layer.provide(layerWorkspaceFileSystem),
+  Layer.provide(layerKnownWorkspaces),
+);
+
 const layerWorkspace = Layer.mergeAll(
   WorkspacePaths.layer,
   layerWorkspaceEntries,
   layerWorkspaceFileSystem,
+  layerCodeIntel,
 );
 
 const layerProjectFaviconResolver = ProjectFaviconResolver.layer.pipe(
@@ -525,7 +577,11 @@ const layerProjectFaviconResolver = ProjectFaviconResolver.layer.pipe(
   Layer.provide(T3ProjectFileLoader.layer),
 );
 
-const layerServerEnvironment = ServerEnvironment.layer.pipe(Layer.provide(ServerSecretStore.layer));
+// Settings let the descriptor report whether public served sites are configured.
+const layerServerEnvironment = ServerEnvironment.layer.pipe(
+  Layer.provide(ServerSecretStore.layer),
+  Layer.provide(layerServerSettings),
+);
 
 const layerAuth = EnvironmentAuth.layer.pipe(
   Layer.provideMerge(layerPersistence),
@@ -646,6 +702,8 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   HeldHooksWaker.layer,
   layerThreadSettlementWorker,
   layerIdleCompactionWorker,
+  LoadMonitor.layer,
+  LoadPauseWorker.layer.pipe(Layer.provide(ProjectionStoreV2.layer)),
   StorageCleanup.layer.pipe(Layer.provide(ProjectionStoreV2.layer)),
   DatabaseStorage.layer.pipe(
     Layer.provide(ProjectionMaintenance.layer),
@@ -653,6 +711,7 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   ),
   layerThreadPullRequestWorker,
   DelegatedTaskAnalytics.layer,
+  TokenBurnRates.layer.pipe(Layer.provide(RuntimeLayer.layerEventSink)),
   Layer.effectDiscard(
     Effect.gen(function* () {
       const service = yield* PullRequestSyncReactor.PullRequestSyncReactor;
@@ -684,6 +743,11 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   ProviderInstallation.layer,
   ReplayMarkers.layer,
   Layer.effectDiscard(ProjectSettingsOverrideSweep.sweep),
+  ServedSites.layer.pipe(
+    Layer.provide(layerNativeTelemetry),
+    Layer.provide(ProcessRunner.layer),
+    Layer.provide(layerServerEnvironment),
+  ),
 ).pipe(
   Layer.provideMerge(layerOrchestrationApplication),
   Layer.provideMerge(RuntimeLayer.layerEventInfrastructure),
@@ -756,7 +820,7 @@ const layerRuntimeCoreDependencies = layerRuntimeCoreDependenciesBase.pipe(
 );
 
 const layerRuntimeDependencies = layerRuntimeCoreDependencies.pipe(
-  Layer.provideMerge(layerUsage),
+  Layer.provideMerge(layerThreadUsage),
   Layer.provideMerge(layerBackground),
   Layer.provideMerge(layerResourceDiagnostics),
   Layer.provideMerge(TraceDiagnostics.layer),
@@ -767,6 +831,8 @@ const layerRuntimeDependencies = layerRuntimeCoreDependencies.pipe(
   Layer.provideMerge(RemoteOpenTargets.layer),
   Layer.provideMerge(DirectEndpoints.layer),
   Layer.provideMerge(ServerLifecycleEvents.layer),
+  // One Scheduler wakes every source (orchestration workers, HostResources) on one 5 s tick.
+  Layer.provideMerge(Scheduler.layer),
   Layer.provide(NetService.layer),
 );
 
@@ -818,12 +884,15 @@ const layerMakeRoutes = Layer.mergeAll(
   Layer.provide(RemoteDelegation.layer.pipe(Layer.provide(ProjectionStoreV2.layer))),
   // Links agents ask for: shown in a thread from /mcp, answered over WebSocket.
   Layer.provide(PeerLinkRequests.layer),
+  // Notes agents leave on lines they changed, from /mcp.
+  Layer.provide(ReviewNotes.layer),
   // Share the service so HTTP/WS clients single-flight reads and invalidate each other's cached patches.
   Layer.provide(layerPullRequestService),
   // The same activity instance RunExecutionService reports to, by layer memoization.
   Layer.provide(
     ServerBrowser.layer.pipe(
       Layer.provide(Layer.merge(DesktopBrowserChannel.layer, PreviewAgentActivity.layer)),
+      Layer.provide(BrowserRun.layer.pipe(Layer.provide(SecretResolver.layer))),
     ),
   ),
   Layer.provide(PreviewBrowser.layer),
@@ -1208,11 +1277,7 @@ const layerMakeServer = Layer.unwrap(
     return layerServerApplication.pipe(
       Layer.provide(CloudLink.layer.pipe(Layer.provideMerge(ConnectReachability.layer))),
       Layer.provideMerge(layerRuntimeServices),
-      Layer.provideMerge(
-        McpSessionRegistry.layer.pipe(
-          Layer.provide(ServerEnvironment.layer.pipe(Layer.provide(ServerSecretStore.layer))),
-        ),
-      ),
+      Layer.provideMerge(McpSessionRegistry.layer.pipe(Layer.provide(layerServerEnvironment))),
       Layer.provide(layerActivation),
       Layer.provideMerge(
         RelayTracing.layerServerRelayBroker.pipe(Layer.provide(ManagedPolicy.layer)),
@@ -1222,6 +1287,12 @@ const layerMakeServer = Layer.unwrap(
       Layer.provideMerge(FetchHttpClient.layer),
       Layer.provide(VcsProcess.layer),
       Layer.provideMerge(AgentScopeLive.layer),
+      // Every spawn site registers into this one registry; the default is a no-op.
+      Layer.provideMerge(ProcessOwnership.layerRegistry),
+      // Spawn sites read the guard env at spawn; the default injects nothing.
+      Layer.provideMerge(LoadGuard.layer.pipe(Layer.provide(layerServerSettings))),
+      // One instance, so the pause worker and resume cleanups share its per-container locks.
+      Layer.provideMerge(LoadPauseDocker.layer),
       Layer.provideMerge(layerPlatformServices),
     );
   }),

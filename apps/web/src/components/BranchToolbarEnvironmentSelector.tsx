@@ -73,6 +73,7 @@ export const BranchToolbarEnvironmentSelector = memo(function BranchToolbarEnvir
       >
         <EnvironmentMachineIcon
           kind={activeEnvironment?.machine ?? "server"}
+          environmentId={activeEnvironment?.environmentId}
           className="size-3 shrink-0"
         />
         <ComposerContextLabel>{activeEnvironment?.label ?? "Run on"}</ComposerContextLabel>
@@ -118,6 +119,7 @@ export const BranchToolbarEnvironmentSelector = memo(function BranchToolbarEnvir
           ) : (
             <EnvironmentMachineIcon
               kind={activeEnvironment?.machine ?? "server"}
+              environmentId={activeEnvironment?.environmentId}
               className="size-3 shrink-0"
             />
           )}
@@ -153,7 +155,11 @@ export const BranchToolbarEnvironmentSelector = memo(function BranchToolbarEnvir
               disabled={onEnvironmentChange === undefined && env.environmentId !== environmentId}
             >
               <span className="inline-flex items-center gap-1.5">
-                <EnvironmentMachineIcon kind={env.machine} className="size-3" />
+                <EnvironmentMachineIcon
+                  kind={env.machine}
+                  environmentId={env.environmentId}
+                  className="size-3"
+                />
                 {env.label}
               </span>
             </SelectItem>

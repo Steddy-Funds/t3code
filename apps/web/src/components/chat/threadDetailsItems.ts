@@ -9,11 +9,14 @@ export const THREAD_DETAILS_ITEMS = [
   { id: "gitActions", label: "Git actions", defaultVisible: true },
   { id: "changes", label: "Changes", defaultVisible: true },
   { id: "servers", label: "Servers", defaultVisible: true },
+  { id: "sites", label: "Sites", defaultVisible: true },
   { id: "automations", label: "Automations", defaultVisible: true },
   { id: "lineage", label: "Lineage", defaultVisible: true },
   { id: "sideChats", label: "Side chats", defaultVisible: true },
+  { id: "resources", label: "Resources", defaultVisible: true },
   { id: "usage", label: "Usage limits", defaultVisible: false },
   { id: "context", label: "Context window", defaultVisible: false },
+  { id: "cost", label: "Cost and activity", defaultVisible: false },
 ] as const;
 
 export type ThreadDetailsItemId = (typeof THREAD_DETAILS_ITEMS)[number]["id"];

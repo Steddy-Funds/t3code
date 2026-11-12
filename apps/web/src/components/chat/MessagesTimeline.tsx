@@ -71,7 +71,15 @@ import {
   rememberTimelinePosition,
 } from "./timelineScrollAnchoring";
 import { AssistantSelectionToolbar } from "./AssistantSelectionToolbar";
-import type { AssistantCitationSourceAnchor } from "~/lib/assistantTextSelection";
+import { MessageSwipeReply } from "./MessageSwipeReply";
+import { MARKDOWN_IMAGE_SELECTOR } from "./messageSwipeReply.logic";
+import {
+  captureAssistantMessageSelector,
+  type AssistantCitationSourceAnchor,
+} from "~/lib/assistantTextSelection";
+import { serializeRenderedMarkdownBlock } from "../../markdown-clipboard";
+import { type MessageReply } from "../../composer-logic";
+import { userMessageReplyText, withoutRepliedCitations } from "./TimelineUserMessageRow.logic";
 import { type AssistantCitationRequest } from "./AssistantCitationSource";
 import { useAssistantCitationTarget } from "./useAssistantCitationTarget";
 import { worktreeSetupAgentStarted } from "@t3tools/client-runtime/worktree-setup";
@@ -123,9 +131,11 @@ import {
   AssistantMetaTimelineRow,
   ProposedPlanTimelineRow,
   HtmlRenderTimelineRow,
+  MachineCardTimelineRow,
   McpAppTimelineRow,
 } from "./TimelineAssistantRows";
 import { V2EventTimelineRow } from "./TimelineV2EventRow";
+import { ReviewNoteCard } from "./ReviewNoteCard";
 import { startTimelinePositionRestore } from "./useTimelinePositionRestore";
 import {
   attachTimelineViewport,
@@ -225,6 +235,8 @@ interface MessagesTimelineProps {
     citation: AssistantCitation,
     sourceAnchor: AssistantCitationSourceAnchor,
   ) => boolean;
+  /** Absent turns off swipe and button replies, as in the guest view. */
+  onReplyToMessage?: (reply: MessageReply) => boolean;
   isWorking: boolean;
   runlessWorkActive?: boolean;
   activeTurnStartedAt?: string | null;
@@ -258,7 +270,9 @@ interface MessagesTimelineProps {
   onOpenTurnDiff?: (runId: RunId, filePath?: string) => void;
   onOpenThread: (threadId: OrchestrationV2TurnItem["threadId"]) => void;
   renderHtmlRender?: TimelineRowSharedState["renderHtmlRender"];
+  liveMachineCards?: boolean;
   turnItemSource?: TimelineRowSharedState["turnItemSource"];
+  reviewNoteReplies?: TimelineRowSharedState["reviewNoteReplies"];
   /**
    * The thread this one is a subagent or side chat of; `open` is absent when it cannot be
    * opened from here.
@@ -338,6 +352,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
   citationRequest = null,
   citationHistory = CITED_HISTORY_LOADING,
   onCiteAssistantText,
+  onReplyToMessage,
   isWorking,
   runlessWorkActive = false,
   activeTurnStartedAt = null,
@@ -371,7 +386,9 @@ const ConversationTimeline = memo(function ConversationTimeline({
   onOpenTurnDiff,
   onOpenThread,
   renderHtmlRender,
+  liveMachineCards = true,
   turnItemSource,
+  reviewNoteReplies,
   parentThreadLink = null,
   workflowOpening = null,
   onForkFromRun,
@@ -991,6 +1008,47 @@ const ConversationTimeline = memo(function ConversationTimeline({
     };
   };
 
+  // A section narrows the reply to one Markdown block; without one it covers the whole message.
+  const replyToMessage = useStableCallback(
+    (messageId: MessageId, section: HTMLElement | null = null) => {
+      if (!onReplyToMessage || !citationThreadRef) return;
+      const row = rows.find(
+        (candidate) => candidate.kind === "message" && candidate.message.id === messageId,
+      );
+      if (row?.kind !== "message") return;
+      const sectionMarkdown = section ? serializeRenderedMarkdownBlock(section) : null;
+      if (row.message.role === "user") {
+        onReplyToMessage({
+          kind: "quote",
+          text: sectionMarkdown
+            ? withoutRepliedCitations(sectionMarkdown)
+            : userMessageReplyText(row.message),
+        });
+        return;
+      }
+      const source = timelineViewportElement?.querySelector<HTMLElement>(
+        `[data-assistant-citation-source="${CSS.escape(messageId)}"]`,
+      );
+      // A citation anchors on text, which an image has none of; its Markdown keeps the path.
+      const image = section?.matches(MARKDOWN_IMAGE_SELECTOR) ?? false;
+      const selector =
+        source && !image
+          ? captureAssistantMessageSelector(
+              source,
+              section && source.contains(section) ? section : source,
+            )
+          : null;
+      // A virtualized-away message, or one with no readable text such as a diagram, is quoted.
+      onReplyToMessage(
+        selector
+          ? {
+              kind: "citation",
+              citation: { version: 1, ...citationThreadRef, messageId, ...selector },
+            }
+          : { kind: "quote", text: sectionMarkdown ?? row.message.text },
+      );
+    },
+  );
   // Built from props after the last hook so the compiler can memoize the row context; a map
   // made before a hook would rebuild it, and re-render every row, on each streamed update.
   const pendingApprovalsByRequestId = new Map(
@@ -1015,6 +1073,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
     runs,
     activeThreadEnvironmentId,
     onRevertToTurnCount,
+    onReplyToMessage: onReplyToMessage && citationThreadRef ? replyToMessage : undefined,
     onRunShellCommand,
     findActive,
     onImageExpand,
@@ -1028,7 +1087,9 @@ const ConversationTimeline = memo(function ConversationTimeline({
     onOpenTurnDiff,
     onOpenThread,
     renderHtmlRender,
+    liveMachineCards,
     turnItemSource,
+    reviewNoteReplies,
     workflowOpening,
     onForkFromRun,
     onToggleTurnFold,
@@ -1290,6 +1351,9 @@ const ConversationTimeline = memo(function ConversationTimeline({
             className="relative h-full min-h-0"
             data-assistant-citation-viewport="true"
           >
+            {onReplyToMessage && citationThreadRef ? (
+              <MessageSwipeReply viewport={timelineViewportElement} onReply={replyToMessage} />
+            ) : null}
             {onCiteAssistantText && citationThreadRef ? (
               <AssistantSelectionToolbar
                 viewport={timelineViewportElement}
@@ -1445,7 +1509,9 @@ const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: Time
                   row.kind === "event" ||
                   row.kind === "attempt-fold" ||
                   row.kind === "html-render" ||
-                  row.kind === "mcp-app"
+                  row.kind === "machine-card" ||
+                  row.kind === "mcp-app" ||
+                  row.kind === "review-note"
                 ? "pb-2"
                 : "pb-4",
         (row.kind === "message" && row.message.role === "assistant") ||
@@ -1494,7 +1560,9 @@ const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: Time
       {row.kind === "assistant-meta" ? <AssistantMetaTimelineRow row={row} /> : null}
       {row.kind === "proposed-plan" ? <ProposedPlanTimelineRow row={row} /> : null}
       {row.kind === "html-render" ? <HtmlRenderTimelineRow row={row} /> : null}
+      {row.kind === "machine-card" ? <MachineCardTimelineRow row={row} /> : null}
       {row.kind === "mcp-app" ? <McpAppTimelineRow row={row} /> : null}
+      {row.kind === "review-note" ? <ReviewNoteCard note={row.note} /> : null}
       {row.kind === "working" ? <WorkingTimelineRow row={row} /> : null}
       {row.kind === "worktree-setup" ? <WorktreeSetupTimelineRow row={row} /> : null}
       {row.kind === "event" ? <V2EventTimelineRow row={row} /> : null}

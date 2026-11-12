@@ -6,7 +6,12 @@ import {
 import { isShownUnderParent } from "@t3tools/client-runtime/state/threads";
 import type { AnyRouter } from "@tanstack/react-router";
 import { threadKey } from "@t3tools/client-runtime/state/entities";
-import type { EnvironmentId, OrchestrationV2ThreadShell, ThreadId } from "@t3tools/contracts";
+import {
+  type EnvironmentId,
+  isBackgroundedThread,
+  type OrchestrationV2ThreadShell,
+  type ThreadId,
+} from "@t3tools/contracts";
 import type { ClientSettings } from "@t3tools/contracts/settings";
 import * as Option from "effect/Option";
 import type { AtomRegistry } from "effect/reactivity";
@@ -25,8 +30,10 @@ import { environmentThreadShells } from "../state/threads";
 import {
   hasDesktopNotifications,
   hasNotificationSound,
+  isAppInForeground,
   playNotificationSound,
   setNotificationBadge,
+  showBackgroundNotification,
   threadNotificationTag,
   unlockNotificationAudio,
 } from "../threadNotifications";
@@ -124,7 +131,12 @@ export function startThreadNotifications(
         .has(threadKey({ environmentId, threadId: thread.id }))
     )
       return;
-    const { notificationMode: mode, inAppNotificationsEnabled } = getClientSettings();
+    const {
+      notificationMode: mode,
+      inAppNotificationsEnabled,
+      sidebarBackgroundedShelfEnabled,
+    } = getClientSettings();
+    if (sidebarBackgroundedShelfEnabled && isBackgroundedThread(state.raw)) return;
     const active = (router.state.matches.at(-1)?.params ?? {}) as {
       environmentId?: string;
       threadId?: string;
@@ -148,8 +160,7 @@ export function startThreadNotifications(
     }
     if (
       inAppNotificationsEnabled &&
-      document.visibilityState === "visible" &&
-      document.hasFocus() &&
+      isAppInForeground() &&
       (active.environmentId !== environmentId || active.threadId !== thread.id)
     ) {
       const toastKey = threadKey({ environmentId, threadId: thread.id });
@@ -187,34 +198,21 @@ export function startThreadNotifications(
       openToasts.set(toastKey, [...(openToasts.get(toastKey) ?? []), toastId]);
       return;
     }
-    if (
-      !hasDesktopNotifications(mode) ||
-      (document.visibilityState === "visible" && document.hasFocus()) ||
-      typeof Notification === "undefined" ||
-      Notification.permission !== "granted"
-    )
-      return;
-    try {
-      const notification = new Notification(title, {
-        body: thread.title,
-        tag: threadNotificationTag(environmentId, thread.id),
-        silent: true,
-        // Windows drops clicks after a toast moves into Notification Center.
-        requireInteraction: kind === "completion" && isWindowsPlatform(navigator.platform),
-      });
-      trackNotification(environmentId, thread.id, notification);
-      notification.addEventListener("click", () => {
-        notification.close();
-        window.focus();
-        void window.desktopBridge?.revealWindow().catch(() => undefined);
+    if (!hasDesktopNotifications(mode)) return;
+    const notification = showBackgroundNotification({
+      title,
+      body: thread.title,
+      tag: threadNotificationTag(environmentId, thread.id),
+      // Windows drops clicks after a toast moves into Notification Center.
+      requireInteraction: kind === "completion" && isWindowsPlatform(navigator.platform),
+      onClick: () => {
         void router.navigate({
           to: "/$environmentId/$threadId",
           params: { environmentId, threadId: thread.id },
         });
-      });
-    } catch {
-      // Some browsers expose Notification but reject desktop presentation.
-    }
+      },
+    });
+    if (notification) trackNotification(environmentId, thread.id, notification);
   };
 
   const observeThreads = (

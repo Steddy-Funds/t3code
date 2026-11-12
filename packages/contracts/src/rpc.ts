@@ -91,6 +91,27 @@ import {
   FilesystemBrowseError,
 } from "./filesystem.ts";
 import {
+  CodeIntelDefinitionInput,
+  CodeIntelDefinitionResult,
+  CodeIntelDocumentHighlightsResult,
+  CodeIntelDocumentInput,
+  CodeIntelDocumentSymbolsResult,
+  CodeIntelError,
+  CodeIntelHoverResult,
+  CodeIntelInstallServerInput,
+  CodeIntelInstallServerResult,
+  CodeIntelPositionInput,
+  CodeIntelReferencesInput,
+  CodeIntelReferencesResult,
+  CodeIntelRestartInput,
+  CodeIntelSemanticTokensInput,
+  CodeIntelSemanticTokensResult,
+  CodeIntelStatusInput,
+  CodeIntelStatusResult,
+  CodeIntelWorkspaceSymbolsInput,
+  CodeIntelWorkspaceSymbolsResult,
+} from "./codeIntel.ts";
+import {
   AgentSessionImportInput,
   AgentSessionImportProjectChangedError,
   AgentSessionImportProjectNotFoundError,
@@ -116,6 +137,7 @@ import {
 import {
   OrchestrationGetFullThreadDiffError,
   OrchestrationGetTurnDiffError,
+  OrchestrationGetTurnDiffFileContentsError,
 } from "./checkpointDiff.ts";
 import {
   WorktreeSetupCancelInput,
@@ -314,6 +336,7 @@ import {
 import {
   ServerConfigStreamEvent,
   DesktopUpdateCommitInput,
+  BrowserRunCheckResult,
   OtlpEndpointCheckInput,
   ServerPrepareTriageError,
   ServerPrepareTriageInput,
@@ -350,11 +373,30 @@ import {
   ResourceTelemetrySnapshot,
 } from "./resourceTelemetry.ts";
 import {
+  BucketEditedError,
+  MachineBucketLimitError,
+  MachineClaimsReleaseInput,
+  MachineProcessFrame,
+  MachineStatusSnapshot,
+  ServerGetThreadResourcesInput,
+  SubscribeMachineInput,
+  SubscribeMachineProcessesInput,
+  ThreadResources,
+} from "./machineResources.ts";
+import {
   UsageLimitSourceError,
   ProviderConsumeResetCreditInput,
   ProviderConsumeResetCreditResult,
 } from "./providerUsageLimits.ts";
-import { UsagePricing, UsageReadError, UsageSummary, UsageSummaryInput } from "./usage.ts";
+import {
+  ThreadUsage,
+  ThreadUsageInput,
+  TokenBurnRates,
+  UsagePricing,
+  UsageReadError,
+  UsageSummary,
+  UsageSummaryInput,
+} from "./usage.ts";
 import {
   StorageCleanupReport,
   DatabaseReclaimError,
@@ -383,6 +425,12 @@ import {
   ScheduledTaskUpsertInput,
   ScheduledTaskMutationResult,
 } from "./scheduledTask.ts";
+import {
+  ServedSiteDismissInput,
+  ServedSiteError,
+  ServedSiteStopInput,
+  ServedSitesSnapshot,
+} from "./servedSites.ts";
 import { SecretRequestAnswerInput, SecretRequestError } from "./secretRequest.ts";
 import {
   ProjectCloneActionInput,
@@ -428,6 +476,18 @@ export const WS_METHODS = {
 
   filesystemBrowse: "filesystem.browse",
   filesystemGetMetadata: "filesystem.getMetadata",
+
+  codeIntelStatus: "codeIntel.status",
+  codeIntelDefinition: "codeIntel.definition",
+  codeIntelReferences: "codeIntel.references",
+  codeIntelDocumentHighlights: "codeIntel.documentHighlights",
+  codeIntelHover: "codeIntel.hover",
+  codeIntelDocumentSymbols: "codeIntel.documentSymbols",
+  codeIntelWorkspaceSymbols: "codeIntel.workspaceSymbols",
+  codeIntelSemanticTokens: "codeIntel.semanticTokens",
+  codeIntelInstallServer: "codeIntel.installServer",
+  codeIntelRestart: "codeIntel.restart",
+
   agentSessionsScan: "agentSessions.scan",
   agentSessionsImport: "agentSessions.import",
   assetsCreateUrl: "assets.createUrl",
@@ -492,6 +552,10 @@ export const WS_METHODS = {
   previewReportStatus: "preview.reportStatus",
   previewStopLocalServer: "preview.stopLocalServer",
 
+  servedSitesSubscribe: "servedSites.subscribe",
+  servedSitesStop: "servedSites.stop",
+  servedSitesDismiss: "servedSites.dismiss",
+
   deviceConfigure: "device.configure",
   deviceList: "device.list",
   deviceTestHost: "device.testHost",
@@ -541,12 +605,16 @@ export const WS_METHODS = {
   serverGetResourceTelemetryHistory: "server.getResourceTelemetryHistory",
   serverRetryResourceTelemetry: "server.retryResourceTelemetry",
   serverCheckOtlpEndpoint: "server.checkOtlpEndpoint",
+  serverCheckBrowserRun: "server.checkBrowserRun",
   serverListTextGeneratorModels: "server.listTextGeneratorModels",
   serverPrepareTriage: "server.prepareTriage",
   serverSignalProcess: "server.signalProcess",
+  machineClaimsRelease: "machine.claims.release",
   serverReportClientActivity: "server.reportClientActivity",
   serverGetUsageSummary: "server.getUsageSummary",
   serverRefreshUsageRates: "server.refreshUsageRates",
+  serverGetThreadUsage: "server.getThreadUsage",
+  serverGetThreadResources: "server.getThreadResources",
 
   scheduledTasksSubscribe: "scheduledTasks.subscribe",
   scheduledTasksUpsert: "scheduledTasks.upsert",
@@ -624,6 +692,9 @@ export const WS_METHODS = {
   subscribeServerLifecycle: "subscribeServerLifecycle",
   subscribeAuthAccess: "subscribeAuthAccess",
   subscribeResourceTelemetry: "subscribeResourceTelemetry",
+  subscribeMachine: "subscribeMachine",
+  subscribeTokenBurnRates: "subscribeTokenBurnRates",
+  subscribeMachineProcesses: "subscribeMachineProcesses",
 } as const;
 
 const WsServerUpsertKeybindingRpc = Rpc.make(WS_METHODS.serverUpsertKeybinding, {
@@ -856,7 +927,13 @@ const WsServerUpdateSettingsRpc = Rpc.make(WS_METHODS.serverUpdateSettings, {
     providerInstanceMutation: Schema.optionalKey(ProviderInstanceMutation),
   }),
   success: ServerSettings,
-  error: Schema.Union([ServerSettingsError, EnvironmentAuthorizationError]),
+  // Bucket errors only answer fork clients writing `machineResources.buckets`.
+  error: Schema.Union([
+    ServerSettingsError,
+    BucketEditedError,
+    MachineBucketLimitError,
+    EnvironmentAuthorizationError,
+  ]),
 });
 
 const WsServerDiscoverSourceControlRpc = Rpc.make(WS_METHODS.serverDiscoverSourceControl, {
@@ -982,6 +1059,12 @@ const WsServerCheckOtlpEndpointRpc = Rpc.make(WS_METHODS.serverCheckOtlpEndpoint
   error: EnvironmentAuthorizationError,
 });
 
+const WsServerCheckBrowserRunRpc = Rpc.make(WS_METHODS.serverCheckBrowserRun, {
+  payload: Schema.Struct({}),
+  success: BrowserRunCheckResult,
+  error: EnvironmentAuthorizationError,
+});
+
 const WsServerListTextGeneratorModelsRpc = Rpc.make(WS_METHODS.serverListTextGeneratorModels, {
   payload: ListTextGeneratorModelsInput,
   success: ListTextGeneratorModelsResult,
@@ -998,6 +1081,18 @@ const WsServerGetUsageSummaryRpc = Rpc.make(WS_METHODS.serverGetUsageSummary, {
   payload: UsageSummaryInput,
   success: UsageSummary,
   error: Schema.Union([EnvironmentAuthorizationError, UsageReadError]),
+});
+
+const WsServerGetThreadUsageRpc = Rpc.make(WS_METHODS.serverGetThreadUsage, {
+  payload: ThreadUsageInput,
+  success: ThreadUsage,
+  error: Schema.Union([EnvironmentAuthorizationError, UsageReadError]),
+});
+
+const WsServerGetThreadResourcesRpc = Rpc.make(WS_METHODS.serverGetThreadResources, {
+  payload: ServerGetThreadResourcesInput,
+  success: ThreadResources,
+  error: EnvironmentAuthorizationError,
 });
 
 const WsServerRefreshUsageRatesRpc = Rpc.make(WS_METHODS.serverRefreshUsageRates, {
@@ -1404,6 +1499,68 @@ const WsFilesystemGetMetadataRpc = Rpc.make(WS_METHODS.filesystemGetMetadata, {
   error: EnvironmentAuthorizationError,
 });
 
+const CodeIntelRpcError = Schema.Union([CodeIntelError, EnvironmentAuthorizationError]);
+
+const WsCodeIntelStatusRpc = Rpc.make(WS_METHODS.codeIntelStatus, {
+  payload: CodeIntelStatusInput,
+  success: CodeIntelStatusResult,
+  error: CodeIntelRpcError,
+});
+
+const WsCodeIntelDefinitionRpc = Rpc.make(WS_METHODS.codeIntelDefinition, {
+  payload: CodeIntelDefinitionInput,
+  success: CodeIntelDefinitionResult,
+  error: CodeIntelRpcError,
+});
+
+const WsCodeIntelReferencesRpc = Rpc.make(WS_METHODS.codeIntelReferences, {
+  payload: CodeIntelReferencesInput,
+  success: CodeIntelReferencesResult,
+  error: CodeIntelRpcError,
+});
+
+const WsCodeIntelDocumentHighlightsRpc = Rpc.make(WS_METHODS.codeIntelDocumentHighlights, {
+  payload: CodeIntelPositionInput,
+  success: CodeIntelDocumentHighlightsResult,
+  error: CodeIntelRpcError,
+});
+
+const WsCodeIntelHoverRpc = Rpc.make(WS_METHODS.codeIntelHover, {
+  payload: CodeIntelPositionInput,
+  success: CodeIntelHoverResult,
+  error: CodeIntelRpcError,
+});
+
+const WsCodeIntelDocumentSymbolsRpc = Rpc.make(WS_METHODS.codeIntelDocumentSymbols, {
+  payload: CodeIntelDocumentInput,
+  success: CodeIntelDocumentSymbolsResult,
+  error: CodeIntelRpcError,
+});
+
+const WsCodeIntelWorkspaceSymbolsRpc = Rpc.make(WS_METHODS.codeIntelWorkspaceSymbols, {
+  payload: CodeIntelWorkspaceSymbolsInput,
+  success: CodeIntelWorkspaceSymbolsResult,
+  error: CodeIntelRpcError,
+});
+
+const WsCodeIntelSemanticTokensRpc = Rpc.make(WS_METHODS.codeIntelSemanticTokens, {
+  payload: CodeIntelSemanticTokensInput,
+  success: CodeIntelSemanticTokensResult,
+  error: CodeIntelRpcError,
+});
+
+const WsCodeIntelInstallServerRpc = Rpc.make(WS_METHODS.codeIntelInstallServer, {
+  payload: CodeIntelInstallServerInput,
+  success: CodeIntelInstallServerResult,
+  error: CodeIntelRpcError,
+});
+
+const WsCodeIntelRestartRpc = Rpc.make(WS_METHODS.codeIntelRestart, {
+  payload: CodeIntelRestartInput,
+  success: CodeIntelStatusResult,
+  error: CodeIntelRpcError,
+});
+
 const WsFilesystemBrowseRpc = Rpc.make(WS_METHODS.filesystemBrowse, {
   payload: FilesystemBrowseInput,
   success: FilesystemBrowseResult,
@@ -1695,6 +1852,23 @@ const WsPreviewStopLocalServerRpc = Rpc.make(WS_METHODS.previewStopLocalServer, 
   error: Schema.Union([PreviewStopLocalServerError, EnvironmentAuthorizationError]),
 });
 
+const WsServedSitesSubscribeRpc = Rpc.make(WS_METHODS.servedSitesSubscribe, {
+  payload: Schema.Struct({}),
+  success: ServedSitesSnapshot,
+  error: EnvironmentAuthorizationError,
+  stream: true,
+});
+
+const WsServedSitesStopRpc = Rpc.make(WS_METHODS.servedSitesStop, {
+  payload: ServedSiteStopInput,
+  error: Schema.Union([ServedSiteError, EnvironmentAuthorizationError]),
+});
+
+const WsServedSitesDismissRpc = Rpc.make(WS_METHODS.servedSitesDismiss, {
+  payload: ServedSiteDismissInput,
+  error: Schema.Union([ServedSiteError, EnvironmentAuthorizationError]),
+});
+
 const WsSubscribeDiscoveredLocalServersRpc = Rpc.make(WS_METHODS.subscribeDiscoveredLocalServers, {
   payload: Schema.Struct({
     configuredUrls: Schema.optional(ConfiguredLocalServerUrls),
@@ -1780,6 +1954,15 @@ const WsOrchestrationV2GetTurnDiffRpc = Rpc.make(ORCHESTRATION_V2_WS_METHODS.get
   success: OrchestrationV2RpcSchemas.getTurnDiff.output,
   error: Schema.Union([OrchestrationGetTurnDiffError, EnvironmentAuthorizationError]),
 });
+
+const WsOrchestrationV2GetTurnDiffFileContentsRpc = Rpc.make(
+  ORCHESTRATION_V2_WS_METHODS.getTurnDiffFileContents,
+  {
+    payload: OrchestrationV2RpcSchemas.getTurnDiffFileContents.input,
+    success: OrchestrationV2RpcSchemas.getTurnDiffFileContents.output,
+    error: Schema.Union([OrchestrationGetTurnDiffFileContentsError, EnvironmentAuthorizationError]),
+  },
+);
 
 const WsOrchestrationV2GetFullThreadDiffRpc = Rpc.make(
   ORCHESTRATION_V2_WS_METHODS.getFullThreadDiff,
@@ -2059,6 +2242,32 @@ const WsSubscribeResourceTelemetryRpc = Rpc.make(WS_METHODS.subscribeResourceTel
   stream: true,
 });
 
+const WsSubscribeMachineRpc = Rpc.make(WS_METHODS.subscribeMachine, {
+  payload: SubscribeMachineInput,
+  success: MachineStatusSnapshot,
+  error: EnvironmentAuthorizationError,
+  stream: true,
+});
+
+const WsSubscribeTokenBurnRatesRpc = Rpc.make(WS_METHODS.subscribeTokenBurnRates, {
+  payload: Schema.Struct({}),
+  success: TokenBurnRates,
+  error: EnvironmentAuthorizationError,
+  stream: true,
+});
+
+const WsMachineClaimsReleaseRpc = Rpc.make(WS_METHODS.machineClaimsRelease, {
+  payload: MachineClaimsReleaseInput,
+  error: EnvironmentAuthorizationError,
+});
+
+const WsSubscribeMachineProcessesRpc = Rpc.make(WS_METHODS.subscribeMachineProcesses, {
+  payload: SubscribeMachineProcessesInput,
+  success: MachineProcessFrame,
+  error: EnvironmentAuthorizationError,
+  stream: true,
+});
+
 export class RpcScopeAuthorization extends RpcMiddleware.Service<RpcScopeAuthorization>()(
   "t3/contracts/RpcScopeAuthorization",
   { error: EnvironmentAuthorizationError },
@@ -2119,11 +2328,15 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerGetResourceTelemetryHistoryRpc,
   WsServerRetryResourceTelemetryRpc,
   WsServerCheckOtlpEndpointRpc,
+  WsServerCheckBrowserRunRpc,
   WsServerListTextGeneratorModelsRpc,
   WsServerPrepareTriageRpc,
   WsServerGetUsageSummaryRpc,
   WsServerRefreshUsageRatesRpc,
+  WsServerGetThreadUsageRpc,
+  WsServerGetThreadResourcesRpc,
   WsServerSignalProcessRpc,
+  WsMachineClaimsReleaseRpc,
   WsScheduledTasksSubscribeRpc,
   WsScheduledTasksUpsertRpc,
   WsScheduledTasksSetEnabledRpc,
@@ -2196,6 +2409,16 @@ export const WsRpcGroup = RpcGroup.make(
   WsShellOpenInEditorRpc,
   WsFilesystemBrowseRpc,
   WsFilesystemGetMetadataRpc,
+  WsCodeIntelStatusRpc,
+  WsCodeIntelDefinitionRpc,
+  WsCodeIntelReferencesRpc,
+  WsCodeIntelDocumentHighlightsRpc,
+  WsCodeIntelHoverRpc,
+  WsCodeIntelDocumentSymbolsRpc,
+  WsCodeIntelWorkspaceSymbolsRpc,
+  WsCodeIntelSemanticTokensRpc,
+  WsCodeIntelInstallServerRpc,
+  WsCodeIntelRestartRpc,
   WsAgentSessionsScanRpc,
   WsAgentSessionsImportRpc,
   WsAssetsCreateUrlRpc,
@@ -2244,6 +2467,9 @@ export const WsRpcGroup = RpcGroup.make(
   WsPreviewReportStatusRpc,
   WsSubscribePreviewEventsRpc,
   WsPreviewStopLocalServerRpc,
+  WsServedSitesSubscribeRpc,
+  WsServedSitesStopRpc,
+  WsServedSitesDismissRpc,
   WsSubscribeDiscoveredLocalServersRpc,
   WsDeviceConfigureRpc,
   WsDeviceListRpc,
@@ -2260,6 +2486,9 @@ export const WsRpcGroup = RpcGroup.make(
   WsSubscribeServerLifecycleRpc,
   WsSubscribeAuthAccessRpc,
   WsSubscribeResourceTelemetryRpc,
+  WsSubscribeMachineRpc,
+  WsSubscribeTokenBurnRatesRpc,
+  WsSubscribeMachineProcessesRpc,
   WsOrchestrationV2DispatchCommandRpc,
   WsOrchestrationV2GetWorkflowScriptRpc,
   WsOrchestrationV2GetNativeChildWorkRpc,
@@ -2267,6 +2496,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsOrchestrationV2ForceStopThreadRpc,
   WsOrchestrationV2GetTurnItemRpc,
   WsOrchestrationV2GetTurnDiffRpc,
+  WsOrchestrationV2GetTurnDiffFileContentsRpc,
   WsOrchestrationV2GetFullThreadDiffRpc,
   WsOrchestrationV2SearchThreadsRpc,
   WsOrchestrationV2SearchThreadRpc,

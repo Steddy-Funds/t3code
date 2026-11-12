@@ -1,12 +1,32 @@
 import {
   BackgroundActivityProfile,
   BackgroundActivityProfileSelection,
+  Claim,
+  ClaimId,
+  ClaimTarget,
   ExecutionEnvironmentDescriptor,
+  GpuDeviceSample,
+  MACHINE_PROCESS_SNAPSHOT_MAX_LIMIT,
+  MachineBucket,
+  MachineBucketId,
+  MachineBucketInput,
+  MachineProcessSnapshot,
+  MachineProcessSnapshotGroupBy,
+  MachineTotalsSummary,
+  MachineVerdict,
+  MachineVerdictReason,
+  NonNegativeInt,
   OrchestratorMcpEnvironmentTarget,
   OrchestratorMcpFailure,
+  PositiveInt,
   ServerSettings,
   ServerSettingsPatch,
+  ThreadId,
+  ThreadResourcePoint,
+  ThreadResourceTotals,
 } from "@t3tools/contracts";
+import { MachineCardSnapshot } from "@t3tools/shared/toolOutput";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Schema from "effect/Schema";
 import { Tool, Toolkit } from "effect/ai";
 import * as ServerEnvironment from "../../../environment/ServerEnvironment.ts";
@@ -67,4 +87,130 @@ const EnvironmentPreferencesTool = Tool.make("t3_environment_preferences_update"
   }),
   success: Schema.Struct(PreferenceFields),
 }).annotate(Tool.Destructive, true);
-export const EnvironmentToolkit = Toolkit.make(EnvironmentReadTool, EnvironmentPreferencesTool);
+const MachineReadTool = Tool.make("t3_machine_read", {
+  ...shared,
+  description:
+    "Read this machine's load: verdict (stressed or not, and why), totals, per-core CPU %, GPUs, bucket totals and running threads' usage. `processes` adds the busiest processes (`limit`, default 20) and `groupBy` totals, or with `unbucketed: true` those no thread, claim or bucket owns and their share; `threadId` adds that thread's usage, its subagents' included. `show: true` also shows the user a live card.",
+  parameters: Schema.Struct({
+    environmentId: OrchestratorMcpEnvironmentTarget,
+    processes: Schema.optionalKey(
+      Schema.Struct({
+        groupBy: Schema.optionalKey(MachineProcessSnapshotGroupBy),
+        limit: Schema.optionalKey(
+          Schema.Int.check(
+            Schema.isBetween({ minimum: 1, maximum: MACHINE_PROCESS_SNAPSHOT_MAX_LIMIT }),
+          ),
+        ),
+        unbucketed: Schema.optionalKey(Schema.Boolean),
+      }),
+    ),
+    threadId: Schema.optionalKey(ThreadId),
+    show: Schema.optionalKey(Schema.Boolean),
+  }),
+  success: Schema.Struct({
+    verdict: MachineVerdict,
+    reason: Schema.NullOr(MachineVerdictReason),
+    sampleAgeMs: NonNegativeInt,
+    totals: Schema.NullOr(MachineTotalsSummary),
+    perCore: Schema.Array(Schema.Number),
+    gpus: Schema.optionalKey(Schema.Array(GpuDeviceSample)),
+    buckets: Schema.optionalKey(
+      Schema.Array(
+        Schema.Struct({
+          bucketId: MachineBucketId,
+          name: Schema.String,
+          cpuPercent: Schema.Number,
+          rssBytes: NonNegativeInt,
+          count: NonNegativeInt,
+        }),
+      ),
+    ),
+    runningThreads: Schema.Array(
+      Schema.Struct({ threadId: ThreadId, title: Schema.String, usage: ThreadResourceTotals }),
+    ),
+    processes: Schema.optionalKey(MachineProcessSnapshot),
+    unbucketed: Schema.optionalKey(
+      Schema.Struct({
+        sharePercent: Schema.NullOr(Schema.Number),
+        sampleAgeMs: NonNegativeInt,
+        processes: Schema.Array(
+          Schema.Struct({
+            pid: NonNegativeInt,
+            ppid: NonNegativeInt,
+            name: Schema.String,
+            exe: Schema.String,
+            command: Schema.optionalKey(Schema.String),
+            cwd: Schema.optionalKey(Schema.String),
+            user: Schema.String,
+            container: Schema.optionalKey(Schema.String),
+            parent: Schema.optionalKey(Schema.String),
+            cpuPercent: Schema.Number,
+            rssBytes: NonNegativeInt,
+          }),
+        ),
+        truncated: Schema.optionalKey(PositiveInt),
+      }),
+    ),
+    processesUnavailable: Schema.optionalKey(Schema.String),
+    thread: Schema.optionalKey(
+      Schema.Struct({
+        threadId: ThreadId,
+        current: Schema.NullOr(ThreadResourceTotals),
+        recent: Schema.Array(ThreadResourcePoint),
+      }),
+    ),
+    machineCard: Schema.optionalKey(
+      Schema.Struct({
+        environmentId: ExecutionEnvironmentDescriptor.fields.environmentId,
+        snapshot: MachineCardSnapshot,
+      }),
+    ),
+  }),
+})
+  .annotate(Tool.Readonly, true)
+  .annotate(Tool.Destructive, false);
+const MachineBucketsTool = Tool.make("t3_machine_buckets", {
+  ...shared,
+  dependencies: [...shared.dependencies, SecureRandom.SecureRandom],
+  description:
+    "Group this machine's processes into named buckets for its task manager. `list` shows buckets and who last edited them; `upsert` creates one (omit `bucket.id`) or replaces it; `delete` removes `bucketId`. A process matching any rule joins the bucket.",
+  parameters: Schema.Struct({
+    action: Schema.Literals(["list", "upsert", "delete"]),
+    bucket: Schema.optionalKey(
+      Schema.Struct({
+        id: Schema.optionalKey(MachineBucketId),
+        name: MachineBucketInput.fields.name,
+        rules: MachineBucketInput.fields.rules,
+      }),
+    ),
+    bucketId: Schema.optionalKey(MachineBucketId),
+  }),
+  success: Schema.Struct({
+    buckets: Schema.optionalKey(Schema.Array(MachineBucket)),
+    bucket: Schema.optionalKey(MachineBucket),
+    deleted: Schema.optionalKey(MachineBucketId),
+  }),
+}).annotate(Tool.Destructive, true);
+const ResourceClaimTool = Tool.make("t3_resource_claim", {
+  ...shared,
+  description:
+    "Count a process tree, container or cgroup you started (a dev server, a test stack) as a thread's CPU and memory. `claim` takes `target` (a process needs its start time in epoch ms: `ps -o lstart= -p <pid>` converted; within 1 s matches), `release` takes `claimId`, `list` shows the thread's claims. `threadId` defaults to this thread. Claims end when the target exits or the server restarts.",
+  parameters: Schema.Struct({
+    action: Schema.Literals(["claim", "release", "list"]),
+    target: Schema.optionalKey(ClaimTarget),
+    threadId: Schema.optionalKey(ThreadId),
+    claimId: Schema.optionalKey(ClaimId),
+  }),
+  success: Schema.Struct({
+    claims: Schema.optionalKey(Schema.Array(Claim)),
+    claim: Schema.optionalKey(Claim),
+    released: Schema.optionalKey(ClaimId),
+  }),
+}).annotate(Tool.Destructive, false);
+export const EnvironmentToolkit = Toolkit.make(
+  EnvironmentReadTool,
+  EnvironmentPreferencesTool,
+  MachineReadTool,
+  MachineBucketsTool,
+  ResourceClaimTool,
+);

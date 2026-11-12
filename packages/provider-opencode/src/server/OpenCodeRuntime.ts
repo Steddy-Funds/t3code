@@ -35,6 +35,8 @@ import * as OpenCodeServerLedger from "./OpenCodeServerLedger.ts";
 import { collectStreamAsString } from "@t3tools/provider-core/server/snapshotProbe";
 import * as NetService from "@t3tools/shared/Net";
 import { AgentScope } from "@t3tools/shared/AgentScope";
+import { GuardEnvironment } from "@t3tools/shared/GuardEnvironment";
+import { ProcessOwnershipRegistry } from "@t3tools/shared/ProcessOwnershipRegistry";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { compareSemverVersions, parseSemver } from "@t3tools/shared/semver";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
@@ -249,6 +251,8 @@ export class OpenCodeRuntime extends Context.Service<
       readonly hostname?: string;
       readonly timeoutMs?: number;
       readonly verify?: (url: string) => Effect.Effect<string, OpenCodeRuntimeError>;
+      /** The thread whose session owns this server. */
+      readonly threadId?: string;
     }) => Effect.Effect<OpenCodeServerProcess, OpenCodeRuntimeError, Scope.Scope>;
     readonly connectToOpenCodeServer: (input: {
       readonly binaryPath: string;
@@ -259,6 +263,7 @@ export class OpenCodeRuntime extends Context.Service<
       readonly port?: number;
       readonly hostname?: string;
       readonly timeoutMs?: number;
+      readonly threadId?: string;
     }) => Effect.Effect<OpenCodeServerConnection, OpenCodeRuntimeError, Scope.Scope>;
     readonly runOpenCodeCommand: (input: {
       readonly binaryPath: string;
@@ -421,6 +426,8 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
   const hostPlatform = yield* HostProcess.Platform;
   const serverLedger = yield* OpenCodeServerLedger.OpenCodeServerLedger;
   const agentScope = yield* AgentScope;
+  const ownership = yield* ProcessOwnershipRegistry;
+  const guard = yield* GuardEnvironment;
   // npm's Windows shim lets the child escape libuv kill-on-close; run its executable directly.
   const resolveCommand = (command: string, args: ReadonlyArray<string>, env?: NodeJS.ProcessEnv) =>
     resolveSpawnCommand(command, args, { ...(env ? { env } : {}), bypassNpmShim: true });
@@ -535,6 +542,7 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
           shell: spawnCommand.shell,
           env: {
             ...input.environment,
+            ...guard.env(),
             ...(serverPassword !== undefined ? { OPENCODE_SERVER_PASSWORD: serverPassword } : {}),
             // The value is set explicitly (rather than relying on inheritance) because
             // `extendEnv` is false whenever `input.environment` is provided.
@@ -571,6 +579,18 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
     // Registered before recording, so an interrupt while the ledger writes
     // still stops the group.
     yield* Scope.addFinalizer(runtimeScope, terminateChild);
+    const cgroup =
+      launch.unit === undefined ? undefined : yield* agentScope.controlGroup(launch.unit);
+    const releaseRoot = ownership.registerRoot({
+      pid: Number(child.pid),
+      ...(cgroup === undefined ? {} : { cgroup }),
+      // Each session starts its own serve; only the owner's probes and text generation share one.
+      owner:
+        input.threadId === undefined
+          ? { type: "shared", provider: "opencode", label: "serve" }
+          : { type: "thread", threadId: input.threadId },
+    });
+    yield* Scope.addFinalizer(runtimeScope, Effect.sync(releaseRoot));
     const forgetServer = yield* serverLedger.track({ pid: Number(child.pid), port, args });
     yield* Scope.addFinalizer(ledgerScope, forgetServer);
 
@@ -759,6 +779,7 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
       ...(input.port !== undefined ? { port: input.port } : {}),
       ...(input.hostname !== undefined ? { hostname: input.hostname } : {}),
       ...(input.timeoutMs !== undefined ? { timeoutMs: input.timeoutMs } : {}),
+      ...(input.threadId !== undefined ? { threadId: input.threadId } : {}),
     }).pipe(
       Effect.map((server) => ({
         url: server.url,

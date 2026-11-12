@@ -1,5 +1,7 @@
 import {
   DEFAULT_SERVER_SETTINGS,
+  MachineBucket,
+  MachineThresholds,
   ModelSelection,
   ProjectId,
   ProjectScript,
@@ -380,6 +382,91 @@ const PersistedServerSettings = Schema.Struct({
 // Parse first and decode second, so a managed policy can fill its defaults in between.
 const decodeSettingsFileJsonExit = Schema.decodeUnknownExit(fromLenientJson(Schema.Unknown));
 const decodePersistedServerSettingsExit = Schema.decodeUnknownExit(PersistedServerSettings);
+const decodeMachineThresholdsExit = Schema.decodeUnknownExit(MachineThresholds);
+const decodeMachineBucketExit = Schema.decodeUnknownExit(MachineBucket);
+
+const isPlainRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+/**
+ * Drops invalid machine thresholds and buckets entry by entry, so one bad entry keeps the rest.
+ * A dropped threshold goes back to its default. A dropped bucket is returned in `unreadableBuckets`
+ * so writes can keep it: a newer build may have stored a rule this one cannot read.
+ */
+export function dropInvalidMachineThresholds(file: unknown): {
+  readonly file: unknown;
+  readonly dropped: ReadonlyArray<string>;
+  readonly unreadableBuckets: Readonly<Record<string, unknown>>;
+} {
+  const unreadableBuckets: Record<string, unknown> = {};
+  if (!isPlainRecord(file) || file.machineResources === undefined) {
+    return { file, dropped: [], unreadableBuckets };
+  }
+  const machineResources = file.machineResources;
+  if (!isPlainRecord(machineResources)) {
+    const { machineResources: _invalid, ...rest } = file;
+    return { file: rest, dropped: ["machineResources"], unreadableBuckets };
+  }
+  const next: Record<string, unknown> = { ...machineResources };
+  const dropped: Array<string> = [];
+  const sanitize = (
+    field: string,
+    isValid: (key: string, value: unknown) => boolean,
+    onDrop: (key: string, value: unknown) => void = () => {},
+  ) => {
+    const entries = machineResources[field];
+    if (entries === undefined) return;
+    if (!isPlainRecord(entries)) {
+      delete next[field];
+      dropped.push(`machineResources.${field}`);
+      return;
+    }
+    const kept: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(entries)) {
+      if (isValid(key, value)) kept[key] = value;
+      else {
+        dropped.push(`machineResources.${field}.${key}`);
+        onDrop(key, value);
+      }
+    }
+    next[field] = kept;
+  };
+  sanitize("thresholds", (key, value) =>
+    Exit.isSuccess(decodeMachineThresholdsExit({ [key]: value })),
+  );
+  sanitize(
+    "buckets",
+    (key, value) =>
+      Exit.isSuccess(decodeMachineBucketExit(value)) && isPlainRecord(value) && value.id === key,
+    (key, value) => {
+      unreadableBuckets[key] = value;
+    },
+  );
+  if (dropped.length === 0) return { file, dropped, unreadableBuckets };
+  return { file: { ...file, machineResources: next }, dropped, unreadableBuckets };
+}
+
+/**
+ * Puts back buckets the file held that this build could not read, so saving other settings
+ * never erases them. A readable bucket saved under the same id since then wins.
+ */
+export function keepUnreadableBuckets(
+  settingsJson: string,
+  unreadableBuckets: Readonly<Record<string, unknown>>,
+): string {
+  if (Object.keys(unreadableBuckets).length === 0) return settingsJson;
+  const file = JSON.parse(settingsJson) as Record<string, unknown>;
+  const machineResources = isPlainRecord(file.machineResources) ? file.machineResources : {};
+  const buckets = isPlainRecord(machineResources.buckets) ? machineResources.buckets : {};
+  return JSON.stringify(
+    {
+      ...file,
+      machineResources: { ...machineResources, buckets: { ...unreadableBuckets, ...buckets } },
+    },
+    null,
+    2,
+  );
+}
 const LegacyProviderSettingsJson = fromLenientJson(
   Schema.Struct({
     providers: Schema.optionalKey(Schema.Record(Schema.String, Schema.Unknown)),
@@ -688,6 +775,7 @@ const make = Effect.gen(function* () {
   const cacheKey = "settings" as const;
   const changesPubSub = yield* PubSub.unbounded<ServerSettings>();
   const startedRef = yield* Ref.make(false);
+  const unreadableBucketsRef = yield* Ref.make<Readonly<Record<string, unknown>>>({});
   const startedDeferred = yield* Deferred.make<void, ServerSettingsError>();
   const watcherScope = yield* Scope.make("sequential");
   yield* Effect.addFinalizer(() => Scope.close(watcherScope, Exit.void));
@@ -737,7 +825,7 @@ const make = Effect.gen(function* () {
 
       return yield* writeFileStringAtomically({
         filePath: settingsPath,
-        contents: `${sparseSettingsJson}\n`,
+        contents: `${keepUnreadableBuckets(sparseSettingsJson, yield* Ref.get(unreadableBucketsRef))}\n`,
       }).pipe(
         Effect.provideService(FileSystem.FileSystem, fs),
         Effect.provideService(Path.Path, pathService),
@@ -792,9 +880,20 @@ const make = Effect.gen(function* () {
     if (yield* readConfigExists) {
       const raw = yield* readRawConfig;
       const parsed = decodeSettingsFileJsonExit(raw);
+      const sanitized = dropInvalidMachineThresholds(Exit.isSuccess(parsed) ? parsed.value : null);
+      yield* Ref.set(unreadableBucketsRef, sanitized.unreadableBuckets);
+      if (sanitized.dropped.length > 0) {
+        yield* Effect.logWarning(
+          "ignoring invalid machine thresholds or buckets in settings.json",
+          {
+            path: settingsPath,
+            keys: sanitized.dropped,
+          },
+        );
+      }
       const decoded = Exit.isFailure(parsed)
         ? parsed
-        : decodePersistedServerSettingsExit(managed.withDefaults(parsed.value));
+        : decodePersistedServerSettingsExit(managed.withDefaults(sanitized.file));
       const legacySettings = decodeLegacyProviderSettingsJsonExit(raw);
       if (legacySettings._tag === "Success") {
         legacyProviders = legacySettings.value.providers;

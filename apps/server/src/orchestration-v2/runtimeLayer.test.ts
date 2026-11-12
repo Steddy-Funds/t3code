@@ -1,6 +1,7 @@
 import { PullRequestProviderError } from "@t3tools/source-control-core/server/PullRequestProvider";
 import { SourceControlProviderKind } from "@t3tools/contracts";
 import { limitRecoveryCommand } from "./UsageLimitRecoveryWorker.ts";
+import * as LoadPauseDocker from "./LoadPauseDocker.ts";
 import { createOrchestrationV2TurnItemVisibility } from "@t3tools/shared/orchestrationV2Timeline";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
@@ -373,6 +374,7 @@ const layerResourceCleanupTest = ResourceCleanupService.layer.pipe(
     Layer.mergeAll(
       Layer.mock(PreviewManager.PreviewManager)({ close: () => Effect.void }),
       Layer.mock(TerminalManager.TerminalManager)({ close: () => Effect.void }),
+      Layer.mock(LoadPauseDocker.LoadPauseDocker)({}),
     ),
   ),
 );
@@ -2815,6 +2817,18 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
           threadId,
         },
       );
+
+      const outbox = yield* EffectOutbox.EffectOutboxV2;
+      const machineClaimCleanups = (commandId: string) =>
+        outbox
+          .listByCommandId(CommandId.make(commandId))
+          .pipe(
+            Effect.map((effects) =>
+              effects.filter((effect) => effect.request.type === "machine-claims.cleanup"),
+            ),
+          );
+      assert.lengthOf(yield* machineClaimCleanups("runtime-layer-lifecycle-archive"), 0);
+      assert.lengthOf(yield* machineClaimCleanups("runtime-layer-lifecycle-delete"), 1);
 
       const projection = yield* orchestrator.getThreadProjection(threadId);
       assert.equal(projection.thread.title, "Renamed lifecycle thread");
@@ -6255,6 +6269,149 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
       assert.deepEqual(delivered.modelSelection, pickedSelection);
       assert.deepEqual(after.thread.modelSelection, pickedSelection);
     }),
+  );
+
+  /** A running turn with two agent messages queued behind it, as t3_thread_send queues them. */
+  const queueTwoAgentMessages = Effect.fn("queueTwoAgentMessages")(function* (threadId: ThreadId) {
+    const orchestrator = yield* Orchestrator.OrchestratorV2;
+    yield* orchestrator.dispatch({
+      type: "thread.create",
+      commandId: CommandId.make(`${threadId}:create`),
+      threadId,
+      projectId: ProjectId.make(`${threadId}:project`),
+      createdBy: "user",
+      creationSource: "web",
+      title: "Queued agent messages",
+      modelSelection,
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      branch: null,
+      worktreePath: process.cwd(),
+    });
+    for (const key of ["active", "first", "second"] as const) {
+      yield* orchestrator.dispatch({
+        type: "message.dispatch",
+        commandId: CommandId.make(`${threadId}:${key}`),
+        threadId,
+        messageId: MessageId.make(`${threadId}:${key}`),
+        text: key,
+        attachments: [],
+        ...(key === "active"
+          ? {
+              modelSelection,
+              dispatchMode: { type: "start_immediately" as const },
+              createdBy: "user" as const,
+              creationSource: "web" as const,
+            }
+          : {
+              dispatchMode: { type: "queue_after_active" as const },
+              createdBy: "agent" as const,
+              creationSource: "mcp" as const,
+            }),
+      });
+    }
+    const [active, first, second] = (yield* orchestrator.getThreadProjection(threadId)).runs;
+    assert.isDefined(active);
+    assert.isDefined(first);
+    assert.isDefined(second);
+    return { active, first, second };
+  });
+
+  it.effect("Send now starts one queued agent message without the ones behind it", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const threadId = ThreadId.make("runtime-layer-send-now-agent-message");
+      const { active, first, second } = yield* queueTwoAgentMessages(threadId);
+      const now = yield* DateTime.now;
+      // A stopped thread: nothing runs and the queue is held, which is when Send now applies.
+      yield* (yield* EventSink.EventSinkV2).write({
+        events: [active, first, second].map((run) => ({
+          id: EventId.make(`${run.id}:stopped`),
+          type: "run.updated" as const,
+          threadId,
+          runId: run.id,
+          occurredAt: now,
+          payload:
+            run.id === active.id
+              ? { ...run, status: "interrupted" as const, completedAt: now }
+              : { ...run, queueHeld: true },
+        })),
+      });
+      yield* orchestrator.dispatch({
+        type: "queued-run.start",
+        commandId: CommandId.make(`${threadId}:send-now`),
+        threadId,
+        runId: first.id,
+      });
+      const after = yield* orchestrator.getThreadProjection(threadId);
+      assert.equal(after.runs.find((run) => run.id === first.id)?.status, "starting");
+      assert.deepInclude(
+        after.runs.find((run) => run.id === second.id),
+        { status: "queued" },
+      );
+      assert.isUndefined(after.runs.find((run) => run.id === second.id)?.mergedIntoRunId);
+    }),
+  );
+
+  it.effect(
+    "holds a merged batch a restart caught before its turn started, then sends it whole",
+    () =>
+      Effect.gen(function* () {
+        const orchestrator = yield* Orchestrator.OrchestratorV2;
+        const recovery = yield* ProviderRuntimeRecoveryService.ProviderRuntimeRecoveryService;
+        const threadId = ThreadId.make("runtime-layer-merged-batch-restart");
+        const { active, first, second } = yield* queueTwoAgentMessages(threadId);
+        const now = yield* DateTime.now;
+        yield* (yield* EventSink.EventSinkV2).write({
+          events: [
+            {
+              id: EventId.make(`${active.id}:completed`),
+              type: "run.updated",
+              threadId,
+              runId: active.id,
+              occurredAt: now,
+              payload: { ...active, status: "completed", completedAt: now },
+            },
+          ],
+        });
+        yield* orchestrator.resumeQueuedRuns;
+        const batchRows = Effect.map(orchestrator.getThreadProjection(threadId), (projection) => ({
+          run: projection.runs.find((run) => run.id === first.id),
+          merged: projection.runs.find((run) => run.id === second.id),
+          rows: projection.turnItems
+            .filter((item) => item.type === "user_message" && item.runId === first.id)
+            .toSorted((left, right) => left.ordinal - right.ordinal)
+            .map((item) => [item.type === "user_message" ? item.messageId : null, item.status]),
+        }));
+        const messageIds = [first.userMessageId, second.userMessageId];
+        const starting = yield* batchRows;
+        assert.equal(starting.run?.status, "starting");
+        assert.deepEqual(
+          starting.rows,
+          messageIds.map((id) => [id, "completed"]),
+        );
+
+        yield* recovery.reconcile("startup");
+        const held = yield* batchRows;
+        assert.deepInclude(held.run, { status: "queued", queueHeld: true });
+        assert.deepEqual(
+          held.rows,
+          messageIds.map((id) => [id, "pending"]),
+        );
+
+        yield* orchestrator.dispatch({
+          type: "queue.resume",
+          commandId: CommandId.make(`${threadId}:resume`),
+          threadId,
+        });
+        const resumed = yield* batchRows;
+        assert.equal(resumed.run?.status, "starting");
+        assert.deepEqual(
+          resumed.rows,
+          messageIds.map((id) => [id, "completed"]),
+        );
+        assert.deepInclude(resumed.merged, { status: "cancelled", mergedIntoRunId: first.id });
+      }),
   );
 
   it.effect("keeps a buffered provider wake on its own provider behind a queued pick", () =>

@@ -2,7 +2,7 @@ import {
   CommandId,
   MessageId,
   PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
-  type ProjectId,
+  ProjectId,
   ScheduledTask,
   ScheduledTaskError,
   ScheduledTaskId,
@@ -24,10 +24,14 @@ import {
   type ScheduledTaskSetEnabledInput,
   type ScheduledTaskThreadMode,
   type ScheduledTaskUpsertInput,
+  BACKGROUNDED_THREAD_TAG,
+  MACHINE_BUCKETS_THREAD_TAG,
+  type ServerSettings,
   managedPolicyDeniedMessage,
   scheduledTaskThreadMode,
   managedRuntimeModeDenial,
 } from "@t3tools/contracts";
+import { MACHINE_BUCKETS_PROMPT, resolveMachineBucketsModel } from "@t3tools/shared/machineBuckets";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Digest from "effect/crypto/Digest";
@@ -278,6 +282,20 @@ export class ScheduledTaskService extends Context.Service<
       ScheduledTaskRunNowResult & { readonly threadId: ThreadId | null },
       ScheduledTaskError
     >;
+    /**
+     * Runs a `load` task for one episode through the same path as every other trigger.
+     * A task deleted, paused or moved off `load` since the monitor saw it is skipped.
+     */
+    readonly triggerLoad: (
+      id: ScheduledTaskId,
+      episode: string,
+      /** The built-in's unowned processes at fire time, keyed by `unownedProcessKey`. */
+      unowned?: ReadonlyArray<string>,
+    ) => Effect.Effect<void, ScheduledTaskError>;
+    /** Keeps built-in rows in step with settings; the server calls it on every settings change. */
+    readonly ensureBuiltInTasks: (
+      settings: ServerSettings,
+    ) => Effect.Effect<void, ScheduledTaskError>;
     readonly rotateWebhookToken: (
       input: ScheduledTaskRotateWebhookTokenInput,
     ) => Effect.Effect<ScheduledTaskMutationResult, ScheduledTaskError>;
@@ -373,6 +391,48 @@ function webhookEndpoint(
   };
 }
 
+export const MACHINE_BUCKETS_TASK_ID = ScheduledTaskId.make("builtin:machine-buckets");
+const MACHINE_BUCKETS_TITLE = "Machine buckets";
+const MACHINE_BUCKETS_PROJECT_PLACEHOLDER = ProjectId.make("builtin:scratch");
+const NO_PROVIDER = "No provider available";
+const BUILT_IN_REJECTED =
+  "This task is built in. Turn it on or off with Auto-buckets in this machine's settings.";
+
+/** Built-in rows are known by id, so they need no column. */
+const BUILT_IN_TASKS: ReadonlyMap<string, NonNullable<ScheduledTask["builtIn"]>> = new Map([
+  [MACHINE_BUCKETS_TASK_ID, "machine-buckets"],
+]);
+
+/** Background runs of the built-in start at most this often; its row's last run start survives restarts. */
+const MACHINE_BUCKETS_COOLDOWN_MS = 6 * 60 * 60 * 1000;
+const MACHINE_BUCKETS_MIN_NEW_SHARE = 0.3;
+
+/** A container counts as one program; any other process by its name. */
+export const unownedProcessKey = (process: {
+  readonly name: string;
+  readonly container?: string;
+}): string => (process.container === undefined ? process.name : `container:${process.container}`);
+
+/** Whether enough of `next` is new since the last run's set to be worth another run. */
+export function unownedSetChanged(
+  previous: ReadonlySet<string> | null,
+  next: ReadonlyArray<string>,
+): boolean {
+  const distinct = new Set(next);
+  if (distinct.size === 0) return false;
+  if (previous === null) return true;
+  let added = 0;
+  for (const key of distinct) if (!previous.has(key)) added += 1;
+  return added / distinct.size >= MACHINE_BUCKETS_MIN_NEW_SHARE;
+}
+
+/** Fires once the unbucketed share reaches 25 % and re-arms once it falls to 15 %. */
+const MACHINE_BUCKETS_SCHEDULE: ScheduledTask["schedule"] = {
+  type: "load",
+  condition: { metric: "unbucketedSharePercent", op: ">=", threshold: 25, sustainSeconds: 0 },
+  clear: { metric: "unbucketedSharePercent", op: "<=", threshold: 15, sustainSeconds: 0 },
+};
+
 // Runs per task row; list and lookup operations already own the span.
 const decodeRow = Effect.fnUntraced(
   function* (row: ScheduledTaskRow, origin: WebhookOrigin | null = null) {
@@ -380,6 +440,7 @@ const decodeRow = Effect.fnUntraced(
     const webhook = schedule.type === "webhook" ? webhookEndpoint(row, origin) : undefined;
     const workspaceStrategy = yield* decodeWorkspaceStrategyJson(row.workspace_strategy_json);
     const modelSelection = yield* decodeModelSelectionJson(row.model_selection_json);
+    const builtIn = BUILT_IN_TASKS.get(row.task_id);
     return yield* decodeTask({
       id: row.task_id,
       title: row.title,
@@ -403,6 +464,7 @@ const decodeRow = Effect.fnUntraced(
       lastRunError: row.last_run_error,
       runCount: row.run_count,
       ...(webhook === undefined ? {} : { webhook }),
+      ...(builtIn === undefined ? {} : { builtIn }),
     });
   },
   (effect, row, _origin?) =>
@@ -417,8 +479,19 @@ const decodeRow = Effect.fnUntraced(
     ),
 );
 
+/** Polls re-read every row, so one bad row warns once per task id per process. */
+const warnUndecodableOnce = (warned: Set<string>, taskId: string, cause: unknown) =>
+  warned.has(taskId)
+    ? Effect.void
+    : Effect.sync(() => warned.add(taskId)).pipe(
+        Effect.andThen(
+          Effect.logWarning("Skipping undecodable schedule task row", { taskId, cause }),
+        ),
+      );
+
 export const listDueTasks = Effect.fn("ScheduledTaskService.listDueTasks")(function* (
   now: DateTime.DateTime,
+  warnedUndecodable: Set<string> = new Set(),
 ) {
   const sql = yield* SqlClient.SqlClient;
   const rows = yield* sql<ScheduledTaskRow>`
@@ -441,10 +514,7 @@ export const listDueTasks = Effect.fn("ScheduledTaskService.listDueTasks")(funct
         });
       }
     } else {
-      yield* Effect.logWarning("Skipping undecodable schedule task row", {
-        taskId: row.task_id,
-        cause: decoded.failure,
-      });
+      yield* warnUndecodableOnce(warnedUndecodable, row.task_id, decoded.failure);
     }
   }
   return tasks;
@@ -470,10 +540,14 @@ export const layer = Layer.effect(
       webhookPolicyOrganization === undefined
         ? undefined
         : managedPolicyDeniedMessage(webhookPolicyOrganization, "webhook tasks");
+    // Set only by ensureBuiltInTasks: why the built-in row cannot run now.
+    let machineBucketsBlock: string | undefined;
     const withPolicy = (task: ScheduledTask): ScheduledTask =>
       webhookPolicyBlock !== undefined && task.schedule.type === "webhook"
         ? { ...task, blockedByPolicy: webhookPolicyBlock }
-        : task;
+        : task.id === MACHINE_BUCKETS_TASK_ID && machineBucketsBlock !== undefined
+          ? { ...task, blockedByPolicy: machineBucketsBlock }
+          : task;
     const webhookPermits = yield* Ref.make<ReadonlyMap<ScheduledTaskId, Semaphore.Semaphore>>(
       new Map(),
     );
@@ -491,6 +565,12 @@ export const layer = Layer.effect(
       ReadonlyMap<ScheduledTaskId, ReadonlyArray<number>>
     >(new Map());
     const activeRuns = yield* Ref.make<ReadonlySet<ScheduledTaskId>>(new Set());
+    const warnedUndecodable = new Set<string>();
+    // The built-in's last background run, in memory: the cooldown covers a restart.
+    const machineBucketsLast = yield* Ref.make<{
+      readonly threadId: ThreadId | null;
+      readonly unowned: ReadonlySet<string> | null;
+    }>({ threadId: null, unowned: null });
     // Notifications re-emit the full list; slow subscribers need only the newest dirty signal.
     const changesPubSub = yield* PubSub.sliding<void>(1);
     const dueTasks = DueHint.make();
@@ -536,11 +616,14 @@ export const layer = Layer.effect(
     const listRows = Effect.fn("ScheduledTaskService.listRows")(function* () {
       const rows = yield* selectAllRows();
       const origin = yield* readWebhookOrigin;
-      return yield* Effect.forEach(
-        rows,
-        (row) => decodeRow(row, origin).pipe(Effect.map(withPolicy)),
-        { concurrency: 1 },
-      );
+      const tasks: ScheduledTask[] = [];
+      // One row a rolled-back or newer build wrote must not hide every other task.
+      for (const row of rows) {
+        const decoded = yield* Effect.result(decodeRow(row, origin));
+        if (Result.isSuccess(decoded)) tasks.push(withPolicy(decoded.success));
+        else yield* warnUndecodableOnce(warnedUndecodable, row.task_id, decoded.failure);
+      }
+      return tasks;
     });
 
     const getRows = (id: ScheduledTaskId) =>
@@ -826,6 +909,32 @@ export const layer = Layer.effect(
         ),
     );
 
+    const machineBucketsSkipReason = Effect.fnUntraced(function* (
+      task: ScheduledTask,
+      now: DateTime.DateTime,
+      unowned: ReadonlyArray<string> | undefined,
+    ) {
+      const lastRunAt = task.lastRunAt === null ? Option.none() : DateTime.make(task.lastRunAt);
+      if (
+        Option.isSome(lastRunAt) &&
+        DateTime.toEpochMillis(now) - DateTime.toEpochMillis(lastRunAt.value) <
+          MACHINE_BUCKETS_COOLDOWN_MS
+      ) {
+        return "cooldown";
+      }
+      const last = yield* Ref.get(machineBucketsLast);
+      if (last.threadId !== null) {
+        const shell = yield* threadManagement
+          .getThreadShell(last.threadId)
+          .pipe(Effect.orElseSucceed(() => null));
+        if (shell !== null && shell.activeRunId !== null) return "last run still working";
+      }
+      if (unowned !== undefined && !unownedSetChanged(last.unowned, unowned)) {
+        return "unowned processes unchanged";
+      }
+      return null;
+    });
+
     // The run already started the thread, so a failed write only costs the binding.
     // A thread deleted before the binding landed already ran its task cleanup, so apply that
     // cleanup here; a later deletion finds the binding. An unconfirmed lookup keeps the binding.
@@ -847,13 +956,18 @@ export const layer = Layer.effect(
 
     const runTask = Effect.fn("ScheduledTaskService.runTask")(function* (
       task: ScheduledTask,
-      trigger: "scheduled" | "manual" | "webhook",
+      trigger: "scheduled" | "manual" | "webhook" | "load",
       webhook?: {
         readonly deliveryId: string;
         readonly prompt: string;
         readonly dispatched: Ref.Ref<boolean>;
       },
+      /** Names the load episode, so one episode dispatches one command however often it fires. */
+      loadEpisode?: string,
+      unowned?: ReadonlyArray<string>,
     ) {
+      // Nobody waits on these triggers, so a deleted or busy task is skipped, not an error.
+      const unattended = trigger === "scheduled" || trigger === "load";
       // Read before reserving: nothing between the reservation and its release may fail.
       const startedAt = yield* localNow;
       const startedAtIso = iso(startedAt);
@@ -866,7 +980,7 @@ export const layer = Layer.effect(
               reason: "The task was deleted before this delivery ran.",
             });
           }
-          if (trigger !== "scheduled") {
+          if (!unattended) {
             return yield* taskError("Schedule task not found.", { taskId: task.id });
           }
           return { task, threadId: null, dispatchFailed: false };
@@ -891,6 +1005,17 @@ export const layer = Layer.effect(
             DateTime.toEpochMillis(parsedNextRunAt.value) > DateTime.toEpochMillis(startedAt))
         ) {
           return { task: active, threadId: null, dispatchFailed: false };
+        }
+        if (trigger === "load" && (!active.enabled || active.schedule.type !== "load")) {
+          return { task: active, threadId: null, dispatchFailed: false };
+        }
+        const backgroundBuiltIn = trigger === "load" && active.builtIn === "machine-buckets";
+        if (backgroundBuiltIn) {
+          const skip = yield* machineBucketsSkipReason(active, startedAt, unowned);
+          if (skip !== null) {
+            yield* Effect.logInfo("Skipping auto-buckets run", { reason: skip });
+            return { task: active, threadId: null, dispatchFailed: false };
+          }
         }
         // Reject queued deliveries after pause, same-id recreation or trigger changes.
         if (webhook !== undefined) {
@@ -926,9 +1051,11 @@ export const layer = Layer.effect(
         yield* notifyChanged;
 
         const fireKey =
-          webhook === undefined
-            ? `${active.id}:${DateTime.toEpochMillis(startedAt)}:${trigger}`
-            : `${active.id}:webhook:${webhook.deliveryId}`;
+          webhook !== undefined
+            ? `${active.id}:webhook:${webhook.deliveryId}`
+            : loadEpisode !== undefined
+              ? `${active.id}:load:${loadEpisode}`
+              : `${active.id}:${DateTime.toEpochMillis(startedAt)}:${trigger}`;
         const commandId = CommandId.make(`scheduled-task:${fireKey}`);
         const messageId = MessageId.make(`scheduled-task-message:${fireKey}`);
         const prompt = webhook?.prompt ?? active.prompt;
@@ -971,34 +1098,77 @@ export const layer = Layer.effect(
               }),
             );
 
+        const launchInput = {
+          commandId,
+          projectId: active.projectId,
+          title: active.title,
+          modelSelection: active.modelSelection,
+          runtimeMode: active.runtimeMode,
+          interactionMode: active.interactionMode,
+          workspaceStrategy: active.workspaceStrategy,
+          createdBy: active.createdBy,
+          creationSource: active.creationSource,
+        };
+        // Bucket writes are `auto` only from a tagged thread, so the tags land before the prompt.
+        const launchMachineBuckets = managedFolders.ensureScratchProject.pipe(
+          Effect.flatMap(({ projectId }) =>
+            threadLaunch
+              .launch({ ...launchInput, projectId })
+              .pipe(Effect.map((launched) => ({ projectId, threadId: launched.threadId }))),
+          ),
+          Effect.tap(({ threadId }) =>
+            Effect.forEach(
+              [BACKGROUNDED_THREAD_TAG, MACHINE_BUCKETS_THREAD_TAG],
+              (tag) =>
+                threadManagement.dispatch({
+                  type: "thread.tag.set",
+                  commandId: CommandId.make(`${commandId}:tag:${tag}`),
+                  threadId,
+                  tag,
+                  tagged: true,
+                }),
+              { discard: true },
+            ),
+          ),
+          Effect.tap(({ projectId, threadId }) =>
+            threadManagement.sendToThread({
+              projectId,
+              commandId: CommandId.make(`${commandId}:message`),
+              threadId,
+              messageId,
+              scheduledTaskId: active.id,
+              text: prompt,
+              attachments: [],
+              mode: "queue",
+              createdBy: active.createdBy,
+              creationSource: active.creationSource,
+            }),
+          ),
+          Effect.map(({ threadId }) => threadId),
+        );
+
         // Capture defects and interrupts too so dispatch failures still reach markCompleted.
         const result =
           active.threadId === null
             ? yield* Effect.exit(
-                threadLaunch
-                  .launch({
-                    commandId,
-                    projectId: active.projectId,
-                    title: active.title,
-                    modelSelection: active.modelSelection,
-                    runtimeMode: active.runtimeMode,
-                    interactionMode: active.interactionMode,
-                    workspaceStrategy: active.workspaceStrategy,
-                    initialMessage: {
-                      messageId,
-                      scheduledTaskId: active.id,
-                      text: prompt,
-                      attachments: [],
-                    },
-                    createdBy: active.createdBy,
-                    creationSource: active.creationSource,
-                  })
-                  .pipe(
-                    Effect.map((launched) => launched.threadId),
-                    Effect.tap((threadId) =>
-                      threadMode === "new_thread" ? Effect.void : bindThread(active, threadId),
-                    ),
-                  ),
+                active.builtIn === "machine-buckets"
+                  ? launchMachineBuckets
+                  : threadLaunch
+                      .launch({
+                        ...launchInput,
+                        initialMessage: {
+                          messageId,
+                          scheduledTaskId: active.id,
+                          text: prompt,
+                          attachments: [],
+                        },
+                      })
+                      .pipe(
+                        Effect.map((launched) => launched.threadId),
+                        Effect.tap((threadId) =>
+                          threadMode === "new_thread" ? Effect.void : bindThread(active, threadId),
+                        ),
+                      ),
               )
             : yield* Effect.exit(
                 // The stored selection only seeds fresh threads. A bound run
@@ -1009,6 +1179,12 @@ export const layer = Layer.effect(
               );
 
         const runSucceeded = result._tag === "Success";
+        if (backgroundBuiltIn && result._tag === "Success") {
+          yield* Ref.update(machineBucketsLast, (last) => ({
+            threadId: result.value,
+            unowned: unowned === undefined ? last.unowned : new Set(unowned),
+          }));
+        }
         if (webhook !== undefined && runSucceeded) yield* Ref.set(webhook.dispatched, true);
         const completedAt = yield* localNow;
         const lastRunStatus = runSucceeded ? ("succeeded" as const) : ("failed" as const);
@@ -1097,7 +1273,7 @@ export const layer = Layer.effect(
         (reserved) =>
           reserved
             ? run
-            : trigger !== "scheduled"
+            : !unattended
               ? Effect.fail(taskError("Schedule task is already running.", { taskId: task.id }))
               : Effect.succeed({ task, threadId: null, dispatchFailed: false }),
         (reserved) =>
@@ -1158,7 +1334,7 @@ export const layer = Layer.effect(
         }
         return;
       }
-      const tasks = yield* listDueTasks(now).pipe(
+      const tasks = yield* listDueTasks(now, warnedUndecodable).pipe(
         Effect.mapError((cause) => taskError("Could not list schedule tasks.", { cause })),
       );
       const due = tasks.flatMap((task) =>
@@ -1280,6 +1456,9 @@ export const layer = Layer.effect(
     const upsert: ScheduledTaskService["Service"]["upsert"] = Effect.fn(
       "ScheduledTaskService.upsert",
     )(function* (input) {
+      if (input.id !== undefined && BUILT_IN_TASKS.has(input.id)) {
+        return yield* taskError(BUILT_IN_REJECTED, { taskId: input.id });
+      }
       // A webhook task the policy blocks can still be edited while it is off.
       if (input.enabled && input.schedule.type === "webhook" && webhookPolicyBlock !== undefined) {
         return yield* taskError(
@@ -1447,6 +1626,9 @@ export const layer = Layer.effect(
     const setEnabled: ScheduledTaskService["Service"]["setEnabled"] = Effect.fn(
       "ScheduledTaskService.setEnabled",
     )(function* (input) {
+      if (BUILT_IN_TASKS.has(input.id)) {
+        return yield* taskError(BUILT_IN_REJECTED, { taskId: input.id });
+      }
       const existing = yield* loadTask(input.id);
       if (existing.enabled === input.enabled) return { task: existing };
       if (
@@ -1526,11 +1708,13 @@ export const layer = Layer.effect(
       );
 
     const deleteTask: ScheduledTaskService["Service"]["delete"] = (input) =>
-      deleteRow(input.id).pipe(
-        Effect.andThen(forgetWebhookTask(input.id)),
-        Effect.andThen(notifyChanged),
-        Effect.as({ id: input.id }),
-      );
+      BUILT_IN_TASKS.has(input.id)
+        ? Effect.fail(taskError(BUILT_IN_REJECTED, { taskId: input.id }))
+        : deleteRow(input.id).pipe(
+            Effect.andThen(forgetWebhookTask(input.id)),
+            Effect.andThen(notifyChanged),
+            Effect.as({ id: input.id }),
+          );
 
     const deleteForThread = Effect.fn("ScheduledTaskService.deleteForThread")(function* (
       threadId: ThreadId,
@@ -1585,6 +1769,9 @@ export const layer = Layer.effect(
           taskId: input.id,
         });
       }
+      if (task.builtIn !== undefined && task.blockedByPolicy !== undefined) {
+        return yield* taskError(task.blockedByPolicy, { taskId: input.id });
+      }
       return yield* runTask(task, "manual").pipe(
         Effect.mapError((cause) =>
           isScheduledTaskError(cause)
@@ -1592,6 +1779,76 @@ export const layer = Layer.effect(
             : taskError("Could not run schedule task.", { taskId: input.id, cause }),
         ),
       );
+    });
+
+    const triggerLoad: ScheduledTaskService["Service"]["triggerLoad"] = Effect.fn(
+      "ScheduledTaskService.triggerLoad",
+    )(function* (id, episode, unowned) {
+      const task = yield* findTask(id);
+      if (task === null || !task.enabled || task.schedule.type !== "load") return;
+      yield* runTask(task, "load", undefined, episode, unowned).pipe(
+        Effect.mapError((cause) =>
+          isScheduledTaskError(cause)
+            ? cause
+            : taskError("Could not run schedule task.", { taskId: id, cause }),
+        ),
+      );
+    });
+
+    const ensureBuiltInTasks: ScheduledTaskService["Service"]["ensureBuiltInTasks"] = Effect.fn(
+      "ScheduledTaskService.ensureBuiltInTasks",
+    )(function* (settings) {
+      const model = resolveMachineBucketsModel(settings);
+      const block =
+        model === null ? NO_PROVIDER : managedRuntimeModeDenial(managedPolicy.summary, "auto");
+      const existing = yield* findTask(MACHINE_BUCKETS_TASK_ID);
+      const blockChanged = machineBucketsBlock !== block;
+      machineBucketsBlock = block;
+      const desired = {
+        title: MACHINE_BUCKETS_TITLE,
+        prompt: MACHINE_BUCKETS_PROMPT,
+        enabled: settings.machineResources.autoBuckets.enabled && block === undefined,
+        schedule: MACHINE_BUCKETS_SCHEDULE,
+        // Each run resolves the scratch project itself, so startup never creates it.
+        projectId: existing?.projectId ?? MACHINE_BUCKETS_PROJECT_PLACEHOLDER,
+        threadId: null,
+        workspaceStrategy: { type: "root" },
+        // The row needs some model while blocked; it never runs with it.
+        modelSelection: model ?? existing?.modelSelection ?? settings.textGenerationModelSelection,
+        // Not auto-accept-edits: Codex then sends approvals to the user, and nobody watches this run.
+        runtimeMode: "auto",
+        interactionMode: "default",
+      } satisfies Partial<ScheduledTask>;
+      const unchanged =
+        existing !== null &&
+        Object.entries(desired).every(
+          ([key, value]) =>
+            JSON.stringify(existing[key as keyof typeof desired]) === JSON.stringify(value),
+        );
+      if (unchanged) {
+        if (blockChanged) yield* notifyChanged;
+        return;
+      }
+      const now = iso(yield* localNow);
+      yield* saveTask(
+        {
+          id: MACHINE_BUCKETS_TASK_ID,
+          ...desired,
+          createdBy: "system",
+          creationSource: "server",
+          createdAt: existing?.createdAt ?? now,
+          updatedAt: now,
+          nextRunAt: null,
+          lastRunAt: existing?.lastRunAt ?? null,
+          lastRunStatus: existing?.lastRunStatus ?? "never",
+          lastRunError: existing?.lastRunError ?? null,
+          runCount: existing?.runCount ?? 0,
+        },
+        false,
+        existing?.schedule ?? null,
+        { token: null, secret: null, secretChanged: true },
+      );
+      yield* notifyChanged;
     });
 
     const rotateWebhookToken: ScheduledTaskService["Service"]["rotateWebhookToken"] = Effect.fn(
@@ -2511,6 +2768,8 @@ export const layer = Layer.effect(
       deleteForThread,
       moveThreadTasks,
       runNow,
+      triggerLoad,
+      ensureBuiltInTasks,
       rotateWebhookToken,
       listWebhookDeliveries,
       getWebhookDelivery,

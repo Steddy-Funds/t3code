@@ -19,6 +19,18 @@ const ICON_PATHS: Record<string, ReadonlyArray<{ tag: string; attrs: Record<stri
     { tag: "circle", attrs: { cx: "12", cy: "12", r: "10" } },
     { tag: "path", attrs: { d: "m9 12 2 2 4-4" } },
   ],
+  moon: [{ tag: "path", attrs: { d: "M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z" } }],
+  sun: [
+    { tag: "circle", attrs: { cx: "12", cy: "12", r: "4" } },
+    { tag: "path", attrs: { d: "M12 2v2" } },
+    { tag: "path", attrs: { d: "M12 20v2" } },
+    { tag: "path", attrs: { d: "m4.93 4.93 1.41 1.41" } },
+    { tag: "path", attrs: { d: "m17.66 17.66 1.41 1.41" } },
+    { tag: "path", attrs: { d: "M2 12h2" } },
+    { tag: "path", attrs: { d: "M20 12h2" } },
+    { tag: "path", attrs: { d: "m6.34 17.66-1.41 1.41" } },
+    { tag: "path", attrs: { d: "m19.07 4.93-1.41 1.41" } },
+  ],
   clock: [
     { tag: "path", attrs: { d: "M12 6v6l4 2" } },
     { tag: "circle", attrs: { cx: "12", cy: "12", r: "10" } },
@@ -91,6 +103,18 @@ const ICON_PATHS: Record<string, ReadonlyArray<{ tag: string; attrs: Record<stri
         d: "M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z",
       },
     },
+  ],
+  play: [
+    {
+      tag: "path",
+      attrs: {
+        d: "M5 5a2 2 0 0 1 3.008-1.728l11.997 6.998a2 2 0 0 1 .003 3.458l-12 7A2 2 0 0 1 5 19z",
+      },
+    },
+  ],
+  gauge: [
+    { tag: "path", attrs: { d: "m12 14 4-4" } },
+    { tag: "path", attrs: { d: "M3.34 19a10 10 0 1 1 17.32 0" } },
   ],
   "pin-off": [
     { tag: "path", attrs: { d: "M12 17v5" } },

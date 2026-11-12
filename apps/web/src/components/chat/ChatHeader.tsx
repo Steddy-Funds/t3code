@@ -1,5 +1,6 @@
 import {
   AuthOrchestrationOperateScope,
+  resolveEnvironmentMachineKind,
   type EnvironmentId,
   type ScopedThreadRef,
   type ThreadId,
@@ -10,7 +11,7 @@ import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
-import { ChevronDownIcon } from "lucide-react";
+import { ChevronDownIcon, PauseIcon } from "lucide-react";
 import {
   memo,
   useEffect,
@@ -30,7 +31,9 @@ import { canShareWithGuestAtom } from "./guestShareAvailability";
 import { useAtomValue } from "@effect/atom-react";
 import { useOrchestrationCommand } from "../../state/use-orchestration-command";
 import { readEnvironmentScope, useEnvironmentScope } from "../../state/session";
+import { EnvironmentMachineIcon } from "../EnvironmentMachineIcon";
 import { ProjectFavicon } from "../ProjectFavicon";
+import { useEnvironment } from "../../state/environments";
 import {
   WorkspaceBreadcrumb,
   WorkspaceBreadcrumbItem,
@@ -41,7 +44,10 @@ import { observeResize } from "~/lib/observeResize";
 import { cn } from "~/lib/utils";
 import { textDirection } from "~/textDirection";
 import { useClientSettings } from "../../hooks/useSettings";
+import { MachineHoverTarget } from "../nodeResources/MachineHoverTarget";
 import { GuestShareIndicator } from "./GuestShareControls";
+import { LOAD_PAUSE_TITLE, useLoadPauseActions } from "./LoadPauseBanner";
+import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
 
 interface ChatHeaderProps {
   activeThreadEnvironmentId: EnvironmentId;
@@ -56,6 +62,8 @@ interface ChatHeaderProps {
   onNewThreadInProject: () => void;
   onOpenProjectSettings?: (() => void) | undefined;
   onFindInThread?: ((threadRef: ScopedThreadRef) => void) | undefined;
+  loadPaused?: boolean;
+  loadPauseOfferNormal?: boolean;
 }
 
 function resolveRenameCommit(input: {
@@ -81,9 +89,12 @@ export const ChatHeader = memo(function ChatHeader({
   onNewThreadInProject,
   onOpenProjectSettings,
   onFindInThread,
+  loadPaused = false,
+  loadPauseOfferNormal = false,
 }: ChatHeaderProps) {
   const activeProjectName = activeProject?.isScratch ? "No project" : activeProject?.title;
   const activeProjectCwd = activeProject?.workspaceRoot ?? null;
+  const environment = useEnvironment(activeThreadEnvironmentId);
   const interfaceFont = useClientSettings((settings) => settings.fontFamilySans);
   const breadcrumbContainerRef = useRef<HTMLDivElement>(null);
   const [collapseParentTitle, setCollapseParentTitle] = useState(false);
@@ -257,6 +268,32 @@ export const ChatHeader = memo(function ChatHeader({
         ariaLabel="Thread breadcrumb"
         className="flex-1 overflow-clip [overflow-clip-margin:2px]"
       >
+        {environment ? (
+          <>
+            <WorkspaceBreadcrumbItem className="shrink text-muted-foreground">
+              <MachineHoverTarget
+                environmentId={environment.environmentId}
+                label={environment.label}
+                side="bottom"
+              >
+                <span className="inline-flex min-w-0 max-w-full items-center gap-1.5">
+                  <EnvironmentMachineIcon
+                    aria-hidden
+                    kind={resolveEnvironmentMachineKind(environment.serverConfig)}
+                    environmentId={environment.environmentId}
+                    className="size-3.5 shrink-0"
+                  />
+                  <WorkspaceBreadcrumbText className="max-w-32">
+                    {environment.label}
+                  </WorkspaceBreadcrumbText>
+                </span>
+              </MachineHoverTarget>
+            </WorkspaceBreadcrumbItem>
+            <WorkspaceBreadcrumbSeparator>
+              <WorkspaceBreadcrumbText>/</WorkspaceBreadcrumbText>
+            </WorkspaceBreadcrumbSeparator>
+          </>
+        ) : null}
         {activeProject ? (
           <>
             <WorkspaceBreadcrumbItem className="shrink">
@@ -381,6 +418,13 @@ export const ChatHeader = memo(function ChatHeader({
               <TooltipPopup side="top">{activeThreadTitle}</TooltipPopup>
             </Tooltip>
           )}
+          {renamingTitle === null && loadPaused ? (
+            <LoadPauseBadge
+              environmentId={activeThreadEnvironmentId}
+              threadId={activeThreadId}
+              offerNormal={loadPauseOfferNormal}
+            />
+          ) : null}
           {renamingTitle === null && activeThreadLinkOrigin ? (
             <Tooltip>
               <TooltipTrigger render={<Badge variant="info" size="sm" />}>
@@ -397,3 +441,29 @@ export const ChatHeader = memo(function ChatHeader({
     </div>
   );
 });
+
+function LoadPauseBadge(props: {
+  environmentId: EnvironmentId;
+  threadId: ThreadId;
+  offerNormal: boolean;
+}) {
+  const { pending, resume, setNormal } = useLoadPauseActions(props.environmentId, props.threadId);
+  return (
+    <Menu>
+      <MenuTrigger render={<Badge variant="warning" size="sm" render={<button type="button" />} />}>
+        <PauseIcon aria-hidden className="size-3" />
+        {LOAD_PAUSE_TITLE}
+      </MenuTrigger>
+      <MenuPopup align="start">
+        <MenuItem disabled={pending} onClick={() => void resume()}>
+          Resume now
+        </MenuItem>
+        {props.offerNormal ? (
+          <MenuItem disabled={pending} onClick={() => void setNormal()}>
+            Set priority Normal
+          </MenuItem>
+        ) : null}
+      </MenuPopup>
+    </Menu>
+  );
+}

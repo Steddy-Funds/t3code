@@ -53,6 +53,7 @@ import IconDeviceDesktop from "@tabler/icons-react-native/IconDeviceDesktop";
 import IconDeviceLaptop from "@tabler/icons-react-native/IconDeviceLaptop";
 import IconDeviceMobile from "@tabler/icons-react-native/IconDeviceMobile";
 import IconDots from "@tabler/icons-react-native/IconDots";
+import IconDropletFilled from "@tabler/icons-react-native/IconDropletFilled";
 import IconPlusMinus from "@tabler/icons-react-native/IconPlusMinus";
 import IconDotsVertical from "@tabler/icons-react-native/IconDotsVertical";
 import IconDotsCircleHorizontal from "@tabler/icons-react-native/IconDotsCircleHorizontal";
@@ -201,6 +202,7 @@ const ANDROID_ICON_BY_SF_SYMBOL = {
   doc: IconFileText,
   "doc.on.doc": IconCopy,
   "doc.text": IconFileText,
+  "drop.fill": IconDropletFilled,
   "file.diff": IconFileDiff,
   ellipsis: IconDots,
   moon: IconMoon,

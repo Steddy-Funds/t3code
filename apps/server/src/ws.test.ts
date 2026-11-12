@@ -63,6 +63,8 @@ import * as DirectEndpoints from "./environment/DirectEndpoints.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import * as EnvironmentTheme from "./environmentTheme.ts";
 import * as GitWorkflowService from "./git/GitWorkflowService.ts";
+import * as HostProcess from "@t3tools/shared/HostProcess";
+import * as HostProcesses from "./resourceTelemetry/HostProcesses.ts";
 import * as HostResources from "./resourceTelemetry/HostResources.ts";
 import * as ManagedProjectFolders from "./project/ManagedProjectFolders.ts";
 import * as ScratchThreadPromotion from "./project/ScratchThreadPromotion.ts";
@@ -70,11 +72,13 @@ import * as McpAppRequests from "./mcpApps/McpAppRequests.ts";
 import * as ModelManifest from "./provider/ModelManifest.ts";
 import * as Orchestrator from "./orchestration-v2/Orchestrator.ts";
 import * as OtlpEndpointCheck from "./observability/OtlpEndpointCheck.ts";
+import * as BrowserRun from "./preview/BrowserRun.ts";
 import * as PairingGrantStore from "./auth/PairingGrantStore.ts";
 import * as RpcAuthorization from "./auth/RpcAuthorization.ts";
 import * as PeerLinkRequests from "./peer/PeerLinkRequests.ts";
 import * as PeerLinks from "./peer/PeerLinks.ts";
 import * as PortScanner from "./preview/PortScanner.ts";
+import * as ServedSites from "./servedSites/ServedSites.ts";
 import * as PreviewManager from "./preview/Manager.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
@@ -112,11 +116,14 @@ import * as TerminalManager from "./terminal/Manager.ts";
 import * as ThreadLaunchService from "./orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadSearch from "./orchestration-v2/ThreadSearch.ts";
 import * as UsageLimitSources from "./usage/UsageLimitSources.ts";
+import * as ThreadUsageService from "./usage/ThreadUsageService.ts";
+import * as TokenBurnRates from "./usage/TokenBurnRates.ts";
 import * as UsageService from "./usage/UsageService.ts";
 import * as VcsProvisioningService from "./vcs/VcsProvisioningService.ts";
 import * as VcsStatusBroadcaster from "./vcs/VcsStatusBroadcaster.ts";
 import * as WorkspaceEntries from "./workspace/WorkspaceEntries.ts";
 import * as WorkspaceFileSystem from "./workspace/WorkspaceFileSystem.ts";
+import * as CodeIntel from "./codeIntel/CodeIntel.ts";
 import * as WorktreeSetupTracker from "./project/WorktreeSetupTracker.ts";
 import * as ProjectFaviconResolver from "./project/ProjectFaviconResolver.ts";
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
@@ -788,16 +795,19 @@ const layerUnusedConfigRpcServices = Layer.mergeAll(
   Layer.mock(EnvironmentTheme.EnvironmentThemeService)({}),
   Layer.mock(GitWorkflowService.GitWorkflowService)({}),
   Layer.mock(HostResources.HostResources)({}),
+  Layer.mock(HostProcesses.HostProcesses)({}),
   Layer.mock(McpAppRequests.McpAppRequests)({}),
   Layer.mock(ModelManifest.ModelManifest)({}),
   Layer.mock(OrchestrationEventStore.OrchestrationEventStore)({}),
   Layer.mock(Orchestrator.OrchestratorV2)({}),
   Layer.mock(OtlpEndpointCheck.OtlpEndpointCheck)({}),
+  Layer.mock(BrowserRun.BrowserRun)({}),
   Layer.mock(PairingGrantStore.PairingGrantStore)({}),
   Layer.mock(PeerLinks.PeerLinks)({}),
   Layer.mock(PeerLinkRequests.PeerLinkRequests)({}),
   Layer.mock(PortScanner.PortDiscovery)({ trackAgent: () => () => undefined }),
   Layer.mock(PreviewManager.PreviewManager)({}),
+  Layer.mock(ServedSites.ServedSites)({}),
   Layer.mock(ProcessDiagnostics.ProcessDiagnostics)({}),
   Layer.mock(ProcessResourceMonitor.ProcessResourceMonitor)({}),
   Layer.mock(ProjectCloneTracker.ProjectCloneTracker)({}),
@@ -836,10 +846,13 @@ const layerUnusedConfigRpcServices = Layer.mergeAll(
   Layer.mock(ThreadManagement.ThreadManagementService)({}),
   Layer.mock(ThreadSearch.ThreadSearch)({}),
   Layer.mock(UsageService.UsageService)({}),
+  Layer.mock(ThreadUsageService.ThreadUsageService)({}),
+  Layer.mock(TokenBurnRates.TokenBurnRatesService)({}),
   Layer.mock(VcsProvisioningService.VcsProvisioningService)({}),
   Layer.mock(VcsStatusBroadcaster.VcsStatusBroadcaster)({}),
   Layer.mock(WorkspaceEntries.WorkspaceEntries)({}),
   Layer.mock(WorkspaceFileSystem.WorkspaceFileSystem)({}),
+  Layer.mock(CodeIntel.CodeIntel)({}),
   Layer.mock(WorktreeSetupTracker.WorktreeSetupTracker)({}),
 );
 
@@ -1116,238 +1129,248 @@ it.effect.each([
     ),
 );
 
-it.effect("on-demand clients get provider config without workspace snapshots", () =>
-  Effect.gen(function* () {
-    const instanceId = ProviderInstanceId.make("claudeAgent");
-    const snapshotFor = (cwd: string, checkedAt: string) => ({
-      cwd,
-      checkedAt,
-      slashCommands: [{ name: `${cwd.slice(1)}-command` }],
-      skills: [],
-    });
-    const provider: ServerProvider = {
-      instanceId,
-      driver: ProviderDriverKind.make("claudeAgent"),
-      enabled: true,
-      installed: true,
-      version: "1.0.0",
-      status: "ready",
-      auth: { status: "authenticated" },
-      checkedAt: "2026-10-25T00:00:00.000Z",
-      models: [],
-      slashCommands: [{ name: "machine-command", description: "A machine command" }],
-      skills: [
-        {
-          name: "machine-skill",
-          description: "Machine skill",
-          path: "/skills/machine-skill",
-          enabled: true,
-        },
-      ],
-      workspaceSnapshots: [
-        snapshotFor("/a", "2026-10-25T00:00:00.000Z"),
-        snapshotFor("/b", "2026-10-25T00:00:00.000Z"),
-      ],
-    };
-    let scansCwd = true;
-    const providerChanges = yield* Queue.unbounded<ReadonlyArray<ServerProvider>>();
-    const pulled = yield* Queue.unbounded<void>();
-    const responses = yield* Queue.unbounded<unknown>();
-    const configRpcServices = Layer.mergeAll(
-      layerUnusedConfigRpcServices,
-      Layer.mock(ExternalLauncher.ExternalLauncher)({
-        resolveAvailableEditors: () => Effect.succeed([]),
-        resolveFileManagerRevealKind: () => Effect.undefined,
-      }),
-      Layer.mock(ProviderRegistry.ProviderRegistry)({
-        getProviders: Effect.succeed([provider]),
-        streamChanges: Stream.fromQueue(providerChanges).pipe(
-          Stream.tap(() => Queue.offer(pulled, undefined)),
-        ),
-        refreshWorkspaceSnapshot: () => Effect.succeed([provider]),
-      }),
-      Layer.mock(ProviderInstanceRegistry.ProviderInstanceRegistry)({
-        listInstances: Effect.sync(() => [
-          (scansCwd
-            ? { instanceId, snapshotForCwd: () => Effect.die("unused") }
-            : { instanceId }) as never,
-        ]),
-        getInstance: () =>
-          Effect.sync(
-            () =>
-              (scansCwd
-                ? { instanceId, snapshotForCwd: () => Effect.die("unused") }
-                : { instanceId }) as never,
-          ),
-      }),
-      Layer.mock(UsageLimitSources.UsageLimitSources)({
-        current: Effect.succeed([]),
-        streamChanges: Stream.make([]),
-      }),
-      Layer.mock(RemoteOpenTargets.RemoteOpenTargets)({
-        resolveTargets: () => Effect.succeed([]),
-      }),
-      Layer.mock(DirectEndpoints.DirectEndpoints)({
-        resolve: () => Effect.succeed([]),
-        resolveAvailable: () => Effect.succeed([]),
-      }),
-      Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
-        scratchRoot: Effect.succeedNone,
-        namedProjectsRoot: process.cwd(),
-      }),
-      Layer.mock(ScratchThreadPromotion.ScratchThreadPromotion)({}),
-      Layer.mock(ServerEnvironment.ServerEnvironment)({
-        getDescriptor: Effect.succeed({
-          environmentId: EnvironmentId.make("config-test"),
-          label: "Config test",
-          platform: { os: "linux", arch: "x64" },
-          serverVersion: "0.0.0",
-          capabilities: { repositoryIdentity: false },
-        }),
-      }),
-      Layer.mock(EnvironmentAuth.EnvironmentAuth)({
-        getDescriptor: () =>
-          Effect.succeed({
-            policy: "loopback-browser",
-            bootstrapMethods: [],
-            sessionMethods: ["browser-session-cookie"],
-            sessionCookieName: "config-test-session",
-          }),
-      }),
-    );
-    const server = yield* RpcServer.makeNoSerialization(
-      RpcGroup.make(WsSubscribeServerConfigRpc, WsServerRefreshProvidersRpc),
-      {
-        ...WS_RPC_SERVER_OPTIONS,
-        onFromServer: (response) =>
-          response._tag === "Chunk"
-            ? Effect.forEach(response.values, (value) => Queue.offer(responses, value), {
-                discard: true,
-              })
-            : response._tag === "Exit" && response.exit._tag === "Success"
-              ? Queue.offer(responses, response.exit.value)
-              : Effect.void,
-      },
-    ).pipe(
-      Effect.provide(
-        layerWsRpc(
-          {
-            sessionId: AuthSessionId.make("config-test"),
-            subject: "config-test",
-            method: "browser-session-cookie",
-            scopes: [],
-          },
-          {},
-          yield* ServerBrowser.ServerBrowser,
-          () => Effect.void,
-          { secretReferences: true },
-        ).pipe(Layer.provide(configRpcServices)),
-      ),
-    );
-    const configRequest = RpcMessage.RequestId("config");
-    yield* server.write(0, {
-      _tag: "Request",
-      id: configRequest,
-      tag: WS_METHODS.subscribeServerConfig,
-      payload: { workspaceSnapshotsOnDemand: true, providerCatalogsOnDemand: true },
-      headers: Headers.empty,
-    });
-    const snapshot = (yield* Queue.take(responses)) as ServerConfigStreamEvent;
-    if (snapshot.type !== "snapshot") return yield* Effect.die("Missing initial snapshot");
-    assert.isUndefined(snapshot.config.providers[0]?.workspaceSnapshots);
-    // The cwd snapshot the client fetches carries the catalog, so only command names are sent.
-    assert.deepEqual(snapshot.config.providers[0]?.slashCommands, [{ name: "machine-command" }]);
-    assert.deepEqual(snapshot.config.providers[0]?.skills, [
-      { name: "machine-skill", path: "/skills/machine-skill", enabled: true },
-    ]);
-    yield* server.write(0, { _tag: "Ack", requestId: configRequest });
-
-    // A rescan that only touches a snapshot sends nothing; the next real change does.
-    yield* Queue.offer(providerChanges, [
-      { ...provider, workspaceSnapshots: [snapshotFor("/a", "2026-10-25T00:05:00.000Z")] },
-    ]);
-    yield* Queue.take(pulled);
-    yield* TestClock.adjust("1 second");
-    // Late /usage-limits discovery still reaches the client, so it refetches its cwd snapshot.
-    yield* Queue.offer(providerChanges, [
-      {
-        ...provider,
-        status: "warning",
-        slashCommands: [...provider.slashCommands, USAGE_LIMITS_COMMAND],
-      },
-    ]);
-    yield* Queue.take(pulled);
-    yield* TestClock.adjust("1 second");
-    const update = (yield* Queue.take(responses)) as ServerConfigStreamEvent;
-    if (update.type !== "providerStatuses") return yield* Effect.die("Expected provider update");
-    assert.equal(update.payload.providers[0]?.status, "warning");
-    assert.isUndefined(update.payload.providers[0]?.workspaceSnapshots);
-    assert.deepEqual(update.payload.providers[0]?.slashCommands, [
-      { name: "machine-command" },
-      { name: USAGE_LIMITS_COMMAND.name },
-    ]);
-    yield* server.write(0, { _tag: "Ack", requestId: configRequest });
-    // A replacement that cannot scan a cwd sends its full machine catalog.
-    scansCwd = false;
-    yield* Queue.offer(providerChanges, [{ ...provider, status: "warning" }]);
-    yield* Queue.take(pulled);
-    yield* TestClock.adjust("1 second");
-    const replaced = (yield* Queue.take(responses)) as ServerConfigStreamEvent;
-    if (replaced.type !== "providerStatuses") return yield* Effect.die("Expected provider update");
-    assert.deepEqual(replaced.payload.providers[0]?.slashCommands, provider.slashCommands);
-    assert.deepEqual(replaced.payload.providers[0]?.skills, provider.skills);
-
-    yield* server.write(0, {
-      _tag: "Request",
-      id: RpcMessage.RequestId("refresh"),
-      tag: WS_METHODS.serverRefreshProviders,
-      payload: { instanceId, cwd: "/b", workspaceSnapshotsOnDemand: true },
-      headers: Headers.empty,
-    });
-    const refreshed = (yield* Queue.take(responses)) as {
-      readonly providers: ReadonlyArray<ServerProvider>;
-    };
-    assert.deepEqual(
-      refreshed.providers.map((entry) => [entry.workspaceSnapshots, entry.slashCommands]),
-      [[[snapshotFor("/b", "2026-10-25T00:00:00.000Z")], []]],
-    );
-    // A failed scan still gives a client without the machine catalog its commands.
-    scansCwd = true;
-    yield* server.write(0, {
-      _tag: "Request",
-      id: RpcMessage.RequestId("refresh-failed-scan"),
-      tag: WS_METHODS.serverRefreshProviders,
-      payload: {
+// The machine terminal opens in homeDirectory; a blank one is left out for the client's cwd fallback.
+it.effect.each([
+  ["  /home/config-test\n", "/home/config-test"],
+  ["  ", undefined],
+] as const)(
+  "on-demand clients get provider config without workspace snapshots (home %j)",
+  ([home, homeDirectory]) =>
+    Effect.gen(function* () {
+      const instanceId = ProviderInstanceId.make("claudeAgent");
+      const snapshotFor = (cwd: string, checkedAt: string) => ({
+        cwd,
+        checkedAt,
+        slashCommands: [{ name: `${cwd.slice(1)}-command` }],
+        skills: [],
+      });
+      const provider: ServerProvider = {
         instanceId,
-        cwd: "/c",
-        workspaceSnapshotsOnDemand: true,
-        providerCatalogsOnDemand: true,
-      },
-      headers: Headers.empty,
-    });
-    const fallback = (yield* Queue.take(responses)) as {
-      readonly providers: ReadonlyArray<ServerProvider>;
-    };
-    assert.deepEqual(fallback.providers[0]?.workspaceSnapshots, [
-      {
-        cwd: "/c",
-        checkedAt: provider.checkedAt,
-        slashCommands: provider.slashCommands,
-        slashCommandsPending: true,
-        skills: provider.skills,
-      },
-    ]);
-    yield* server.write(0, { _tag: "Interrupt", requestId: configRequest, interruptors: [] });
-  }).pipe(
-    Effect.provide(
-      Layer.mergeAll(
-        Layer.fresh(layerConfigSources),
-        Layer.mock(PreviewAutomationBroker.PreviewAutomationBroker)({}),
-        Layer.mock(ServerBrowser.ServerBrowser)({}),
+        driver: ProviderDriverKind.make("claudeAgent"),
+        enabled: true,
+        installed: true,
+        version: "1.0.0",
+        status: "ready",
+        auth: { status: "authenticated" },
+        checkedAt: "2026-10-25T00:00:00.000Z",
+        models: [],
+        slashCommands: [{ name: "machine-command", description: "A machine command" }],
+        skills: [
+          {
+            name: "machine-skill",
+            description: "Machine skill",
+            path: "/skills/machine-skill",
+            enabled: true,
+          },
+        ],
+        workspaceSnapshots: [
+          snapshotFor("/a", "2026-10-25T00:00:00.000Z"),
+          snapshotFor("/b", "2026-10-25T00:00:00.000Z"),
+        ],
+      };
+      let scansCwd = true;
+      const providerChanges = yield* Queue.unbounded<ReadonlyArray<ServerProvider>>();
+      const pulled = yield* Queue.unbounded<void>();
+      const responses = yield* Queue.unbounded<unknown>();
+      const configRpcServices = Layer.mergeAll(
+        layerUnusedConfigRpcServices,
+        Layer.mock(ExternalLauncher.ExternalLauncher)({
+          resolveAvailableEditors: () => Effect.succeed([]),
+          resolveFileManagerRevealKind: () => Effect.undefined,
+        }),
+        Layer.mock(ProviderRegistry.ProviderRegistry)({
+          getProviders: Effect.succeed([provider]),
+          streamChanges: Stream.fromQueue(providerChanges).pipe(
+            Stream.tap(() => Queue.offer(pulled, undefined)),
+          ),
+          refreshWorkspaceSnapshot: () => Effect.succeed([provider]),
+        }),
+        Layer.mock(ProviderInstanceRegistry.ProviderInstanceRegistry)({
+          listInstances: Effect.sync(() => [
+            (scansCwd
+              ? { instanceId, snapshotForCwd: () => Effect.die("unused") }
+              : { instanceId }) as never,
+          ]),
+          getInstance: () =>
+            Effect.sync(
+              () =>
+                (scansCwd
+                  ? { instanceId, snapshotForCwd: () => Effect.die("unused") }
+                  : { instanceId }) as never,
+            ),
+        }),
+        Layer.mock(UsageLimitSources.UsageLimitSources)({
+          current: Effect.succeed([]),
+          streamChanges: Stream.make([]),
+        }),
+        Layer.mock(RemoteOpenTargets.RemoteOpenTargets)({
+          resolveTargets: () => Effect.succeed([]),
+        }),
+        Layer.mock(DirectEndpoints.DirectEndpoints)({
+          resolve: () => Effect.succeed([]),
+          resolveAvailable: () => Effect.succeed([]),
+        }),
+        Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
+          scratchRoot: Effect.succeedNone,
+          namedProjectsRoot: process.cwd(),
+        }),
+        Layer.mock(ScratchThreadPromotion.ScratchThreadPromotion)({}),
+        Layer.mock(ServerEnvironment.ServerEnvironment)({
+          getDescriptor: Effect.succeed({
+            environmentId: EnvironmentId.make("config-test"),
+            label: "Config test",
+            platform: { os: "linux", arch: "x64" },
+            serverVersion: "0.0.0",
+            capabilities: { repositoryIdentity: false },
+          }),
+        }),
+        Layer.mock(EnvironmentAuth.EnvironmentAuth)({
+          getDescriptor: () =>
+            Effect.succeed({
+              policy: "loopback-browser",
+              bootstrapMethods: [],
+              sessionMethods: ["browser-session-cookie"],
+              sessionCookieName: "config-test-session",
+            }),
+        }),
+      );
+      const server = yield* RpcServer.makeNoSerialization(
+        RpcGroup.make(WsSubscribeServerConfigRpc, WsServerRefreshProvidersRpc),
+        {
+          ...WS_RPC_SERVER_OPTIONS,
+          onFromServer: (response) =>
+            response._tag === "Chunk"
+              ? Effect.forEach(response.values, (value) => Queue.offer(responses, value), {
+                  discard: true,
+                })
+              : response._tag === "Exit" && response.exit._tag === "Success"
+                ? Queue.offer(responses, response.exit.value)
+                : Effect.void,
+        },
+      ).pipe(
+        Effect.provide(
+          layerWsRpc(
+            {
+              sessionId: AuthSessionId.make("config-test"),
+              subject: "config-test",
+              method: "browser-session-cookie",
+              scopes: [],
+            },
+            {},
+            yield* ServerBrowser.ServerBrowser,
+            () => Effect.void,
+            { secretReferences: true },
+          ).pipe(Layer.provide(configRpcServices)),
+        ),
+      );
+      const configRequest = RpcMessage.RequestId("config");
+      yield* server.write(0, {
+        _tag: "Request",
+        id: configRequest,
+        tag: WS_METHODS.subscribeServerConfig,
+        payload: { workspaceSnapshotsOnDemand: true, providerCatalogsOnDemand: true },
+        headers: Headers.empty,
+      });
+      const snapshot = (yield* Queue.take(responses)) as ServerConfigStreamEvent;
+      if (snapshot.type !== "snapshot") return yield* Effect.die("Missing initial snapshot");
+      assert.isUndefined(snapshot.config.providers[0]?.workspaceSnapshots);
+      assert.strictEqual(snapshot.config.homeDirectory, homeDirectory);
+      assert.equal("homeDirectory" in snapshot.config, homeDirectory !== undefined);
+      // The cwd snapshot the client fetches carries the catalog, so only command names are sent.
+      assert.deepEqual(snapshot.config.providers[0]?.slashCommands, [{ name: "machine-command" }]);
+      assert.deepEqual(snapshot.config.providers[0]?.skills, [
+        { name: "machine-skill", path: "/skills/machine-skill", enabled: true },
+      ]);
+      yield* server.write(0, { _tag: "Ack", requestId: configRequest });
+
+      // A rescan that only touches a snapshot sends nothing; the next real change does.
+      yield* Queue.offer(providerChanges, [
+        { ...provider, workspaceSnapshots: [snapshotFor("/a", "2026-10-25T00:05:00.000Z")] },
+      ]);
+      yield* Queue.take(pulled);
+      yield* TestClock.adjust("1 second");
+      // Late /usage-limits discovery still reaches the client, so it refetches its cwd snapshot.
+      yield* Queue.offer(providerChanges, [
+        {
+          ...provider,
+          status: "warning",
+          slashCommands: [...provider.slashCommands, USAGE_LIMITS_COMMAND],
+        },
+      ]);
+      yield* Queue.take(pulled);
+      yield* TestClock.adjust("1 second");
+      const update = (yield* Queue.take(responses)) as ServerConfigStreamEvent;
+      if (update.type !== "providerStatuses") return yield* Effect.die("Expected provider update");
+      assert.equal(update.payload.providers[0]?.status, "warning");
+      assert.isUndefined(update.payload.providers[0]?.workspaceSnapshots);
+      assert.deepEqual(update.payload.providers[0]?.slashCommands, [
+        { name: "machine-command" },
+        { name: USAGE_LIMITS_COMMAND.name },
+      ]);
+      yield* server.write(0, { _tag: "Ack", requestId: configRequest });
+      // A replacement that cannot scan a cwd sends its full machine catalog.
+      scansCwd = false;
+      yield* Queue.offer(providerChanges, [{ ...provider, status: "warning" }]);
+      yield* Queue.take(pulled);
+      yield* TestClock.adjust("1 second");
+      const replaced = (yield* Queue.take(responses)) as ServerConfigStreamEvent;
+      if (replaced.type !== "providerStatuses")
+        return yield* Effect.die("Expected provider update");
+      assert.deepEqual(replaced.payload.providers[0]?.slashCommands, provider.slashCommands);
+      assert.deepEqual(replaced.payload.providers[0]?.skills, provider.skills);
+
+      yield* server.write(0, {
+        _tag: "Request",
+        id: RpcMessage.RequestId("refresh"),
+        tag: WS_METHODS.serverRefreshProviders,
+        payload: { instanceId, cwd: "/b", workspaceSnapshotsOnDemand: true },
+        headers: Headers.empty,
+      });
+      const refreshed = (yield* Queue.take(responses)) as {
+        readonly providers: ReadonlyArray<ServerProvider>;
+      };
+      assert.deepEqual(
+        refreshed.providers.map((entry) => [entry.workspaceSnapshots, entry.slashCommands]),
+        [[[snapshotFor("/b", "2026-10-25T00:00:00.000Z")], []]],
+      );
+      // A failed scan still gives a client without the machine catalog its commands.
+      scansCwd = true;
+      yield* server.write(0, {
+        _tag: "Request",
+        id: RpcMessage.RequestId("refresh-failed-scan"),
+        tag: WS_METHODS.serverRefreshProviders,
+        payload: {
+          instanceId,
+          cwd: "/c",
+          workspaceSnapshotsOnDemand: true,
+          providerCatalogsOnDemand: true,
+        },
+        headers: Headers.empty,
+      });
+      const fallback = (yield* Queue.take(responses)) as {
+        readonly providers: ReadonlyArray<ServerProvider>;
+      };
+      assert.deepEqual(fallback.providers[0]?.workspaceSnapshots, [
+        {
+          cwd: "/c",
+          checkedAt: provider.checkedAt,
+          slashCommands: provider.slashCommands,
+          slashCommandsPending: true,
+          skills: provider.skills,
+        },
+      ]);
+      yield* server.write(0, { _tag: "Interrupt", requestId: configRequest, interruptors: [] });
+    }).pipe(
+      Effect.provideService(HostProcess.HomeDirectory, home),
+      Effect.provide(
+        Layer.mergeAll(
+          Layer.fresh(layerConfigSources),
+          Layer.mock(PreviewAutomationBroker.PreviewAutomationBroker)({}),
+          Layer.mock(ServerBrowser.ServerBrowser)({}),
+        ),
       ),
+      Effect.scoped,
     ),
-    Effect.scoped,
-  ),
 );
 
 it.effect("a publish whose push fails still refreshes the new remote", () =>

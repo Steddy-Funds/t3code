@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 import { Hct, SchemeTonalSpot, argbFromHex, hexFromArgb } from "@material/material-color-utilities";
 
-import { MOBILE_THEME_IDS } from "../../../lib/mobileTheme";
+import { getMobileThemeAppearances, MOBILE_THEME_IDS } from "../../../lib/mobileTheme";
 import { getMobileThemeRuntimeVariables } from "../../../lib/mobileThemeVariables";
 import { materialYouPaletteToMobileThemeVariables } from "../../../lib/materialYouTheme.android";
 import type { MaterialYouPalette } from "../../../lib/materialYouPalette";
@@ -35,7 +35,7 @@ function expectVisibleSelection(colors: ReturnType<typeof androidWorkspaceNaviga
 
 describe("Android workspace navigation colors", () => {
   it.each(MOBILE_THEME_IDS)("keeps %s selection visible in every navigation layout", (themeId) => {
-    for (const appearance of ["light", "dark"] as const) {
+    for (const appearance of getMobileThemeAppearances(themeId)) {
       const variables = getMobileThemeRuntimeVariables(themeId, appearance, "android");
       const snapshot = { ...variables };
       for (const [rail, floating] of [

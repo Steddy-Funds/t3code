@@ -1,4 +1,8 @@
-import { MIN_SCHEDULED_TASK_INTERVAL_MS, type ScheduledTaskSchedule } from "@t3tools/contracts";
+import {
+  type LoadCondition,
+  MIN_SCHEDULED_TASK_INTERVAL_MS,
+  type ScheduledTaskSchedule,
+} from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Option from "effect/Option";
 
@@ -14,7 +18,7 @@ export function nextScheduledRunAt(
   schedule: ScheduledTaskSchedule,
   from: DateTime.DateTime,
 ): DateTime.DateTime | null {
-  if (schedule.type === "webhook") return null;
+  if (schedule.type === "webhook" || schedule.type === "load") return null;
   if (schedule.type === "once") {
     const runAt = DateTime.make(schedule.runAt);
     return Option.isSome(runAt) &&
@@ -51,11 +55,29 @@ function weekdayKey(weekdays: ReadonlyArray<number> | undefined): string {
   return unique.join(",");
 }
 
+function isSameLoadCondition(a: LoadCondition | undefined, b: LoadCondition | undefined): boolean {
+  if (a === undefined || b === undefined) return a === b;
+  return (
+    a.metric === b.metric &&
+    a.op === b.op &&
+    a.threshold === b.threshold &&
+    a.sustainSeconds === b.sustainSeconds &&
+    a.gpuId === b.gpuId
+  );
+}
+
 export function isSameSchedule(a: ScheduledTaskSchedule, b: ScheduledTaskSchedule): boolean {
   if (a.type === "interval") {
     return b.type === "interval" && a.everyMs === b.everyMs;
   }
   if (a.type === "webhook") return b.type === "webhook";
+  if (a.type === "load") {
+    return (
+      b.type === "load" &&
+      isSameLoadCondition(a.condition, b.condition) &&
+      isSameLoadCondition(a.clear, b.clear)
+    );
+  }
   if (a.type === "once") return b.type === "once" && Date.parse(a.runAt) === Date.parse(b.runAt);
   if (b.type !== "fixed_time") return false;
   // Compare parsed times so padded-hour edits do not reschedule pending runs.

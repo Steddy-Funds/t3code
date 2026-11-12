@@ -16,7 +16,13 @@ import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import * as ServerConfig from "../config.ts";
 import { makeCodexAppServerSpawnCommand } from "../orchestration-v2/Adapters/CodexAdapterV2.ts";
 import * as ProcessRunner from "../processRunner.ts";
-import { classifyScope, make, ownedAgentSlice, type ScopeState } from "./agentScope.ts";
+import {
+  classifyScope,
+  make,
+  ownedAgentSlice,
+  scopeControlGroup,
+  type ScopeState,
+} from "./agentScope.ts";
 
 const running: ScopeState = {
   loadState: "loaded",
@@ -55,7 +61,13 @@ const withFakeSystemd = <A, E>(
   {
     oomPolicy = true,
     stopFails = false,
-  }: { readonly oomPolicy?: boolean; readonly stopFails?: boolean } = {},
+    managerControlGroup,
+  }: {
+    readonly oomPolicy?: boolean;
+    readonly stopFails?: boolean;
+    /** The user manager's own cgroup; "fail" makes `systemctl --user show` fail. */
+    readonly managerControlGroup?: string | undefined;
+  } = {},
 ) =>
   Effect.gen(function* () {
     const bin = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-agent-scope-"));
@@ -91,6 +103,12 @@ const withFakeSystemd = <A, E>(
             };
           }
           if (verb === "reset-failed") units.delete(unit);
+          if (verb === "show" && unit === "--property=ControlGroup") {
+            if (managerControlGroup === "fail") return output("", 1);
+            if (managerControlGroup !== undefined) {
+              return output(`ControlGroup=${managerControlGroup}\n`);
+            }
+          }
           if (verb !== "show") return output("");
           const state = units.get(unit);
           return output(
@@ -165,13 +183,70 @@ const launchCodex = (scope: Effect.Success<typeof make>, threadId: string) =>
   makeCodexAppServerSpawnCommand({ command: "agent", args: ["app-server"], threadId }).pipe(
     Effect.provideService(AgentScope, scope),
     Effect.provideService(HostProcess.Platform, "linux"),
-    Effect.map((command) => {
+    Effect.map(({ command }) => {
       assert(ChildProcess.isStandardCommand(command));
       return command;
     }),
   );
 
+describe("scopeControlGroup", () => {
+  it("nests a dashed slice under each of its prefixes", () => {
+    const manager = "/user.slice/user-1000.slice/user@1000.service";
+    expect(scopeControlGroup(manager, "app-t3code-agents-0123456789ab.slice", "t3-a.scope")).toBe(
+      `${manager}/app.slice/app-t3code.slice/app-t3code-agents.slice/` +
+        "app-t3code-agents-0123456789ab.slice/t3-a.scope",
+    );
+    expect(scopeControlGroup(manager, "app.slice", "t3-a.scope")).toBe(
+      `${manager}/app.slice/t3-a.scope`,
+    );
+  });
+});
+
 describe("AgentScope service", () => {
+  it.effect("knows each scope's cgroup from the user manager's own", () => {
+    const manager = "/user.slice/user-1000.slice/user@1000.service";
+    return withFakeSystemd(
+      ({ scope, stateDir }) =>
+        Effect.gen(function* () {
+          const owned = yield* scope.wrap({ command: "agent", args: [], name: "t", threadId: "a" });
+          const surviving = yield* scope.wrap({
+            command: "agent",
+            args: [],
+            name: "terminal",
+            survivesRestart: true,
+          });
+          expect(yield* scope.controlGroup(unitOf(owned))).toBe(
+            `${manager}/app.slice/app-t3code.slice/app-t3code-agents.slice/` +
+              `${ownedAgentSlice(stateDir)}/${unitOf(owned)}`,
+          );
+          expect(yield* scope.controlGroup(unitOf(surviving))).toBe(
+            `${manager}/app.slice/app-t3code.slice/app-t3code-agents.slice/${unitOf(surviving)}`,
+          );
+          expect(yield* scope.controlGroup("t3-unknown.scope")).toBeUndefined();
+        }),
+      { managerControlGroup: manager },
+    );
+  });
+
+  it.effect.each([{ managerControlGroup: "fail" as const }, { managerControlGroup: undefined }])(
+    "knows no cgroup when the user manager does not report its own ($managerControlGroup)",
+    ({ managerControlGroup }) =>
+      withFakeSystemd(
+        ({ scope }) =>
+          Effect.gen(function* () {
+            const launch = yield* scope.wrap({
+              command: "agent",
+              args: [],
+              name: "t",
+              threadId: "a",
+            });
+            expect(unitOf(launch)).not.toBe("");
+            expect(yield* scope.controlGroup(unitOf(launch))).toBeUndefined();
+          }),
+        { managerControlGroup },
+      ),
+  );
+
   it.effect("labels a thread from its newest scope until its next session clears it", () =>
     withFakeSystemd(({ scope, units }) =>
       Effect.gen(function* () {

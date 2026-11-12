@@ -29,6 +29,7 @@ import {
   type ServerRemoveKeybindingInput,
   type ServerUpsertKeybindingInput,
 } from "@t3tools/contracts";
+import { DEFAULT_UNIFIED_SETTINGS } from "@t3tools/contracts/settings";
 import { mergeWithDefaultKeybindings } from "@t3tools/shared/keybindings";
 import {
   isAtomCommandInterrupted,
@@ -41,6 +42,7 @@ import { formatShortcutLabel } from "../../keybindings";
 import { cn } from "../../lib/utils";
 import { serverEnvironment } from "../../state/server";
 import { useSettingsScope } from "./SettingsScopeContext";
+import { useScopedSettings, useUpdateScopedSettings } from "./useScopedSettings";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
@@ -49,6 +51,7 @@ import { Kbd, KbdGroup } from "../ui/kbd";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select";
+import { Switch } from "../ui/switch";
 import { Toggle } from "../ui/toggle";
 import { toastManager } from "../ui/toast";
 import {
@@ -72,7 +75,12 @@ import {
   whenNodeRemoveLabel,
 } from "./KeybindingsSettings.logic";
 import { SettingsGroup } from "./SettingsGroup";
-import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
+import {
+  SettingResetButton,
+  SettingsPageContainer,
+  SettingsRow,
+  SettingsSection,
+} from "./settingsLayout";
 import { keybindingSearchAnchorId, searchableSetting } from "./settingsSearch";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -1345,6 +1353,10 @@ export function KeybindingsSettingsPanel() {
     setHandledSearchTargetId(searchTargetId);
     if (searchTargetId.startsWith("keybinding-")) setQuery("");
   }
+  const shortcutQuickReferenceEnabled = useScopedSettings(
+    (settings) => settings.shortcutQuickReferenceEnabled,
+  );
+  const updateSettings = useUpdateScopedSettings();
   const whenVariables = buildWhenVariableOptions();
   const { commandOptions, allRows } = useKeybindingCatalog();
   const rows = filterKeybindingRows(allRows, query);
@@ -1501,6 +1513,33 @@ export function KeybindingsSettingsPanel() {
             <TooltipPopup side="top">Open keybindings.json</TooltipPopup>
           </Tooltip>
         </div>
+        <SettingsRow
+          {...searchableSetting("shortcut-quick-reference")}
+          description="After a short hold, lists the shortcuts that work where you are."
+          resetAction={
+            shortcutQuickReferenceEnabled !==
+            DEFAULT_UNIFIED_SETTINGS.shortcutQuickReferenceEnabled ? (
+              <SettingResetButton
+                label="shortcut quick reference"
+                onClick={() =>
+                  updateSettings({
+                    shortcutQuickReferenceEnabled:
+                      DEFAULT_UNIFIED_SETTINGS.shortcutQuickReferenceEnabled,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Switch
+              checked={shortcutQuickReferenceEnabled}
+              onCheckedChange={(checked) =>
+                updateSettings({ shortcutQuickReferenceEnabled: Boolean(checked) })
+              }
+              aria-label={searchableSetting("shortcut-quick-reference").title}
+            />
+          }
+        />
       </SettingsSection>
 
       {!canWriteSettings ? (

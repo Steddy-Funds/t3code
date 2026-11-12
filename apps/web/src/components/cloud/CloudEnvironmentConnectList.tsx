@@ -386,6 +386,7 @@ export function CloudEnvironmentConnectRows({
           <EnvironmentMachineIcon
             aria-hidden
             kind={machineKind}
+            environmentId={environment.environmentId}
             className="size-4 shrink-0 text-muted-foreground"
           />
           <span className="min-w-0 flex-1">
@@ -452,6 +453,7 @@ export function CloudEnvironmentConnectRows({
               <EnvironmentMachineIcon
                 aria-hidden
                 kind={machineKind}
+                environmentId={environment.environmentId}
                 className="size-4 shrink-0 text-muted-foreground"
               />
               <p className="truncate text-sm font-medium">{environment.label}</p>

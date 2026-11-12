@@ -28,7 +28,11 @@ export function LinkMachineBadge({ machine }: { readonly machine: LinkableMachin
 function MachineName({ machine }: { readonly machine: LinkableMachine }) {
   return (
     <span className="flex min-w-0 items-center gap-2">
-      <EnvironmentMachineIcon kind={machine.machine} className="size-4 shrink-0 opacity-80" />
+      <EnvironmentMachineIcon
+        kind={machine.machine}
+        environmentId={machine.environmentId}
+        className="size-4 shrink-0 opacity-80"
+      />
       <span className="min-w-0 truncate">{machine.label}</span>
     </span>
   );

@@ -1172,7 +1172,7 @@ it.effect("accepts case-insensitive MCP bearer schemes and diagnoses rejected cr
   );
 });
 
-it.effect("hides tools for links and refuses another environment while the beta is off", () =>
+it.effect("hides link and review-note tools, and refuses another environment, while off", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const token = "linksToken";
@@ -1195,6 +1195,12 @@ it.effect("hides tools for links and refuses another environment while the beta 
           failure: OrchestratorMcpFailure,
           failureMode: "return",
         }).annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenWhileLinksOff),
+        Tool.make("notes", {
+          description: "Leaves a review note.",
+          success: Schema.Struct({}),
+          failure: OrchestratorMcpFailure,
+          failureMode: "return",
+        }).annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenWhileReviewNotesOff),
         Tool.make("where", {
           description: "Says where it ran.",
           parameters: Schema.Struct({ environmentId: OrchestratorMcpEnvironmentTarget }),
@@ -1210,6 +1216,7 @@ it.effect("hides tools for links and refuses another environment while the beta 
           LinksToolkit,
           McpToolAccess.toLayer(LinksToolkit, {
             links: McpToolAccess.reads(() => Effect.succeed({ links: 0 })),
+            notes: McpToolAccess.reads(() => Effect.succeed({})),
             where: McpToolAccess.reads(() => Effect.succeed({ ranIn: "here" })),
           }),
         ),
@@ -1276,6 +1283,8 @@ it.effect("hides tools for links and refuses another environment while the beta 
         );
       const elsewhere = EnvironmentId.make("environment-elsewhere");
 
+      expect(yield* listed()).toEqual(["notes", "where"]);
+      yield* settings.updateSettings({ agentReviewNotesEnabled: false });
       expect(yield* listed()).toEqual(["where"]);
       expect(yield* ranIn(elsewhere)).toMatchObject({
         isError: true,
@@ -1285,6 +1294,8 @@ it.effect("hides tools for links and refuses another environment while the beta 
 
       yield* settings.updateSettings({ linkedEnvironmentsEnabled: true });
       expect(yield* listed()).toEqual(["links", "where"]);
+      yield* settings.updateSettings({ agentReviewNotesEnabled: true });
+      expect(yield* listed()).toEqual(["links", "notes", "where"]);
       // On, the call goes on to the forwarding, which this server lacks.
       expect(yield* ranIn(elsewhere)).toMatchObject({
         isError: true,

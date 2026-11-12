@@ -1,7 +1,10 @@
 import {
+  OrchestrationGetTurnDiffFileContentsError,
   OrchestrationGetTurnDiffResult,
   type OrchestrationGetFullThreadDiffInput,
   type OrchestrationGetFullThreadDiffResult,
+  type OrchestrationGetTurnDiffFileContentsInput,
+  type OrchestrationGetTurnDiffFileContentsResult,
   type OrchestrationGetTurnDiffInput,
   type OrchestrationGetTurnDiffResult as OrchestrationGetTurnDiffResultType,
   type ThreadId,
@@ -16,7 +19,9 @@ import { CHECKPOINT_DIFF_MAX_OUTPUT_BYTES } from "../vcs/VcsDriver.ts";
 import { checkpointRefForScopeOrdinal } from "../orchestration-v2/CheckpointService.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import {
+  type CheckpointDiffOperation,
   CheckpointDiffResultInvalidError,
+  CheckpointFileContentsUnavailableError,
   CheckpointRefUnavailableError,
   CheckpointThreadNotFoundError,
   CheckpointTurnRangeUnavailableError,
@@ -29,6 +34,8 @@ import { isGitImport, parseTurnDiffFilesFromNumstat, type TurnDiffFileSummary } 
 // Windows limits a command line to 32,767 characters. Leave room for the rest of git's arguments.
 const MAX_PATHSPEC_CHARS = 24_000;
 const DIFF_TRUNCATED_MARKER = "\n\n[truncated]";
+/** The cap review.getDiffFileContents puts on a whole file. */
+const TURN_DIFF_FILE_MAX_BYTES = 1024 * 1024;
 
 function batchFilePaths(files: ReadonlyArray<TurnDiffFileSummary>) {
   const batches: string[][] = [];
@@ -59,6 +66,14 @@ export class CheckpointDiffQuery extends Context.Service<
     readonly getFullThreadDiff: (
       input: OrchestrationGetFullThreadDiffInput,
     ) => Effect.Effect<OrchestrationGetFullThreadDiffResult, CheckpointServiceError>;
+
+    /** Both sides of one file of a turn range's diff, whole. A path outside that diff is refused. */
+    readonly getTurnDiffFileContents: (
+      input: OrchestrationGetTurnDiffFileContentsInput,
+    ) => Effect.Effect<
+      OrchestrationGetTurnDiffFileContentsResult,
+      CheckpointServiceError | CheckpointFileContentsUnavailableError
+    >;
   }
 >()("t3/checkpointing/CheckpointDiffQuery") {}
 
@@ -86,6 +101,108 @@ export const make = Effect.gen(function* () {
   const checkpointStore = yield* CheckpointStore.CheckpointStore;
   const digest = yield* Digest.Digest;
 
+  // Untraced: getTurnDiff and getTurnDiffFileContents are the tracing boundaries.
+  const resolveTurnComparison = Effect.fnUntraced(function* (
+    input: {
+      readonly threadId: ThreadId;
+      readonly fromTurnCount: number;
+      readonly toTurnCount: number;
+    },
+    operation: CheckpointDiffOperation,
+  ) {
+    const projection = yield* threads.getCheckpointContext(input.threadId).pipe(
+      Effect.mapError(
+        () =>
+          new CheckpointThreadNotFoundError({
+            operation,
+            threadId: input.threadId,
+          }),
+      ),
+      Effect.withSpan("checkpoint.turnDiff.lookupContext"),
+    );
+    const completedRunIds = new Set(
+      projection.runs.filter((run) => run.status === "completed").map((run) => run.id),
+    );
+    const readyCheckpoints = projection.checkpoints.filter(
+      (checkpoint) =>
+        checkpoint.status === "ready" &&
+        checkpoint.appRunOrdinal !== null &&
+        checkpoint.runId !== null &&
+        completedRunIds.has(checkpoint.runId),
+    );
+    const maxTurnCount = readyCheckpoints.reduce(
+      (max, checkpoint) => Math.max(max, checkpoint.appRunOrdinal ?? 0),
+      0,
+    );
+    if (input.toTurnCount > maxTurnCount) {
+      return yield* new CheckpointTurnRangeUnavailableError({
+        operation,
+        threadId: input.threadId,
+        requestedTurnCount: input.toTurnCount,
+        availableTurnCount: maxTurnCount,
+      });
+    }
+
+    const toCheckpoint = readyCheckpoints.find(
+      (checkpoint) => checkpoint.appRunOrdinal === input.toTurnCount,
+    );
+    if (toCheckpoint === undefined) {
+      return yield* new CheckpointRefUnavailableError({
+        operation,
+        threadId: input.threadId,
+        turnCount: input.toTurnCount,
+        checkpoint: "to",
+      });
+    }
+
+    const toScope = projection.checkpointScopes.find((scope) => scope.id === toCheckpoint.scopeId);
+    if (toScope === undefined) {
+      return yield* new CheckpointWorkspacePathMissingError({
+        operation,
+        threadId: input.threadId,
+      });
+    }
+
+    // Capture compares against the preceding scope ordinal, even when that
+    // checkpoint belongs to a stopped run or has no run.
+    const parentCheckpoint =
+      input.fromTurnCount === input.toTurnCount - 1
+        ? projection.checkpoints.find(
+            (checkpoint) =>
+              checkpoint.status === "ready" &&
+              checkpoint.scopeId === toCheckpoint.scopeId &&
+              checkpoint.ordinalWithinScope === toCheckpoint.ordinalWithinScope - 1,
+          )
+        : undefined;
+
+    const firstScope =
+      input.fromTurnCount === 0
+        ? projection.checkpointScopes.find((scope) => scope.kind === "root_run")
+        : undefined;
+    const fromCheckpointRef =
+      input.fromTurnCount === 0
+        ? firstScope === undefined
+          ? undefined
+          : yield* checkpointRefForScopeOrdinal({
+              scopeId: firstScope.id,
+              ordinalWithinScope: 0,
+            }).pipe(Effect.provideService(Digest.Digest, digest))
+        : (
+            parentCheckpoint ??
+            readyCheckpoints.find((checkpoint) => checkpoint.appRunOrdinal === input.fromTurnCount)
+          )?.ref;
+    if (fromCheckpointRef === undefined) {
+      return yield* new CheckpointRefUnavailableError({
+        operation,
+        threadId: input.threadId,
+        turnCount: input.fromTurnCount,
+        checkpoint: "from",
+      });
+    }
+
+    return { cwd: toScope.cwd, fromCheckpointRef, toCheckpointRef: toCheckpoint.ref };
+  });
+
   const getTurnDiff: CheckpointDiffQuery["Service"]["getTurnDiff"] = Effect.fn("getTurnDiff")(
     function* (input) {
       const operation = "CheckpointDiffQuery.getTurnDiff";
@@ -108,104 +225,8 @@ export const make = Effect.gen(function* () {
         return emptyDiff;
       }
 
-      const projection = yield* threads.getCheckpointContext(input.threadId).pipe(
-        Effect.mapError(
-          () =>
-            new CheckpointThreadNotFoundError({
-              operation,
-              threadId: input.threadId,
-            }),
-        ),
-        Effect.withSpan("checkpoint.turnDiff.lookupContext"),
-      );
-      const completedRunIds = new Set(
-        projection.runs.filter((run) => run.status === "completed").map((run) => run.id),
-      );
-      const readyCheckpoints = projection.checkpoints.filter(
-        (checkpoint) =>
-          checkpoint.status === "ready" &&
-          checkpoint.appRunOrdinal !== null &&
-          checkpoint.runId !== null &&
-          completedRunIds.has(checkpoint.runId),
-      );
-      const maxTurnCount = readyCheckpoints.reduce(
-        (max, checkpoint) => Math.max(max, checkpoint.appRunOrdinal ?? 0),
-        0,
-      );
-      if (input.toTurnCount > maxTurnCount) {
-        return yield* new CheckpointTurnRangeUnavailableError({
-          operation,
-          threadId: input.threadId,
-          requestedTurnCount: input.toTurnCount,
-          availableTurnCount: maxTurnCount,
-        });
-      }
-
-      const toCheckpoint = readyCheckpoints.find(
-        (checkpoint) => checkpoint.appRunOrdinal === input.toTurnCount,
-      );
-      if (toCheckpoint === undefined) {
-        return yield* new CheckpointRefUnavailableError({
-          operation,
-          threadId: input.threadId,
-          turnCount: input.toTurnCount,
-          checkpoint: "to",
-        });
-      }
-
-      const toScope = projection.checkpointScopes.find(
-        (scope) => scope.id === toCheckpoint.scopeId,
-      );
-      if (toScope === undefined) {
-        return yield* new CheckpointWorkspacePathMissingError({
-          operation,
-          threadId: input.threadId,
-        });
-      }
-
-      // Capture compares against the preceding scope ordinal, even when that
-      // checkpoint belongs to a stopped run or has no run.
-      const parentCheckpoint =
-        input.fromTurnCount === input.toTurnCount - 1
-          ? projection.checkpoints.find(
-              (checkpoint) =>
-                checkpoint.status === "ready" &&
-                checkpoint.scopeId === toCheckpoint.scopeId &&
-                checkpoint.ordinalWithinScope === toCheckpoint.ordinalWithinScope - 1,
-            )
-          : undefined;
-
-      const firstScope =
-        input.fromTurnCount === 0
-          ? projection.checkpointScopes.find((scope) => scope.kind === "root_run")
-          : undefined;
-      const fromCheckpointRef =
-        input.fromTurnCount === 0
-          ? firstScope === undefined
-            ? undefined
-            : yield* checkpointRefForScopeOrdinal({
-                scopeId: firstScope.id,
-                ordinalWithinScope: 0,
-              }).pipe(Effect.provideService(Digest.Digest, digest))
-          : (
-              parentCheckpoint ??
-              readyCheckpoints.find(
-                (checkpoint) => checkpoint.appRunOrdinal === input.fromTurnCount,
-              )
-            )?.ref;
-      if (fromCheckpointRef === undefined) {
-        return yield* new CheckpointRefUnavailableError({
-          operation,
-          threadId: input.threadId,
-          turnCount: input.fromTurnCount,
-          checkpoint: "from",
-        });
-      }
-
       const comparison = {
-        cwd: toScope.cwd,
-        fromCheckpointRef,
-        toCheckpointRef: toCheckpoint.ref,
+        ...(yield* resolveTurnComparison(input, operation)),
         fallbackFromToHead: false,
         ignoreWhitespace,
       };
@@ -311,10 +332,90 @@ export const make = Effect.gen(function* () {
     return turnDiff satisfies OrchestrationGetFullThreadDiffResult;
   });
 
+  const getTurnDiffFileContents: CheckpointDiffQuery["Service"]["getTurnDiffFileContents"] =
+    Effect.fn("CheckpointDiffQuery.getTurnDiffFileContents")(function* (input) {
+      yield* Effect.annotateCurrentSpan({
+        "checkpoint.thread_id": input.threadId,
+        "checkpoint.from_turn_count": input.fromTurnCount,
+        "checkpoint.to_turn_count": input.toTurnCount,
+      });
+      const unavailable = (reason: CheckpointFileContentsUnavailableError["reason"]) =>
+        new CheckpointFileContentsUnavailableError({
+          threadId: input.threadId,
+          path: input.path,
+          reason,
+        });
+      if (input.fromTurnCount === input.toTurnCount) return yield* unavailable("not_in_diff");
+
+      const refs = yield* resolveTurnComparison(
+        input,
+        "CheckpointDiffQuery.getTurnDiffFileContents",
+      );
+      // Whitespace-only changes count: this is every file the turn diff can show.
+      const comparison = { ...refs, fallbackFromToHead: false, ignoreWhitespace: false };
+      const [authoredPaths, files] = yield* Effect.all(
+        [
+          checkpointStore.listAuthoredPaths(comparison).pipe(Effect.orElseSucceed(() => null)),
+          // The whole range: a path-limited diff lets git pair renames differently.
+          checkpointStore
+            .diffCheckpoints({ ...comparison, format: "numstat" })
+            .pipe(Effect.map(parseTurnDiffFilesFromNumstat)),
+        ],
+        { concurrency: 2 },
+      );
+      const file = files.find(
+        (candidate) =>
+          candidate.path === input.path && candidate.previousPath === input.previousPath,
+      );
+      if (file === undefined || isGitImport(file, authoredPaths)) {
+        return yield* unavailable("not_in_diff");
+      }
+
+      const readSide = Effect.fnUntraced(function* (
+        checkpointRef: typeof refs.fromCheckpointRef,
+        path: string,
+      ) {
+        const read = yield* checkpointStore.readCheckpointFile({
+          cwd: refs.cwd,
+          checkpointRef,
+          path,
+          maxBytes: TURN_DIFF_FILE_MAX_BYTES,
+        });
+        if (read.kind === "text") return read.contents;
+        // The file was added or deleted in the range, so this side has nothing.
+        if (read.kind === "missing") return "";
+        return yield* unavailable(read.kind === "not_a_file" ? "unavailable" : read.kind);
+      });
+      const [oldContents, newContents] = yield* Effect.all(
+        [
+          readSide(refs.fromCheckpointRef, input.previousPath ?? input.path),
+          readSide(refs.toCheckpointRef, input.path),
+        ],
+        { concurrency: 2 },
+      );
+      return { oldContents, newContents };
+    });
+
   return CheckpointDiffQuery.of({
     getTurnDiff,
     getFullThreadDiff,
+    getTurnDiffFileContents,
   });
 });
 
 export const layer = Layer.effect(CheckpointDiffQuery, make);
+
+/** Only a refusal names its reason; every other failure reads as unavailable. */
+export const turnDiffFileContentsRpcError = (
+  cause: CheckpointServiceError | CheckpointFileContentsUnavailableError,
+) =>
+  cause._tag === "CheckpointFileContentsUnavailableError"
+    ? new OrchestrationGetTurnDiffFileContentsError({
+        message: cause.message,
+        reason: cause.reason,
+      })
+    : new OrchestrationGetTurnDiffFileContentsError({
+        message: "Failed to load turn diff file contents",
+        reason: "unavailable",
+        cause,
+      });

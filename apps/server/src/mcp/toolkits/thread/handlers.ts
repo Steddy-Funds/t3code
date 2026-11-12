@@ -1,4 +1,7 @@
 import {
+  BACKGROUNDED_THREAD_TAG,
+  LOW_PRIORITY_THREAD_TAG,
+  NORMAL_PRIORITY_THREAD_TAG,
   type CommandId,
   type RuntimeRequestId,
   ThreadId,
@@ -341,8 +344,36 @@ export const layer = McpToolAccess.toLayer(ThreadToolkit, {
           .settleThread({ ...common, byOwnAgent: caller?.id === projection.thread.id })
           .pipe(Effect.mapError(dispatchFailure));
       }
+      if (input.action === "set_priority") {
+        if (input.priority === undefined) {
+          return yield* new OrchestratorMcpFailure({
+            code: "invalid_request",
+            message: "set_priority requires priority.",
+          });
+        }
+        let sequence = 0;
+        for (const [tag, priority] of [
+          [LOW_PRIORITY_THREAD_TAG, "low"],
+          [NORMAL_PRIORITY_THREAD_TAG, "normal"],
+        ] as const) {
+          const result = yield* threads
+            .dispatch({
+              commandId: yield* newCommandId(),
+              threadId: projection.thread.id,
+              type: "thread.tag.set",
+              tag,
+              tagged: input.priority === priority,
+            })
+            .pipe(Effect.mapError(dispatchFailure));
+          sequence = result.sequence;
+        }
+        return { sequence };
+      }
       let command: OrchestrationV2Command;
       switch (input.action) {
+        case "resume_load_pause":
+          command = { ...common, type: "thread.metadata.update", loadPause: { resume: true } };
+          break;
         case "snooze":
           if (input.snoozedUntil === undefined) {
             return yield* new OrchestratorMcpFailure({
@@ -358,6 +389,15 @@ export const layer = McpToolAccess.toLayer(ThreadToolkit, {
           break;
         case "mark_unread":
           command = { ...common, type: "thread.mark-unread" };
+          break;
+        case "background":
+        case "unbackground":
+          command = {
+            ...common,
+            type: "thread.tag.set",
+            tag: BACKGROUNDED_THREAD_TAG,
+            tagged: input.action === "background",
+          };
           break;
         default:
           command = { ...common, type: `thread.${input.action}` };

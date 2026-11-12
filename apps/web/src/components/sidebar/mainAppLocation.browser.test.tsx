@@ -9,6 +9,7 @@ import {
   assistantCitationNavigation,
 } from "../../lib/assistantCitationNavigation";
 import {
+  isSidebarUtilityPage,
   startMainAppLocationTracking,
   useCloseAppModal,
   useNavigateToMainApp,
@@ -73,5 +74,20 @@ describe("main app return location", () => {
       closingUsage: THREAD_PATH,
       sidebarBack: THREAD_PATH,
     });
+  });
+});
+
+describe("isSidebarUtilityPage", () => {
+  it.each([
+    ["/machines", true],
+    ["/machines/machine-a", true],
+    ["/projects/a", true],
+    ["/pull-requests", true],
+    ["/machinesx", false],
+    ["/settings/connections", false],
+    [THREAD_PATH, false],
+    ["/", false],
+  ])("%s → %s", (pathname, expected) => {
+    expect(isSidebarUtilityPage(pathname)).toBe(expected);
   });
 });

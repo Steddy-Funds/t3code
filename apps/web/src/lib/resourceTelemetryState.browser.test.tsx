@@ -54,12 +54,20 @@ vi.mock("../state/session", () => ({
   readEnvironmentScope: () => true,
   useEnvironmentScope: () => true,
 }));
-vi.mock("../state/server", () => ({
-  serverEnvironment: {
-    resourceTelemetry: monitor.telemetry,
-    resourceTelemetryHistory: monitor.history,
-  },
-}));
+vi.mock("../state/server", async () => {
+  const { Atom } = await import("effect/reactivity");
+  // The live process table's kill flow; this connection can't signal, so no Kill buttons.
+  const cannotSignal = Atom.make(false);
+  const noConfig = Atom.make(null);
+  return {
+    serverEnvironment: {
+      resourceTelemetry: monitor.telemetry,
+      resourceTelemetryHistory: monitor.history,
+      signalProcess: { permissionAtom: () => cannotSignal },
+      configValueAtom: () => noConfig,
+    },
+  };
+});
 vi.mock("../state/use-atom-command", () => ({ useAtomCommand: () => monitor.retry }));
 
 import { ResourceTelemetryDiagnostics } from "../components/settings/ResourceTelemetryDiagnostics";

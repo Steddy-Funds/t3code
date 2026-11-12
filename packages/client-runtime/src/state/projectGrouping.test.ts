@@ -1,4 +1,9 @@
-import { EnvironmentId, ProjectId, SourceControlProviderKind } from "@t3tools/contracts";
+import {
+  EnvironmentId,
+  type MachineStatusSnapshot,
+  ProjectId,
+  SourceControlProviderKind,
+} from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import type { EnvironmentProject } from "./models.ts";
@@ -76,6 +81,71 @@ describe("load balancing shared project machines", () => {
     };
     expect(chooseLoadBalancedEnvironment([candidate], now)).toBe("different-clock");
     expect(chooseLoadBalancedEnvironment([candidate], now + 15_001)).toBeNull();
+  });
+
+  const status: MachineStatusSnapshot = {
+    sequence: 1,
+    verdict: "ok",
+    verdictAgeMs: 0,
+    reason: null,
+    sampleAgeMs: 0,
+    totals: {
+      cpuUtilization: 0.2,
+      cpuCount: 8,
+      load: null,
+      memoryTotalBytes: 16_000,
+      memoryAvailableBytes: 8_000,
+      swapTotalBytes: 0,
+      swapUsedBytes: 0,
+      memoryPressure: null,
+    },
+  };
+  const machine = (overrides: Partial<MachineStatusSnapshot> = {}, receivedAt = now) => ({
+    status: { ...status, ...overrides },
+    receivedAt,
+  });
+
+  it.each([
+    { label: "stressed", machine: machine({ verdict: "stressed" }) },
+    { label: "unknown", machine: machine({ verdict: "unknown" }) },
+    { label: "stale", machine: machine({}, now - 75_001) },
+    { label: "no status", machine: { status: null, receivedAt: now } },
+    { label: "no totals", machine: machine({ totals: null }) },
+    {
+      label: "no CPU sample",
+      machine: machine({ totals: { ...status.totals!, cpuUtilization: null } }),
+    },
+  ])("skips a verdict machine that is $label", ({ machine }) => {
+    // Healthy host resources do not rescue a machine whose verdict rules it out.
+    expect(
+      chooseLoadBalancedEnvironment([{ environmentId: "m", weight: 1, resources, machine }], now),
+    ).toBeNull();
+  });
+
+  it("scores a verdict machine from its totals and trusts the verdict over CPU cut-offs", () => {
+    const busy = machine({ totals: { ...status.totals!, cpuUtilization: 0.96 } });
+    expect(
+      chooseLoadBalancedEnvironment([{ environmentId: "busy-ok", weight: 1, machine: busy }], now),
+    ).toBe("busy-ok");
+    // Verdict machine: 1 × 8 × 0.8 × 0.5 = 3.2; host-resources machine with 4 cores: 1.6.
+    expect(
+      chooseLoadBalancedEnvironment(
+        [
+          { environmentId: "legacy", weight: 1, resources: { ...resources, cpuCount: 4 } },
+          { environmentId: "verdict", weight: 1, machine: machine() },
+        ],
+        now,
+      ),
+    ).toBe("verdict");
+    expect(
+      chooseLoadBalancedEnvironment(
+        [
+          { environmentId: "legacy", weight: 3, resources: { ...resources, cpuCount: 4 } },
+          { environmentId: "verdict", weight: 1, machine: machine() },
+        ],
+        now,
+      ),
+    ).toBe("legacy");
   });
 });
 const repositoryIdentity = {

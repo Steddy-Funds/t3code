@@ -167,6 +167,7 @@ it.effect("reads a collected reference again once it is invalidated", () =>
     cache.set("voice#key", "stale");
     cache.set("expo#token", "stale");
     cache.set("simlock#token", "stale");
+    cache.set("browser-run#token", "stale");
     assert.deepEqual((yield* read()).bitbucket, {
       email: "me@example.test",
       accessToken: "stale",
@@ -177,6 +178,7 @@ it.effect("reads a collected reference again once it is invalidated", () =>
       Effect.succeed({
         sourceControlHosts: hosts,
         cloudSpeechCredentials: { openai: source("voice#key"), xai: "", openrouter: "" },
+        browserRun: { enabled: true, accountId: "", apiToken: source("browser-run#token") },
         usageLimitSources,
         textGenerators: {},
         easDeviceHosts,
@@ -187,6 +189,7 @@ it.effect("reads a collected reference again once it is invalidated", () =>
     assert.isFalse(cache.has("voice#key"));
     assert.isFalse(cache.has("expo#token"));
     assert.isFalse(cache.has("simlock#token"));
+    assert.isFalse(cache.has("browser-run#token"));
     assert.deepEqual((yield* read()).bitbucket, {
       email: "me@example.test",
       accessToken: "rotated",

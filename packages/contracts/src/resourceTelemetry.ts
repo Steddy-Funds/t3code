@@ -3,8 +3,20 @@ import * as Schema from "effect/Schema";
 import { NonNegativeInt, PositiveInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import { HostPowerSnapshot } from "./background.ts";
 import { DesktopUpdateChannelSchema, DesktopUpdateStateSchema } from "./ipc.ts";
+import { GpuDeviceSample } from "./machineResources.ts";
 
-export const RESOURCE_MONITOR_PROTOCOL_VERSION = 3 as const;
+export const RESOURCE_MONITOR_PROTOCOL_VERSION = 4 as const;
+/** A monitor built before v4 still speaks this; the server then uses only v3 messages. */
+export const RESOURCE_MONITOR_LEGACY_PROTOCOL_VERSION = 3 as const;
+export const MAX_CLAIMED_PROCESSES = 256;
+
+/** Messages whose shape v3 and v4 share. */
+const SharedProtocolVersion = Schema.Literals([
+  RESOURCE_MONITOR_LEGACY_PROTOCOL_VERSION,
+  RESOURCE_MONITOR_PROTOCOL_VERSION,
+]);
+export type ResourceMonitorProtocolVersion = typeof SharedProtocolVersion.Type;
+const V4ProtocolVersion = Schema.Literal(RESOURCE_MONITOR_PROTOCOL_VERSION);
 
 export const HostResourcesSnapshot = Schema.Struct({
   sampledAt: NonNegativeInt,
@@ -66,6 +78,11 @@ export const ResourceMonitorCapabilities = Schema.Struct({
   ioBytes: Schema.Boolean,
   processStartTime: Schema.Boolean,
   processTree: Schema.Boolean,
+  /** v4 "can try" flags; absent from a v3 monitor. */
+  hostProcesses: Schema.optionalKey(Schema.Boolean),
+  gpuNvidia: Schema.optionalKey(Schema.Boolean),
+  gpuIntel: Schema.optionalKey(Schema.Boolean),
+  hostTotals: Schema.optionalKey(Schema.Boolean),
 });
 export type ResourceMonitorCapabilities = typeof ResourceMonitorCapabilities.Type;
 
@@ -88,7 +105,7 @@ export const ResourceMonitorProcessSample = Schema.Struct({
 export type ResourceMonitorProcessSample = typeof ResourceMonitorProcessSample.Type;
 
 export const ResourceMonitorConfigureCommand = Schema.Struct({
-  version: Schema.Literal(RESOURCE_MONITOR_PROTOCOL_VERSION),
+  version: SharedProtocolVersion,
   type: Schema.Literal("configure"),
   rootPid: PositiveInt,
   sampleIntervalMs: NonNegativeInt,
@@ -97,7 +114,7 @@ export const ResourceMonitorConfigureCommand = Schema.Struct({
 export type ResourceMonitorConfigureCommand = typeof ResourceMonitorConfigureCommand.Type;
 
 export const ResourceMonitorSetExternalProcessesCommand = Schema.Struct({
-  version: Schema.Literal(RESOURCE_MONITOR_PROTOCOL_VERSION),
+  version: SharedProtocolVersion,
   type: Schema.Literal("setExternalProcesses"),
   processes: Schema.Array(ResourceMonitorExternalProcess),
 });
@@ -105,21 +122,21 @@ export type ResourceMonitorSetExternalProcessesCommand =
   typeof ResourceMonitorSetExternalProcessesCommand.Type;
 
 export const ResourceMonitorSampleNowCommand = Schema.Struct({
-  version: Schema.Literal(RESOURCE_MONITOR_PROTOCOL_VERSION),
+  version: SharedProtocolVersion,
   type: Schema.Literal("sampleNow"),
   requestId: TrimmedNonEmptyString,
 });
 export type ResourceMonitorSampleNowCommand = typeof ResourceMonitorSampleNowCommand.Type;
 
 export const ResourceMonitorProcessTableCommand = Schema.Struct({
-  version: Schema.Literal(RESOURCE_MONITOR_PROTOCOL_VERSION),
+  version: SharedProtocolVersion,
   type: Schema.Literal("processTable"),
   requestId: TrimmedNonEmptyString,
 });
 export type ResourceMonitorProcessTableCommand = typeof ResourceMonitorProcessTableCommand.Type;
 
 export const ResourceMonitorSetSampleIntervalCommand = Schema.Struct({
-  version: Schema.Literal(RESOURCE_MONITOR_PROTOCOL_VERSION),
+  version: SharedProtocolVersion,
   type: Schema.Literal("setSampleInterval"),
   sampleIntervalMs: NonNegativeInt,
 });
@@ -127,22 +144,72 @@ export type ResourceMonitorSetSampleIntervalCommand =
   typeof ResourceMonitorSetSampleIntervalCommand.Type;
 
 export const ResourceMonitorSetStreamingCommand = Schema.Struct({
-  version: Schema.Literal(RESOURCE_MONITOR_PROTOCOL_VERSION),
+  version: SharedProtocolVersion,
   type: Schema.Literal("setStreaming"),
   enabled: Schema.Boolean,
 });
 export type ResourceMonitorSetStreamingCommand = typeof ResourceMonitorSetStreamingCommand.Type;
 
 export const ResourceMonitorReadHistoryCommand = Schema.Struct({
-  version: Schema.Literal(RESOURCE_MONITOR_PROTOCOL_VERSION),
+  version: SharedProtocolVersion,
   type: Schema.Literal("readHistory"),
   requestId: TrimmedNonEmptyString,
   windowMs: NonNegativeInt,
 });
 export type ResourceMonitorReadHistoryCommand = typeof ResourceMonitorReadHistoryCommand.Type;
 
+export const ResourceMonitorSetClaimedProcessesCommand = Schema.Struct({
+  version: V4ProtocolVersion,
+  type: Schema.Literal("setClaimedProcesses"),
+  processes: Schema.Array(ResourceMonitorExternalProcess).check(
+    Schema.isMaxLength(MAX_CLAIMED_PROCESSES),
+  ),
+});
+export type ResourceMonitorSetClaimedProcessesCommand =
+  typeof ResourceMonitorSetClaimedProcessesCommand.Type;
+
+/** What one `hostSample` carries. */
+export const ResourceMonitorHostSampleOptions = Schema.Struct({
+  processes: Schema.Boolean,
+  gpus: Schema.Boolean,
+  gpuProcesses: Schema.Boolean,
+});
+export type ResourceMonitorHostSampleOptions = typeof ResourceMonitorHostSampleOptions.Type;
+
+export const ResourceMonitorSetHostStreamingCommand = Schema.Struct({
+  version: V4ProtocolVersion,
+  type: Schema.Literal("setHostStreaming"),
+  /** 0 stops streaming and frees the host process table; otherwise clamped to 1–60 s. */
+  intervalMs: NonNegativeInt,
+  ...ResourceMonitorHostSampleOptions.fields,
+});
+export type ResourceMonitorSetHostStreamingCommand =
+  typeof ResourceMonitorSetHostStreamingCommand.Type;
+
+export const ResourceMonitorHostSampleNowCommand = Schema.Struct({
+  version: V4ProtocolVersion,
+  type: Schema.Literal("hostSampleNow"),
+  requestId: TrimmedNonEmptyString,
+  ...ResourceMonitorHostSampleOptions.fields,
+});
+export type ResourceMonitorHostSampleNowCommand = typeof ResourceMonitorHostSampleNowCommand.Type;
+
+export const ResourceMonitorHostTotalsCommand = Schema.Struct({
+  version: V4ProtocolVersion,
+  type: Schema.Literal("hostTotals"),
+  requestId: TrimmedNonEmptyString,
+});
+export type ResourceMonitorHostTotalsCommand = typeof ResourceMonitorHostTotalsCommand.Type;
+
+export const ResourceMonitorGpuTotalsCommand = Schema.Struct({
+  version: V4ProtocolVersion,
+  type: Schema.Literal("gpuTotals"),
+  requestId: TrimmedNonEmptyString,
+});
+export type ResourceMonitorGpuTotalsCommand = typeof ResourceMonitorGpuTotalsCommand.Type;
+
 export const ResourceMonitorShutdownCommand = Schema.Struct({
-  version: Schema.Literal(RESOURCE_MONITOR_PROTOCOL_VERSION),
+  version: SharedProtocolVersion,
   type: Schema.Literal("shutdown"),
 });
 export type ResourceMonitorShutdownCommand = typeof ResourceMonitorShutdownCommand.Type;
@@ -155,12 +222,17 @@ export const ResourceMonitorCommand = Schema.Union([
   ResourceMonitorSampleNowCommand,
   ResourceMonitorProcessTableCommand,
   ResourceMonitorReadHistoryCommand,
+  ResourceMonitorSetClaimedProcessesCommand,
+  ResourceMonitorSetHostStreamingCommand,
+  ResourceMonitorHostSampleNowCommand,
+  ResourceMonitorHostTotalsCommand,
+  ResourceMonitorGpuTotalsCommand,
   ResourceMonitorShutdownCommand,
 ]);
 export type ResourceMonitorCommand = typeof ResourceMonitorCommand.Type;
 
 export const ResourceMonitorHelloEvent = Schema.Struct({
-  version: Schema.Literal(RESOURCE_MONITOR_PROTOCOL_VERSION),
+  version: SharedProtocolVersion,
   type: Schema.Literal("hello"),
   sidecarVersion: TrimmedNonEmptyString,
   sidecarPid: PositiveInt,
@@ -171,7 +243,7 @@ export const ResourceMonitorHelloEvent = Schema.Struct({
 export type ResourceMonitorHelloEvent = typeof ResourceMonitorHelloEvent.Type;
 
 export const ResourceMonitorSnapshotEvent = Schema.Struct({
-  version: Schema.Literal(RESOURCE_MONITOR_PROTOCOL_VERSION),
+  version: SharedProtocolVersion,
   type: Schema.Literal("snapshot"),
   sequence: NonNegativeInt,
   sampledAtUnixMs: NonNegativeInt,
@@ -182,6 +254,10 @@ export const ResourceMonitorSnapshotEvent = Schema.Struct({
   requestId: Schema.optionalKey(TrimmedNonEmptyString),
   externalProcesses: Schema.optionalKey(Schema.Array(ResourceMonitorExternalProcess)),
   processes: Schema.Array(ResourceMonitorProcessSample),
+  /** v4, while claims are set: the claimed roots still alive. */
+  claimedProcesses: Schema.optionalKey(Schema.Array(ResourceMonitorExternalProcess)),
+  /** v4: every pid in a claimed subtree. These rows belong to their claimant, not to T3. */
+  claimedPids: Schema.optionalKey(Schema.Array(PositiveInt)),
 });
 export type ResourceMonitorSnapshotEvent = typeof ResourceMonitorSnapshotEvent.Type;
 
@@ -189,11 +265,13 @@ export const ResourceMonitorProcessTableEntry = Schema.Struct({
   pid: PositiveInt,
   ppid: NonNegativeInt,
   name: Schema.String,
+  /** v4; on the same epoch as `hostSample` start times. */
+  startTimeMs: Schema.optionalKey(NonNegativeInt),
 });
 export type ResourceMonitorProcessTableEntry = typeof ResourceMonitorProcessTableEntry.Type;
 
 export const ResourceMonitorProcessTableEvent = Schema.Struct({
-  version: Schema.Literal(RESOURCE_MONITOR_PROTOCOL_VERSION),
+  version: SharedProtocolVersion,
   type: Schema.Literal("processTable"),
   requestId: TrimmedNonEmptyString,
   processes: Schema.Array(ResourceMonitorProcessTableEntry),
@@ -201,7 +279,7 @@ export const ResourceMonitorProcessTableEvent = Schema.Struct({
 export type ResourceMonitorProcessTableEvent = typeof ResourceMonitorProcessTableEvent.Type;
 
 export const ResourceMonitorHistoryChunkEvent = Schema.Struct({
-  version: Schema.Literal(RESOURCE_MONITOR_PROTOCOL_VERSION),
+  version: SharedProtocolVersion,
   type: Schema.Literal("historyChunk"),
   requestId: TrimmedNonEmptyString,
   done: Schema.Boolean,
@@ -210,7 +288,7 @@ export const ResourceMonitorHistoryChunkEvent = Schema.Struct({
 export type ResourceMonitorHistoryChunkEvent = typeof ResourceMonitorHistoryChunkEvent.Type;
 
 export const ResourceMonitorErrorEvent = Schema.Struct({
-  version: Schema.Literal(RESOURCE_MONITOR_PROTOCOL_VERSION),
+  version: SharedProtocolVersion,
   type: Schema.Literal("error"),
   code: TrimmedNonEmptyString,
   message: TrimmedNonEmptyString,
@@ -218,12 +296,91 @@ export const ResourceMonitorErrorEvent = Schema.Struct({
 });
 export type ResourceMonitorErrorEvent = typeof ResourceMonitorErrorEvent.Type;
 
+export const GpuProcessSample = Schema.Struct({
+  pid: PositiveInt,
+  startTimeMs: NonNegativeInt,
+  deviceId: Schema.String,
+  utilPercent: Schema.NullOr(Schema.Number),
+  vramBytes: Schema.NullOr(NonNegativeInt),
+});
+export type GpuProcessSample = typeof GpuProcessSample.Type;
+
+/** Index-aligned columns, one entry per process on the host. */
+export const ResourceMonitorHostProcessColumns = Schema.Struct({
+  pid: Schema.Array(PositiveInt),
+  ppid: Schema.Array(NonNegativeInt),
+  startTimeMs: Schema.Array(NonNegativeInt),
+  /** Percent of one core. */
+  cpuPercent: Schema.Array(Schema.Number),
+  residentBytes: Schema.Array(NonNegativeInt),
+});
+export type ResourceMonitorHostProcessColumns = typeof ResourceMonitorHostProcessColumns.Type;
+
+/** Static fields, sent once per process identity until the next `staticReset`. */
+export const ResourceMonitorHostProcessStatic = Schema.Struct({
+  pid: PositiveInt,
+  startTimeMs: NonNegativeInt,
+  name: Schema.String,
+  user: Schema.String,
+  command: Schema.String,
+  exe: Schema.String,
+  cwd: Schema.String,
+  cgroup: Schema.String,
+  /** "" outside a container. */
+  containerId: Schema.String,
+});
+export type ResourceMonitorHostProcessStatic = typeof ResourceMonitorHostProcessStatic.Type;
+
+export const ResourceMonitorHostSampleEvent = Schema.Struct({
+  version: V4ProtocolVersion,
+  type: Schema.Literal("hostSample"),
+  sequence: NonNegativeInt,
+  sampledAtUnixMs: NonNegativeInt,
+  requestId: Schema.optionalKey(TrimmedNonEmptyString),
+  collectionDurationMicros: NonNegativeInt,
+  scannedProcessCount: NonNegativeInt,
+  inaccessibleProcessCount: NonNegativeInt,
+  /** Drop every static field held for this monitor before applying `added`. */
+  staticReset: Schema.Boolean,
+  processes: Schema.optionalKey(ResourceMonitorHostProcessColumns),
+  added: Schema.optionalKey(Schema.Array(ResourceMonitorHostProcessStatic)),
+  gpus: Schema.optionalKey(Schema.Array(GpuDeviceSample)),
+  gpuProcesses: Schema.optionalKey(Schema.Array(GpuProcessSample)),
+  /** Devices whose process walk succeeded; a process is unmeasured on any other device. */
+  gpuProcessDevices: Schema.optionalKey(Schema.Array(Schema.String)),
+});
+export type ResourceMonitorHostSampleEvent = typeof ResourceMonitorHostSampleEvent.Type;
+
+export const ResourceMonitorHostTotalsEvent = Schema.Struct({
+  version: V4ProtocolVersion,
+  type: Schema.Literal("hostTotals"),
+  requestId: TrimmedNonEmptyString,
+  /** macOS only; null fields elsewhere. */
+  memoryPressure: Schema.NullOr(Schema.Literals(["normal", "warn", "critical"])),
+  memoryAvailableBytes: Schema.NullOr(NonNegativeInt),
+  swapTotalBytes: Schema.NullOr(NonNegativeInt),
+  swapUsedBytes: Schema.NullOr(NonNegativeInt),
+});
+export type ResourceMonitorHostTotalsEvent = typeof ResourceMonitorHostTotalsEvent.Type;
+
+export const ResourceMonitorGpuTotalsEvent = Schema.Struct({
+  version: V4ProtocolVersion,
+  type: Schema.Literal("gpuTotals"),
+  requestId: TrimmedNonEmptyString,
+  /** Absent when this one query failed; empty when there are no GPUs or GPUs are off. */
+  gpus: Schema.optionalKey(Schema.Array(GpuDeviceSample)),
+});
+export type ResourceMonitorGpuTotalsEvent = typeof ResourceMonitorGpuTotalsEvent.Type;
+
 export const ResourceMonitorEvent = Schema.Union([
   ResourceMonitorHelloEvent,
   ResourceMonitorSnapshotEvent,
   ResourceMonitorProcessTableEvent,
   ResourceMonitorHistoryChunkEvent,
   ResourceMonitorErrorEvent,
+  ResourceMonitorHostSampleEvent,
+  ResourceMonitorHostTotalsEvent,
+  ResourceMonitorGpuTotalsEvent,
 ]);
 export type ResourceMonitorEvent = typeof ResourceMonitorEvent.Type;
 

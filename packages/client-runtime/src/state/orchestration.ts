@@ -164,6 +164,22 @@ export function createOrchestrationEnvironmentAtoms<R, E>(
       tag: ORCHESTRATION_V2_WS_METHODS.getTurnDiff,
       ...onCheckpointDiffAnswer,
     }),
+    turnDiffFileContents: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:orchestration:turn-diff-file-contents",
+      tag: ORCHESTRATION_V2_WS_METHODS.getTurnDiffFileContents,
+      concurrency: {
+        mode: "singleFlight",
+        key: ({ environmentId, input }) =>
+          JSON.stringify([
+            environmentId,
+            input.threadId,
+            input.fromTurnCount,
+            input.toTurnCount,
+            input.path,
+            input.previousPath ?? null,
+          ]),
+      },
+    }),
     workflowScript: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:orchestration:workflow-script",
       tag: ORCHESTRATION_V2_WS_METHODS.getWorkflowScript,

@@ -1,17 +1,22 @@
 import {
   EnvironmentId,
+  type ServedSitesCapability,
   ORCHESTRATION_PROTOCOL_VERSION,
   PROVIDER_SEND_TURN_MAX_FILE_BYTES,
   type ExecutionEnvironmentDescriptor,
 } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
+import { readTailscaleStatus } from "@t3tools/tailscale";
 import * as Context from "effect/Context";
 import * as SecureRandom from "effect/crypto/SecureRandom";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
+import { ChildProcessSpawner } from "effect/process";
 
 import packageJson from "../../package.json" with { type: "json" };
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
@@ -22,6 +27,7 @@ import { resolveServiceLauncherMode } from "../cloud/serviceLauncherClient.ts";
 import * as ServerConfig from "../config.ts";
 import { databaseMigrationHead } from "../persistence/databaseMigrationHead.ts";
 import * as ProcessRunner from "../processRunner.ts";
+import * as Settings from "../serverSettings.ts";
 import { isSpeechPlatformSupported } from "../speech/platform.ts";
 import { resolveServerEnvironmentLabel } from "./ServerEnvironmentLabel.ts";
 import { detectServerEnvironmentMachineKind } from "./ServerEnvironmentMachine.ts";
@@ -49,6 +55,33 @@ export class ServerEnvironment extends Context.Service<
     readonly getDescriptor: Effect.Effect<ExecutionEnvironmentDescriptor>;
   }
 >()("t3/environment/ServerEnvironment") {}
+
+const TAILNET_PROBE_TTL = Duration.minutes(10);
+
+/**
+ * Served sites need the settings service, which only the full server provides. The tailnet probe
+ * is cached because every MCP call reads the descriptor.
+ */
+const servedSitesCapability = Effect.gen(function* () {
+  const settings = yield* Effect.serviceOption(Settings.ServerSettingsService);
+  if (Option.isNone(settings)) return Effect.undefined;
+  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+  const tailnet = yield* Effect.cachedWithTTL(
+    readTailscaleStatus.pipe(
+      Effect.map((status) => status.magicDnsName !== null),
+      Effect.orElseSucceed(() => false),
+      Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+    ),
+    TAILNET_PROBE_TTL,
+  );
+  const hookSet = settings.value.getSettings.pipe(
+    Effect.map((current) => current.servedSites.publicExposeCommand.length > 0),
+    Effect.orElseSucceed(() => false),
+  );
+  return Effect.all({ tailnet, public: hookSet }).pipe(
+    Effect.map((capability): ServedSitesCapability | undefined => capability),
+  );
+});
 
 export class ServerEnvironmentIdentity extends Context.Service<
   ServerEnvironmentIdentity,
@@ -273,7 +306,15 @@ export const make = Effect.gen(function* () {
       ignoredFileListing: true,
       triage: true,
       oneTimeSchedules: true,
+      machineResources: true,
+      machineOwnership: true,
+      processSigterm: true,
+      loadSchedules: true,
+      machineAutoBuckets: true,
+      loadGuard: true,
+      loadPause: true,
       freshContext: true,
+      tokenBurnRates: true,
       scheduledTaskThreadModes: true,
       npmReleaseLookup: true,
       voiceTranscription: isSpeechPlatformSupported(hostPlatform, hostArchitecture, hostLibc),
@@ -293,13 +334,19 @@ export const make = Effect.gen(function* () {
     },
   };
 
+  const servedSites = yield* servedSitesCapability;
+
   return ServerEnvironment.of({
     getEnvironmentId: Effect.succeed(environmentId),
     // Publishing opt-in and relay links change at runtime; read the capability per request.
-    getDescriptor: readAgentActivityPublishingActive(secrets).pipe(
-      Effect.map((agentActivityPublishing) => ({
+    getDescriptor: Effect.all([readAgentActivityPublishingActive(secrets), servedSites]).pipe(
+      Effect.map(([agentActivityPublishing, servedSites]) => ({
         ...descriptor,
-        capabilities: { ...descriptor.capabilities, agentActivityPublishing },
+        capabilities: {
+          ...descriptor.capabilities,
+          agentActivityPublishing,
+          ...(servedSites === undefined ? {} : { servedSites }),
+        },
       })),
     ),
   });

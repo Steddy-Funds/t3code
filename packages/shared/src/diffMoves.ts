@@ -35,7 +35,7 @@ const MIN_MOVE_CHARACTERS = 40;
 /** A line this common in the added code ("}", "return;") starts no match, though one may cross it. */
 const MAX_SEED_CANDIDATES = 64;
 /** Past this many changed lines the diff is a rewrite or generated code; matching it says little. */
-export const MAX_MOVE_DETECTION_LINES = 20_000;
+const MAX_MOVE_DETECTION_LINES = 20_000;
 
 interface FlatLine {
   readonly key: string;
@@ -146,7 +146,7 @@ export function findDiffMoves(files: ReadonlyArray<DiffMoveFile>): DiffMove[] {
   const removed = flatten(files, "removed");
   const added = flatten(files, "added");
   if (removed.length + added.length > MAX_MOVE_DETECTION_LINES) return [];
-  const segments = matchingSegments(removed, added).toSorted(
+  const segments = matchingSegments(removed, added).sort(
     (left, right) => right.weight - left.weight || left.removed - right.removed,
   );
   const takenRemoved = new Uint8Array(removed.length);
@@ -176,7 +176,7 @@ export function findDiffMoves(files: ReadonlyArray<DiffMoveFile>): DiffMove[] {
     });
     moves.push({ from: end(removed, segment.removed), to: end(added, segment.added) });
   });
-  return moves.toSorted(
+  return moves.sort(
     (left, right) =>
       left.from.path.localeCompare(right.from.path) || left.from.startLine - right.from.startLine,
   );

@@ -615,42 +615,6 @@ export function SideBySideDiffView<T = unknown>(props: SideBySideDiffViewProps<T
     },
   };
 
-  const attachScroller = (side: SbsSide, element: HTMLDivElement | null) => {
-    scrollers.current[side] = element;
-    if (element === null || opened.current) return;
-    if (sides.some((candidate) => scrollers.current[candidate] === null)) return;
-    opened.current = true;
-    if (props.focusOnOpen) scrollers.current[lead]?.focus({ preventScroll: true });
-    const openLine = props.openAt ? sbsLineIndex(model, props.openAt.side, props.openAt.line) : -1;
-    if (props.openAt && openLine >= 0) {
-      revealLineRange(props.openAt.side, { start: openLine, end: openLine + 1 });
-    } else if (groupRanges.length > 0) {
-      stepTo(props.initialDifference === "last" ? groupRanges.length - 1 : 0);
-    }
-  };
-  const attachDeletions = useStableCallback((element: HTMLDivElement | null) =>
-    attachScroller("deletions", element),
-  );
-  const attachAdditions = useStableCallback((element: HTMLDivElement | null) =>
-    attachScroller("additions", element),
-  );
-  const observeBody = useStableCallback((element: HTMLDivElement | null) => {
-    if (!element) return;
-    const stop = observeResize(element, readViewport);
-    return () => {
-      stop();
-      if (frame.current !== null) cancelAnimationFrame(frame.current);
-      frame.current = null;
-    };
-  });
-  const observeCard = useStableCallback((element: HTMLDivElement | null) => {
-    if (!element) return;
-    return observeResize(element, ([entry]) => {
-      // The border box: docking places the card's outer edge, borders included.
-      if (entry) setCardHeight(entry.borderBoxSize[0]?.blockSize ?? entry.contentRect.height);
-    });
-  });
-
   const expandFolds = (folds: ReadonlyArray<number>) => {
     if (folds.length === 0) return;
     const next = new Set(expandedFolds);
@@ -691,6 +655,42 @@ export function SideBySideDiffView<T = unknown>(props: SideBySideDiffViewProps<T
     expandFolds(sbsFoldsCovering(layout, side, range));
     revealAfterRender({ kind: "line", side, line: range.start });
   };
+
+  const attachScroller = (side: SbsSide, element: HTMLDivElement | null) => {
+    scrollers.current[side] = element;
+    if (element === null || opened.current) return;
+    if (sides.some((candidate) => scrollers.current[candidate] === null)) return;
+    opened.current = true;
+    if (props.focusOnOpen) scrollers.current[lead]?.focus({ preventScroll: true });
+    const openLine = props.openAt ? sbsLineIndex(model, props.openAt.side, props.openAt.line) : -1;
+    if (props.openAt && openLine >= 0) {
+      revealLineRange(props.openAt.side, { start: openLine, end: openLine + 1 });
+    } else if (groupRanges.length > 0) {
+      stepTo(props.initialDifference === "last" ? groupRanges.length - 1 : 0);
+    }
+  };
+  const attachDeletions = useStableCallback((element: HTMLDivElement | null) =>
+    attachScroller("deletions", element),
+  );
+  const attachAdditions = useStableCallback((element: HTMLDivElement | null) =>
+    attachScroller("additions", element),
+  );
+  const observeBody = useStableCallback((element: HTMLDivElement | null) => {
+    if (!element) return;
+    const stop = observeResize(element, readViewport);
+    return () => {
+      stop();
+      if (frame.current !== null) cancelAnimationFrame(frame.current);
+      frame.current = null;
+    };
+  });
+  const observeCard = useStableCallback((element: HTMLDivElement | null) => {
+    if (!element) return;
+    return observeResize(element, ([entry]) => {
+      // The border box: docking places the card's outer edge, borders included.
+      if (entry) setCardHeight(entry.borderBoxSize[0]?.blockSize ?? entry.contentRect.height);
+    });
+  });
 
   const followMove = (mark: SbsMoveMark) => {
     if (!mark.move.counterpart.sameFile) {
@@ -1105,11 +1105,11 @@ export function SideBySideDiffView<T = unknown>(props: SideBySideDiffViewProps<T
   const scrolls = (side: SbsSide) => rowCounts[side] * lineHeight + tailHeight > viewport.height;
   // On the first line of each moved block, at the pane's right edge, for the blocks in view.
   const moveChips = (side: SbsSide) =>
-    moveLayer?.marks[side].map((mark, index) => {
+    moveLayer?.marks[side].map((mark) => {
       const top = sbsLineRow(layout, side, mark.range.start).row * lineHeight - viewport[side];
       if (top < -lineHeight || top > viewport.height) return null;
       return (
-        <Tooltip key={`${mark.range.start}:${index}`}>
+        <Tooltip key={mark.range.start}>
           <TooltipTrigger
             render={
               <button

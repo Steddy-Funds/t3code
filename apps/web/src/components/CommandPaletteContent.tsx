@@ -42,6 +42,8 @@ type CommandPaletteContentProps = Omit<ComponentProps<typeof Command>, "children
   readonly children: ReactNode;
   readonly escapeLabel?: ReactNode;
   readonly footerActionLabel?: ReactNode;
+  /** Keeps the Enter hint's space while Enter has nothing to act on, so the footer holds still. */
+  readonly footerActionHidden?: boolean;
   readonly footerTrailing?: ReactNode;
   readonly inputAccessory?: ReactNode;
   readonly inputProps: ComponentProps<typeof CommandInput>;
@@ -55,6 +57,7 @@ export function CommandPaletteContent({
   children,
   escapeLabel = "Close",
   footerActionLabel,
+  footerActionHidden = false,
   footerTrailing,
   inputAccessory,
   inputProps,
@@ -102,7 +105,10 @@ export function CommandPaletteContent({
               <span>Navigate</span>
             </KbdGroup>
             {footerActionLabel !== undefined ? (
-              <KbdGroup>
+              <KbdGroup
+                aria-hidden={footerActionHidden || undefined}
+                className={footerActionHidden ? "invisible" : undefined}
+              >
                 <Kbd>Enter</Kbd>
                 <span>{footerActionLabel}</span>
               </KbdGroup>

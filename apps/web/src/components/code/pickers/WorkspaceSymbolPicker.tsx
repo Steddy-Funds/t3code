@@ -188,7 +188,7 @@ export function WorkspaceSymbolPicker(props: {
         label={copy.label}
         testId={`code-${props.scope}-picker`}
         placeholder={copy.placeholder}
-        footerActionLabel={null}
+        footerActionLabel="Open"
         escapeLabel={props.escapeLabel}
         query=""
         onQueryChange={() => undefined}

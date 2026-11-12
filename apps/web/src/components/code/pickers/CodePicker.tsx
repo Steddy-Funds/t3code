@@ -40,8 +40,7 @@ export interface CodePickerProps {
   readonly label: string;
   readonly testId: string;
   readonly placeholder: string;
-  /** Null when Enter has nothing it could open. */
-  readonly footerActionLabel: string | null;
+  readonly footerActionLabel: string;
   readonly escapeLabel: "Back" | "Close";
   readonly query: string;
   readonly onQueryChange: (query: string) => void;
@@ -70,7 +69,8 @@ export function CodePicker(props: CodePickerProps) {
   const highlightedIndex = highlighted === null ? null : itemValues.indexOf(highlighted);
   const initialIndex = props.initialValue == null ? -1 : itemValues.indexOf(props.initialValue);
 
-  const execute = (item: ReturnType<typeof findHighlightedCommandPaletteItem>) => {
+  const highlightedItem = findHighlightedCommandPaletteItem(props.groups, highlighted);
+  const execute = (item: typeof highlightedItem) => {
     if (item?.kind === "action" && !item.disabled) props.onExecute(item);
   };
 
@@ -92,7 +92,7 @@ export function CodePicker(props: CodePickerProps) {
     if (event.key === "Enter") {
       preventBaseUI();
       event.stopPropagation();
-      execute(findHighlightedCommandPaletteItem(props.groups, highlighted));
+      execute(highlightedItem);
     }
   };
 
@@ -101,7 +101,8 @@ export function CodePicker(props: CodePickerProps) {
       aria-label={props.label}
       autoHighlight={false}
       escapeLabel={props.escapeLabel}
-      {...(props.footerActionLabel === null ? {} : { footerActionLabel: props.footerActionLabel })}
+      footerActionLabel={props.footerActionLabel}
+      footerActionHidden={highlightedItem?.kind !== "action"}
       footerTrailing={props.footerTrailing}
       inputProps={{
         placeholder: props.placeholder,

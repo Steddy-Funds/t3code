@@ -115,7 +115,7 @@ export function FileStructurePicker(props: { readonly setOpen: (open: boolean) =
       label="File structure"
       testId="code-structure-picker"
       placeholder={document === null ? "Filter symbols…" : `Filter ${fileName(document.path)}…`}
-      footerActionLabel={answer?._tag === "none" || answer?._tag === "message" ? null : "Go to"}
+      footerActionLabel="Go to"
       escapeLabel="Close"
       query={query}
       onQueryChange={(value) => {

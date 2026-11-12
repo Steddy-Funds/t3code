@@ -284,7 +284,11 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
     }).pipe(Effect.provide(layerKeybindings())),
   );
 
-  it.effect("adds the side-by-side diff's go to declaration below the sidebar's mod+b", () =>
+  it.effect.each<ReadonlyArray<KeybindingRule>>([
+    [],
+    [{ key: "mod+b", command: "chat.newLocal" }],
+    [{ key: "mod+b", command: "chat.newLocal", when: "diffFocus" }],
+  ])("adds the side-by-side diff's go to declaration below the sidebar's mod+b, under %j", (own) =>
     Effect.gen(function* () {
       const { keybindingsConfigPath } = yield* ServerConfig.ServerConfig;
       const keybindings = yield* Keybindings.Keybindings;
@@ -294,7 +298,7 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
         command: "code.goToDeclaration",
         when: "codeFocus && codeNavigation",
       } as const;
-      yield* writeKeybindingsConfig(keybindingsConfigPath, [sidebar, inCode]);
+      yield* writeKeybindingsConfig(keybindingsConfigPath, [sidebar, inCode, ...own]);
 
       yield* keybindings.syncDefaultKeybindingsOnStartup;
       const persisted = yield* readKeybindingsConfig(keybindingsConfigPath);
@@ -304,8 +308,34 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
           sidebar,
           inCode,
           { key: "mod+b", command: "code.goToDeclaration", when: "diffFocus && codeNavigation" },
+          ...own,
         ],
       );
+    }).pipe(Effect.provide(layerKeybindings())),
+  );
+
+  it.effect("gives a rebound go to declaration no side-by-side diff rule, for good", () =>
+    Effect.gen(function* () {
+      const { keybindingsConfigPath } = yield* ServerConfig.ServerConfig;
+      const keybindings = yield* Keybindings.Keybindings;
+      const sidebar = { key: "mod+b", command: "sidebar.toggle" } as const;
+      const rebound = {
+        key: "f12",
+        command: "code.goToDeclaration",
+        when: "codeFocus && codeNavigation",
+      } as const;
+      const declarationRules = Effect.map(readKeybindingsConfig(keybindingsConfigPath), (rules) =>
+        rules.filter((entry) => entry.command === "code.goToDeclaration"),
+      );
+
+      yield* writeKeybindingsConfig(keybindingsConfigPath, [sidebar, rebound]);
+      yield* keybindings.syncDefaultKeybindingsOnStartup;
+      assert.deepStrictEqual(yield* declarationRules, [rebound]);
+
+      const inCode = { ...rebound, key: "mod+b" } as const;
+      yield* writeKeybindingsConfig(keybindingsConfigPath, [sidebar, inCode]);
+      yield* keybindings.syncDefaultKeybindingsOnStartup;
+      assert.deepStrictEqual(yield* declarationRules, [inCode]);
     }).pipe(Effect.provide(layerKeybindings())),
   );
 

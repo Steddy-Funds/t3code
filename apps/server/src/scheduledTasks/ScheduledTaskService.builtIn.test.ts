@@ -13,6 +13,7 @@ import {
 } from "@t3tools/contracts";
 import { MACHINE_BUCKETS_PROMPT } from "@t3tools/shared/machineBuckets";
 import * as Context from "effect/Context";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as PubSub from "effect/PubSub";
@@ -41,12 +42,36 @@ type Command =
   | { readonly type: "dispatch"; readonly input: Record<string, unknown> }
   | { readonly type: "send"; readonly input: Record<string, unknown> };
 
+/** Thread shells by id, a run's end the service waits on, and the threads it deleted. */
+interface Threads {
+  readonly shells: Map<string, Record<string, unknown>>;
+  readonly runEnded: Deferred.Deferred<void>;
+  readonly deleted: Deferred.Deferred<string>;
+}
+const makeThreads = (shells: Record<string, Record<string, unknown>> = {}): Threads => ({
+  shells: new Map(Object.entries(shells)),
+  runEnded: Deferred.makeUnsafe<void>(),
+  deleted: Deferred.makeUnsafe<string>(),
+});
+/** An idle auto-buckets thread in the scratch project. */
+const bucketsThread = (id: string, overrides: Record<string, unknown> = {}) => ({
+  id,
+  projectId: SCRATCH,
+  activeRunId: null,
+  tags: ["backgrounded", "machine-buckets"],
+  pinnedAt: null,
+  latestUserAuthoredMessageAt: null,
+  deletedAt: null,
+  ...overrides,
+});
+
 /** The service, recording every thread command in order; threads in `working` are mid-run. */
 const serviceLayer = (
   commands: Array<Command>,
   working: ReadonlySet<string>,
   policy?: ManagedPolicyDocument,
   scratch: { calls: number } = { calls: 0 },
+  threads: Threads = makeThreads(),
 ) => {
   const record = (type: Command["type"]) => (input: unknown) =>
     Effect.sync(() => {
@@ -61,10 +86,31 @@ const serviceLayer = (
         ),
     }),
     Layer.mock(ThreadManagementService.ThreadManagementService)({
-      dispatch: (input) => record("dispatch")(input).pipe(Effect.as({} as never)),
-      sendToThread: (input) => record("send")(input).pipe(Effect.as({} as never)),
+      dispatch: (input) =>
+        record("dispatch")(input).pipe(
+          Effect.andThen(
+            input.type === "thread.delete"
+              ? Deferred.succeed(threads.deleted, input.threadId)
+              : Effect.void,
+          ),
+          Effect.as({} as never),
+        ),
+      sendToThread: (input) =>
+        record("send")(input).pipe(Effect.as({ run: { id: "run:launched" } } as never)),
+      waitForThread: () =>
+        Deferred.await(threads.runEnded).pipe(Effect.as({ timedOut: false } as never)),
       getThreadShell: (threadId) =>
-        Effect.succeed({ activeRunId: working.has(threadId) ? "run:1" : null } as never),
+        Effect.succeed({
+          ...threads.shells.get(threadId),
+          activeRunId: working.has(threadId) ? "run:1" : null,
+        } as never),
+      listProjectThreads: () =>
+        Effect.succeed(
+          [...threads.shells.values()].map((shell) => ({
+            ...shell,
+            activeRunId: working.has(shell.id as string) ? "run:1" : null,
+          })) as never,
+        ),
     }),
     Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
       namedProjectsRoot: "/projects",
@@ -87,22 +133,24 @@ const withService = <A, E>(
     readonly commands: Array<Command>;
     readonly working: Set<string>;
     readonly scratch: { calls: number };
+    readonly threads: Threads;
   }) => Effect.Effect<A, E>,
   policy?: ManagedPolicyDocument,
   /** Also runs the built-in tasks layer against these settings. */
   serverSettings?: Layer.Layer<ServerSettingsService>,
+  threads: Threads = makeThreads(),
 ) => {
   const commands: Array<Command> = [];
   const working = new Set<string>();
   const scratch = { calls: 0 };
-  const service = serviceLayer(commands, working, policy, scratch);
+  const service = serviceLayer(commands, working, policy, scratch, threads);
   const layer =
     serverSettings === undefined
       ? service
       : builtInTasksLayer.pipe(Layer.provideMerge(service), Layer.provide(serverSettings));
   return Effect.gen(function* () {
     const service = yield* ScheduledTaskService.ScheduledTaskService;
-    return yield* body({ service, commands, working, scratch });
+    return yield* body({ service, commands, working, scratch, threads });
   }).pipe(Effect.provide(layer.pipe(Layer.provide(Layer.fresh(SqlitePersistence.layerMemory)))));
 };
 
@@ -526,4 +574,69 @@ it.effect(
       yield* TestClock.adjust(UNBUCKETED_INTERVAL_MS);
       assert.equal(launches(commands), 2);
     }).pipe(Effect.scoped),
+);
+
+const deletes = (commands: ReadonlyArray<Command>) =>
+  commands.flatMap(({ type, input }) =>
+    type === "dispatch" && input.type === "thread.delete" ? [input.threadId] : [],
+  );
+
+it.effect("deletes the built-in run's thread once its run ends", () =>
+  withService(({ service, commands, threads }) =>
+    Effect.gen(function* () {
+      yield* service.ensureBuiltInTasks(settings({ providers: true }));
+      yield* service.triggerLoad(BUILT_IN, "1000");
+      threads.shells.set("thread:launched", bucketsThread("thread:launched"));
+      assert.deepEqual(deletes(commands), []);
+      yield* Deferred.succeed(threads.runEnded, undefined);
+      assert.equal(yield* Deferred.await(threads.deleted), "thread:launched");
+      assert.deepEqual(deletes(commands), ["thread:launched"]);
+    }),
+  ),
+);
+
+it.effect("keeps a finished built-in thread the user pinned or wrote in", () =>
+  withService(({ service, commands, threads }) =>
+    Effect.gen(function* () {
+      yield* service.ensureBuiltInTasks(settings({ providers: true }));
+      yield* service.triggerLoad(BUILT_IN, "1000");
+      threads.shells.set(
+        "thread:launched",
+        bucketsThread("thread:launched", { latestUserAuthoredMessageAt: "2026-11-12T00:00:00Z" }),
+      );
+      yield* Deferred.succeed(threads.runEnded, undefined);
+      yield* TestClock.adjust("7 hours");
+      // The next run's sweep sees it too, and keeps it.
+      yield* service.triggerLoad(BUILT_IN, "2000", ["redis"]);
+      assert.deepEqual(deletes(commands), []);
+    }),
+  ),
+);
+
+it.effect("sweeps finished auto-buckets threads left behind, at startup and before each run", () =>
+  withService(
+    ({ service, commands, threads, working }) =>
+      Effect.gen(function* () {
+        assert.equal(yield* Deferred.await(threads.deleted), "thread:stale");
+        threads.shells.set("thread:stale-later", bucketsThread("thread:stale-later"));
+        threads.shells.set("thread:running", bucketsThread("thread:running"));
+        working.add("thread:running");
+        yield* service.ensureBuiltInTasks(settings({ providers: true }));
+        yield* service.triggerLoad(BUILT_IN, "1000");
+        assert.sameMembers([...new Set(deletes(commands))], ["thread:stale", "thread:stale-later"]);
+      }),
+    undefined,
+    undefined,
+    makeThreads({
+      "thread:stale": bucketsThread("thread:stale"),
+      "thread:pinned": bucketsThread("thread:pinned", { pinnedAt: "2026-11-12T00:00:00Z" }),
+      "thread:user-wrote": bucketsThread("thread:user-wrote", {
+        latestUserAuthoredMessageAt: "2026-11-12T00:00:00Z",
+      }),
+      "thread:untagged": bucketsThread("thread:untagged", { tags: ["backgrounded"] }),
+      "thread:elsewhere": bucketsThread("thread:elsewhere", {
+        projectId: ProjectId.make("project:test"),
+      }),
+    }),
+  ),
 );

@@ -904,7 +904,8 @@ export function SideBySideDiffView<T = unknown>(props: SideBySideDiffViewProps<T
           annotations={annotationRanges.deletions}
           selectedStart={gutterSelection?.side === "deletions" ? selectedStart : -1}
           selectedEnd={gutterSelection?.side === "deletions" ? selectedEnd : -1}
-          hideScrollbar={single === null}
+          // Kept when only this side runs past the view, or nothing would show it scrolls.
+          hideScrollbar={single === null && rowCounts.additions * lineHeight > viewport.height}
           scrollerRef={attachDeletions}
         />
         {renderOverlays("deletions")}

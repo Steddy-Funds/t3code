@@ -388,7 +388,11 @@ export function SideBySideDiffPanel(props: SideBySideDiffPanelProps) {
       key={`${fileId}:${outcome?.kind === "loaded" ? outcome.revision : ""}:${patchOnly}:${ignoreWhitespace}`}
       className="flex min-h-0 min-w-0 flex-1 flex-col"
     >
-      {props.renderView ? props.renderView(viewProps, entry) : <SideBySideDiffView {...viewProps} />}
+      {props.renderView ? (
+        props.renderView(viewProps, entry)
+      ) : (
+        <SideBySideDiffView {...viewProps} />
+      )}
     </div>
   );
 }

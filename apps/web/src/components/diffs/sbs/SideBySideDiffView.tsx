@@ -975,7 +975,9 @@ export function SideBySideDiffView<T = unknown>(props: SideBySideDiffViewProps<T
   const revealRequestedAnnotation = useEffectEvent(revealAnnotation);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- the caller asks for an annotation's lines, such as a note it steps to; the rows must be laid out first
   useLayoutEffect(() => {
-    if (props.revealAnnotationId != null) revealRequestedAnnotation(props.revealAnnotationId);
+    if (props.revealAnnotationId == null) return;
+    // oxlint-disable-next-line react/set-state-in-effect -- the request is an event from outside the view; its folds open before the scroll
+    revealRequestedAnnotation(props.revealAnnotationId);
   }, [props.revealAnnotationId]);
 
   const hintRows =

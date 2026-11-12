@@ -36,7 +36,9 @@ import { writeFileStringAtomically } from "@t3tools/shared/atomicWrite";
 import { fromJsonStringPretty, fromLenientJson } from "@t3tools/shared/schemaJson";
 import {
   DEFAULT_KEYBINDINGS,
+  insertMissingDefaultKeybindings,
   mergeWithDefaultKeybindings,
+  missingDefaultsThatFit,
   compileResolvedKeybindingRule,
   compileResolvedKeybindingsConfig,
   parseKeybindingShortcut,
@@ -110,6 +112,33 @@ const LATE_DEFAULT_KEYBINDINGS: ReadonlyArray<{
       key: "mod+enter",
       command: "composer.sendBackground",
       when: "composerFocus && draftThreadRoute",
+    },
+  },
+  {
+    id: "navigation.back:mod+alt+arrowleft",
+    alongside: { key: "mod+[", command: "navigation.back", when: "!terminalFocus" },
+    rule: {
+      key: "mod+alt+arrowleft",
+      command: "navigation.back",
+      when: "!terminalFocus && isDesktop",
+    },
+  },
+  {
+    id: "navigation.forward:mod+alt+arrowright",
+    alongside: { key: "mod+]", command: "navigation.forward", when: "!terminalFocus" },
+    rule: {
+      key: "mod+alt+arrowright",
+      command: "navigation.forward",
+      when: "!terminalFocus && isDesktop",
+    },
+  },
+  {
+    id: "filePicker.toggle:mod+shift+o",
+    alongside: { key: "mod+p", command: "filePicker.toggle", when: "!terminalFocus" },
+    rule: {
+      key: "mod+shift+o",
+      command: "filePicker.toggle",
+      when: "codeFocus || projectTreeFocus",
     },
   },
 ];
@@ -531,10 +560,9 @@ const make = Effect.gen(function* () {
         }
       }
 
-      // Put defaults before persisted rules so custom shortcuts win overlapping conditions.
       const availableSlots = Math.max(0, MAX_KEYBINDINGS_COUNT - customConfig.length);
-      const defaultsToAppend = missingDefaults.slice(0, availableSlots);
-      const skippedDefaults = missingDefaults.slice(availableSlots);
+      const defaultsToAppend = missingDefaultsThatFit(missingDefaults, availableSlots);
+      const skippedDefaults = missingDefaults.filter((rule) => !defaultsToAppend.includes(rule));
       if (skippedDefaults.length > 0) {
         yield* Effect.logWarning("skipping default keybinding backfill at max entries", {
           path: keybindingsConfigPath,
@@ -543,7 +571,14 @@ const make = Effect.gen(function* () {
         });
       }
       if (defaultsToAppend.length > 0) {
-        yield* writeConfigAtomically([...defaultsToAppend, ...customConfig]);
+        // Existing rules keep their place and order; only the missing defaults are placed.
+        yield* writeConfigAtomically(
+          insertMissingDefaultKeybindings(
+            customConfig,
+            defaultsToAppend,
+            compileResolvedKeybindingRule,
+          ),
+        );
       }
       const settledLateDefaults = pendingLateDefaults.filter(
         (late) => !skippedDefaults.includes(late.rule),
@@ -636,29 +671,33 @@ const make = Effect.gen(function* () {
           const customConfig = yield* loadWritableCustomKeybindingsConfig();
           const rule = keybindingRuleFromInput(input);
           const replaceTarget = replaceTargetFromUpsertInput(input);
-          const nextConfig = [
-            ...customConfig.filter(({ rule: entry }) => {
-              if (!entry) return true;
-              if (replaceTarget) {
-                return (
-                  !isSameKeybindingRule(entry, replaceTarget) && !isSameKeybindingRule(entry, rule)
-                );
-              }
-              return !isSameKeybindingRule(entry, rule);
-            }),
-            { value: rule, rule },
-          ];
-          const cappedConfig =
-            nextConfig.length > MAX_KEYBINDINGS_COUNT
-              ? nextConfig.slice(-MAX_KEYBINDINGS_COUNT)
-              : nextConfig;
-          if (nextConfig.length > MAX_KEYBINDINGS_COUNT) {
+          const kept = customConfig.filter(({ rule: entry }) => {
+            if (!entry) return true;
+            if (replaceTarget) {
+              return (
+                !isSameKeybindingRule(entry, replaceTarget) && !isSameKeybindingRule(entry, rule)
+              );
+            }
+            return !isSameKeybindingRule(entry, rule);
+          });
+          // The oldest entries make room, before the saved rule is placed among the rest.
+          const withRoom = kept.slice(-(MAX_KEYBINDINGS_COUNT - 1));
+          if (withRoom.length < kept.length) {
             yield* Effect.logWarning("truncating keybindings config to max entries", {
               path: keybindingsConfigPath,
               maxEntries: MAX_KEYBINDINGS_COUNT,
             });
           }
-          yield* writeConfigAtomically(cappedConfig.map(({ value }) => value));
+          const saved = { value: rule, rule };
+          // A rule saved back as a shipped default (Settings' reset) takes that default's place,
+          // so defaults that share its shortcut keep their order. Any other rule is the user's
+          // own and goes last.
+          const nextConfig = DEFAULT_KEYBINDINGS.some((entry) => isSameKeybindingRule(entry, rule))
+            ? insertMissingDefaultKeybindings(withRoom, [saved], (entry) =>
+                entry.rule ? compileResolvedKeybindingRule(entry.rule) : null,
+              )
+            : [...withRoom, saved];
+          yield* writeConfigAtomically(nextConfig.map(({ value }) => value));
           return yield* reloadAndEmit;
         }),
       ),

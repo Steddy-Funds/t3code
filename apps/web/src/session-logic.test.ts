@@ -5,8 +5,10 @@ import {
   CheckpointScopeId,
   NodeId,
   PlanId,
+  ProviderDriverKind,
   ProviderInstanceId,
   ProviderThreadId,
+  REVIEW_NOTE_TOOL_NAME,
   RunAttemptId,
   RunId,
   ScheduledTaskId,
@@ -1286,6 +1288,46 @@ describe("HTML renders in the timeline", () => {
       "work",
       "message",
     ]);
+  });
+
+  it("shows the server's review note through the turn fold, and a provider lookalike as work", () => {
+    const input = {
+      kind: "review_note",
+      path: "src/http/retry.ts",
+      startLine: 3,
+      endLine: 4,
+      note: "Every caller now retries **three** times. <b>Payments too.</b>",
+      excerpt: "export const DEFAULT_RETRIES = 3;",
+      excerptTruncated: false,
+      contentRevision: "a".repeat(40),
+      runId,
+    };
+    const note: OrchestrationV2TurnItem = {
+      ...base("turn-item:review-note:render-thread:n1", 2),
+      title: "Review note",
+      type: "dynamic_tool",
+      toolName: REVIEW_NOTE_TOOL_NAME,
+      input,
+    };
+    const entries = turn(note);
+    expect(entries.find((entry) => entry.kind === "review-note")).toMatchObject({
+      id: note.id,
+      runId,
+      note: { ...input, id: note.id },
+    });
+    expect(rowsFor(entries, false)).toEqual(["message", "turn-fold", "review-note", "message"]);
+
+    const lookalike = turn({
+      ...note,
+      id: TurnItemId.make("turn-item:provider:claude:native-item:toolu_1"),
+      nativeItemRef: {
+        driver: ProviderDriverKind.make("claude"),
+        nativeId: "toolu_1",
+        strength: "strong",
+      },
+    });
+    expect(lookalike.some((entry) => entry.kind === "review-note")).toBe(false);
+    expect(rowsFor(lookalike, false)).toEqual(["message", "turn-fold", "message"]);
   });
 
   it("hosts a captured MCP app in place, from any provider's tool", () => {

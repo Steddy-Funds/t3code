@@ -81,6 +81,7 @@ import * as McpHttpServer from "./mcp/McpHttpServer.ts";
 import * as PeerForwarding from "./peer/PeerForwarding.ts";
 import * as RemoteDelegation from "./peer/RemoteDelegation.ts";
 import * as PeerLinkRequests from "./peer/PeerLinkRequests.ts";
+import * as ReviewNotes from "./mcp/ReviewNotes.ts";
 import * as PeerLinks from "./peer/PeerLinks.ts";
 import * as PeerMcpClient from "./peer/PeerMcpClient.ts";
 import * as McpSessionRegistry from "./mcp/McpSessionRegistry.ts";
@@ -883,6 +884,8 @@ const layerMakeRoutes = Layer.mergeAll(
   Layer.provide(RemoteDelegation.layer.pipe(Layer.provide(ProjectionStoreV2.layer))),
   // Links agents ask for: shown in a thread from /mcp, answered over WebSocket.
   Layer.provide(PeerLinkRequests.layer),
+  // Notes agents leave on lines they changed, from /mcp.
+  Layer.provide(ReviewNotes.layer),
   // Share the service so HTTP/WS clients single-flight reads and invalidate each other's cached patches.
   Layer.provide(layerPullRequestService),
   // The same activity instance RunExecutionService reports to, by layer memoization.

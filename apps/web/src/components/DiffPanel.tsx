@@ -65,7 +65,8 @@ import { formatRelativeTimeLabel, formatShortTimestamp } from "../timestampForma
 import { DiffFilePathCopyButton } from "./DiffFilePathCopyButton";
 import { DiffPanelLoadingState, DiffPanelShell, type DiffPanelMode } from "./DiffPanelShell";
 import { DiffStatLabel } from "./chat/DiffStatLabel";
-import { AnnotatableCodeView } from "./diffs/AnnotatableCodeView";
+import { AnnotatableCodeView, type AnnotatableCodeViewHandle } from "./diffs/AnnotatableCodeView";
+import { ReviewNotesToolbar, useDiffReviewNotes } from "./diffs/ReviewNoteNavigation";
 import { sendableReviewComments, type SendReviewComments } from "./diffs/useReviewCommentDrafts";
 import { DiffFileTree } from "./diffs/DiffFileTree";
 import { FileExplorerPane } from "./files/FileExplorerPane";
@@ -792,6 +793,21 @@ export default function DiffPanel({
       return next;
     });
   });
+  const reviewNotes = useDiffReviewNotes({
+    threadRef: routeThreadRef,
+    files: codeViewFiles,
+    unfoldFile: unfoldDiffFile,
+    requestFile: (filePath) => {
+      if (lazySource) requestFile(filePath);
+    },
+    workspaceRoot: activeCwd,
+    repositoryRoot: activeRepositoryRoot,
+  });
+  const noteReveal = reviewNotes.reveal;
+  const attachCodeView = useStableCallback((viewer: AnnotatableCodeViewHandle | null) => {
+    codeViewReveal.attach(viewer);
+    noteReveal.attach(viewer);
+  });
 
   const toggleDiffFileCollapse = () => {
     setCodeViewRevision((current) => current + 1);
@@ -1159,6 +1175,7 @@ export default function DiffPanel({
             <TooltipPopup side="top">{sendCommentsLabel} to the agent</TooltipPopup>
           </Tooltip>
         ) : null}
+        {reviewNotes.toolbar ? <ReviewNotesToolbar {...reviewNotes.toolbar} /> : null}
         {codeViewFiles.length > 0 || (isGitSelection && selectedGitSource?.files?.length) ? (
           <DiffStatLabel
             additions={diffLineStat.additions}
@@ -1468,7 +1485,7 @@ export default function DiffPanel({
                     key={collapseScopeKey ?? reviewSectionId}
                     environmentId={activeThread?.environmentId}
                     projectId={activeThread?.projectId}
-                    viewerRef={codeViewReveal.attach}
+                    viewerRef={attachCodeView}
                     codeViewKey={codeViewMountKey}
                     className="h-full min-h-0 overflow-auto"
                     files={codeViewFiles}
@@ -1478,6 +1495,7 @@ export default function DiffPanel({
                     sectionTitle={reviewSectionTitle}
                     composerDraftTarget={composerDraftTarget}
                     onSendComments={onSendReviewComments}
+                    reviewNotes={reviewNotes.codeView}
                     renderHeaderFilenameSuffix={(fileDiff) => {
                       const path = resolveFileDiffPath(fileDiff);
                       const state = fileStates.get(path);
@@ -1531,7 +1549,11 @@ export default function DiffPanel({
                       preferredHighlighter: PREFERRED_HIGHLIGHTER,
                       themeType: resolvedTheme as DiffThemeType,
                       stickyHeaders: true,
-                      onPostRender: codeViewReveal.flush,
+                      // The note reveal flushes last so its line wins over a file reveal.
+                      onPostRender: () => {
+                        codeViewReveal.flush();
+                        noteReveal.flush();
+                      },
                       ...(currentLoadDiffFiles ? { loadDiffFiles } : {}),
                     }}
                   />

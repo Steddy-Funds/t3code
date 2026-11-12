@@ -7,14 +7,18 @@ import type {
   SelectedLineRange,
 } from "@pierre/diffs";
 import type { CodeViewHandle } from "@pierre/diffs/react";
-import type { EnvironmentId, ProjectId, ScopedThreadRef } from "@t3tools/contracts";
-import { useRef, useState, type ReactNode, type Ref } from "react";
+import type { EnvironmentId, ProjectId, ScopedThreadRef, TurnItemId } from "@t3tools/contracts";
+import { type ReviewNote, reviewNoteSectionId } from "@t3tools/shared/reviewNote";
+import { useEffect, useRef, useState, type ReactNode, type Ref } from "react";
 
 import type { DraftId } from "~/composerDraftStore";
 import { fnv1a32, resolveFileDiffPath, resolveFileDiffPreviousPath } from "~/lib/diffRendering";
 import { buildDiffReviewComment, restoreDiffReviewCommentRange } from "~/reviewCommentContext";
+import { buildReviewNoteReply } from "~/reviewNotes";
 
 import { ReviewCommentBox } from "./ReviewCommentBox";
+import { ReviewNoteAnnotation } from "./ReviewNoteAnnotation";
+import { isAttachedReviewNote, type PlacedReviewNote } from "./reviewNoteAnchoring";
 import { StyledDiffCodeView, type StyledDiffCodeViewOptions } from "./StyledDiffCodeView";
 import {
   type SendReviewComments,
@@ -24,11 +28,21 @@ import {
 
 interface DiffCommentAnnotationEntry {
   id: string;
-  kind: "draft" | "comment";
+  kind: "draft" | "comment" | "note";
   rangeLabel: string;
   /** Empty for a draft: typing in the box must not re-version its file. */
   text: string;
 }
+
+/** The agent's review notes on the shown diff. */
+export interface DiffReviewNotes {
+  /** Only the notes with lines in the diff are shown; the rest belong to the panel's list. */
+  readonly placed: ReadonlyArray<PlacedReviewNote>;
+  readonly answeredIds: ReadonlySet<TurnItemId>;
+  readonly onDismiss: (noteId: TurnItemId) => void;
+}
+
+const NO_REVIEW_NOTES: ReadonlyArray<PlacedReviewNote> = [];
 
 interface DiffCommentAnnotationGroup {
   entries: DiffCommentAnnotationEntry[];
@@ -101,6 +115,7 @@ interface AnnotatableCodeViewProps {
   composerDraftTarget: ScopedThreadRef | DraftId;
   /** Absent where a comment can only join the message. */
   onSendComments?: SendReviewComments | undefined;
+  reviewNotes?: DiffReviewNotes | undefined;
   options: StyledDiffCodeViewOptions<DiffCommentAnnotationGroup>;
   viewerRef?: Ref<AnnotatableCodeViewHandle>;
   className?: string;
@@ -130,6 +145,7 @@ export function AnnotatableCodeView({
   sectionTitle,
   composerDraftTarget,
   onSendComments,
+  reviewNotes,
   options,
   viewerRef,
   className,
@@ -182,9 +198,57 @@ export function AnnotatableCodeView({
     comments.cancel();
     setSelectedLines(null);
   }
+
+  const attachedNotes = (reviewNotes?.placed ?? NO_REVIEW_NOTES).filter(isAttachedReviewNote);
+  const notesBySection = new Map(
+    attachedNotes.map(({ note }) => [reviewNoteSectionId(note.id), note]),
+  );
+  const noteReplies = useReviewCommentDrafts<ReviewNote>({
+    composerDraftTarget,
+    onSend: onSendComments,
+    buildComment: ({ id, range, text, selectedText }) =>
+      withQuotedSelection(buildReviewNoteReply({ id, note: range, text }), selectedText),
+    ownsComment: (comment) => notesBySection.has(comment.sectionId),
+  });
+  const repliesTo = (noteId: TurnItemId) =>
+    noteReplies.annotations.filter((annotation) =>
+      annotation.kind === "draft"
+        ? annotation.range.id === noteId
+        : notesBySection.get(annotation.comment.sectionId)?.id === noteId,
+    );
+  const noteDraft = noteReplies.annotations.find((annotation) => annotation.kind === "draft");
+  const draftAnchor = noteDraft
+    ? reviewNotes?.placed.find(({ note }) => note.id === noteDraft.range.id)?.anchor.kind
+    : undefined;
+  // A reloading file holds its notes as pending; the reply waits for it.
+  const orphanedReply =
+    noteDraft && (draftAnchor === undefined || draftAnchor === "unattached") ? noteDraft : null;
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- a reply whose note left its lines (the file changed under it) keeps its words in the composer's draft store
+  useEffect(() => {
+    if (!orphanedReply) return;
+    if (orphanedReply.text.trim() === "") noteReplies.cancel();
+    else noteReplies.addToMessage(orphanedReply.text);
+  }, [orphanedReply, noteReplies]);
+
   const items: CodeViewDiffItem<DiffCommentAnnotationGroup>[] = files.map(
     ({ fileDiff, filePath, fileKey, fileVersion, collapsed }) => {
       let annotations: DiffCommentLineAnnotation[] = [];
+      for (const { note, fileKey: noteFileKey, anchor } of attachedNotes) {
+        if (noteFileKey !== fileKey) continue;
+        annotations = appendAnnotationEntry(
+          annotations,
+          { start: anchor.startLine, side: "additions", end: anchor.endLine, endSide: "additions" },
+          {
+            id: note.id,
+            kind: "note",
+            rangeLabel: `${anchor.kind}:${anchor.startLine}:${anchor.endLine}`,
+            text: JSON.stringify([
+              reviewNotes?.answeredIds.has(note.id) ?? false,
+              repliesTo(note.id).map((reply) => reply.id),
+            ]),
+          },
+        );
+      }
       for (const annotation of comments.annotations) {
         if (annotation.kind === "draft") {
           if (annotation.range.fileKey !== fileKey) continue;
@@ -288,6 +352,45 @@ export function AnnotatableCodeView({
               className={hasDraft ? "py-1" : "divide-y divide-border/30 border-y border-border/30"}
             >
               {annotation.metadata.entries.map((entry) => {
+                if (entry.kind === "note") {
+                  const placed = attachedNotes.find(({ note }) => note.id === entry.id);
+                  if (!placed || !reviewNotes) return null;
+                  const { note } = placed;
+                  const replies = repliesTo(note.id);
+                  return (
+                    <ReviewNoteAnnotation
+                      key={entry.id}
+                      note={note}
+                      moved={placed.anchor.kind === "moved"}
+                      answered={reviewNotes.answeredIds.has(note.id)}
+                      replying={replies.some((reply) => reply.kind === "draft")}
+                      onReply={() => noteReplies.beginComment(note, selectedTextRef.current)}
+                      onDismiss={() => reviewNotes.onDismiss(note.id)}
+                      replies={
+                        replies.length > 0 ? (
+                          <div className="divide-y divide-border/30 border-t border-border/30">
+                            {replies.map((reply) => (
+                              <ReviewCommentBox
+                                key={reply.id}
+                                environmentId={environmentId}
+                                projectId={projectId}
+                                ownerKey={JSON.stringify([
+                                  environmentId,
+                                  composerDraftTarget,
+                                  codeViewKey,
+                                  note.id,
+                                  reply.id,
+                                ])}
+                                annotation={reply}
+                                drafts={noteReplies}
+                              />
+                            ))}
+                          </div>
+                        ) : null
+                      }
+                    />
+                  );
+                }
                 const live = comments.annotations.find((candidate) => candidate.id === entry.id);
                 return live ? (
                   <ReviewCommentBox

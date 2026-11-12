@@ -31,6 +31,7 @@ import {
   machineCardFromToolItem,
   mcpAppFromToolItem,
 } from "@t3tools/shared/toolOutput";
+import { type ReviewNote, reviewNoteFromToolItem } from "@t3tools/shared/reviewNote";
 import {
   contextCompactionLabel,
   workEntryIndicatesToolFailure,
@@ -134,6 +135,13 @@ export type TimelineEntry = (
       readonly createdAt: string;
       readonly runId: RunId | null;
       readonly machineCard: MachineCard;
+    }
+  | {
+      readonly id: string;
+      readonly kind: "review-note";
+      readonly createdAt: string;
+      readonly runId: RunId | null;
+      readonly note: ReviewNote;
     }
   | {
       readonly id: string;
@@ -651,6 +659,19 @@ export function deriveTimelineEntriesFromVisibleTurnItems(
         createdAt,
         runId: item.runId,
         machineCard,
+        ...attemptMetadata,
+      });
+      continue;
+    }
+
+    const reviewNote = item.type === "dynamic_tool" ? reviewNoteFromToolItem(item) : undefined;
+    if (reviewNote !== undefined) {
+      entries.push({
+        id: item.id,
+        kind: "review-note",
+        createdAt,
+        runId: item.runId,
+        note: reviewNote,
         ...attemptMetadata,
       });
       continue;

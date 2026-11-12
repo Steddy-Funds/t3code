@@ -26,6 +26,7 @@ export function LabsSettingsPanel() {
         {hasCloudPublicConfig() ? <GuestLinksRowWithSignIn /> : <GuestLinksRow />}
         <LinkedEnvironmentsRow />
         <PromptSuggestionsRow />
+        <AgentReviewNotesRow />
         <SimlockHostsRow />
         <FastWorktreeCheckoutRow />
       </SettingsSection>
@@ -241,6 +242,29 @@ function PromptSuggestionsRow() {
             updateSettings({ promptSuggestionsEnabled: Boolean(checked) })
           }
           aria-label="Suggest next prompt"
+        />
+      }
+    />
+  );
+}
+
+function AgentReviewNotesRow() {
+  const settings = useScopedSettings();
+  const updateSettings = useUpdateScopedSettings();
+  return (
+    <SettingsRow
+      serverScoped
+      {...searchableSetting("agent-review-notes")}
+      settingKeys={["agentReviewNotesEnabled"]}
+      description="Let agents pin a note or question to lines they changed, for you to weigh before it ships. You reply from the chat or the diff. Off stops new notes at once."
+      control={
+        <ScopedSwitch
+          settingKeys={["agentReviewNotesEnabled"]}
+          checked={settings.agentReviewNotesEnabled}
+          onCheckedChange={(checked) =>
+            updateSettings({ agentReviewNotesEnabled: Boolean(checked) })
+          }
+          aria-label="Agent review notes"
         />
       }
     />

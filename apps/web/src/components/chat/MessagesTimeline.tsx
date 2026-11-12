@@ -135,6 +135,7 @@ import {
   McpAppTimelineRow,
 } from "./TimelineAssistantRows";
 import { V2EventTimelineRow } from "./TimelineV2EventRow";
+import { ReviewNoteCard } from "./ReviewNoteCard";
 import { startTimelinePositionRestore } from "./useTimelinePositionRestore";
 import {
   attachTimelineViewport,
@@ -271,6 +272,7 @@ interface MessagesTimelineProps {
   renderHtmlRender?: TimelineRowSharedState["renderHtmlRender"];
   liveMachineCards?: boolean;
   turnItemSource?: TimelineRowSharedState["turnItemSource"];
+  reviewNoteReplies?: TimelineRowSharedState["reviewNoteReplies"];
   /**
    * The thread this one is a subagent or side chat of; `open` is absent when it cannot be
    * opened from here.
@@ -386,6 +388,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
   renderHtmlRender,
   liveMachineCards = true,
   turnItemSource,
+  reviewNoteReplies,
   parentThreadLink = null,
   workflowOpening = null,
   onForkFromRun,
@@ -1086,6 +1089,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
     renderHtmlRender,
     liveMachineCards,
     turnItemSource,
+    reviewNoteReplies,
     workflowOpening,
     onForkFromRun,
     onToggleTurnFold,
@@ -1506,7 +1510,8 @@ const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: Time
                   row.kind === "attempt-fold" ||
                   row.kind === "html-render" ||
                   row.kind === "machine-card" ||
-                  row.kind === "mcp-app"
+                  row.kind === "mcp-app" ||
+                  row.kind === "review-note"
                 ? "pb-2"
                 : "pb-4",
         (row.kind === "message" && row.message.role === "assistant") ||
@@ -1557,6 +1562,7 @@ const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: Time
       {row.kind === "html-render" ? <HtmlRenderTimelineRow row={row} /> : null}
       {row.kind === "machine-card" ? <MachineCardTimelineRow row={row} /> : null}
       {row.kind === "mcp-app" ? <McpAppTimelineRow row={row} /> : null}
+      {row.kind === "review-note" ? <ReviewNoteCard note={row.note} /> : null}
       {row.kind === "working" ? <WorkingTimelineRow row={row} /> : null}
       {row.kind === "worktree-setup" ? <WorktreeSetupTimelineRow row={row} /> : null}
       {row.kind === "event" ? <V2EventTimelineRow row={row} /> : null}

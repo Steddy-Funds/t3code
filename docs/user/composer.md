@@ -197,6 +197,20 @@ thread and near usage limits. Codex needs version 0.165 or later; if T3 Code man
 Codex, update it in Settings > Providers. Codex follows a change to the setting at once; open Claude
 threads follow it after they restart. Suggestions show on web and desktop.
 
+## Review notes from the agent
+
+When an agent changes something you should weigh before it ships, such as a shared default or a
+behavior other code relies on, it can pin a short note or question to those lines. The note shows in
+the conversation and on the lines in the diff. Agents leave them rarely, and never wait on one.
+
+Choose **Reply** on a note to answer it. The reply goes to the agent with the noted lines quoted,
+and the note then shows as answered. **Show in diff** opens the change at the noted lines. If the
+file changed since, the note moves with its lines when they can still be found, and otherwise waits
+in the diff's notes list. On mobile, notes show in the conversation; reply from web or desktop.
+
+Notes are on by default. Turn off **Agent review notes** in Settings > Labs to stop agents leaving
+them.
+
 ## Edit an earlier prompt
 
 On web and desktop, choose **Edit from here** beneath a sent message to rewind

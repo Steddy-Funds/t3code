@@ -1,5 +1,7 @@
 import type { CodeViewDiffItem, FileDiffMetadata, SelectedLineRange } from "@pierre/diffs";
 import { parsePatchFiles } from "@pierre/diffs/utils/parsePatchFiles";
+import { RunId, TurnItemId } from "@t3tools/contracts";
+import { type ReviewNote, reviewNoteSectionId } from "@t3tools/shared/reviewNote";
 import { StrictMode, type ComponentProps } from "react";
 import { describe, expect, it, vi } from "vite-plus/test";
 
@@ -48,7 +50,7 @@ vi.mock("./StyledDiffCodeView", () => ({
       )),
 }));
 
-import { AnnotatableCodeView } from "./AnnotatableCodeView";
+import { AnnotatableCodeView, type DiffReviewNotes } from "./AnnotatableCodeView";
 import type { StyledDiffCodeView } from "./StyledDiffCodeView";
 import type { SendReviewComments } from "./useReviewCommentDrafts";
 
@@ -83,6 +85,7 @@ function view(
   codeViewKey = "initial",
   pendingFiles: FileDiffMetadata[] = [],
   onSendComments?: SendReviewComments,
+  reviewNotes?: DiffReviewNotes,
 ) {
   return (
     <StrictMode>
@@ -94,6 +97,7 @@ function view(
         sectionTitle="Uncommitted"
         composerDraftTarget={target}
         onSendComments={onSendComments}
+        reviewNotes={reviewNotes}
         options={{}}
         renderHeaderFilenameSuffix={() => null}
         renderHeaderPrefix={() => null}
@@ -105,7 +109,7 @@ function view(
 
 function click(label: string) {
   const button = Array.from(container.querySelectorAll("button")).find(
-    (node) => node.textContent === label,
+    (node) => node.textContent === label || node.getAttribute("aria-label") === label,
   );
   if (!button) throw new Error(`Missing button: ${label}`);
   return act(() => button.click());
@@ -221,5 +225,54 @@ describe("diff comment drafts", () => {
     expect(useComposerDraftStore.getState().getComposerDraft(target)?.reviewComments[0]?.text).toBe(
       "> foo(bar)\n\nShould this be baz?",
     );
+  });
+});
+
+describe("review note replies", () => {
+  it("keeps an open reply while its file reloads, and its words when its note leaves", async () => {
+    using _drafts = setup();
+    const shown = file("shared.ts");
+    const note: ReviewNote = {
+      id: TurnItemId.make("turn-item:review-note:thread-1:0123456789abcdef0123456789abcdef"),
+      kind: "review_note",
+      path: "shared.ts",
+      startLine: 1,
+      endLine: 1,
+      note: "Shared by every caller.",
+      excerpt: "new",
+      excerptTruncated: false,
+      contentRevision: "3b18e512dba79e4c8300dd08aeb37f8e728b8dad",
+      runId: RunId.make("run-1"),
+    };
+    const notes = (anchor: DiffReviewNotes["placed"][number]["anchor"]): DiffReviewNotes => ({
+      placed: [{ note, fileKey: shown.fileKey, anchor }],
+      answeredIds: new Set(),
+      onDismiss: () => {},
+    });
+    await using screen = await render(
+      view([shown], "initial", [], undefined, notes({ kind: "exact", startLine: 1, endLine: 1 })),
+      { container },
+    );
+    await click("Reply");
+    await typeComment("Only search should retry.");
+
+    await screen.rerender(view([shown], "initial", [], undefined, notes({ kind: "pending" })));
+    await screen.rerender(
+      view([shown], "initial", [], undefined, notes({ kind: "exact", startLine: 1, endLine: 1 })),
+    );
+    await expect.element(screen.getByRole("textbox")).toHaveValue("Only search should retry.");
+    expect(
+      useComposerDraftStore.getState().getComposerDraft(target)?.reviewComments,
+    ).toBeUndefined();
+
+    await screen.rerender(view([shown], "initial", [], undefined, notes({ kind: "unattached" })));
+
+    expect(container.querySelector("textarea")).toBeNull();
+    expect(useComposerDraftStore.getState().getComposerDraft(target)?.reviewComments).toEqual([
+      expect.objectContaining({
+        sectionId: reviewNoteSectionId(note.id),
+        text: "Only search should retry.",
+      }),
+    ]);
   });
 });

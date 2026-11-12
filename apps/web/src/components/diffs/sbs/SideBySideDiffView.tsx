@@ -503,7 +503,8 @@ export function SideBySideDiffView<T = unknown>(props: SideBySideDiffViewProps<T
   const observeCard = useStableCallback((element: HTMLDivElement | null) => {
     if (!element) return;
     return observeResize(element, ([entry]) => {
-      if (entry) setCardHeight(entry.contentRect.height);
+      // The border box: docking places the card's outer edge, borders included.
+      if (entry) setCardHeight(entry.borderBoxSize[0]?.blockSize ?? entry.contentRect.height);
     });
   });
 

@@ -60,6 +60,7 @@ upstream; a feature can, from its own branch, when Akiva decides.
 | Code intelligence follow-ups: Go to class on a cold TS server, decorated Python names, all packages' libraries, an off state                      | #90 | 744c067 |
 | Diff and review stitch: Cmd+B and Cmd+click from side-by-side panes, the PR Code tab side by side, a fork's notes get their own ids               | #92 | 1dbc8a7 |
 | Snooze reasons: a "why?" prompt after each snooze, a per-thread snooze log, Settings → Snooze history with CSV/JSON export                        | #87 | pending |
+| Glint native dialogs (Labs, macOS): snooze Time from now, the model picker, /color; a generic helper bridge                                       | #93 | 5b4b111 |
 
 Held: #38 (pods notes in the t3-orchestration skill). It edits
 `.agents/skills/t3-orchestration/`, which exists only on

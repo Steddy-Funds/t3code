@@ -20,7 +20,7 @@ import {
 } from "@t3tools/shared/keybindings";
 import { isElectron } from "./env";
 import { isEditableFocused } from "./lib/editableFocus";
-import { readFocusScopes } from "./lib/focusScopes";
+import { type FocusScopes, readFocusScopes } from "./lib/focusScopes";
 import { projectScriptIdFromCommand } from "./projectScripts";
 
 export type { ShortcutModifierStateLike } from "@t3tools/shared/keybindings";
@@ -200,6 +200,8 @@ export function shortcutConflictKey(
   ].join("|");
 }
 
+const focusScopesByEvent = new WeakMap<ShortcutEventLike, FocusScopes>();
+
 function shortcutForContext(binding: ResolvedKeybindingRule, context: ShortcutMatchContext) {
   const shortcut = binding.shortcut;
   // Resolve persisted Mod+Enter against send preference without rewriting saved shortcuts.
@@ -277,9 +279,11 @@ export function resolveShortcutCommand(
     if (options?.context?.editableFocus === undefined) {
       context.editableFocus = isEditableFocused(target);
     }
-    // Listeners build their own context and do not know the focus scopes. Reading them here
-    // keeps every listener agreeing on the command a key means.
-    const focusScopes = readFocusScopes(target);
+    // Listeners build their own context and do not know the focus scopes. Reading them here,
+    // once per key press, keeps every listener agreeing on the command a key means, even when
+    // an earlier listener's handler moved focus.
+    const focusScopes = focusScopesByEvent.get(event) ?? readFocusScopes(target);
+    focusScopesByEvent.set(event, focusScopes);
     context.codeFocus = options?.context?.codeFocus ?? focusScopes.codeFocus;
     context.diffFocus = options?.context?.diffFocus ?? focusScopes.diffFocus;
     context.projectTreeFocus = options?.context?.projectTreeFocus ?? focusScopes.projectTreeFocus;

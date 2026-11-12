@@ -25,6 +25,7 @@ import type { ReactNode } from "react";
 import { Skeleton } from "~/components/ui/skeleton";
 import { cn } from "~/lib/utils";
 
+import { BurnRateValue } from "../sidebar/SidebarBurnRate";
 import { MachineVerdictLine } from "./MachineVerdictLine";
 import { ownersSummary } from "./ownership/processOwners";
 import type { OwnerNames } from "./primitives/OwnerLabel";
@@ -59,6 +60,7 @@ export function MachineCardBody({
   processes,
   limits,
   runningThreadCount,
+  tokensPerMinute,
   ownerNames,
 }: {
   readonly view: MachineIndicatorView;
@@ -68,6 +70,8 @@ export function MachineCardBody({
   /** The machine's thresholds, when the caller knows them. */
   readonly limits?: MachineLimits;
   readonly runningThreadCount?: number;
+  /** Shown beside the running threads while above zero. */
+  readonly tokensPerMinute?: number;
   /** Resolves owner names; rows from a server with ownership then show who owns each top entry. */
   readonly ownerNames?: OwnerNames;
 }) {
@@ -107,8 +111,13 @@ export function MachineCardBody({
         <ProcessesSection processes={processes} ownerNames={ownerNames} />
       )}
       {runningThreadCount === undefined ? null : (
-        <div className="px-3 py-2.5 text-muted-foreground">
-          {runningThreadCount} T3 {runningThreadCount === 1 ? "thread" : "threads"} running
+        <div className="flex items-center gap-2 px-3 py-2.5 text-muted-foreground">
+          <span className="min-w-0 flex-1 truncate">
+            {runningThreadCount} T3 {runningThreadCount === 1 ? "thread" : "threads"} running
+          </span>
+          {tokensPerMinute !== undefined && tokensPerMinute > 0 ? (
+            <BurnRateValue tokensPerMinute={tokensPerMinute} />
+          ) : null}
         </div>
       )}
     </div>

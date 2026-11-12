@@ -1,6 +1,6 @@
 import { createTokenBurnRateAtoms } from "@t3tools/client-runtime/state/tokenBurnRates";
 import { threadKey } from "@t3tools/client-runtime/state/entities";
-import type { ScopedThreadRef } from "@t3tools/contracts";
+import type { EnvironmentId, ScopedThreadRef } from "@t3tools/contracts";
 import { useAtomValue } from "@effect/atom-react";
 
 import { environmentCatalog } from "../connection/catalog";
@@ -22,4 +22,9 @@ export function useTreeBurnRate(ref: ScopedThreadRef): number {
 /** Tokens per minute across every thread in every connected environment; 0 when idle. */
 export function useTotalBurnRate(): number {
   return useAtomValue(tokenBurnRates.totalRateAtom);
+}
+
+/** Tokens per minute across one machine's threads; 0 when idle. */
+export function useEnvironmentBurnRate(environmentId: EnvironmentId): number {
+  return useAtomValue(tokenBurnRates.environmentRateAtom(environmentId));
 }

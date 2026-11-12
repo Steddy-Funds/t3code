@@ -129,7 +129,7 @@ export function CrossMachineList() {
         </ToggleGroup>
       </header>
       <div className="overflow-x-auto">
-        <ul className="flex min-w-[934px] flex-col">
+        <ul className="flex min-w-[938px] flex-col">
           <li
             aria-hidden
             className={cn(
@@ -144,7 +144,7 @@ export function CrossMachineList() {
             <span>Memory</span>
             <span>VRAM</span>
             <span>Top consumer</span>
-            <span className="text-end">Threads</span>
+            <span className="text-end">Burn · Threads</span>
           </li>
           {CROSS_MACHINE_GROUPS.map((group) => {
             const members = machines.filter((machine) => machine.group === group);

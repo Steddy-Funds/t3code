@@ -5,7 +5,14 @@ import { useId } from "react";
 import { cn } from "~/lib/utils";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
-function BurnFlameIcon(props: { className?: string }) {
+/** Flicker steps, by tokens per minute; the top one is half a million. */
+const HEAT_STEPS = [25_000, 100_000, 250_000, 500_000] as const;
+
+function burnHeat(tokensPerMinute: number): 0 | 1 | 2 | 3 | 4 {
+  return HEAT_STEPS.filter((step) => tokensPerMinute >= step).length as 0 | 1 | 2 | 3 | 4;
+}
+
+function FlameGlyph(props: { hot?: boolean; className?: string }) {
   // Per instance: a gradient referenced from a hidden row's <defs> would not paint.
   const gradientId = useId();
   return (
@@ -16,12 +23,39 @@ function BurnFlameIcon(props: { className?: string }) {
     >
       <defs>
         <linearGradient id={gradientId} x1="0" y1="1" x2="0" y2="0">
-          <stop offset="0%" stopColor="currentColor" className="text-flame-base" />
-          <stop offset="55%" stopColor="currentColor" className="text-flame-body" />
-          <stop offset="100%" stopColor="currentColor" className="text-flame-tip" />
+          <stop
+            offset="0%"
+            stopColor="currentColor"
+            className={props.hot ? "text-flame-body" : "text-flame-base"}
+          />
+          <stop
+            offset="55%"
+            stopColor="currentColor"
+            className={props.hot ? "text-flame-tip" : "text-flame-body"}
+          />
+          <stop
+            offset="100%"
+            stopColor="currentColor"
+            className={props.hot ? "text-flame-core" : "text-flame-tip"}
+          />
         </linearGradient>
       </defs>
     </FlameIcon>
+  );
+}
+
+/** A hotter copy of the flame flickers over it, faster the more tokens burn. */
+function BurnFlameIcon(props: { tokensPerMinute: number }) {
+  const heat = burnHeat(props.tokensPerMinute);
+  return (
+    <span className="relative inline-flex shrink-0">
+      <FlameGlyph />
+      {heat === 0 ? null : (
+        <span data-heat={heat} className="burn-flame-flicker absolute inset-0 inline-flex">
+          <FlameGlyph hot />
+        </span>
+      )}
+    </span>
   );
 }
 
@@ -31,7 +65,7 @@ const rateLabel = (tokensPerMinute: number) => `${formatTokens(tokensPerMinute)}
 function BurnRateContent(props: { tokensPerMinute: number }) {
   return (
     <>
-      <BurnFlameIcon />
+      <BurnFlameIcon tokensPerMinute={props.tokensPerMinute} />
       <span className="text-secondary-label">{rateLabel(props.tokensPerMinute)}</span>
     </>
   );

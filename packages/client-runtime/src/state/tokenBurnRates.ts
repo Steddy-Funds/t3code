@@ -79,9 +79,10 @@ export function createTokenBurnRateAtoms<R, E>(
     idleTtlMs: 60_000,
   });
 
-  /** Every capable environment's own per-thread rates, by thread key. */
-  const ownRatesAtom = Atom.make((get) => {
+  /** Every capable environment's own per-thread rates, by thread key, and each one's total. */
+  const snapshotAtom = Atom.make((get) => {
     const rates = new Map<string, number>();
+    const environments = new Map<EnvironmentId, number>();
     for (const environmentId of enabledEnvironmentIds(get(input.catalogValueAtom))) {
       const config = get(input.configValueAtom(environmentId));
       if (config?.environment.capabilities.tokenBurnRates !== true) continue;
@@ -89,12 +90,21 @@ export function createTokenBurnRateAtoms<R, E>(
       const snapshot: TokenBurnRates | null = AsyncResult.isFailure(result)
         ? Option.getOrNull(Option.map(result.previousSuccess, (success) => success.value))
         : Option.getOrNull(AsyncResult.value(result));
+      let total = 0;
       for (const { threadId, tokensPerMinute } of snapshot?.threads ?? []) {
         rates.set(threadKey({ environmentId, threadId }), tokensPerMinute);
+        total += tokensPerMinute;
       }
+      environments.set(environmentId, total);
     }
-    return rates as ReadonlyMap<string, number>;
-  }).pipe(Atom.withLabel("token-burn-rates:own"));
+    return {
+      rates: rates as ReadonlyMap<string, number>,
+      environments: environments as ReadonlyMap<EnvironmentId, number>,
+    };
+  }).pipe(Atom.withLabel("token-burn-rates:snapshot"));
+  const ownRatesAtom = Atom.make((get) => get(snapshotAtom).rates).pipe(
+    Atom.withLabel("token-burn-rates:own"),
+  );
 
   // Kept by identity while the numbers hold, so shell updates re-sort nothing.
   const treeRatesAtom = (() => {
@@ -109,9 +119,15 @@ export function createTokenBurnRateAtoms<R, E>(
 
   const totalRateAtom = Atom.make((get) => {
     let total = 0;
-    for (const rate of get(ownRatesAtom).values()) total += rate;
+    for (const rate of get(snapshotAtom).environments.values()) total += rate;
     return total;
   }).pipe(Atom.withLabel("token-burn-rates:total"));
+
+  const environmentRateAtomFamily = Atom.family((environmentId: EnvironmentId) =>
+    Atom.make((get) => get(snapshotAtom).environments.get(environmentId) ?? 0).pipe(
+      Atom.withLabel(`token-burn-rates:environment:${environmentId}`),
+    ),
+  );
 
   const treeRateAtomFamily = Atom.family((key: string) =>
     Atom.make((get) => get(treeRatesAtom).get(key) ?? 0).pipe(
@@ -124,6 +140,8 @@ export function createTokenBurnRateAtoms<R, E>(
     treeRatesAtom,
     /** Tokens per minute across every connected environment. */
     totalRateAtom,
+    /** Tokens per minute across one environment's threads. */
+    environmentRateAtom: (environmentId: EnvironmentId) => environmentRateAtomFamily(environmentId),
     treeRateAtom: (key: string) => treeRateAtomFamily(key),
   };
 }

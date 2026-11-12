@@ -1,0 +1,240 @@
+import { FileTree, useFileTree } from "@pierre/trees/react";
+import { isCodeIntelUnsupportedError } from "@t3tools/client-runtime/state/code-intel";
+import { executeAtomQuery } from "@t3tools/client-runtime/state/runtime";
+import type { EnvironmentId, ProjectEntry, ScopedThreadRef } from "@t3tools/contracts";
+import { useEffect, useRef, useState } from "react";
+
+import { joinHostPath } from "~/components/files/filePath";
+import { buildFileTreePathUpdates } from "~/components/files/fileTreePathReconciliation";
+import { CollapsibleSectionHeader } from "~/components/ui/collapsible-section-header";
+import { useTheme } from "~/hooks/useTheme";
+import { T3_PIERRE_ICONS } from "~/pierre-icons";
+import { PIERRE_TREE_UNSAFE_CSS, pierreTreeStyle } from "~/pierre-tree-theme";
+import { useRightPanelStore } from "~/rightPanelStore";
+import { appAtomRegistry } from "~/rpc/atomRegistry";
+import { codeIntelEnvironment } from "~/state/codeIntel";
+import { projectEnvironment } from "~/state/projects";
+import { useEnvironmentQuery } from "~/state/query";
+
+import {
+  type ExternalLibraryRoot,
+  externalLibraryRoots,
+  libraryLocation,
+} from "./externalLibraries";
+
+function parentOf(path: string): string {
+  return path.slice(0, Math.max(0, path.lastIndexOf("/")));
+}
+
+/** Lists library folders as they open. Paths are tree paths: the root's label, then its own. */
+function useLibraryEntries(
+  environmentId: EnvironmentId,
+  roots: ReadonlyArray<ExternalLibraryRoot>,
+) {
+  const [listed, setListed] = useState(new Map<string, readonly ProjectEntry[]>());
+  const [loading, setLoading] = useState<ReadonlySet<string>>(new Set());
+  const [failed, setFailed] = useState<ReadonlySet<string>>(new Set());
+  const requested = useRef(new Set<string>());
+
+  const without = (set: ReadonlySet<string>, path: string) => {
+    const next = new Set(set);
+    next.delete(path);
+    return next;
+  };
+
+  const load = (directory: string) => {
+    const location = libraryLocation(roots, directory);
+    if (location === null || requested.current.has(directory)) return;
+    requested.current.add(directory);
+    setLoading((previous) => new Set(previous).add(directory));
+    setFailed((previous) => without(previous, directory));
+    const { root, relativePath } = location;
+    const atom = projectEnvironment.listEntries({
+      environmentId,
+      input: { cwd: root.path, directoryPath: relativePath },
+    });
+    void executeAtomQuery(appAtomRegistry, atom, {
+      refresh: true,
+      reportFailure: false,
+      reportDefect: false,
+    }).then((result) => {
+      setLoading((previous) => without(previous, directory));
+      if (result._tag !== "Success") {
+        requested.current.delete(directory);
+        setFailed((previous) => new Set(previous).add(directory));
+        return;
+      }
+      const children = result.value.entries
+        .filter((entry) => parentOf(entry.path) === relativePath)
+        .map((entry) => ({ ...entry, path: `${root.label}/${entry.path}` }));
+      setListed((previous) => new Map(previous).set(directory, children));
+    });
+  };
+
+  const retry = () => {
+    for (const directory of failed) load(directory);
+  };
+
+  const kinds = new Map<string, ProjectEntry["kind"]>();
+  const treePaths: string[] = [];
+  const visit = (directory: string) => {
+    for (const entry of listed.get(directory) ?? []) {
+      kinds.set(entry.path, entry.kind);
+      treePaths.push(entry.kind === "directory" ? `${entry.path}/` : entry.path);
+      if (entry.kind === "directory") visit(entry.path);
+    }
+  };
+  for (const root of roots) {
+    treePaths.push(`${root.label}/`);
+    visit(root.label);
+  }
+  return { kinds, treePaths, load, loading, failed: failed.size > 0, retry };
+}
+
+function LibraryTree({
+  environmentId,
+  threadRef,
+  roots,
+}: {
+  environmentId: EnvironmentId;
+  threadRef: ScopedThreadRef;
+  roots: ReadonlyArray<ExternalLibraryRoot>;
+}) {
+  const { resolvedTheme } = useTheme();
+  const { kinds, treePaths, load, loading, failed, retry } = useLibraryEntries(
+    environmentId,
+    roots,
+  );
+  const kindsRef = useRef(kinds);
+  const loadingRef = useRef(loading);
+  const previousTreePathsRef = useRef<readonly string[] | null>(null);
+  const { model } = useFileTree({
+    density: "compact",
+    // Keeps each root its own row; a root with one folder would otherwise merge into it.
+    flattenEmptyDirectories: false,
+    initialExpansion: "closed",
+    icons: T3_PIERRE_ICONS,
+    onSelectionChange: (selectedPaths) => {
+      const selected = selectedPaths.at(-1)?.replace(/\/$/, "");
+      if (!selected || kindsRef.current.get(selected) !== "file") return;
+      const location = libraryLocation(roots, selected);
+      if (location === null) return;
+      useRightPanelStore
+        .getState()
+        .openFile(threadRef, joinHostPath(location.root.path, location.relativePath));
+    },
+    paths: [],
+    renderRowDecoration: ({ item, row }) =>
+      row.kind === "directory" &&
+      row.isExpanded &&
+      loadingRef.current.has(item.path.replace(/\/$/, ""))
+        ? { icon: "t3-tree-icon-loading", title: "Loading…" }
+        : null,
+    search: false,
+    unsafeCSS: PIERRE_TREE_UNSAFE_CSS,
+  });
+
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- applies listed folders to the imperative Pierre tree model
+  useEffect(() => {
+    kindsRef.current = kinds;
+    const previous = previousTreePathsRef.current;
+    if (previous === treePaths) return;
+    previousTreePathsRef.current = treePaths;
+    if (previous === null) {
+      model.resetPaths(treePaths);
+      return;
+    }
+    const updates = buildFileTreePathUpdates(previous, treePaths);
+    if (updates.length > 0) model.batch(updates);
+  }, [kinds, model, treePaths]);
+
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- makes the Pierre tree model re-render row decorations when loading folders change
+  useEffect(() => {
+    if (loadingRef.current === loading) return;
+    loadingRef.current = loading;
+    model.setComposition(model.getComposition());
+  }, [loading, model]);
+
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- subscribes to the Pierre tree model to list folders as they are expanded
+  useEffect(() => {
+    const loadExpanded = () => {
+      for (const path of treePaths) {
+        if (!path.endsWith("/")) continue;
+        const item = model.getItem(path);
+        if (item?.isDirectory() && "isExpanded" in item && item.isExpanded()) {
+          load(path.slice(0, -1));
+        }
+      }
+    };
+    loadExpanded();
+    return model.subscribe(loadExpanded);
+  }, [load, model, treePaths]);
+
+  return (
+    <>
+      {failed ? (
+        <button
+          type="button"
+          onClick={retry}
+          className="px-3 py-1 text-left text-xs text-destructive"
+        >
+          Some library folders couldn't be listed. Click to retry.
+        </button>
+      ) : null}
+      <FileTree
+        model={model}
+        aria-label="External libraries"
+        className="min-h-0 flex-1 overflow-hidden"
+        style={pierreTreeStyle(resolvedTheme)}
+      />
+    </>
+  );
+}
+
+/**
+ * The library folders the workspace's language servers read (a virtualenv, the standard library,
+ * node_modules), browsable below the workspace tree. Hidden when there are none; files open
+ * read-only, like a jump into library code.
+ */
+export default function ExternalLibraries({
+  environmentId,
+  cwd,
+  threadRef,
+}: {
+  environmentId: EnvironmentId;
+  cwd: string;
+  threadRef: ScopedThreadRef;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  // A server older than code intel refuses status for good; stop asking it.
+  const [unsupportedIn, setUnsupportedIn] = useState<EnvironmentId | null>(null);
+  const unsupported = unsupportedIn === environmentId;
+  const status = useEnvironmentQuery(
+    unsupported ? null : codeIntelEnvironment.status({ environmentId, input: { cwd } }),
+  );
+  if (!unsupported && isCodeIntelUnsupportedError(status.failure)) setUnsupportedIn(environmentId);
+  const roots = externalLibraryRoots(status.data?.servers ?? []);
+  if (roots.length === 0) return null;
+
+  return (
+    <div
+      className={
+        expanded
+          ? "flex h-2/5 min-h-0 shrink-0 flex-col border-t border-border/60 px-0.5"
+          : "shrink-0 border-t border-border/60 px-0.5"
+      }
+    >
+      <CollapsibleSectionHeader expanded={expanded} onClick={() => setExpanded(!expanded)}>
+        External Libraries
+      </CollapsibleSectionHeader>
+      {expanded ? (
+        <LibraryTree
+          key={roots.map((root) => `${root.label}\n${root.path}`).join("\n")}
+          environmentId={environmentId}
+          threadRef={threadRef}
+          roots={roots}
+        />
+      ) : null}
+    </div>
+  );
+}

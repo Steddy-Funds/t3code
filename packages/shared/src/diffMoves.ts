@@ -137,7 +137,8 @@ function matchingSegments(removed: FlatLine[], added: FlatLine[]): Segment[] {
         length += 1;
       } while (continues(removed, added, r + length - 1, a + length - 1, 1));
       if (length >= MIN_MOVE_LINES && weight >= MIN_MOVE_CHARACTERS) {
-        const inPlace = removed[r]!.file === added[a]!.file && removed[r]!.block === added[a]!.block;
+        const inPlace =
+          removed[r]!.file === added[a]!.file && removed[r]!.block === added[a]!.block;
         segments.push({ removed: r, added: a, length, weight, inPlace });
       }
     }

@@ -72,6 +72,7 @@ const IDE_KEYBINDING_COMMANDS = [
   "diff.nextChange",
   "diff.previousChange",
   "diff.jumpToSource",
+  "diff.find",
   "projectPane.toggle",
   "projectPane.selectOpenedFile",
 ] as const;

@@ -385,6 +385,7 @@ const CODE_COMMAND_LABELS: Partial<Record<KeybindingCommand, string>> = {
   "code.goToClass": "Code: Go to Class",
   "code.goToSymbol": "Code: Go to Symbol",
   "diff.jumpToSource": "Diff: Jump to Source",
+  "diff.find": "Diff: Find",
   "projectPane.toggle": "Project Pane: Show or Return to Code",
 };
 

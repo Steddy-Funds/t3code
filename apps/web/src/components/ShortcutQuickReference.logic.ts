@@ -365,7 +365,11 @@ function entryWidthRem(entry: QuickReferenceEntry): number {
   return entry.label.length * CHARACTER_REM + keys + ROW_CHROME_REM;
 }
 
-/** Columns are as wide as their widest row, so the panel's width is estimated from its text. */
+/**
+ * Columns are as wide as their widest row, so the panel's width is estimated
+ * from its text. A wider font than the default only costs a shortened label:
+ * the panel never grows past its area.
+ */
 function panelWidthRem(columns: QuickReferenceView["columns"]): number {
   const widths = columns.map((column) =>
     Math.max(...column.flatMap((group) => group.entries.map(entryWidthRem))),

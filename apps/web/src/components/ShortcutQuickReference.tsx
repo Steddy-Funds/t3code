@@ -124,12 +124,13 @@ function readSnapshot(router: AnyRouter): QuickReferenceSnapshot {
   };
 }
 
-/** Where a held modifier means something else, or the app's shortcuts are off. */
-function isQuickReferenceSuppressed(): boolean {
+/** Where a held modifier means something else, or the chat's shortcuts are off. */
+function isQuickReferenceSuppressed(router: AnyRouter): boolean {
   return (
+    // The list is the chat's: off a thread (Settings, Usage, pull requests) most of it would do nothing.
+    resolveThreadRouteTarget(router.state.matches.at(-1)?.params ?? {}) === null ||
     isPointerOverCodeScope() ||
-    isCommandPaletteOpen() ||
-    document.activeElement?.closest("[data-keybinding-capture]") != null
+    isCommandPaletteOpen()
   );
 }
 
@@ -168,7 +169,7 @@ function QuickReferenceOverlay() {
 
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- the show timer and the window listeners that cancel it, live only while the modifier is held
   useEffect(() => {
-    if (!armed || isPointerPressedRef.current() || isQuickReferenceSuppressed()) return;
+    if (!armed || isPointerPressedRef.current() || isQuickReferenceSuppressed(router)) return;
     const timer = window.setTimeout(
       () => setSnapshot(readSnapshot(router)),
       QUICK_REFERENCE_SHOW_DELAY_MS,

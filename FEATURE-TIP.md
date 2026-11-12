@@ -63,6 +63,7 @@ upstream; a feature can, from its own branch, when Akiva decides.
 | Snooze reasons: a "why?" prompt after each snooze, a per-thread snooze log, Settings → Snooze history with CSV/JSON export                        | #87 | 08e7d16 |
 | Glint native dialogs (Labs, macOS): snooze Time from now, the model picker, /color; a generic helper bridge                                       | #93 | 5b4b111 |
 | "Why snooze?" as Glint's native choice dialog (Labs, macOS), with the web prompt as fallback                                                      | #94 | 7f0beef |
+| Glint dialogs own the trackpad: snooze button opens the dial, gestures pause while a dialog is up, triggers toggle                                | #96 | a8d5243 |
 | Code stitch: External Libraries, a Python environment field, the quick reference by focus, Mod+B in side-by-side diffs, user docs                 | #91 | a143e08 |
 
 Held: #38 (pods notes in the t3-orchestration skill). It edits

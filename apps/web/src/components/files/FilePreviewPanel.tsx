@@ -49,7 +49,7 @@ import { mediaFileReference } from "@t3tools/client-runtime/media-reference";
 import { FolderTree, Globe2, WrapTextIcon } from "lucide-react";
 import { Code2, Eye, Table2 } from "lucide";
 import * as Schema from "effect/Schema";
-import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useContext, useEffect, useRef, useState } from "react";
 
 import { isBrowserPreviewFile, openFileInPreview } from "~/browser/openFileInPreview";
 import { useAssetUrlRefresh, useAssetUrlState } from "~/assets/assetUrls";
@@ -134,6 +134,9 @@ import {
   setProjectFileQueryData,
   useProjectFileQuery,
 } from "./projectFilesQueryState";
+import { CodeIntelStatusChip, LibraryCodeNotice } from "../code/CodeIntelChrome";
+import { useCodeIntelFile } from "../code/useCodeIntelFile";
+import { CodeEditorSlotContext, useCodeNavigation } from "../code/useCodeNavigation";
 
 const NO_FILE_REVISION_ATOM = Atom.make(null);
 
@@ -735,12 +738,15 @@ function EditableFileSurface({
   const { ready: editable, onPostRender: onEditablePostRender } =
     useEditableAfterHighlight(externalFile);
   const editorRef = useRef<Editor<"file", FileCommentAnnotationGroup, undefined> | null>(null);
+  const setCodeEditor = useContext(CodeEditorSlotContext);
   const editorOptions: EditorOptions<"file", FileCommentAnnotationGroup, undefined> = {
     onAttach: (editor) => {
       editorRef.current = editor;
+      setCodeEditor?.(editor);
     },
     onComplete: () => {
       editorRef.current = null;
+      setCodeEditor?.(null);
     },
   };
 
@@ -1139,7 +1145,34 @@ export default function FilePreviewPanel({
       : relativePath && attachment === undefined
         ? resolvePathLinkTarget(relativePath, cwd)
         : null;
-  const onFilePostRender = useFileLineReveal(relativePath, revealLine, revealRequestId);
+  const onLineRevealPostRender = useFileLineReveal(relativePath, revealLine, revealRequestId);
+  const codeIntel = useCodeIntelFile(
+    environmentId,
+    cwd,
+    previewPath,
+    canReadFiles &&
+      attachment === undefined &&
+      showsRawText &&
+      file.data !== null &&
+      !file.data.truncated,
+  );
+  const readOnlySource =
+    file.data?.truncated === true || isHostFile || !canWriteFiles || codeIntel.libraryCode;
+  const codeNavigation = useCodeNavigation({
+    environmentId,
+    cwd,
+    threadRef,
+    path: previewPath,
+    text: file.data?.contents ?? "",
+    shown:
+      canReadFiles && attachment === undefined && showsRawText && file.data?.truncated === false,
+    editable: !readOnlySource,
+    intel: codeIntel,
+  });
+  const onFilePostRender: FilePostRender = (fileContainer, instance, phase) => {
+    onLineRevealPostRender(fileContainer, instance, phase);
+    codeNavigation.onPostRender(fileContainer, phase);
+  };
   // Mounting the file read under the workspace mutation id refetches it after each mutation.
   useAtomMount(
     canReadFiles &&
@@ -1219,7 +1252,7 @@ export default function FilePreviewPanel({
     );
   }
 
-  return (
+  const surface = (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-background">
       {breadcrumbPath !== null && breadcrumbTrail !== null ? (
         <div className={FILE_SURFACE_SUBHEADER_CLASS} data-surface-subheader>
@@ -1291,6 +1324,14 @@ export default function FilePreviewPanel({
               <Globe2 className="size-3.5" />
             </FileSurfaceAction>
           ) : null}
+          {codeIntel.supported && codeIntel.server !== null && showsRawText ? (
+            <CodeIntelStatusChip
+              environmentId={environmentId}
+              cwd={cwd}
+              server={codeIntel.server}
+              onChanged={codeIntel.refreshStatus}
+            />
+          ) : null}
           {!isHostFile && previewPath !== null ? (
             <FileSurfaceAction
               label={explorerOpen ? "Hide file explorer" : "Show file explorer"}
@@ -1307,6 +1348,9 @@ export default function FilePreviewPanel({
           Read-only connection. Unsaved edits are kept until write access returns.
         </div>
       ) : null}
+      {codeIntel.libraryCode && showsRawText ? (
+        <LibraryCodeNotice root={codeIntel.libraryRoot} />
+      ) : null}
       {previewPath &&
       attachment === undefined &&
       !isMedia &&
@@ -1319,7 +1363,11 @@ export default function FilePreviewPanel({
       ) : null}
       <div className="flex min-h-0 flex-1 overflow-hidden">
         <div
-          className={cn("min-w-0 flex-1 flex-col overflow-hidden", previewPath ? "flex" : "hidden")}
+          {...codeNavigation.surfaceProps}
+          className={cn(
+            "min-w-0 flex-1 flex-col overflow-hidden outline-none",
+            previewPath ? "flex" : "hidden",
+          )}
         >
           {isFolder ? null : relativePath && attachment ? (
             <AttachmentFilePreview
@@ -1473,7 +1521,7 @@ export default function FilePreviewPanel({
                 text={file.data.contents}
                 delimiter={tableDelimiter}
               />
-            ) : file.data.truncated || isHostFile || !canWriteFiles ? (
+            ) : readOnlySource ? (
               <SourceFilePreview
                 name={relativePath}
                 text={file.data.contents}
@@ -1501,6 +1549,7 @@ export default function FilePreviewPanel({
               </DiffWorkerPoolProvider>
             )
           ) : null}
+          {codeNavigation.popup}
         </div>
         {showExplorer ? (
           <FileExplorerPane resizable={Boolean(previewPath)}>
@@ -1532,6 +1581,7 @@ export default function FilePreviewPanel({
       </div>
     </div>
   );
+  return <CodeEditorSlotContext value={codeNavigation.setEditor}>{surface}</CodeEditorSlotContext>;
 }
 
 const LargeTextViewer = lazy(() => import("./LargeTextViewer"));

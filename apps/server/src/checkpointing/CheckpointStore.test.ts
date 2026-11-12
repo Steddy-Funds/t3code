@@ -479,6 +479,139 @@ it.layer(layerTest)("CheckpointStore.layer", (it) => {
     );
   });
 
+  describe("readCheckpointFile", () => {
+    const setup = (cwdOf: (repo: string) => string = (repo) => repo) =>
+      Effect.gen(function* () {
+        const repo = yield* makeTmpDir();
+        yield* initRepoWithCommit(repo);
+        const checkpointStore = yield* CheckpointStore.CheckpointStore;
+        const checkpointRef = checkpointRefForThreadTurn(ThreadId.make("checkpoint-read-file"), 1);
+        const cwd = cwdOf(repo);
+        const read = (path: string, maxBytes = 1_048_576) =>
+          checkpointStore.readCheckpointFile({ cwd, checkpointRef, path, maxBytes });
+        const capture = checkpointStore.captureCheckpoint({ cwd, checkpointRef });
+        return { repo, cwd, checkpointStore, checkpointRef, read, capture };
+      });
+
+    it.effect("returns the text the checkpoint recorded, not the working tree's", () =>
+      Effect.gen(function* () {
+        const { repo, read, capture } = yield* setup();
+        const fileSystem = yield* FileSystem.FileSystem;
+        const platform = yield* HostProcess.Platform;
+        const exact = "  indented\r\n\tüñí 😀\n\nno final newline";
+        const oddName = platform === "win32" ? "odd café.txt" : "odd\tname\n名.txt";
+        yield* fileSystem.makeDirectory(NodePath.join(repo, "dir"), { recursive: true });
+        for (const [path, contents] of Object.entries({
+          "exact.txt": exact,
+          "empty.txt": "",
+          "dir/inner.txt": "inner\n",
+          [oddName]: "odd\n",
+          "gone-later.txt": "still here\n",
+        })) {
+          yield* writeTextFile(NodePath.join(repo, path), contents);
+        }
+        yield* capture;
+        yield* writeTextFile(NodePath.join(repo, "exact.txt"), "changed after\n");
+        yield* writeTextFile(NodePath.join(repo, "later.txt"), "created after\n");
+        yield* fileSystem.remove(NodePath.join(repo, "gone-later.txt"));
+
+        expect(yield* read("exact.txt")).toEqual({ kind: "text", contents: exact });
+        expect(yield* read("empty.txt")).toEqual({ kind: "text", contents: "" });
+        expect(yield* read("dir/inner.txt")).toEqual({ kind: "text", contents: "inner\n" });
+        expect(yield* read(oddName)).toEqual({ kind: "text", contents: "odd\n" });
+        expect(yield* read("gone-later.txt")).toEqual({ kind: "text", contents: "still here\n" });
+        expect(yield* read("later.txt")).toEqual({ kind: "missing" });
+        expect(yield* read("nothing.txt")).toEqual({ kind: "missing" });
+        expect(yield* read("dir/nothing.txt")).toEqual({ kind: "missing" });
+        expect(yield* read("dir/inner")).toEqual({ kind: "missing" });
+      }),
+    );
+
+    it.effect("refuses a file over the cap, a binary file, a directory and a submodule", () =>
+      Effect.gen(function* () {
+        const { repo, read, capture } = yield* setup();
+        const fileSystem = yield* FileSystem.FileSystem;
+        yield* fileSystem.makeDirectory(NodePath.join(repo, "dir"), { recursive: true });
+        yield* writeTextFile(NodePath.join(repo, "dir/inner.txt"), "inner\n");
+        yield* writeTextFile(NodePath.join(repo, "hundred.txt"), "x".repeat(100));
+        yield* writeTextFile(NodePath.join(repo, "multibyte.txt"), "é".repeat(50));
+        yield* writeTextFile(NodePath.join(repo, "binary.bin"), "ab\0cd");
+        yield* writeTextFile(NodePath.join(repo, "big-binary.bin"), `\0${"x".repeat(99)}`);
+        yield* git(repo, ["init", "sub"]);
+        yield* initRepoWithCommit(NodePath.join(repo, "sub"));
+        yield* capture;
+
+        expect(yield* read("hundred.txt", 100)).toEqual({
+          kind: "text",
+          contents: "x".repeat(100),
+        });
+        expect(yield* read("hundred.txt", 99)).toEqual({ kind: "too_large" });
+        // The cap counts bytes, not characters.
+        expect(yield* read("multibyte.txt", 99)).toEqual({ kind: "too_large" });
+        expect(yield* read("multibyte.txt", 100)).toMatchObject({ kind: "text" });
+        expect(yield* read("binary.bin")).toEqual({ kind: "binary" });
+        expect(yield* read("big-binary.bin", 50)).toEqual({ kind: "too_large" });
+        expect(yield* read("dir")).toEqual({ kind: "not_a_file" });
+        expect(yield* read("sub")).toEqual({ kind: "not_a_file" });
+      }),
+    );
+
+    it.effect("takes repository-relative paths when cwd is a subdirectory", () =>
+      Effect.gen(function* () {
+        const { cwd, read, capture } = yield* setup((root) => NodePath.join(root, "app"));
+        const fileSystem = yield* FileSystem.FileSystem;
+        yield* fileSystem.makeDirectory(cwd);
+        yield* writeTextFile(NodePath.join(cwd, "kept.txt"), "kept\n");
+        yield* capture;
+
+        expect(yield* read("app/kept.txt")).toEqual({ kind: "text", contents: "kept\n" });
+        expect(yield* read("kept.txt")).toEqual({ kind: "missing" });
+        expect(yield* read("app")).toEqual({ kind: "not_a_file" });
+      }),
+    );
+
+    it.effect("matches glob characters and pathspec magic in a name only literally", () =>
+      Effect.gen(function* () {
+        const { repo, read, capture } = yield* setup();
+        const platform = yield* HostProcess.Platform;
+        const names: Record<string, string> = {
+          "a[1].txt": "bracket",
+          "a1.txt": "one",
+          "a2.txt": "two",
+          "b.txt": "b",
+          ...(platform === "win32" ? {} : { "*.txt": "star" }),
+        };
+        for (const [path, contents] of Object.entries(names)) {
+          yield* writeTextFile(NodePath.join(repo, path), contents);
+        }
+        yield* capture;
+
+        for (const [path, contents] of Object.entries(names)) {
+          expect(yield* read(path)).toEqual({ kind: "text", contents });
+        }
+        for (const path of [
+          "a?.txt",
+          "a[12].txt",
+          "*",
+          "**",
+          "a*.txt",
+          ":(glob)*.txt",
+          ":/b.txt",
+        ]) {
+          expect(yield* read(path)).toEqual({ kind: "missing" });
+        }
+      }),
+    );
+
+    it.effect("fails, rather than reporting a missing file, when the ref does not exist", () =>
+      Effect.gen(function* () {
+        const { read } = yield* setup();
+        const error = yield* read("README.md").pipe(Effect.flip);
+        expect(error._tag).toBe("VcsProcessExitError");
+      }),
+    );
+  });
+
   describe("listAuthoredPaths", () => {
     it.effect("leaves out paths that only a merged upstream changed", () =>
       Effect.gen(function* () {

@@ -808,9 +808,9 @@ function PullRequestCodeTab({
   const selectSbsFile = (fileKey: string) => {
     setSbsFileKey(fileKey);
     setOpenSbsAnnotationId(null);
-    // Side by side shows one file at a time: reaching the last one loaded asks for the next page.
-    if (fileKey === fileKeys.at(-1) && canLoadNextSlice) loadNextSlice();
   };
+  const sbsShownFileKey =
+    sbsFileKey !== null && fileKeys.includes(sbsFileKey) ? sbsFileKey : fileKeys[0];
 
   const toggleFile = (fileKey: string) =>
     setToggledFiles((current) => {
@@ -1658,7 +1658,7 @@ function PullRequestCodeTab({
       ) : null}
       <div className="flex min-h-0 flex-1 overflow-hidden">
         {sideBySide ? (
-          <div ref={observeArea} className="flex min-h-0 min-w-0 flex-1">
+          <div ref={observeArea} className="flex min-h-0 min-w-0 flex-1 flex-col">
             <SideBySideDiffPanel
               files={annotatedFiles.map(({ fileKey, path, fileDiff }) => ({
                 fileKey,
@@ -1680,6 +1680,10 @@ function PullRequestCodeTab({
               onRetryPatch={NO_PATCH_REQUEST}
               renderView={renderSbsView}
             />
+            {/* One file shows at a time, so the next page loads once the last one loaded is shown. */}
+            {nextCursor !== null && sbsShownFileKey === fileKeys.at(-1) ? (
+              <div className="shrink-0 border-t border-border/60">{renderCodeViewFooter()}</div>
+            ) : null}
           </div>
         ) : (
           <div

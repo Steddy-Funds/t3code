@@ -59,7 +59,7 @@ upstream; a feature can, from its own branch, when Akiva decides.
 | Symbols and pickers: Go to class and symbol (Cmd+O), File structure, Recent files (Cmd+E), next/previous method, double Shift for search          | #88 | 95f8ea3 |
 | Code intelligence follow-ups: Go to class on a cold TS server, decorated Python names, all packages' libraries, an off state                      | #90 | 744c067 |
 | Diff and review stitch: Cmd+B and Cmd+click from side-by-side panes, the PR Code tab side by side, a fork's notes get their own ids               | #92 | 1dbc8a7 |
-| Snooze reasons: a "why?" prompt after each snooze, a per-thread snooze log, Settings → Snooze history with CSV/JSON export                        | #87 | pending |
+| Snooze reasons: a "why?" prompt after each snooze, a per-thread snooze log, Settings → Snooze history with CSV/JSON export                        | #87 | 08e7d16 |
 | Glint native dialogs (Labs, macOS): snooze Time from now, the model picker, /color; a generic helper bridge                                       | #93 | 5b4b111 |
 | Code stitch: External Libraries, a Python environment field, the quick reference by focus, Mod+B in side-by-side diffs, user docs                 | #91 | a143e08 |
 

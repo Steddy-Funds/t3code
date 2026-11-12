@@ -116,8 +116,58 @@ describe("anchorReviewNote", () => {
       ]),
       expected: { kind: "unattached" },
     },
-  ])("is $state", ({ fileDiff, expected }) => {
-    expect(anchorReviewNote(note(), fileDiff)).toEqual(expected);
+    {
+      state: "unattached when its lines run through lines the diff folds away",
+      overrides: { endLine: 12 },
+      fileDiff: changed(REVISION.slice(0, 7), [
+        "@@ -1,3 +1,4 @@",
+        " start",
+        "+retry()",
+        " a",
+        " b",
+        "@@ -9,3 +10,4 @@",
+        " x",
+        " y",
+        "+return",
+        " end",
+      ]),
+      expected: { kind: "unattached" },
+    },
+    {
+      state: "moved over its excerpt's own lines when the note ran past them",
+      overrides: { endLine: 9, excerptTruncated: true },
+      fileDiff: changed("2222222", [
+        "@@ -1,3 +1,6 @@",
+        " start",
+        "+added",
+        "+added again",
+        "+retry()",
+        "+return",
+        " end",
+      ]),
+      expected: { kind: "moved", startLine: 4, endLine: 5 },
+    },
+    {
+      state: "unattached when the last whole line of a shortened excerpt changed",
+      overrides: { endLine: 4, excerptTruncated: true },
+      fileDiff: changed("2222222", [
+        "@@ -1,3 +1,5 @@",
+        " start",
+        "+added",
+        "+retry()",
+        "+returnLater()",
+        " end",
+      ]),
+      expected: { kind: "unattached" },
+    },
+    {
+      state: "moved on a single line the server cut short",
+      overrides: { endLine: 2, excerpt: "retry(", excerptTruncated: true },
+      fileDiff: changed("2222222", ["@@ -1,3 +1,4 @@", " start", "+added", "+retry()", " end"]),
+      expected: { kind: "moved", startLine: 3, endLine: 3 },
+    },
+  ])("is $state", ({ fileDiff, expected, overrides }) => {
+    expect(anchorReviewNote(note(overrides), fileDiff)).toEqual(expected);
   });
 });
 

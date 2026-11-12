@@ -229,7 +229,7 @@ describe("diff comment drafts", () => {
 });
 
 describe("review note replies", () => {
-  it("keeps the words of an open reply in the message when its note leaves its lines", async () => {
+  it("keeps an open reply while its file reloads, and its words when its note leaves", async () => {
     using _drafts = setup();
     const shown = file("shared.ts");
     const note: ReviewNote = {
@@ -255,6 +255,15 @@ describe("review note replies", () => {
     );
     await click("Reply");
     await typeComment("Only search should retry.");
+
+    await screen.rerender(view([shown], "initial", [], undefined, notes({ kind: "pending" })));
+    await screen.rerender(
+      view([shown], "initial", [], undefined, notes({ kind: "exact", startLine: 1, endLine: 1 })),
+    );
+    await expect.element(screen.getByRole("textbox")).toHaveValue("Only search should retry.");
+    expect(
+      useComposerDraftStore.getState().getComposerDraft(target)?.reviewComments,
+    ).toBeUndefined();
 
     await screen.rerender(view([shown], "initial", [], undefined, notes({ kind: "unattached" })));
 

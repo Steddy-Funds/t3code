@@ -217,10 +217,12 @@ export function AnnotatableCodeView({
         : notesBySection.get(annotation.comment.sectionId)?.id === noteId,
     );
   const noteDraft = noteReplies.annotations.find((annotation) => annotation.kind === "draft");
+  const draftAnchor = noteDraft
+    ? reviewNotes?.placed.find(({ note }) => note.id === noteDraft.range.id)?.anchor.kind
+    : undefined;
+  // A reloading file holds its notes as pending; the reply waits for it.
   const orphanedReply =
-    noteDraft && !attachedNotes.some(({ note }) => note.id === noteDraft.range.id)
-      ? noteDraft
-      : null;
+    noteDraft && (draftAnchor === undefined || draftAnchor === "unattached") ? noteDraft : null;
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- a reply whose note left its lines (the file changed under it) keeps its words in the composer's draft store
   useEffect(() => {
     if (!orphanedReply) return;

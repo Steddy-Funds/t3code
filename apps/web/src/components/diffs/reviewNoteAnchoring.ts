@@ -33,13 +33,16 @@ function isRevisionOf(objectId: string | undefined, contentRevision: string): bo
 
 const lineText = (line: string | undefined) => (line ?? "").replace(/\r?\n$/u, "");
 
-/** The viewer shows only lines inside hunks; a note anywhere else has nowhere to sit. */
+/** The viewer shows only lines inside hunks; a note sits only where every one of its lines shows. */
 function showsLines(fileDiff: FileDiffMetadata, startLine: number, endLine: number): boolean {
   const shows = (line: number) =>
     fileDiff.hunks.some(
       (hunk) => line >= hunk.additionStart && line < hunk.additionStart + hunk.additionCount,
     );
-  return shows(startLine) && shows(endLine);
+  for (let line = startLine; line <= endLine; line += 1) {
+    if (!shows(line)) return false;
+  }
+  return true;
 }
 
 /** Consecutive new-side lines, each run starting at its 1-based line number. */
@@ -54,15 +57,16 @@ function newSideRuns(fileDiff: FileDiffMetadata) {
   }));
 }
 
+const excerptLines = (note: ReviewNote) => note.excerpt.split("\n");
+
 /** Where the excerpt starts on the new side, stopping at a second occurrence. */
 function findExcerpt(fileDiff: FileDiffMetadata, note: ReviewNote): number[] {
-  const excerpt = note.excerpt.split("\n");
-  const lastIndex = excerpt.length - 1;
-  // A truncated excerpt can end partway through its last line.
+  const excerpt = excerptLines(note);
+  // The server cuts inside a line only when one line alone is too long; else it drops whole lines.
+  const [only] = excerpt;
+  const cutLine = note.excerptTruncated && excerpt.length === 1 && only ? only : null;
   const matches = (line: string, index: number) =>
-    note.excerptTruncated && index === lastIndex
-      ? line.startsWith(excerpt[index] ?? "")
-      : line === excerpt[index];
+    cutLine === null ? line === excerpt[index] : line.startsWith(cutLine);
   const starts: number[] = [];
   for (const run of newSideRuns(fileDiff)) {
     for (let start = 0; start + excerpt.length <= run.lines.length; start += 1) {
@@ -94,7 +98,8 @@ export function anchorReviewNote(
   const starts = findExcerpt(fileDiff, note);
   const [startLine] = starts;
   if (startLine === undefined || starts.length > 1) return UNATTACHED;
-  const endLine = startLine + note.endLine - note.startLine;
+  // Only the excerpt was matched; a shortened one covers fewer lines than the note did.
+  const endLine = startLine + excerptLines(note).length - 1;
   return showsLines(fileDiff, startLine, endLine)
     ? { kind: "moved", startLine, endLine }
     : UNATTACHED;

@@ -94,14 +94,18 @@ const editor: CodeEditorHandle = {
 // Pierre's editor can stop tracking clicks after focus leaves it, and then reports no caret.
 const editorWithoutCaret: CodeEditorHandle = { getViewState: () => ({}), focus: () => {} };
 
-function Viewer(props: { readonly path: string; readonly editor?: CodeEditorHandle }) {
+function Viewer(props: {
+  readonly path: string;
+  readonly editor?: CodeEditorHandle;
+  readonly shown?: boolean;
+}) {
   const navigation = useCodeNavigation({
     environmentId: threadRef.environmentId,
     cwd: "/repo",
     threadRef,
     path: props.path,
     text: TEXT,
-    shown: true,
+    shown: props.shown ?? true,
     editable: true,
     intel: {
       supported: true,
@@ -210,6 +214,24 @@ describe("useCodeNavigation lookups", () => {
 
     expect(mocks.navigateToCodeLocation).not.toHaveBeenCalled();
     expect(page.getByText("Choose a target").query()).toBeNull();
+  });
+
+  it("keeps a list opened with Cmd+Enter, and its filter, while the next file loads", async () => {
+    setup();
+    await using screen = await render(<Viewer path="src/main.ts" />);
+    using _timers = fakeTimers();
+    const other = { ...declaration, path: "src/other.ts" };
+    await press("code.goToDeclaration");
+    await settle(0, answer([declaration, other]));
+    const filter = page.getByLabelText("Filter results");
+    await userEvent.fill(filter, "other");
+    await userEvent.keyboard("{Control>}{Enter}{/Control}");
+    expect(mocks.navigateToCodeLocation).toHaveBeenCalledWith(threadRef, other);
+
+    await screen.rerender(<Viewer path="src/other.ts" shown={false} />);
+    await screen.rerender(<Viewer path="src/other.ts" />);
+
+    await expect.element(page.getByLabelText("Filter results")).toHaveValue("other");
   });
 
   it("drops a lookup when Go to Line opens over it", async () => {

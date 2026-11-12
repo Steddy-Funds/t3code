@@ -282,7 +282,8 @@ export const make = Effect.gen(function* () {
 
   /**
    * A project loads the workspace packages it imports with its own files. So the projects that
-   * import the most go first, and one a chosen project already loads is not opened again.
+   * import the most go first, and one a chosen project already loads waits for a slot left over:
+   * an import may resolve to built output, which loads none of the package's sources.
    */
   const pickProjects = Effect.fnUntraced(function* (
     root: string,
@@ -313,17 +314,25 @@ export const make = Effect.gen(function* () {
       };
     });
     const loaded = new Set<string>();
+    const deferred: Array<Candidate> = [];
     const files: Array<string> = [];
+    const open = Effect.fnUntraced(function* (candidate: Candidate) {
+      const file = yield* projectFile(root, candidate.config, 0, budget);
+      if (file === undefined || files.includes(file)) return;
+      files.push(file);
+      if (candidate.name !== undefined) loaded.add(candidate.name);
+      for (const name of candidate.loads) loaded.add(name);
+    });
     for (const candidate of candidates.toSorted(
       (left, right) => right.loads.length - left.loads.length,
     )) {
       if (files.length >= MAX_SEED_PROJECTS) break;
-      if (candidate.name !== undefined && loaded.has(candidate.name)) continue;
-      const file = yield* projectFile(root, candidate.config, 0, budget);
-      if (file === undefined || files.includes(file)) continue;
-      files.push(file);
-      if (candidate.name !== undefined) loaded.add(candidate.name);
-      for (const name of candidate.loads) loaded.add(name);
+      if (candidate.name !== undefined && loaded.has(candidate.name)) deferred.push(candidate);
+      else yield* open(candidate);
+    }
+    for (const candidate of deferred) {
+      if (files.length >= MAX_SEED_PROJECTS) break;
+      yield* open(candidate);
     }
     return files;
   });

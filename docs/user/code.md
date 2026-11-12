@@ -53,7 +53,8 @@ The **ty** chip shows the interpreter found from the project's files: a `.venv` 
 or one named in `pyrightconfig.json` or `pyproject.toml`. A worktree without one uses the main
 checkout's. To use another, enter a virtualenv or an
 interpreter path in the chip's **Python environment** field and choose **Apply**. It wins over the
-one found, and the Python server restarts. A relative path starts at the workspace. Clear the
+one found, and the Python server restarts to use it. A connection that can't restart servers saves
+it for the server's next start. A relative path starts at the workspace. Clear the
 field and apply to go back to finding one. Each workspace, including each worktree, keeps its own
 setting.
 

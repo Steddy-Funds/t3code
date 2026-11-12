@@ -315,6 +315,16 @@ export const OtlpEndpointCheckResult = Schema.Union([
 ]);
 export type OtlpEndpointCheckResult = typeof OtlpEndpointCheckResult.Type;
 
+/** Whether Cloudflare takes the saved Browser Run account and token; starts no browser. */
+export const BrowserRunCheckResult = Schema.Union([
+  Schema.TaggedStruct("Accepted", {}),
+  Schema.TaggedStruct("NotConfigured", {}),
+  Schema.TaggedStruct("TokenUnreadable", {}),
+  Schema.TaggedStruct("Rejected", { status: Schema.Number }),
+  Schema.TaggedStruct("Unreachable", {}),
+]);
+export type BrowserRunCheckResult = typeof BrowserRunCheckResult.Type;
+
 /** The client tells the server what it is, so the triage context can name it. */
 export const ServerPrepareTriageInput = Schema.Struct({
   client: AuthClientPresentationMetadata,
@@ -425,7 +435,7 @@ export const ServerTraceDiagnosticsResult = Schema.Struct({
 });
 export type ServerTraceDiagnosticsResult = typeof ServerTraceDiagnosticsResult.Type;
 
-export const ServerProcessSignal = Schema.Literals(["SIGINT", "SIGKILL"]);
+export const ServerProcessSignal = Schema.Literals(["SIGINT", "SIGTERM", "SIGKILL"]);
 export type ServerProcessSignal = typeof ServerProcessSignal.Type;
 
 export const ServerProcessDiagnosticsEntry = Schema.Struct({
@@ -649,6 +659,8 @@ export const ServerConfig = Schema.Struct({
   /** A secret request card may be answered with a secret provider reference. */
   secretRequestReferences: Schema.optionalKey(Schema.Boolean),
   scratchWorkspaceRoot: Schema.optionalKey(TrimmedNonEmptyString),
+  /** The server user's home directory; where a machine terminal opens. */
+  homeDirectory: Schema.optionalKey(TrimmedNonEmptyString),
   newProjectsRoot: Schema.optionalKey(TrimmedNonEmptyString),
   /**
    * The latest stall long enough to notice, sent only for a few minutes after

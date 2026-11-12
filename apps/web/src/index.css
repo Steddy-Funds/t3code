@@ -225,6 +225,9 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
      compositor updates discrete frames instead of every vsync. */
   --animate-status-pulse: status-pulse 2s infinite;
   --animate-status-ping: status-ping 2s infinite;
+  /* Machine stress: the same 2 s stepped cycle as status-pulse, so they share a phase. */
+  --animate-machine-pulse: machine-pulse 2s infinite;
+  --animate-machine-drip: machine-drip 2s infinite;
   /* Stash pulses hold a highlight for 1.2s; the row then eases back over 200ms, the count snaps.
      The row alternates two identical keyframes so each stash restarts it without a remount. */
   --animate-stash-pulse-row: stash-pulse-row 1400ms;
@@ -359,6 +362,71 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
       scale: 2;
     }
   }
+  @keyframes machine-pulse {
+    /* The light-red glyph copy fades fully out to the gray icon beneath it. */
+    0%,
+    40% {
+      opacity: 1;
+      animation-timing-function: steps(6);
+    }
+    50%,
+    90% {
+      opacity: 0;
+      animation-timing-function: steps(6);
+    }
+    100% {
+      opacity: 1;
+    }
+  }
+  @keyframes machine-drip {
+    /* A drop forms, runs down beside the icon and fades. With no animation
+       (reduced motion) it rests formed, at its untransformed pose. */
+    0% {
+      transform: translateY(-20%) scale(0.3);
+      opacity: 0;
+      animation-timing-function: steps(3);
+    }
+    22% {
+      transform: translateY(0) scale(1);
+      opacity: 1;
+      animation-timing-function: steps(8);
+    }
+    72% {
+      transform: translateY(var(--machine-drip-run, 190%)) scale(0.85);
+      opacity: 0.9;
+      animation-timing-function: steps(3);
+    }
+    88%,
+    100% {
+      transform: translateY(var(--machine-drip-end, 240%)) scale(0.7);
+      opacity: 0;
+    }
+  }
+}
+
+/* Machine indicator state lives on the icon's own <svg> (data-machine-icon) and
+   its sweat group, so it wins over whatever text-* colour the caller passes. */
+svg[data-machine-icon] {
+  overflow: visible;
+}
+svg[data-machine-icon="unknown"],
+svg[data-machine-icon="unreachable"],
+svg[data-machine-icon="unreachable-stressed"] {
+  opacity: 0.42;
+}
+[data-machine-sweat="stressed"] {
+  color: var(--machine-stress);
+}
+[data-machine-sweat] [data-machine-drop] {
+  transform-box: fill-box;
+  transform-origin: center;
+}
+[data-machine-sweat][data-machine-size="12"] {
+  --machine-drip-run: 130%;
+  --machine-drip-end: 160%;
+}
+[data-machine-sweat][data-machine-size="12"] [data-machine-drops] {
+  opacity: 0.8;
 }
 
 @utility surface-glass {
@@ -1164,6 +1232,15 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   --warning: var(--color-amber-500);
   --warning-foreground: var(--color-amber-700);
   --warning-surface: color-mix(in srgb, var(--warning) 8%, transparent);
+  /* Light red, reserved for the stressed machine verdict. */
+  --machine-stress: var(--color-red-400);
+  /* Owner colours: resource views only (the memory pool and owner dots). */
+  --owner-1: var(--color-indigo-500);
+  --owner-2: var(--color-sky-500);
+  --owner-3: var(--color-teal-500);
+  --owner-4: var(--color-fuchsia-500);
+  --owner-5: var(--color-amber-500);
+  --owner-other: var(--color-zinc-400);
   --update: var(--primary);
   --update-foreground: var(--primary);
   /* Keep every sidebar primitive on the same light surface hierarchy, including
@@ -1216,6 +1293,7 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
     --success-foreground: var(--color-emerald-400);
     --warning-foreground: var(--color-amber-400);
     --warning-surface: color-mix(in srgb, var(--warning) 16%, transparent);
+    --machine-stress: var(--color-red-300);
     --update-foreground: var(--color-blue-400);
     --sidebar: var(--card);
     --sidebar-control-surface: var(--muted);
@@ -1865,7 +1943,85 @@ code {
   background: var(--app-scrollbar-thumb-hover);
 }
 
+/* Swipe to reply (MessageSwipeReply): JS follows the fingers, CSS runs the release. */
+[data-swipe-reply-release] {
+  /* An underdamped spring (damping 0.72), sampled; it overshoots by about 4%. */
+  transition: transform 340ms
+    linear(
+      0,
+      0.057,
+      0.188,
+      0.35,
+      0.513,
+      0.66,
+      0.781,
+      0.876,
+      0.944,
+      0.99,
+      1.018,
+      1.033,
+      1.038,
+      1.037,
+      1.033,
+      1.027,
+      1.02,
+      1.015,
+      1.01,
+      1.006,
+      1.003,
+      1.001,
+      1,
+      0.999,
+      1
+    );
+}
+
+.swipe-reply-indicator {
+  transition:
+    background-color 120ms,
+    color 120ms;
+}
+
+.swipe-reply-indicator[data-armed="true"] {
+  transition: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-swipe-reply-release] {
+    transition: none;
+  }
+}
+
 /* Chat markdown rendering */
+
+/* The section a swipe replies to (MessageSwipeReply). */
+.chat-markdown > [data-swipe-reply-section],
+.chat-markdown li[data-swipe-reply-section]::before {
+  border-radius: 0.375rem;
+  background-color: color-mix(in oklab, var(--primary) 12%, transparent);
+  box-shadow: 0 0 0 0.25rem color-mix(in oklab, var(--primary) 12%, transparent);
+}
+
+/* An item's marker or task box hangs outside its box, in the list's gutter, and moves with that box,
+   so the tint is a layer behind the item that reaches into the gutter. */
+.chat-markdown li[data-swipe-reply-section] {
+  position: relative;
+  isolation: isolate;
+}
+
+.chat-markdown li[data-swipe-reply-section]::before {
+  content: "";
+  position: absolute;
+  inset-block: 0;
+  inset-inline: calc(-1 * var(--list-gutter, 1.25rem)) 0;
+  z-index: -1;
+  pointer-events: none;
+}
+
+/* A ring outside the image's box, so it shows over an opaque image without moving it. */
+.chat-markdown [data-markdown-copy^="!["][data-swipe-reply-section] {
+  box-shadow: 0 0 0 0.25rem color-mix(in oklab, var(--primary) 40%, transparent);
+}
 
 .chat-markdown > :first-child {
   margin-top: 0;
@@ -2286,6 +2442,277 @@ code {
   --diff-deletion-foreground: light-dark(var(--color-red-700), var(--color-red-400));
 }
 
+/* Side-by-side diff. Every theme gets this colour for a changed line; a theme with editor
+   colours replaces the block colours below on the view itself. */
+:root {
+  --diff-modified: light-dark(var(--color-blue-600), var(--color-blue-400));
+}
+
+/* That scheme's additions are already blue. */
+:root[data-diff-color-scheme="blue-orange"] {
+  --diff-modified: light-dark(var(--color-violet-600), var(--color-violet-400));
+}
+
+/* Declared here, not on :root, so they mix over the background this view paints on. */
+.sbs-diff {
+  --diff-block-inserted: color-mix(in srgb, var(--diff-addition) 20%, var(--code-background));
+  --diff-block-deleted: color-mix(in srgb, var(--diff-deletion) 20%, var(--code-background));
+  --diff-block-modified: color-mix(in srgb, var(--diff-modified) 24%, var(--code-background));
+  /* A modified block whose changed words carry the colour, as JetBrains derives it:
+     40% of the block colour over 60% of the editor background. */
+  --diff-block-modified-muted: color-mix(
+    in srgb,
+    var(--diff-block-modified) 40%,
+    var(--code-background)
+  );
+  --diff-fold-wave: color-mix(in srgb, var(--code-foreground) 32%, transparent);
+  --sbs-gutter-width: calc(var(--sbs-gutter-digits, 3) * 1ch + 1.75rem);
+  background: var(--code-background);
+  color: var(--code-foreground);
+  font-family: var(--font-mono);
+  font-variant-ligatures: none;
+  tab-size: 4;
+}
+
+/* Rows are swapped under the viewport as it scrolls; anchoring to one would move the pane. */
+.sbs-scroller {
+  overflow-anchor: none;
+}
+
+.sbs-sheet {
+  position: relative;
+  min-width: max(100%, calc(var(--sbs-content-columns, 0) * 1ch + var(--sbs-gutter-width) + 2rem));
+}
+
+.sbs-window {
+  position: relative;
+  min-width: max-content;
+}
+
+.sbs-row {
+  --sbs-row-bg: var(--code-background);
+  display: flex;
+  width: 100%;
+  height: var(--sbs-line-height);
+  line-height: var(--sbs-line-height);
+  background: var(--sbs-row-bg);
+}
+
+.sbs-row[data-tint="inserted"] {
+  --sbs-row-bg: var(--diff-block-inserted);
+}
+
+.sbs-row[data-tint="deleted"] {
+  --sbs-row-bg: var(--diff-block-deleted);
+}
+
+.sbs-row[data-tint="modified"] {
+  --sbs-row-bg: var(--diff-block-modified);
+}
+
+.sbs-row[data-tint="modified-muted"] {
+  --sbs-row-bg: var(--diff-block-modified-muted);
+}
+
+.sbs-row[data-selected],
+[data-sbs-all-selected] .sbs-row {
+  background: color-mix(in srgb, var(--primary) 16%, var(--sbs-row-bg));
+}
+
+/* Where the other side's lines belong on a side that has none: a line, not a row. */
+.sbs-row[data-insert-above="inserted"] {
+  box-shadow: inset 0 2px 0 var(--diff-addition);
+}
+
+.sbs-row[data-insert-above="deleted"] {
+  box-shadow: inset 0 2px 0 var(--diff-deletion);
+}
+
+.sbs-row[data-insert-below="inserted"] {
+  box-shadow: inset 0 -2px 0 var(--diff-addition);
+}
+
+.sbs-row[data-insert-below="deleted"] {
+  box-shadow: inset 0 -2px 0 var(--diff-deletion);
+}
+
+.sbs-gutter {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  flex: none;
+  width: var(--sbs-gutter-width);
+  padding-inline: 0.75rem 0.5rem;
+  background: inherit;
+  color: var(--sbs-line-number, color-mix(in srgb, var(--code-foreground) 45%, transparent));
+  text-align: right;
+  cursor: default;
+  user-select: none;
+}
+
+.sbs-gutter[data-annotated] {
+  box-shadow: inset 3px 0 0 color-mix(in srgb, var(--primary) 55%, transparent);
+}
+
+.sbs-gutter[data-annotation-open] {
+  box-shadow: inset 3px 0 0 var(--primary);
+}
+
+.sbs-annotation-marker {
+  position: absolute;
+  inset-block: 0;
+  left: 3px;
+  width: 0.75rem;
+  cursor: pointer;
+}
+
+.sbs-annotation-marker::before {
+  position: absolute;
+  top: 50%;
+  left: 3px;
+  width: 6px;
+  height: 6px;
+  border-radius: 9999px;
+  background: var(--primary);
+  content: "";
+  transform: translateY(-50%);
+}
+
+.sbs-code {
+  flex: 1 0 auto;
+  padding-right: 2rem;
+  white-space: pre;
+}
+
+.sbs-word {
+  border-radius: 2px;
+  background: var(--diff-block-modified);
+}
+
+/* The thread find's colours, or the editor theme's own. */
+.sbs-match {
+  background: var(
+    --sbs-find-match,
+    var(--app-theme-search-match-background, light-dark(oklch(0.915 0.11 85), oklch(0.55 0.1 85)))
+  );
+  color: var(
+    --sbs-find-foreground,
+    var(
+      --app-theme-search-match-foreground,
+      light-dark(oklch(0.216164 0.028283 77.423), oklch(0.970151 0 0))
+    )
+  );
+}
+
+.sbs-match-current {
+  background: var(
+    --sbs-find-current,
+    var(--app-theme-search-match-active-background, oklch(0.774202 0.151946 74.331))
+  );
+  color: var(
+    --sbs-find-foreground,
+    var(--app-theme-search-match-active-foreground, oklch(0.216164 0.028283 77.423))
+  );
+}
+
+/* A collapsed run of unchanged lines: JetBrains' wave, drawn through a mask so it takes a colour. */
+.sbs-fold,
+.sbs-omitted {
+  position: relative;
+  cursor: default;
+}
+
+.sbs-fold::before,
+.sbs-omitted::before {
+  position: absolute;
+  inset: 0;
+  background: var(--diff-fold-wave);
+  content: "";
+  mask: url("data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 width=%2712%27 height=%276%27 viewBox=%270 0 12 6%27%3E%3Cpath d=%27M0 3Q3 0 6 3T12 3%27 fill=%27none%27 stroke=%27%23000%27 stroke-width=%271%27/%3E%3C/svg%3E")
+    repeat-x left center / 12px 6px;
+}
+
+.sbs-fold {
+  cursor: pointer;
+}
+
+.sbs-fold:is(:hover, :focus-visible)::before {
+  background: color-mix(in srgb, var(--code-foreground) 70%, transparent);
+}
+
+.sbs-omitted::before {
+  opacity: 0.6;
+}
+
+.sbs-omitted-label {
+  position: sticky;
+  left: calc(var(--sbs-gutter-width) + 0.5rem);
+  z-index: 1;
+  align-self: center;
+  padding-inline: 0.5rem;
+  background: var(--code-background);
+  color: var(--muted-foreground);
+  font-family: var(--font-sans);
+  font-size: 11px;
+  line-height: 1;
+  user-select: none;
+}
+
+.sbs-divider {
+  background: var(--code-background);
+}
+
+.sbs-connector {
+  stroke-width: 1px;
+}
+
+.sbs-connector[data-kind="inserted"] {
+  fill: var(--diff-block-inserted);
+  stroke: var(--diff-block-inserted);
+}
+
+.sbs-connector[data-kind="deleted"] {
+  fill: var(--diff-block-deleted);
+  stroke: var(--diff-block-deleted);
+}
+
+.sbs-connector[data-kind="modified"] {
+  fill: var(--diff-block-modified);
+  stroke: var(--diff-block-modified);
+}
+
+.sbs-fold-link {
+  cursor: pointer;
+}
+
+.sbs-fold-link-hit {
+  fill: none;
+  stroke: transparent;
+  stroke-width: 12px;
+}
+
+.sbs-fold-link-line {
+  fill: none;
+  stroke: var(--diff-fold-wave);
+  stroke-width: 1px;
+}
+
+.sbs-fold-link:hover .sbs-fold-link-line {
+  stroke: color-mix(in srgb, var(--code-foreground) 70%, transparent);
+}
+
+.sbs-scroll-marks rect[data-kind="inserted"] {
+  fill: var(--diff-addition);
+}
+
+.sbs-scroll-marks rect[data-kind="deleted"] {
+  fill: var(--diff-deletion);
+}
+
+.sbs-scroll-marks rect[data-kind="modified"] {
+  fill: var(--diff-modified);
+}
+
 /* Chat width setting. Comfortable keeps the default --chat-content-max-width,
    which sizes the timeline lane, the composer, and ChatCanvas's width probe. */
 :root[data-chat-width="wide"] {
@@ -2537,6 +2964,98 @@ code {
 
 .composer-tiptap li[data-checked] > div > p {
   margin: 0;
+}
+
+/* useDockedEditorFill sizes the docked editor to the column's spare height. */
+[data-chat-composer-overlay][data-composer-docked="true"] [data-composer-rich-text] {
+  height: var(--docked-editor-height, auto);
+  max-height: none;
+}
+/* Beside a docked composer the timeline keeps its full-width scroller and moves its content left. */
+/* The docked composer takes only the space the thread's full text width leaves, so docking
+   or dragging it (ComposerDockResizeHandle) never narrows the thread, and it stops where the
+   composer itself stops growing. */
+[data-chat-canvas][data-composer-docked="true"] {
+  --chat-composer-dock-pad-end: 0.75rem;
+  --chat-composer-dock-width: clamp(
+    24rem,
+    var(--chat-composer-dock-size, min(44rem, 45%)),
+    min(
+      100% - var(--chat-content-max-width) - 3rem - var(--chat-lane-inset-start, 0px) -
+        var(--chat-lane-inset-end, 0px),
+      var(--chat-content-max-width) + 0.75rem + var(--chat-composer-dock-pad-end)
+    )
+  );
+}
+[data-chat-canvas][data-composer-docked="true"]:has([data-thread-details-panel="inline"]) {
+  --chat-composer-dock-pad-end: 7rem;
+}
+[data-chat-canvas][data-composer-docked="true"] .messages-timeline-scroll {
+  padding-inline-end: calc(
+    var(--chat-composer-dock-width) + var(--chat-lane-inset-end, 0px) -
+      var(--chat-timeline-gutter, 0px)
+  );
+}
+/* Centered on the thread's lane, which keeps its 3rem start padding but none at the dock. */
+[data-chat-canvas][data-composer-docked="true"] .chat-scroll-to-bottom {
+  inset-inline: calc(3rem + var(--chat-lane-inset-start, 0px))
+    calc(var(--chat-composer-dock-width) + var(--chat-lane-inset-end, 0px));
+}
+[data-chat-canvas][data-composer-docked="true"] [data-composer-quick-tray] {
+  padding-inline-end: calc(var(--chat-composer-dock-width) + var(--chat-lane-inset-end, 0px));
+}
+/* The docked composer keeps the same gap to the conversation and to the peeking details card. */
+[data-chat-composer-overlay][data-composer-docked="true"] > .chat-composer-lane {
+  padding-inline: 0.75rem var(--chat-composer-dock-pad-end);
+}
+/* The peeking details card and the docking slide both overhang the canvas; neither may scroll it. */
+[data-chat-canvas][data-composer-docked="true"] {
+  overflow: clip;
+}
+/* Beside a docked composer the inline details card tucks off the edge, peeking until hovered. */
+[data-chat-canvas][data-composer-docked="true"] [data-thread-details-panel="inline"] {
+  z-index: 30;
+  transform: translateX(calc(100% - 5.5rem));
+  transition: transform 150ms ease-out;
+}
+[data-chat-canvas][data-composer-docked="true"]
+  [data-thread-details-panel="inline"]:is(:hover, :focus-within) {
+  transform: none;
+}
+/* Hovering the margins on either side of the card opens it too. */
+[data-chat-canvas][data-composer-docked="true"] [data-thread-details-panel="inline"]::before,
+[data-chat-canvas][data-composer-docked="true"] [data-thread-details-panel="inline"]::after {
+  content: "";
+  position: absolute;
+  inset-block: 0;
+  width: 0.75rem;
+}
+[data-chat-canvas][data-composer-docked="true"] [data-thread-details-panel="inline"]::before {
+  right: 100%;
+}
+[data-chat-canvas][data-composer-docked="true"] [data-thread-details-panel="inline"]::after {
+  left: 100%;
+}
+/* Beside a docked composer, a quick composer rests below the timeline until the pointer is in the thread's column. */
+[data-composer-quick-tray-body] {
+  transform: translateY(calc(100% - var(--quick-composer-lip)));
+  transition: transform 160ms ease-out;
+}
+/* On dock the lip rises in from below. */
+@starting-style {
+  [data-composer-quick-tray-body] {
+    transform: translateY(100%);
+  }
+}
+[data-composer-quick-tray]:is([data-pointer-in-thread], :focus-within, :has([aria-expanded="true"]))
+  [data-composer-quick-tray-body] {
+  transform: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-chat-canvas][data-composer-docked="true"] [data-thread-details-panel="inline"],
+  [data-composer-quick-tray-body] {
+    transition: none;
+  }
 }
 
 @layer components {

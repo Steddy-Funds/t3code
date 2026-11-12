@@ -37,6 +37,22 @@ at the end, leave the block. **Backspace** at the start of a code block turns it
 back into plain lines. Choose the language in a code block's corner to change
 it. Very large code blocks are shown without syntax highlighting.
 
+### Write a long prompt
+
+When the chat has room beside the conversation, press **Cmd+Shift+Enter**
+(Ctrl+Shift+Enter on Windows and Linux) to move the composer into a full-height
+editor beside the conversation. There, Enter and Cmd+Enter add lines, and
+Cmd+Shift+Enter sends and returns the composer to the bottom. Once a prompt grows
+past a few lines, a button beside Send does the same. When the chat gets too narrow,
+the composer returns to the bottom, and it moves back beside the conversation once
+there is room again, until you send. Drag the editor's left edge to widen it for
+the rest of the session, or double-click the edge to reset it.
+
+While the long prompt is open, a second composer rests just below the conversation.
+Point at the conversation and it slides up, so you can ask the agent something
+without touching the long prompt. It keeps its own draft and uses
+the thread's model.
+
 ## Attach files
 
 Attach up to 100 files per message. Each image can be up to 10 MiB, with at most
@@ -145,6 +161,19 @@ The quoted text and comment count toward the message limit.
 Mobile displays saved quotes and comments, but does not create citations or
 navigate to their sources.
 
+### Reply to a message
+
+Swipe a message right with two fingers on a trackpad to reply to the part under the pointer, or
+the nearest one: the heading, paragraph, single list item, image, code block, quote, or table. That part lights up and
+moves as you swipe. To reply to the whole message, choose **Reply** in its actions, or on macOS hold
+Cmd while you swipe. An assistant response arrives as a citation and your own message as a quote, on
+a new line at the caret. The composer takes focus without the pointer moving, so you can swipe,
+type, and swipe the next message.
+
+To make a plain swipe reply to the whole message instead, set **Settings → Chat → Swipe to reply**
+to **Whole message**. Then, on macOS, holding Cmd highlights the part under the pointer, and a Cmd
+swipe replies to just that part.
+
 ## Recall a sent prompt
 
 Press `ArrowUp` in an empty composer to bring back the last prompt you sent in this thread. Press
@@ -167,6 +196,20 @@ cache, so it uses a little of your plan's usage. Claude skips suggestions on the
 thread and near usage limits. Codex needs version 0.165 or later; if T3 Code manages
 Codex, update it in Settings > Providers. Codex follows a change to the setting at once; open Claude
 threads follow it after they restart. Suggestions show on web and desktop.
+
+## Review notes from the agent
+
+When an agent changes something you should weigh before it ships, such as a shared default or a
+behavior other code relies on, it can pin a short note or question to those lines. The note shows in
+the conversation and on the lines in the diff. Agents leave them rarely, and never wait on one.
+
+Choose **Reply** on a note to answer it. The reply goes to the agent with the noted lines quoted,
+and the note then shows as answered. **Show in diff** opens the change at the noted lines. If the
+file changed since, the note moves with its lines when they can still be found, and otherwise waits
+in the diff's notes list. On mobile, notes show in the conversation; reply from web or desktop.
+
+Notes are on by default. Turn off **Agent review notes** in Settings > Labs to stop agents leaving
+them.
 
 ## Edit an earlier prompt
 
@@ -261,6 +304,11 @@ If you stop the agent or the server restarts, queued messages keep their order a
 Press **Resume** in an empty composer to continue. **Resume** also continues a stopped
 run or one that hit a usage limit, even with nothing queued. Sending a new message also resumes the queue, unless it steers a turn that is already
 running. You can edit or remove held messages without starting them.
+
+Messages that other agents sent to a busy thread start together. When the queue reaches one, the
+agent messages directly behind it join the same turn, so the agent reads them all before it answers.
+Each still appears as its own message. Your own queued messages start one turn each, and an agent's
+message never moves ahead of one you queued before it.
 
 The pencil on a queued message opens it in the composer for editing. The original message
 stays in the queue until you save, and it is highlighted while you edit. The message's

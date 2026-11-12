@@ -20,6 +20,46 @@ export function hasDesktopNotifications(mode: NotificationMode) {
   return mode === "notifications" || mode === "notifications-and-sound";
 }
 
+/** While the user is looking at this window, alerts go in-app instead of to the OS. */
+export function isAppInForeground(): boolean {
+  return document.visibilityState === "visible" && document.hasFocus();
+}
+
+/** A silent OS notification while the app is in the background; a click brings the app forward. */
+export function showBackgroundNotification(options: {
+  readonly title: string;
+  readonly body: string;
+  readonly tag: string;
+  readonly requireInteraction?: boolean;
+  readonly onClick?: () => void;
+}): Notification | null {
+  if (
+    isAppInForeground() ||
+    typeof Notification === "undefined" ||
+    Notification.permission !== "granted"
+  ) {
+    return null;
+  }
+  try {
+    const notification = new Notification(options.title, {
+      body: options.body,
+      tag: options.tag,
+      silent: true,
+      requireInteraction: options.requireInteraction ?? false,
+    });
+    notification.addEventListener("click", () => {
+      notification.close();
+      window.focus();
+      void window.desktopBridge?.revealWindow().catch(() => undefined);
+      options.onClick?.();
+    });
+    return notification;
+  } catch {
+    // Some browsers expose Notification but reject desktop presentation.
+    return null;
+  }
+}
+
 const TAG_HASH_OFFSET_BASIS = 0xcbf29ce484222325n;
 const TAG_HASH_PRIME = 0x100000001b3n;
 const TAG_HASH_MASK = 0xffffffffffffffffn;
@@ -82,10 +122,11 @@ export function setNotificationBadge(count: number) {
 
 let audioContext: AudioContext | undefined;
 const buffers = new Map<string, Promise<AudioBuffer>>();
+const preloaded = new Set<string>();
 /** When each sound's current playback ends, on the audio context's clock. */
 const playingUntil = new Map<string, number>();
 
-function loadNotificationBuffer(context: AudioContext, url: string): Promise<AudioBuffer> {
+export function loadAudioBuffer(context: AudioContext, url: string): Promise<AudioBuffer> {
   let buffer = buffers.get(url);
   if (!buffer) {
     buffer = fetch(url)
@@ -100,27 +141,39 @@ function loadNotificationBuffer(context: AudioContext, url: string): Promise<Aud
   return buffer;
 }
 
-/** Called from a gesture so browsers allow later background playback. */
-export function unlockNotificationAudio() {
-  const firstUnlock = audioContext === undefined;
+/**
+ * Called from a gesture so browsers allow later background playback. Fetches and decodes `urls`
+ * during interaction so the first sound is ready when it is needed.
+ */
+export function unlockAudio(urls: ReadonlyArray<string>) {
   audioContext ??= new AudioContext();
   void audioContext.resume().catch(() => undefined);
-  if (!firstUnlock) return;
-  // Fetch and decode during interaction so the first alert is ready when the thread finishes.
-  for (const url of [completionUrl, inputUrl]) {
-    void loadNotificationBuffer(audioContext, url).catch(() => undefined);
+  // Once per sound: a failed preload is retried when the sound plays, not on every keypress.
+  for (const url of urls) {
+    if (preloaded.has(url)) continue;
+    preloaded.add(url);
+    void loadAudioBuffer(audioContext, url).catch(() => undefined);
   }
+}
+
+/** The shared context once a gesture unlocked it, or null while playback is not allowed. */
+export function runningAudioContext(): AudioContext | null {
+  return audioContext?.state === "running" ? audioContext : null;
+}
+
+export function unlockNotificationAudio() {
+  unlockAudio([completionUrl, inputUrl]);
 }
 
 export async function playNotificationSound(
   kind: "completion" | "input",
   shouldPlay: () => boolean,
 ) {
-  if (!audioContext || audioContext.state !== "running") return;
-  const context = audioContext;
+  const context = runningAudioContext();
+  if (!context) return;
   const url = kind === "completion" ? completionUrl : inputUrl;
   try {
-    const decoded = await loadNotificationBuffer(context, url);
+    const decoded = await loadAudioBuffer(context, url);
     if (!shouldPlay() || context.state !== "running") return;
     // Coalesce same-sound bursts after decode to avoid clipping; input and completion alerts keep separate slots.
     if (context.currentTime < (playingUntil.get(url) ?? 0)) return;

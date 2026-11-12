@@ -3,6 +3,7 @@ import * as Dialog from "../../components/ui/Dialog";
 import { useOpenPullRequest } from "../../native/useOpenPullRequest";
 import { useWorkspaceSettledContentWidth } from "../layout/workspace-content-width";
 import { ThreadMarkdownVideo, ThreadMediaVisibleContext } from "./ThreadMarkdownVideo";
+import { InlineMachineCard } from "./InlineMachineCard";
 import { useMarkdownImageSource } from "../../native/useMarkdownImageSource";
 import {
   enrichedContextLinkCustomization,
@@ -23,6 +24,7 @@ import {
 import { GuestBubbleTint, GuestMessageName } from "./guestMessageStyle";
 import { ThreadGuestPendingMessage, useThreadGuestShare } from "./ThreadGuestShareBar";
 import { LinkRequestCard } from "./LinkRequestCard";
+import { ReviewNoteCard } from "./ReviewNoteCard";
 import { SecretRequestCard } from "./SecretRequestCard";
 import { AppActivityIndicator } from "../../components/ui/AppActivityIndicator";
 import {
@@ -1633,6 +1635,7 @@ function renderFeedEntry(
     readonly workGroupScrollPositions: Map<string, ThreadWorkGroupScrollPosition>;
     readonly terminalAssistantMessageIds: ReadonlySet<string>;
     readonly unsettledTurnId: RunId | null;
+    readonly latestRunId: RunId | null;
     readonly compactionLabelsByEntryId: ReadonlyMap<string, { title: string; compacting: string }>;
     readonly failedRunIds: ReadonlySet<RunId>;
     readonly onCopyWorkRow: (rowId: string, value: string) => void;
@@ -1727,6 +1730,20 @@ function renderFeedEntry(
         iconColor={iconSubtleColor}
       />
     );
+  }
+
+  if (entry.type === "machine-card") {
+    return (
+      <InlineMachineCard
+        card={entry.card}
+        capturedAt={entry.createdAt}
+        current={entry.runId !== null && entry.runId === props.latestRunId}
+      />
+    );
+  }
+
+  if (entry.type === "review-note") {
+    return <ReviewNoteCard note={entry.note} />;
   }
 
   if (entry.type === "mcp-app") {
@@ -3161,6 +3178,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
   );
   const reviewCommentColors = useReviewCommentColors();
   const unsettledTurnId = threadFeedRunIsUnsettled(props.latestRun) ? props.latestRun.runId : null;
+  const latestRunId = props.latestRun?.runId ?? null;
   const compactionLabelsByEntryId = useMemo(
     () => threadFeedCompactionLabels(props.feed),
     [props.feed],
@@ -3175,6 +3193,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     setupWorkingStartedAt: props.setupWorkingStartedAt,
     dispatchingMessageId: props.dispatchingMessageId,
     unsettledTurnId,
+    latestRunId,
     copiedRowId,
     expandedWorkGroups,
     expandedWorkRows,
@@ -3592,6 +3611,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
             workGroupScrollPositions,
             terminalAssistantMessageIds,
             unsettledTurnId,
+            latestRunId,
             compactionLabelsByEntryId,
             failedRunIds,
             onCopyWorkRow,

@@ -101,6 +101,7 @@ export interface PiRpcConnection {
   readonly events: Queue.Queue<PiRpcRecord, PiRpcError>;
   readonly exited: Effect.Effect<number, PiRpcError>;
   readonly terminate: Effect.Effect<void>;
+  readonly pid: number;
 }
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
@@ -449,6 +450,7 @@ export const makePiRpcConnection = Effect.fnUntraced(function* (options: PiRpcSp
     send,
     request,
     events,
+    pid: Number(child.pid),
     exited: Deferred.await(exitDeferred),
     terminate: failTransport(
       new PiRpcError({ operation: "terminate", detail: "pi process was stopped" }),

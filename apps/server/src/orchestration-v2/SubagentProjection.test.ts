@@ -86,6 +86,7 @@ it("keeps a subagent child awake when its parent thread is snoozed", () => {
   const parentThread: OrchestrationV2AppThread = {
     ...makeParentThread(),
     titleRegeneration: { requestId: CommandId.make("command:parent-title"), startedAt: snoozedAt },
+    tags: ["autonomy:on"],
   };
   const childProviderThreadId = ProviderThreadId.make("provider-thread:subagent-awake-child");
   const parentNodeId = NodeId.make("node:subagent-parent");
@@ -110,6 +111,7 @@ it("keeps a subagent child awake when its parent thread is snoozed", () => {
   assert.equal(childThread.interactionMode, parentThread.interactionMode);
   assert.equal(childThread.branch, parentThread.branch);
   assert.equal(childThread.worktreePath, parentThread.worktreePath);
+  assert.deepEqual(childThread.tags, ["autonomy:on"]);
   assert.equal(childThread.providerInstanceId, childProviderInstanceId);
   assert.deepEqual(childThread.modelSelection, childModelSelection);
   assert.equal(childThread.activeProviderThreadId, childProviderThreadId);

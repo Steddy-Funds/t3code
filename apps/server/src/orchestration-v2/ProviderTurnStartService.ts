@@ -13,6 +13,7 @@ import {
   isCompactionCommandMessage,
   parseGoalCommand,
   RunId,
+  threadAutonomy,
   ThreadId,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
@@ -48,8 +49,10 @@ import {
 import { deliverContextHandoffs, withInlineContext } from "./ContextHandoffDelivery.ts";
 import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
+import { buildAutonomyInstructions } from "@t3tools/provider-core/server/runtimeInstructions";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
+import { mergedTurnText } from "./QueuedRunOrder.ts";
 import {
   ContextHandoffBackgroundWorkError,
   knownProviderFailureMessage,
@@ -837,10 +840,32 @@ export const layer: Layer.Layer<
       });
       let effectiveHandoffs = handoffs;
       let resumeFellBack = false;
-      const userText = projectComposerContextForProvider({
-        text: message.text,
-        records: message.context?.records ?? [],
-      });
+      // Queued agent messages that joined this run go out with its opening message. A restart
+      // delivers a steer instead, and the provider already holds the opening ones.
+      const mergedMessageIds = new Set(
+        projection.runs
+          .filter((candidate) => candidate.mergedIntoRunId === run.id)
+          .map((candidate) => candidate.userMessageId),
+      );
+      const userMessageItems = projection.turnItems.flatMap((item) =>
+        item.type === "user_message" && item.runId === run.id ? [item] : [],
+      );
+      const opensQueuedTurn =
+        userMessageItems.find((item) => item.messageId === message.id)?.inputIntent ===
+        "queued_turn";
+      const mergedItems = opensQueuedTurn
+        ? userMessageItems
+            .filter((item) => mergedMessageIds.has(item.messageId))
+            .toSorted((left, right) => left.ordinal - right.ordinal)
+        : [];
+      const userText = mergedTurnText(
+        [message, ...mergedItems].map((part) =>
+          projectComposerContextForProvider({
+            text: part.text,
+            records: part.context?.records ?? [],
+          }),
+        ),
+      );
       // Codex and Claude parse /goal from the prompt, so it goes verbatim and history waits a turn.
       const goalDriver = session.driver === "codex" || session.driver === "claudeAgent";
       const goalCommand = goalDriver && parseGoalCommand(message) !== null;
@@ -870,6 +895,18 @@ export const layer: Layer.Layer<
         restartCancelledWork.length === 0
           ? ""
           : restartCancelledBackgroundWorkNote(restartCancelledWork);
+      // Native slash commands must stay first in the prompt.
+      const nativeSlash =
+        message.attachments.length === 0 && /^\/[\w:-]+(\s|$)/.test(userText.trimStart());
+      const autonomyInstructions =
+        goalCommand || nativeSlash
+          ? ""
+          : buildAutonomyInstructions({
+              autonomy: threadAutonomy(projection.thread),
+              delegated:
+                projection.thread.lineage.relationshipToParent === "subagent" ||
+                projection.thread.delegatedFrom !== undefined,
+            });
       const tokenCap = yield* handoffTokenCapConfig.pipe(
         Effect.orElseSucceed(() => DEFAULT_HANDOFF_TOKEN_CAP),
       );
@@ -1600,7 +1637,8 @@ export const layer: Layer.Layer<
             sideChatHandoff === undefined || compact || goalCommand
               ? ""
               : sideChatHandoff.summaryText;
-          const context = [delivery.context, sideChatContext, restartNote]
+          const autonomyContext = compact ? "" : autonomyInstructions;
+          const context = [autonomyContext, delivery.context, sideChatContext, restartNote]
             .filter((part) => part !== "")
             .join("\n\n");
           const { restartContinuationOfRunId: _resumedRunId, ...promptedInput } = turnInput;
@@ -1668,6 +1706,7 @@ export const layer: Layer.Layer<
         retryHandoff.length === 0 &&
         sideChatHandoff === undefined &&
         restartNote === "" &&
+        autonomyInstructions === "" &&
         !noteContinuation
           ? session
           : makeDeliverySession(session, startWithHandoffs);

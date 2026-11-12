@@ -154,8 +154,14 @@ function threadIdle(
     (thread.pendingBackgroundTasks?.length ?? 0) === 0 &&
     thread.pendingRuntimeRequest === null &&
     !threadHasQueuedTurnStart(thread, now) &&
-    !heldForLimitRecovery(thread, now, settings)
+    !heldForLimitRecovery(thread, now, settings) &&
+    !heldForLoadPause(thread)
   );
+}
+
+// A load-paused thread resumes in its worktree, which may hold paused containers' mounts.
+function heldForLoadPause(thread: OrchestrationV2ThreadShell): boolean {
+  return thread.loadPause != null;
 }
 
 // A run held for its usage-limit reset has its work still ahead of it, and a

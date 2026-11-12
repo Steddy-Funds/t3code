@@ -21,6 +21,7 @@ const clientSettings: ClientSettings = {
   ...DEFAULT_CLIENT_SETTINGS,
   notificationMode: "notifications-and-sound",
   inAppNotificationsEnabled: true,
+  notifyOnMachineStressed: false,
   appearanceContrast: 100,
   browserDefaultViewport: { _tag: "preset", width: 1024, height: 600, presetId: "nest-hub" },
   browserDefaultZoomFactor: 1.25,
@@ -37,6 +38,7 @@ const clientSettings: ClientSettings = {
   diffFilesCollapsed: true,
   diffIgnoreWhitespace: true,
   diffLayout: "stacked",
+  diffSideBySide: false,
   environmentIdentificationMode: "artwork",
   favorites: [],
   fontFamilyCode: "",
@@ -63,6 +65,9 @@ const clientSettings: ClientSettings = {
   sidebarThreadSortOrder: "created_at",
   boringSidebarEnabled: false,
   boringSidebarMultilineRows: false,
+  swipeReplyTarget: "message",
+  gambaModeEnabled: false,
+  gambaModeVolume: 50,
   threadDetailsUsageEnabled: false,
   threadDetailsItems: {},
   sidebarWorkingShelfEnabled: false,
@@ -234,6 +239,8 @@ describe("DesktopClientSettings", () => {
         assert.isTrue(Option.isSome(persisted));
         if (Option.isSome(persisted)) {
           assert.equal(persisted.value.timestampFormat, "24-hour");
+          // Files saved before the machine-stressed toggle existed keep it on.
+          assert.isTrue(persisted.value.notifyOnMachineStressed);
         }
       }),
     ),

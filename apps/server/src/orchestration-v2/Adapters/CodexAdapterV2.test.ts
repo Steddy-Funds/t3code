@@ -44,6 +44,11 @@ import * as Effect from "effect/Effect";
 import * as Predicate from "effect/Predicate";
 import * as FileSystem from "effect/FileSystem";
 import { MCP_APP_OUTPUT_KEY, readMcpAppReference } from "@t3tools/shared/mcpApp";
+import { AgentScope } from "@t3tools/shared/AgentScope";
+import {
+  ProcessOwnershipRegistry,
+  type ProcessRoot,
+} from "@t3tools/shared/ProcessOwnershipRegistry";
 import { toolOutputImages } from "@t3tools/shared/toolOutput";
 import { resolveAttachmentPathById } from "../../attachmentStore.ts";
 import * as Fiber from "effect/Fiber";
@@ -892,7 +897,28 @@ describe("CodexAdapterV2 process exit", () => {
 
   it.effect("counts the app-server as a running agent until its session closes", () => {
     let runningAgents = 0;
+    const roots: Array<{ readonly root: ProcessRoot; releases: number }> = [];
     const factoryLayer = CodexAdapterV2.layerAppServerClientFactory.pipe(
+      Layer.provide(
+        Layer.succeed(ProcessOwnershipRegistry, {
+          registerRoot: (root) => {
+            const entry = { root, releases: 0 };
+            roots.push(entry);
+            return () => {
+              entry.releases += 1;
+            };
+          },
+          roots: () => [],
+        }),
+      ),
+      Layer.provide(
+        Layer.succeed(AgentScope, {
+          ...AgentScope.defaultValue(),
+          wrap: ({ command, args }) => Effect.succeed({ command, args, unit: "t3-codex.scope" }),
+          controlGroup: (unit) =>
+            Effect.succeed(unit === "t3-codex.scope" ? "/agents/t3-codex.scope" : undefined),
+        }),
+      ),
       Layer.provide(
         Layer.mock(PortScanner.PortDiscovery)({
           trackAgent: () => {
@@ -944,9 +970,31 @@ describe("CodexAdapterV2 process exit", () => {
             settings: DEFAULT_CODEX_SETTINGS,
             environment: {},
           })
-          .pipe(Effect.tap(() => Effect.sync(() => assert.equal(runningAgents, 1)))),
+          .pipe(
+            Effect.tap(() =>
+              Effect.sync(() => {
+                assert.equal(runningAgents, 1);
+                const [entry] = roots;
+                assert.equal(roots.length, 1);
+                const { threads, ...root } = entry!.root;
+                assert.deepEqual(root, {
+                  pid: 999_999_999,
+                  cgroup: "/agents/t3-codex.scope",
+                  owner: { type: "shared", provider: "codex", label: "app-server" },
+                  splitByEnv: true,
+                });
+                // Without the adapter's attached-thread list, the opening thread is the one served.
+                assert.deepEqual(threads?.(), ["thread-codex-agent"]);
+                assert.equal(entry!.releases, 0);
+              }),
+            ),
+          ),
       );
       assert.equal(runningAgents, 0);
+      assert.deepEqual(
+        roots.map((entry) => entry.releases),
+        [1],
+      );
     }).pipe(Effect.provide(factoryLayer));
   });
 });
@@ -1253,9 +1301,11 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         transcript,
         beforeEmitInbound === undefined ? {} : { beforeEmitInbound },
       );
+      let openedThreads: (() => ReadonlyArray<ThreadId>) | undefined;
       const clientFactory: CodexAdapterV2.CodexAppServerClientFactoryShape = {
         open: (openInput) =>
           Layer.build(CodexReplay.layerReplayWithDriver(driver)).pipe(
+            Effect.tap(() => Effect.sync(() => (openedThreads = openInput.threads))),
             Effect.mapError(
               (cause) =>
                 new ProviderAdapter.ProviderAdapterOpenSessionError({
@@ -1369,6 +1419,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         terminalEvents,
         subagentUpdates,
         hasPendingBackgroundWork,
+        servedThreads: () => openedThreads?.() ?? [],
         firstTerminal: Deferred.await(firstTerminal),
         until: changes.until,
         awaitTerminal: (count: number) => changes.until(() => terminalEvents().length >= count),
@@ -2915,6 +2966,16 @@ describe("CodexAdapterV2 post-settle continuation", () => {
               label: "thread/resume with an explicit app thread",
               frame: { id: 5, result: { thread: { id: nativeThreadId, updatedAt: 1782622450 } } },
             },
+            {
+              type: "expect_outbound",
+              label: "thread/unsubscribe",
+              frame: { id: 6, method: "thread/unsubscribe", params: { threadId: nativeThreadId } },
+            },
+            {
+              type: "emit_inbound",
+              label: "thread/unsubscribe",
+              frame: { id: 6, result: { status: "notSubscribed" } },
+            },
           ],
         });
         const resumeThreadEnvs: Array<unknown> = [];
@@ -2948,6 +3009,10 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         assert.equal(resumed.status, "idle");
         assert.equal(DateTime.toEpochMillis(resumed.updatedAt), 1782622450000);
         assert.deepEqual(resumeThreadEnvs, [harness.threadId, undefined, explicitThreadId]);
+        // The shared app-server's root counts every thread it serves, for "shared (N threads)".
+        assert.deepEqual(harness.servedThreads(), [harness.threadId, explicitThreadId]);
+        yield* harness.runtime.unloadThread!({ providerThread: harness.providerThread });
+        assert.deepEqual(harness.servedThreads(), [explicitThreadId]);
       }).pipe(
         Effect.provide(
           Layer.mergeAll(

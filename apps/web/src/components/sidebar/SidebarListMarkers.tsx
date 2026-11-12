@@ -1,4 +1,5 @@
 import { CollapsibleSectionHeader } from "../ui/collapsible-section-header";
+import { Toggle, ToggleGroup } from "../ui/toggle-group";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { type ReactNode, useLayoutEffect } from "react";
@@ -6,7 +7,9 @@ import { cn } from "~/lib/utils";
 import {
   animateSidebarLayoutChanges,
   sidebarMarkerId,
+  type PullRequestShelfFilter,
   type SidebarListMarker,
+  type WorkingShelfSort,
 } from "../Sidebar.logic";
 import { SIDEBAR_SORTABLE_DRAG_DISABLED } from "./SidebarThreadRow";
 
@@ -111,7 +114,7 @@ export function SidebarDragBoundary(props: {
 }
 
 export function SidebarSectionHeader(props: {
-  marker: "working-header" | "snoozed-header" | "settled-header";
+  marker: "working-header" | "snoozed-header" | "backgrounded-header" | "settled-header";
   label: string;
   /** A muted trailing count. */
   count: number;
@@ -120,12 +123,7 @@ export function SidebarSectionHeader(props: {
   isDropTarget?: boolean;
   toggle: { expanded: boolean; onToggle: () => void };
 }) {
-  const shelf =
-    props.marker === "working-header"
-      ? "working"
-      : props.marker === "snoozed-header"
-        ? "snoozed"
-        : "settled";
+  const shelf = props.marker.slice(0, -"-header".length);
   return (
     <SortableSidebarMarker
       marker={props.marker}
@@ -142,6 +140,107 @@ export function SidebarSectionHeader(props: {
       >
         {props.label}
       </CollapsibleSectionHeader>
+    </SortableSidebarMarker>
+  );
+}
+
+const REVIEW_FILTERS: ReadonlyArray<{ value: PullRequestShelfFilter; label: string }> = [
+  { value: "all", label: "All" },
+  { value: "draft", label: "Draft" },
+  { value: "open", label: "Open" },
+];
+
+export function SidebarReviewShelfHeader(props: {
+  count: number;
+  className?: string;
+  expanded: boolean;
+  onToggle: () => void;
+  filter: PullRequestShelfFilter;
+  filterCounts: Readonly<Record<PullRequestShelfFilter, number>>;
+  onFilterChange: (filter: PullRequestShelfFilter) => void;
+}) {
+  return (
+    <SortableSidebarMarker
+      marker="review-header"
+      data-testid="sidebar-review-header"
+      className={cn("relative mx-0.5", props.className)}
+    >
+      <CollapsibleSectionHeader
+        data-sidebar-row="shelf:review"
+        onClick={props.onToggle}
+        expanded={props.expanded}
+        data-testid="sidebar-review-shelf-toggle"
+        accessory={<span className="font-normal tabular-nums">{props.count}</span>}
+      >
+        PR review
+      </CollapsibleSectionHeader>
+      {props.expanded ? (
+        <ToggleGroup
+          aria-label="Filter pull requests"
+          className="mx-2 mb-1"
+          value={[props.filter]}
+          onValueChange={(value) => {
+            const next = REVIEW_FILTERS.find((filter) => filter.value === value[0]);
+            if (next) props.onFilterChange(next.value);
+          }}
+        >
+          {REVIEW_FILTERS.map(({ value, label }) => (
+            <Toggle key={value} value={value}>
+              {label}
+              <span className="tabular-nums opacity-60">{props.filterCounts[value]}</span>
+            </Toggle>
+          ))}
+        </ToggleGroup>
+      ) : null}
+    </SortableSidebarMarker>
+  );
+}
+
+const WORKING_SORTS: ReadonlyArray<{ value: WorkingShelfSort; label: string }> = [
+  { value: "recent", label: "Recent" },
+  { value: "burn", label: "Burn rate" },
+];
+
+export function SidebarWorkingShelfHeader(props: {
+  count: number;
+  className?: string;
+  expanded: boolean;
+  onToggle: () => void;
+  sort: WorkingShelfSort;
+  onSortChange: (sort: WorkingShelfSort) => void;
+}) {
+  return (
+    <SortableSidebarMarker
+      marker="working-header"
+      data-testid="sidebar-working-header"
+      className={cn("relative mx-0.5", props.className)}
+    >
+      <CollapsibleSectionHeader
+        data-sidebar-row="shelf:working"
+        onClick={props.onToggle}
+        expanded={props.expanded}
+        data-testid="sidebar-working-shelf-toggle"
+        accessory={<span className="font-normal tabular-nums">{props.count}</span>}
+      >
+        Working
+      </CollapsibleSectionHeader>
+      {props.expanded && props.count > 1 ? (
+        <ToggleGroup
+          aria-label="Sort working threads"
+          className="mx-2 mb-1"
+          value={[props.sort]}
+          onValueChange={(value) => {
+            const next = WORKING_SORTS.find((sort) => sort.value === value[0]);
+            if (next) props.onSortChange(next.value);
+          }}
+        >
+          {WORKING_SORTS.map(({ value, label }) => (
+            <Toggle key={value} value={value}>
+              {label}
+            </Toggle>
+          ))}
+        </ToggleGroup>
+      ) : null}
     </SortableSidebarMarker>
   );
 }

@@ -69,6 +69,9 @@ match in a folded file opens it. Escape closes the search. This shortcut is not
 configurable. A very large uncommitted diff loads its files as you scroll, and
 find only searches the files loaded so far.
 
+The side-by-side layout finds in one side of one file instead: the side the
+keyboard is in. That one is the `diff.find` command, which you can rebind.
+
 ## Code, diffs, and the Project pane
 
 Code navigation, the side-by-side diff, and the Project pane use the shortcuts of JetBrains
@@ -94,6 +97,7 @@ else.
 | `ctrl+shift+arrowdown`, `ctrl+shift+arrowup` | Next Method, Previous Method             | code                                 |
 | `f7`, `shift+f7`                             | Next Change, Previous Change             | a diff                               |
 | `f4`, `mod+arrowdown`                        | Jump to Source                           | a diff                               |
+| `mod+f`                                      | Find in that side of the diff            | a side-by-side diff                  |
 | `mod+1`                                      | Show the Project pane, or return to code | code or the Project pane, on desktop |
 | `alt+f1`                                     | Select Opened File in the Project pane   | code                                 |
 | `mod+alt+arrowleft`, `mod+alt+arrowright`    | Back, Forward                            | anything but a terminal, on desktop  |

@@ -48,6 +48,8 @@ import { PreviewControlsToolkit } from "./toolkits/previewControls/tools.ts";
 import * as PreviewControlsHandlers from "./toolkits/previewControls/handlers.ts";
 import { EnvironmentToolkit } from "./toolkits/environment/tools.ts";
 import * as EnvironmentHandlers from "./toolkits/environment/handlers.ts";
+import { ServedSitesToolkit } from "./toolkits/servedSites/tools.ts";
+import * as ServedSitesHandlers from "./toolkits/servedSites/handlers.ts";
 import { ProjectToolkit } from "./toolkits/project/tools.ts";
 import * as ProjectHandlers from "./toolkits/project/handlers.ts";
 import { AttachmentToolkit } from "./toolkits/attachment/tools.ts";
@@ -199,9 +201,12 @@ const makeMcpAuthMiddleware = Effect.gen(function* () {
   const clients = yield* Effect.serviceOption(McpClientAuthenticator);
   const serverSettings = yield* ServerSettings.ServerSettingsService;
   const runtimeModeCeiling = serverSettings.managedPolicy?.limits?.maxRuntimeMode;
-  const linksEnabled = serverSettings.getSettings.pipe(
-    Effect.map((settings) => settings.linkedEnvironmentsEnabled),
-    Effect.orElseSucceed(() => false),
+  const settingFlags = serverSettings.getSettings.pipe(
+    Effect.map((settings) => ({
+      linkedEnvironments: settings.linkedEnvironmentsEnabled,
+      reviewNotes: settings.agentReviewNotesEnabled,
+    })),
+    Effect.orElseSucceed(() => ({ linkedEnvironments: false, reviewNotes: true })),
   );
   const authenticateRequest = Effect.fn("McpHttpServer.authenticateRequest")(function* (
     request: HttpServerRequest.HttpServerRequest,
@@ -233,9 +238,9 @@ const makeMcpAuthMiddleware = Effect.gen(function* () {
     const asked = withModeLimit(invocation, request);
     if (asked === undefined) return invalidModeLimit;
     const limited = McpInvocationContext.withRuntimeModeCeiling(asked, runtimeModeCeiling);
-    const linkedEnvironments = yield* linksEnabled;
+    const { linkedEnvironments, reviewNotes } = yield* settingFlags;
     if (limited.client?.linked === true && !linkedEnvironments) return linkedEnvironmentsOff;
-    return { ...limited, linkedEnvironments };
+    return { ...limited, linkedEnvironments, reviewNotes };
   });
   // Untraced: a span here would wrap the tool call; the HTTP server span already covers it.
   return Effect.fnUntraced(function* (httpEffect) {
@@ -1180,6 +1185,8 @@ const layerEnvironmentToolkit = toolkitRegistration(
   EnvironmentHandlers.layer,
 ).pipe(Layer.provide(ThreadCommandExecutor.layer));
 
+const layerServedSitesToolkit = toolkitRegistration(ServedSitesToolkit, ServedSitesHandlers.layer);
+
 export const layerProjectRegistration = toolkitRegistration(ProjectToolkit, ProjectHandlers.layer);
 
 export const layerAttachmentToolkit = toolkitRegistration(
@@ -1244,6 +1251,7 @@ export const layerTools = Layer.mergeAll(
   layerAttachmentToolkit,
   layerProjectRegistration,
   layerEnvironmentToolkit,
+  layerServedSitesToolkit,
   layerPreviewControlsRegistration,
   layerWorktreeToolkitRegistration,
   layerPullRequestsToolkit,

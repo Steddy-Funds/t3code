@@ -49,9 +49,16 @@ function tryResolveClaudeModelCatalog(
     const adapter = decodeClaudeModelAdapter(entry.adapter ?? {});
     if (Option.isNone(profile) || Option.isNone(adapter)) return null;
     const model = ModelCatalog.catalogServerModel(resolved, entry);
+    const runtime = profile.value.claudeCode ?? {};
     models.push({
-      model: { ...model, capabilities: withUltracodeToggle(model.capabilities) },
-      runtime: profile.value.claudeCode ?? {},
+      model: {
+        ...model,
+        capabilities: withAutoCompactWindowChoice(
+          withUltracodeToggle(model.capabilities),
+          runtime.fixedContextWindowTokens,
+        ),
+      },
+      runtime,
       compatibility: adapter.value.claudeCode ?? {},
     });
   }
@@ -103,6 +110,49 @@ export function withUltracodeToggle(
         ...(ultracodeByDefault ? { currentValue: true } : {}),
       },
     ),
+  };
+}
+
+const AUTO_COMPACT_WINDOW_CHOICES = [
+  { id: "200k", label: "200k", tokens: 200_000 },
+  { id: "300k", label: "300k", tokens: 300_000 },
+  { id: "400k", label: "400k", tokens: 400_000 },
+  { id: "500k", label: "500k", tokens: 500_000 },
+  { id: "1m", label: "1M", tokens: 1_000_000 },
+];
+
+// Added here, not in the manifest: servers refetch that from upstream, which has no such option.
+// `default` sends no window, so the instance's Auto-compact setting and Claude's own still apply.
+function withAutoCompactWindowChoice(
+  capabilities: ModelCapabilities | null,
+  fixedContextWindowTokens: number | undefined,
+): ModelCapabilities | null {
+  const descriptors = capabilities?.optionDescriptors ?? [];
+  const choices = AUTO_COMPACT_WINDOW_CHOICES.filter(
+    (choice) => fixedContextWindowTokens !== undefined && choice.tokens <= fixedContextWindowTokens,
+  );
+  // Claude caps the window at the model's own, so a lone choice would change nothing.
+  // Clients read a model's first select as its effort, so this is never the only one.
+  if (
+    choices.length < 2 ||
+    !descriptors.some((descriptor) => descriptor.type === "select") ||
+    descriptors.some((descriptor) => descriptor.id === "autoCompactWindow")
+  )
+    return capabilities;
+  return {
+    ...capabilities,
+    optionDescriptors: [
+      ...descriptors,
+      {
+        id: "autoCompactWindow",
+        label: "Auto-compact after",
+        type: "select",
+        options: [
+          { id: "default", label: "Provider setting", isDefault: true },
+          ...choices.map(({ id, label }) => ({ id, label })),
+        ],
+      },
+    ],
   };
 }
 
@@ -368,6 +418,19 @@ function resolveClaudeCatalogContextWindow(
   const descriptor = descriptors.find((candidate) => candidate.id === "contextWindow");
   const value = getProviderOptionCurrentValue(descriptor);
   return typeof value === "string" ? value : undefined;
+}
+
+/** The auto-compact window a selection picked, in tokens, or undefined when it leaves the default. */
+export function resolveClaudeCatalogAutoCompactWindow(
+  catalog: ClaudeModelCatalog,
+  modelSelection: ModelSelection,
+): number | undefined {
+  const descriptor = getProviderOptionDescriptors({
+    caps: getClaudeCatalogModelCapabilities(catalog, modelSelection.model),
+    selections: modelSelection.options,
+  }).find((candidate) => candidate.id === "autoCompactWindow");
+  const value = getProviderOptionCurrentValue(descriptor);
+  return AUTO_COMPACT_WINDOW_CHOICES.find((choice) => choice.id === value)?.tokens;
 }
 
 export function resolveClaudeCatalogApiModelId(

@@ -65,6 +65,7 @@ import * as PeerLinks from "./PeerLinks.ts";
 import { descriptorOf, layerLinkingEnvironment, linkTo, servePeer } from "./PeerLinks.testkit.ts";
 import * as RemoteDelegation from "./RemoteDelegation.ts";
 import * as PeerLinkRequests from "./PeerLinkRequests.ts";
+import * as ReviewNotes from "../mcp/ReviewNotes.ts";
 
 // The laptop's agent delegates a task to the box through a link. The box is
 // its real /mcp behind real OAuth, with one thread the test finishes; the
@@ -482,7 +483,12 @@ const boxToolkitLayer = (thread: BoxThread) => {
     Layer.provide(layerBoxLaunches),
     Layer.provide(Layer.mock(RemoteDelegation.RemoteDelegation)({})),
     Layer.provide(Layer.mock(PeerForwarding.PeerForwarding)({})),
-    Layer.provide(Layer.mock(PeerLinkRequests.PeerLinkRequests)({})),
+    Layer.provide(
+      Layer.merge(
+        Layer.mock(PeerLinkRequests.PeerLinkRequests)({}),
+        Layer.mock(ReviewNotes.ReviewNotes)({}),
+      ),
+    ),
     Layer.provide(Layer.mock(PeerLinks.PeerLinks)({})),
     Layer.provide(
       Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({ namedProjectsRoot: "/p" }),
@@ -603,7 +609,12 @@ const makeLaptop = (
         ),
       ),
       Layer.provide(Layer.succeedContext(linking)),
-      Layer.provide(Layer.mock(PeerLinkRequests.PeerLinkRequests)({})),
+      Layer.provide(
+        Layer.merge(
+          Layer.mock(PeerLinkRequests.PeerLinkRequests)({}),
+          Layer.mock(ReviewNotes.ReviewNotes)({}),
+        ),
+      ),
       Layer.provide(NodeCrypto.layer),
       Layer.provideMerge(layerThreads),
       Layer.provide(Layer.mock(ProviderRegistry.ProviderRegistry)({})),
@@ -835,6 +846,8 @@ it.effect("a task delegated to the box wakes the laptop's parent when it ends th
         threadId: parentThreadId,
         title: "Laptop parent",
       });
+      // A parent without an autonomy tag leaves the child at the box's default.
+      expect(yield* Ref.get(thread.delegatedFrom)).not.toHaveProperty("autonomy");
       // A retry with the same key launches nothing new and records nothing new.
       const retried = yield* delegateToBox(a);
       expect(retried.taskId).toBe(delegated.taskId);
@@ -1088,42 +1101,52 @@ it.effect(
     ).pipe(Effect.provide(NodeHttpServer.layerTest)),
 );
 
-it.effect("a task named only by environment inherits the parent's model, within the link", () =>
-  Effect.scoped(
-    Effect.gen(function* () {
-      const thread = yield* makeBoxThread;
-      const b = yield* serveBox(thread);
-      const offers = yield* SubscriptionRef.make<
-        ReadonlyArray<ProviderContinuationRequests.ProviderContinuationRequest>
-      >([]);
-      const database = yield* SqlitePersistence.layerMemory.pipe(Layer.build);
-      const a = yield* makeLaptop(database, offers);
-      // The parent runs with full access; the link allows less.
-      yield* linkTo(a.links, b, "auto-accept-edits");
-      yield* seedParent(a);
+it.effect(
+  "a task named only by environment inherits the parent's model and autonomy, within the link",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const thread = yield* makeBoxThread;
+        const b = yield* serveBox(thread);
+        const offers = yield* SubscriptionRef.make<
+          ReadonlyArray<ProviderContinuationRequests.ProviderContinuationRequest>
+        >([]);
+        const database = yield* SqlitePersistence.layerMemory.pipe(Layer.build);
+        const a = yield* makeLaptop(database, offers);
+        // The parent runs with full access; the link allows less.
+        yield* linkTo(a.links, b, "auto-accept-edits");
+        yield* seedParent(a);
+        yield* a.orchestrator.dispatch({
+          type: "thread.tag.set",
+          commandId: CommandId.make("command:tag:laptop-parent-autonomy"),
+          threadId: parentThreadId,
+          tag: "autonomy:on",
+          tagged: true,
+        });
 
-      const result = yield* a.call("delegate_task", {
-        task: "Run the suite on the box.",
-        target: { environmentId: box.environmentId },
-      });
-      expect(result.isError, JSON.stringify(result.content)).toBe(false);
-      // The parent's model, and the link's modes rather than the parent's.
-      expect(yield* Ref.get(thread.launchedWith)).toEqual({
-        modelSelection,
-        runtimeMode: "auto-accept-edits",
-        interactionMode: "default",
-      });
+        const result = yield* a.call("delegate_task", {
+          task: "Run the suite on the box.",
+          target: { environmentId: box.environmentId },
+        });
+        expect(result.isError, JSON.stringify(result.content)).toBe(false);
+        // The parent's model, and the link's modes rather than the parent's.
+        expect(yield* Ref.get(thread.launchedWith)).toEqual({
+          modelSelection,
+          runtimeMode: "auto-accept-edits",
+          interactionMode: "default",
+        });
+        expect((yield* Ref.get(thread.delegatedFrom))?.autonomy).toBe("on");
 
-      // Asking for more than the link allows is still refused there.
-      const broader = yield* a.call("delegate_task", {
-        task: "Run the suite on the box.",
-        target: { environmentId: box.environmentId },
-        runtimeMode: "full-access",
-        clientRequestId: "broader",
-      });
-      expect(broader.isError).toBe(true);
-    }),
-  ).pipe(Effect.provide(NodeHttpServer.layerTest)),
+        // Asking for more than the link allows is still refused there.
+        const broader = yield* a.call("delegate_task", {
+          task: "Run the suite on the box.",
+          target: { environmentId: box.environmentId },
+          runtimeMode: "full-access",
+          clientRequestId: "broader",
+        });
+        expect(broader.isError).toBe(true);
+      }),
+    ).pipe(Effect.provide(NodeHttpServer.layerTest)),
 );
 
 it.effect("refuses worktree isolation for a task there before launching anything", () =>

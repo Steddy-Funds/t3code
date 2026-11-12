@@ -46,6 +46,7 @@ import {
   ThreadId,
 } from "@t3tools/contracts";
 import { projectComposerContextForProvider } from "@t3tools/shared/composerContextReferences";
+import { MACHINE_BUCKETS_PROMPT } from "@t3tools/shared/machineBuckets";
 import { formatThreadLink } from "@t3tools/shared/threadLinks";
 import { buildCodexAdditionalContext } from "../../apps/server/src/provider/CodexDeveloperInstructions.ts";
 import { makeSideChatContext } from "../../apps/server/src/orchestration-v2/ContextHandoffService.ts";
@@ -58,6 +59,7 @@ import { OrchestratorToolkit } from "../../apps/server/src/mcp/toolkits/orchestr
 import { PreviewToolkit } from "../../apps/server/src/mcp/toolkits/preview/tools.ts";
 import { PreviewControlsToolkit } from "../../apps/server/src/mcp/toolkits/previewControls/tools.ts";
 import { ProjectToolkit } from "../../apps/server/src/mcp/toolkits/project/tools.ts";
+import { ServedSitesToolkit } from "../../apps/server/src/mcp/toolkits/servedSites/tools.ts";
 import {
   CHILD_PULL_REQUEST_REPORT_NEXT,
   PullRequestsToolkit,
@@ -318,6 +320,8 @@ export const McpToolUseCase = Schema.Struct({
   }),
   /** Empty to resume a top-level thread without side-chat context after its last tool result. */
   prompt: Schema.String,
+  /** Runs a shipped prompt, such as a built-in task's, in place of `prompt`. */
+  productPrompt: Schema.optional(Schema.Literals(["machine-buckets"])),
   /** Records for the context chips `prompt` links, projected as T3 sends them. */
   promptContext: Schema.optional(Schema.Struct({ records: Schema.Array(ComposerContextRecord) })),
   expect: McpToolUseExpect,
@@ -327,6 +331,12 @@ export const McpToolUseCase = Schema.Struct({
   notes: Schema.optional(Schema.String),
 });
 export type McpToolUseCase = typeof McpToolUseCase.Type;
+
+const PRODUCT_PROMPTS = { "machine-buckets": MACHINE_BUCKETS_PROMPT };
+const withProductPrompt = (testCase: McpToolUseCase): McpToolUseCase =>
+  testCase.productPrompt === undefined
+    ? testCase
+    : { ...testCase, prompt: PRODUCT_PROMPTS[testCase.productPrompt] };
 const AnyBlock = Schema.StructWithRest(
   Schema.Struct({ type: Schema.String, text: Schema.optional(Schema.String) }),
   Rest,
@@ -430,6 +440,7 @@ const t3SourceTools: ReadonlyArray<Tool.Any> = [
   AttachmentToolkit,
   ProjectToolkit,
   EnvironmentToolkit,
+  ServedSitesToolkit,
   PreviewControlsToolkit,
   WorktreeToolkit,
   PullRequestsToolkit,
@@ -2329,7 +2340,8 @@ const Flags = Schema.Struct({
 const decodeFlags = Schema.decodeUnknownEffect(Flags);
 const decodeCapture = Schema.decodeUnknownEffect(Schema.fromJsonString(Capture));
 const decodeCodexCapture = Schema.decodeUnknownEffect(Schema.fromJsonString(CodexCapture));
-const decodeCase = Schema.decodeUnknownEffect(Schema.fromJsonString(McpToolUseCase));
+const decodeCaseLine = Schema.decodeUnknownEffect(Schema.fromJsonString(McpToolUseCase));
+const decodeCase = (line: string) => decodeCaseLine(line).pipe(Effect.map(withProductPrompt));
 const decodeBaselineRow = Schema.decodeUnknownEffect(
   Schema.fromJsonString(
     Schema.Struct({

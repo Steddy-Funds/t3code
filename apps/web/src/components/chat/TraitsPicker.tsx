@@ -143,8 +143,11 @@ function getSelectedTraits(
       descriptor.type === "boolean",
   );
   const primarySelectDescriptor = selectDescriptors[0] ?? null;
+  // A model has one or the other: a window it runs with, or a point it compacts at.
   const contextWindowDescriptor =
-    selectDescriptors.find((descriptor) => descriptor.id === "contextWindow") ?? null;
+    selectDescriptors.find(
+      (descriptor) => descriptor.id === "contextWindow" || descriptor.id === "autoCompactWindow",
+    ) ?? null;
   const agentDescriptor = selectDescriptors.find((descriptor) => descriptor.id === "agent") ?? null;
   const fastModeDescriptor =
     booleanDescriptors.find((descriptor) => descriptor.id === "fastMode") ?? null;

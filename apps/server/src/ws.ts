@@ -168,6 +168,7 @@ import {
   projectThreadProjectionForWire,
   threadStreamEventItem,
 } from "./orchestration-v2/WireProjection.ts";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import { dedupeSnapshotBodies } from "@t3tools/shared/orchestrationV2DedupedBodies";
 import * as ProjectStore from "./orchestration-v2/ProjectStore.ts";
 import * as ThreadSearch from "./orchestration-v2/ThreadSearch.ts";
@@ -204,6 +205,7 @@ import {
 import { parseBase64DataUrl } from "./imageMime.ts";
 import { deletePendingAttachment, issueAttachmentUploadUrl } from "./assets/AttachmentUpload.ts";
 import * as PortScanner from "./preview/PortScanner.ts";
+import * as ServedSites from "./servedSites/ServedSites.ts";
 import * as WorkspaceEntries from "./workspace/WorkspaceEntries.ts";
 import * as KnownWorkspaces from "./workspace/KnownWorkspaces.ts";
 import * as WorkspaceFileSystem from "./workspace/WorkspaceFileSystem.ts";
@@ -238,10 +240,15 @@ import { RpcInstrumentation, rpcInstrumentationLayer } from "./observability/Rpc
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
 import * as ResourceTelemetry from "./resourceTelemetry/ResourceTelemetry.ts";
+import * as HostProcesses from "./resourceTelemetry/HostProcesses.ts";
+import * as ProcessOwnership from "./resourceTelemetry/ProcessOwnership.ts";
+import * as ThreadResources from "./resourceTelemetry/ThreadResources.ts";
 import * as HostResources from "./resourceTelemetry/HostResources.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import { commandFeatureUsage, featureUsage } from "./telemetry/FeatureUsage.ts";
 import type { TelemetryOwner } from "./telemetry/Identify.ts";
+import * as ThreadUsageService from "./usage/ThreadUsageService.ts";
+import * as TokenBurnRates from "./usage/TokenBurnRates.ts";
 import * as UsageService from "./usage/UsageService.ts";
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
 import * as TriageService from "./triage/TriageService.ts";
@@ -253,6 +260,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as PullRequestSyncReactor from "./orchestration-v2/PullRequestSyncReactor.ts";
 import * as SourceControlDiscovery from "./sourceControl/SourceControlDiscovery.ts";
 import * as OtlpEndpointCheck from "./observability/OtlpEndpointCheck.ts";
+import * as BrowserRun from "./preview/BrowserRun.ts";
 import * as TextGenerators from "./textGeneration/TextGenerators.ts";
 import * as SourceControlRepositoryService from "./sourceControl/SourceControlRepositoryService.ts";
 import * as SourceControlSignIn from "./sourceControl/SourceControlSignIn.ts";
@@ -1477,6 +1485,8 @@ export const layerWsRpc = (
               Effect.orElseSucceed(() => null),
             );
       const usage = yield* UsageService.UsageService;
+      const threadUsage = yield* ThreadUsageService.ThreadUsageService;
+      const tokenBurnRates = yield* TokenBurnRates.TokenBurnRatesService;
       const usageLimitSources = yield* UsageLimitSources.UsageLimitSources;
       const worktreeSetupTracker = yield* WorktreeSetupTracker.WorktreeSetupTracker;
       const projectCloneTracker = yield* ProjectCloneTracker.ProjectCloneTracker;
@@ -1499,6 +1509,7 @@ export const layerWsRpc = (
       const terminalManager = yield* TerminalManager.TerminalManager;
       const previewManager = yield* PreviewManager.PreviewManager;
       const portDiscovery = yield* PortScanner.PortDiscovery;
+      const servedSites = yield* ServedSites.ServedSites;
       const providerRegistry = yield* ProviderRegistry.ProviderRegistry;
       const providerInstances = yield* ProviderInstanceRegistry.ProviderInstanceRegistry;
       const acpRegistryCatalog = yield* AcpRegistrySupport.AcpRegistryCatalog;
@@ -1541,6 +1552,7 @@ export const layerWsRpc = (
       const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
       const sourceControlDiscovery = yield* SourceControlDiscovery.SourceControlDiscovery;
       const otlpEndpointCheck = yield* OtlpEndpointCheck.OtlpEndpointCheck;
+      const browserRun = yield* BrowserRun.BrowserRun;
       const textGenerators = yield* TextGenerators.TextGenerators;
       const sourceControlRepositories =
         yield* SourceControlRepositoryService.SourceControlRepositoryService;
@@ -1551,6 +1563,9 @@ export const layerWsRpc = (
       const processDiagnostics = yield* ProcessDiagnostics.ProcessDiagnostics;
       const triage = yield* TriageService.TriageService;
       const hostResources = yield* HostResources.HostResources;
+      const hostProcesses = yield* HostProcesses.HostProcesses;
+      const processOwnership = yield* ProcessOwnership.ProcessOwnership;
+      const threadResources = yield* ThreadResources.ThreadResources;
       const processResourceMonitor = yield* ProcessResourceMonitor.ProcessResourceMonitor;
       const resourceTelemetry = yield* ResourceTelemetry.ResourceTelemetry;
       const relayClient = yield* RelayClient.RelayClient;
@@ -1922,6 +1937,7 @@ export const layerWsRpc = (
         const environment = yield* serverEnvironment.getDescriptor;
         const auth = yield* serverAuth.getDescriptor();
         const scratchWorkspaceRoot = yield* managedFolders.scratchRoot;
+        const homeDirectory = (yield* HostProcess.HomeDirectory).trim();
         const lastEventLoopStall = yield* eventLoopMonitor.latestNoticeableStall;
         const discovery = yield* resolveOpenDiscoveryForConfig({
           editors: externalLauncher.resolveAvailableEditors(),
@@ -1990,6 +2006,7 @@ export const layerWsRpc = (
             onNone: () => ({}),
             onSome: (root) => ({ scratchWorkspaceRoot: root }),
           }),
+          ...(homeDirectory === "" ? {} : { homeDirectory }),
           newProjectsRoot: managedFolders.namedProjectsRoot,
           ...(lastEventLoopStall === undefined ? {} : { lastEventLoopStall }),
         };
@@ -2131,6 +2148,10 @@ export const layerWsRpc = (
                 }),
             ),
           ),
+        [ORCHESTRATION_V2_WS_METHODS.getTurnDiffFileContents]: (input) =>
+          checkpointDiffQuery
+            .getTurnDiffFileContents(input)
+            .pipe(Effect.mapError(CheckpointDiffQuery.turnDiffFileContentsRpcError)),
         [ORCHESTRATION_V2_WS_METHODS.getFullThreadDiff]: (input) =>
           checkpointDiffQuery.getFullThreadDiff(input).pipe(
             Effect.mapError(
@@ -2721,9 +2742,15 @@ export const layerWsRpc = (
                 )
               : undefined;
             const nextPatch = { ...patch, ...(deviceHosts ? { deviceHosts } : {}) };
-            const settings = yield* providerInstanceMutation === undefined
-              ? serverSettings.updateSettings(nextPatch)
-              : serverSettings.updateProviderInstance(providerInstanceMutation, nextPatch);
+            // Bucket entries are stamped with provenance here; a client's own stamp is ignored.
+            const settings = yield* processOwnership.writeSettingsPatch(
+              nextPatch,
+              { type: "user" },
+              (stamped) =>
+                providerInstanceMutation === undefined
+                  ? serverSettings.updateSettings(stamped)
+                  : serverSettings.updateProviderInstance(providerInstanceMutation, stamped),
+            );
             return ServerSettings.redactServerSettingsForClient(settings, settingsClient);
           }),
         [WS_METHODS.serverDiscoverSourceControl]: (_input) => sourceControlDiscovery.discover,
@@ -2740,11 +2767,15 @@ export const layerWsRpc = (
           resourceTelemetry.readHistory(input),
         [WS_METHODS.serverGetUsageSummary]: (input) => usage.readSummary(input),
         [WS_METHODS.serverRefreshUsageRates]: (_input) => usage.refreshRates,
+        [WS_METHODS.serverGetThreadUsage]: ({ threadId }) => threadUsage.read(threadId),
+        [WS_METHODS.serverGetThreadResources]: ({ threadId }) => threadResources.read(threadId),
         [WS_METHODS.serverRetryResourceTelemetry]: (_input) => resourceTelemetry.retry,
         [WS_METHODS.serverCheckOtlpEndpoint]: (input) => otlpEndpointCheck.check(input),
+        [WS_METHODS.serverCheckBrowserRun]: (_input) => browserRun.check,
         [WS_METHODS.serverListTextGeneratorModels]: (input) => textGenerators.listModels(input),
         [WS_METHODS.serverPrepareTriage]: (input) => triage.prepare(input),
         [WS_METHODS.serverSignalProcess]: (input) => processDiagnostics.signal(input),
+        [WS_METHODS.machineClaimsRelease]: ({ claimId }) => processOwnership.release(claimId),
         [WS_METHODS.serverReportClientActivity]: (input, metadata) =>
           Ref.update(rpcClientIds, (clientIds) => {
             const next = new Set(clientIds);
@@ -3287,6 +3318,16 @@ export const layerWsRpc = (
         [WS_METHODS.deviceAction]: (input) => deviceService.action(input),
         [WS_METHODS.subscribeDeviceState]: (_input) => DeviceService.stateStream(deviceService),
         [WS_METHODS.previewStopLocalServer]: (input) => portDiscovery.stopServer(input),
+        [WS_METHODS.servedSitesSubscribe]: (_input) => servedSites.changes,
+        [WS_METHODS.servedSitesStop]: (input) =>
+          Effect.annotateCurrentSpan({ "served_site.id": input.siteId }).pipe(
+            Effect.andThen(servedSites.stop(input)),
+            Effect.asVoid,
+          ),
+        [WS_METHODS.servedSitesDismiss]: (input) =>
+          Effect.annotateCurrentSpan({ "served_site.id": input.siteId }).pipe(
+            Effect.andThen(servedSites.dismiss(input)),
+          ),
         [WS_METHODS.subscribeDiscoveredLocalServers]: (input) =>
           Stream.callback<DiscoveredLocalServerList>((queue) =>
             Effect.gen(function* () {
@@ -3514,6 +3555,9 @@ export const layerWsRpc = (
               );
             }),
           ),
+        [WS_METHODS.subscribeMachine]: (input) => hostResources.subscribe(input),
+        [WS_METHODS.subscribeTokenBurnRates]: (_input) => tokenBurnRates.changes,
+        [WS_METHODS.subscribeMachineProcesses]: (input) => hostProcesses.frames(input),
         [WS_METHODS.subscribeResourceTelemetry]: (_input) =>
           Stream.unwrap(
             Effect.map(resourceTelemetry.subscribe, ({ latest, changes }) =>
@@ -3627,6 +3671,7 @@ export const layer = Layer.unwrap(
               // Share server-lifetime PR caches so WS mutations invalidate every client's HTTP diffs.
               Layer.provide(Layer.succeed(PullRequestService.PullRequestService, pullRequests)),
               Layer.provide(OtlpEndpointCheck.layer),
+              Layer.provide(BrowserRun.layer),
               Layer.provide(
                 Layer.succeed(
                   PullRequestReviewGuideService.PullRequestReviewGuideService,

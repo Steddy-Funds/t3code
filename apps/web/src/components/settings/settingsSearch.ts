@@ -166,6 +166,9 @@ export function keybindingSearchAnchorId<Command extends KeybindingCommand>(comm
   return `keybinding-${command}` as const;
 }
 
+const SHORTCUT_MODIFIER_NAME =
+  typeof navigator !== "undefined" && isMacPlatform(navigator.platform) ? "Cmd" : "Ctrl";
+
 const KEYBINDING_SEARCH_ITEMS = STATIC_KEYBINDING_COMMANDS.toSorted((left, right) =>
   commandLabel(left).localeCompare(commandLabel(right)),
 ).map((command) => {
@@ -352,6 +355,14 @@ export const SETTINGS_SEARCH_ITEMS = [
     ],
   },
   {
+    id: "sidebar-details-items",
+    title: "Sidebar details",
+    to: "/settings/appearance",
+    searchTerms: [
+      "customize show hide sidebar thread card branch model provider two rows compact agents subagents lineage tree machine environment remote",
+    ],
+  },
+  {
     id: "effort-display",
     title: "Effort display",
     to: "/settings/appearance",
@@ -462,6 +473,18 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["hide fold running monitoring threads inbox sidebar shelf"],
   },
   {
+    id: "pull-request-shelf",
+    title: "PR review section",
+    to: "/settings/general",
+    searchTerms: ["pull request watch draft open review sidebar shelf"],
+  },
+  {
+    id: "backgrounded-shelf",
+    title: "Background threads",
+    to: "/settings/general",
+    searchTerms: ["backgrounded autonomous long running agents hide sidebar shelf"],
+  },
+  {
     id: "boring-sidebar",
     title: "Boring sidebar (group by project)",
     to: "/settings/labs",
@@ -474,6 +497,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     // Shown inside the boring sidebar row only while it is on, so search lands on the parent.
     targetId: "boring-sidebar",
     searchTerms: ["beta boring sidebar folder rows multiline branch pull request details"],
+  },
+  {
+    id: "gamba-mode",
+    title: "Gamba mode",
+    to: "/settings/labs",
+    searchTerms: ["beta coin sound volume turn finished subagents swarm audio casino"],
   },
   {
     id: "tool-call-visibility",
@@ -503,6 +532,13 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/labs",
     scope: "environment",
     searchTerms: ["beta tab autocomplete predict next message claude codex ghost text"],
+  },
+  {
+    id: "agent-review-notes",
+    title: "Agent review notes",
+    to: "/settings/labs",
+    scope: "environment",
+    searchTerms: ["beta flag_for_review agent note question diff lines changed reply"],
   },
   {
     id: "simlock-hosts",
@@ -671,6 +707,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["notification toast popup completion input approval failure"],
   },
   {
+    id: "machine-stressed-notifications",
+    title: "Machine becomes stressed",
+    to: "/settings/general",
+    searchTerms: ["notification alert machine stressed overloaded load memory cpu resources"],
+  },
+  {
     id: "time-format",
     title: "Time format",
     to: "/settings/general",
@@ -724,6 +766,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     title: "Send shortcut",
     to: "/settings/chat",
     searchTerms: ["enter return command ctrl multiline prompt new line composer"],
+  },
+  {
+    id: "swipe-reply-target",
+    title: "Swipe to reply",
+    to: "/settings/chat",
+    searchTerms: ["trackpad two finger gesture reply quote cite section whole message command"],
   },
   {
     id: "follow-up-behavior",
@@ -896,6 +944,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/keybindings",
     searchTerms: ["keyboard shortcuts hotkeys commands bindings json"],
   },
+  {
+    id: "shortcut-quick-reference",
+    title: `Show shortcuts while ${SHORTCUT_MODIFIER_NAME} is held`,
+    to: "/settings/keybindings",
+    searchTerms: ["quick reference cheat sheet hold command control overlay hints"],
+  },
   ...KEYBINDING_SEARCH_ITEMS,
   {
     id: "snap-shot-enabled",
@@ -1064,6 +1118,14 @@ export const SETTINGS_SEARCH_ITEMS = [
     title: "Search engine",
     to: "/settings/browser",
     searchTerms: ["address bar duckduckgo google bing brave kagi ecosia custom url"],
+  },
+  {
+    id: "browser-cloudflare",
+    title: "Cloudflare Browser Run",
+    to: "/settings/browser",
+    targetId: "browser-cloudflare",
+    scope: "environment",
+    searchTerms: ["hosted remote chrome agent tabs account id api token check connection"],
   },
   {
     id: "pull-request-links-open-in-app",
@@ -1292,6 +1354,47 @@ export const SETTINGS_SEARCH_ITEMS = [
     ],
   },
   {
+    id: "machine-stress-thresholds",
+    title: "Stress thresholds",
+    to: "/settings/access",
+    targetId: "connections-environment",
+    searchTerms: [
+      "machine resources stressed load per core memory ram cpu pressure hold clear hysteresis limit",
+    ],
+  },
+  {
+    id: "machine-load-management",
+    title: "Load management",
+    to: "/settings/access",
+    targetId: "connections-environment",
+    searchTerms: [
+      "load management guard t3 guard pause priority low normal stressed kill hold machine resources",
+    ],
+  },
+  {
+    id: "machine-auto-buckets",
+    title: "Auto-buckets",
+    to: "/settings/access",
+    targetId: "connections-environment",
+    searchTerms: [
+      "auto buckets group unowned unbucketed processes task manager background machine resources",
+    ],
+  },
+  {
+    id: "machine-auto-buckets-model",
+    title: "Auto-buckets model",
+    to: "/settings/access",
+    targetId: "connections-environment",
+    searchTerms: ["auto buckets model provider haiku"],
+  },
+  {
+    id: "machine-process-buckets",
+    title: "Process buckets",
+    to: "/settings/access",
+    targetId: "connections-environment",
+    searchTerms: ["machine resources process owner bucket group rule match exe command cwd pin"],
+  },
+  {
     id: "pull-request-routing",
     title: "Pull request sharing",
     to: "/settings/connections",
@@ -1313,6 +1416,14 @@ export const SETTINGS_SEARCH_ITEMS = [
     targetId: "secret-providers",
     searchTerms: ["new 1password vault op cli account"],
     secretsFeatureOnly: true,
+  },
+  {
+    id: "scheduled-task-load-monitor",
+    title: "Load monitor",
+    to: "/settings/scheduled-tasks",
+    searchTerms: [
+      "when machine is busy stressed load cpu memory gpu scheduled task trigger on load wake",
+    ],
   },
   {
     id: "archive",

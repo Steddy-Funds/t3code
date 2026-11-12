@@ -115,8 +115,8 @@ shared access declarations, not tool by tool:
 
 - linked work may change only threads with the same origin, not the user's own
   threads and not another link's;
-- it cannot change projects, settings or scheduled tasks, nor use the receiving
-  environment's own links;
+- it cannot change projects, settings (machine buckets included), scheduled
+  tasks or machine claims, nor use the receiving environment's own links;
 - its project setup scripts are skipped
   ([`ProjectSetupScriptRunner`](../../apps/server/src/project/ProjectSetupScriptRunner.ts)
   checks every path that runs them).

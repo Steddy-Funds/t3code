@@ -1,4 +1,6 @@
 import {
+  BUILT_IN_THEMES,
+  getThemeColorsForAppearance,
   MOBILE_DEFAULT_THEME_ID,
   MOBILE_THEME_IDS,
   type MobileThemeId,
@@ -11,7 +13,16 @@ export type { ShowcaseScene };
 
 export type ShowcaseAppearance = "light" | "dark";
 
-export const SHOWCASE_THEMES = MOBILE_THEME_IDS;
+// A capture applies its palette to both colour schemes, which a dark-only palette cannot fill.
+export const SHOWCASE_THEMES = MOBILE_THEME_IDS.filter((themeId) => {
+  const theme = BUILT_IN_THEMES.find((candidate) => candidate.id === themeId);
+  return (
+    !theme ||
+    (["light", "dark"] as const).every(
+      (appearance) => getThemeColorsForAppearance(theme, appearance) !== null,
+    )
+  );
+});
 const DEFAULT_SHOWCASE_THEME = MOBILE_DEFAULT_THEME_ID;
 export type ShowcaseTheme = MobileThemeId;
 

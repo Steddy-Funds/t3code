@@ -11,6 +11,7 @@ import {
   getClaudeCatalogModelCapabilities,
   normalizeClaudeCatalogEffort,
   resolveClaudeCatalogApiModelId,
+  resolveClaudeCatalogAutoCompactWindow,
   resolveClaudeCatalogEffort,
   type ClaudeModelCatalog,
 } from "./provider/ClaudeModelCatalog.ts";
@@ -19,7 +20,12 @@ export interface CompiledClaudeModelSelection {
   readonly apiModelId: string;
   readonly effort: string | undefined;
   readonly promptEffort: string | undefined;
-  readonly settings: Readonly<Record<string, boolean>>;
+  readonly settings: {
+    readonly alwaysThinkingEnabled?: boolean;
+    readonly fastMode?: boolean;
+    readonly ultracode?: boolean;
+    readonly autoCompactWindow?: number;
+  };
   readonly queryIdentity: string;
 }
 
@@ -44,10 +50,12 @@ export function compileClaudeModelSelection(
     ? getModelSelectionBooleanOptionValue(selection, "thinking")
     : undefined;
   const ultracode = descriptors.find((descriptor) => descriptor.id === "ultracode")?.currentValue;
+  const autoCompactWindow = resolveClaudeCatalogAutoCompactWindow(catalog, selection);
   const settings = {
     ...(typeof thinking === "boolean" ? { alwaysThinkingEnabled: thinking } : {}),
     ...(typeof fastMode === "boolean" ? { fastMode } : {}),
     ...(typeof ultracode === "boolean" ? { ultracode } : {}),
+    ...(autoCompactWindow === undefined ? {} : { autoCompactWindow }),
   };
   const apiModelId = resolveClaudeCatalogApiModelId(catalog, selection);
   const promptEffort = resolvePromptInjectedEffort(capabilities, rawEffort) ?? undefined;

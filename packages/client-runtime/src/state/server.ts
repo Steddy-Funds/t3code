@@ -1365,6 +1365,11 @@ export function createServerEnvironmentAtoms<R, E>(
           ),
         ),
     }),
+    threadUsage: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:server:thread-usage",
+      tag: WS_METHODS.serverGetThreadUsage,
+      staleTimeMs: 30_000,
+    }),
     resourceTelemetry: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
       label: "environment-data:server:resource-telemetry",
       tag: WS_METHODS.subscribeResourceTelemetry,
@@ -1614,6 +1619,10 @@ export function createServerEnvironmentAtoms<R, E>(
     checkOtlpEndpoint: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:check-otlp-endpoint",
       tag: WS_METHODS.serverCheckOtlpEndpoint,
+    }),
+    checkBrowserRun: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:check-browser-run",
+      tag: WS_METHODS.serverCheckBrowserRun,
     }),
     listTextGeneratorModels: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:list-text-generator-models",

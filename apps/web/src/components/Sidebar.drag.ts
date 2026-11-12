@@ -1,6 +1,7 @@
 import { closestCenter, type CollisionDetection, type Modifier } from "@dnd-kit/core";
 import { verticalListSortingStrategy, type SortingStrategy } from "@dnd-kit/sortable";
 import {
+  isPlacedSidebarSection,
   resolveSidebarDropTarget,
   sidebarListItemId,
   sidebarMarkerId,
@@ -15,8 +16,10 @@ type ThreadItem = Extract<SidebarListItem, { kind: "thread" }>;
 type Layout = Parameters<SortingStrategy>[0];
 const isShelfHeader = (item: SidebarListItem | undefined) =>
   item?.kind === "marker" &&
-  (item.marker === "working-header" ||
+  (item.marker === "review-header" ||
+    item.marker === "working-header" ||
     item.marker === "snoozed-header" ||
+    item.marker === "backgrounded-header" ||
     item.marker === "settled-header");
 
 export function restrictBelowSidebarLabel(
@@ -56,7 +59,9 @@ export function createSidebarCollisionDetection(
       if (pointer.x >= boundary.left && pointer.x <= boundary.right) {
         if (pointer.y < previousY && pointer.y <= boundary.bottom) boundarySection = "pinned";
         else if (pointer.y > previousY && pointer.y >= boundary.top) boundarySection = "active";
-        const nextHeader = (["working-header", "snoozed-header", "settled-header"] as const)
+        const nextHeader = (
+          ["working-header", "snoozed-header", "backgrounded-header", "settled-header"] as const
+        )
           .map((marker) =>
             args.droppableContainers.find((container) => container.id === sidebarMarkerId(marker)),
           )
@@ -117,8 +122,10 @@ export function createSidebarSortingStrategy(input: {
     const groups: Record<SidebarSection, ThreadItem[]> = {
       pinned: [],
       active: [],
+      review: [],
       working: [],
       snoozed: [],
+      backgrounded: [],
       settled: [],
     };
     let cardHeight = input.cardHeight;
@@ -126,13 +133,18 @@ export function createSidebarSortingStrategy(input: {
     let headerScale: number | undefined;
     for (const [index, item] of items.entries()) {
       if (item.kind === "marker") {
-        if (isShelfHeader(item)) {
+        // The review header carries its filter tabs, so it is not a 32px header.
+        if (isShelfHeader(item) && item.marker !== "review-header") {
           const height = rects[index]?.height;
           if (height) headerScale ??= height / 32;
         }
         continue;
       }
-      if (item.section === "pinned" || item.section === "active" || item.section === "working")
+      if (
+        item.section === "pinned" ||
+        item.section === "active" ||
+        isPlacedSidebarSection(item.section)
+      )
         cardHeight ??= rects[index]?.height;
       else slimHeight ??= rects[index]?.height;
       if (item.key !== active.key) groups[item.section].push(item);
@@ -176,6 +188,10 @@ export function createSidebarSortingStrategy(input: {
     projected.push(...groups.pinned);
     marker("pinned-divider");
     section("active");
+    if (items.some((item) => item.kind === "marker" && item.marker === "review-header")) {
+      marker("review-header");
+      projected.push(...groups.review);
+    }
     if (items.some((item) => item.kind === "marker" && item.marker === "working-header")) {
       marker("working-header");
       projected.push(...groups.working);
@@ -188,6 +204,11 @@ export function createSidebarSortingStrategy(input: {
       marker("snoozed-header");
       projected.push(...groups.snoozed);
     }
+    // Backgrounded rows never drag, so the shelf only keeps its place.
+    if (items.some((item) => item.kind === "marker" && item.marker === "backgrounded-header")) {
+      marker("backgrounded-header");
+      projected.push(...groups.backgrounded);
+    }
     marker("settled-header");
     section("settled");
     const heights = projected.map((item) => {
@@ -195,7 +216,9 @@ export function createSidebarSortingStrategy(input: {
       const rect = index === undefined ? undefined : rects[index];
       const fallback =
         item.kind === "thread" &&
-        (item.section === "pinned" || item.section === "active" || item.section === "working")
+        (item.section === "pinned" ||
+          item.section === "active" ||
+          isPlacedSidebarSection(item.section))
           ? cardHeight
           : slimHeight;
       const moved = item.kind === "thread" && item.key === active.key;

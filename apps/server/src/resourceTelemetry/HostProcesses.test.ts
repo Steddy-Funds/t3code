@@ -1,0 +1,1770 @@
+import { it } from "@effect/vitest";
+import {
+  type Claim,
+  ClaimId,
+  type GpuDeviceSample,
+  type GpuProcessSample,
+  MACHINE_PROCESSES_MAX_ROWS,
+  MachineBucketId,
+  type MachineProcessFrame,
+  type ProcessOwner,
+  ProviderDriverKind,
+  type ResourceMonitorHostProcessStatic,
+  type ResourceTelemetryAggregate,
+  type ResourceTelemetryProcess,
+  type ResourceTelemetrySnapshot,
+  ThreadId,
+} from "@t3tools/contracts";
+import * as DateTime from "effect/DateTime";
+import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
+import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
+import * as Queue from "effect/Queue";
+import * as Ref from "effect/Ref";
+import * as Scope from "effect/Scope";
+import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
+import { describe, expect } from "vite-plus/test";
+
+import { createMachineProcessFrameApplier } from "../../../../packages/client-runtime/src/state/machineProcessFrames.ts";
+import {
+  buildProcessSnapshot,
+  buildUnbucketed,
+  type FrameInput,
+  type HostFrameInput,
+  HostProcesses,
+  HostProcessesUnavailable,
+  hostOwnershipRows,
+  hostSnapshotRows,
+  initialFrameBuilderState,
+  initialHostFrameBuilderState,
+  layer as hostProcessesLayer,
+  nextFrame,
+  nextHostFrames,
+  selectProcesses,
+  type SnapshotBuildInput,
+  type SnapshotRow,
+  subtreeOwnershipRows,
+  subtreeSnapshotRows,
+  unbucketedSharePercent,
+} from "./HostProcesses.ts";
+import * as NativeTelemetryClient from "./NativeTelemetryClient.ts";
+import { ResourceTelemetry, ResourceTelemetryRefreshFailed } from "./ResourceTelemetry.ts";
+
+const EPOCH = DateTime.makeUnsafe(0);
+
+function proc(
+  pid: number,
+  cpuPercent: number,
+  residentBytes: number,
+  overrides: Partial<ResourceTelemetryProcess> = {},
+): ResourceTelemetryProcess {
+  return {
+    identity: { pid, startTimeMs: pid * 10 },
+    ppid: 1,
+    childPids: [],
+    depth: 0,
+    name: `p${pid}`,
+    command: `p${pid} --run`,
+    status: "running",
+    category: "server-child",
+    cpuPercent,
+    cpuTimeMs: 0,
+    residentBytes,
+    peakResidentBytes: residentBytes,
+    virtualBytes: 0,
+    ioReadBytes: 0,
+    ioWriteBytes: 0,
+    ioReadBytesPerSecond: 0,
+    ioWriteBytesPerSecond: 0,
+    ioSemantics: "storage",
+    runTimeMs: 0,
+    firstSeenAt: EPOCH,
+    lastSeenAt: EPOCH,
+    ...overrides,
+  };
+}
+
+function input(overrides: Partial<FrameInput> = {}): FrameInput {
+  return {
+    generation: 0,
+    readAtMs: 1_000,
+    nowMs: 1_500,
+    monitorAvailable: true,
+    processes: [proc(10, 5, 100), proc(11, 1, 200)],
+    top: undefined,
+    ...overrides,
+  };
+}
+
+const pids = (processes: ReadonlyArray<ResourceTelemetryProcess>) =>
+  processes.map((process) => process.identity.pid);
+
+describe("selectProcesses", () => {
+  it("unions top N by CPU with top N by memory without duplicating a process that tops both", () => {
+    const processes = [
+      proc(1, 90, 9_000),
+      proc(2, 80, 10),
+      proc(3, 1, 8_000),
+      proc(4, 70, 20),
+      proc(5, 0, 7_000),
+    ];
+    const { selected, truncated } = selectProcesses(processes, 2);
+    expect(pids(selected).toSorted()).toEqual([1, 2, 3]);
+    expect(truncated).toBe(0);
+  });
+
+  it("returns the whole table when top is omitted and under the row cap", () => {
+    const processes = [proc(1, 1, 1), proc(2, 2, 2)];
+    expect(selectProcesses(processes, undefined)).toEqual({ selected: processes, truncated: 0 });
+  });
+
+  it("caps the whole table at the row limit by CPU and counts the rest", () => {
+    const processes = Array.from({ length: MACHINE_PROCESSES_MAX_ROWS + 3 }, (_, index) =>
+      proc(index + 1, index, 1),
+    );
+    const { selected, truncated } = selectProcesses(processes, undefined);
+    expect(selected).toHaveLength(MACHINE_PROCESSES_MAX_ROWS);
+    expect(truncated).toBe(3);
+    // The three lowest-CPU processes are the ones left out.
+    expect(pids(selected)).not.toContain(1);
+    expect(pids(selected)).not.toContain(3);
+    expect(pids(selected)).toContain(4);
+  });
+});
+
+describe("nextFrame", () => {
+  it("starts with a full frame carrying every row in added", () => {
+    const [frame, state] = nextFrame(initialFrameBuilderState, input());
+    expect(frame).toEqual({
+      generation: 0,
+      full: true,
+      sequence: 0,
+      sampleAgeMs: 500,
+      source: "t3",
+      added: [
+        {
+          key: 0,
+          pid: 10,
+          ppid: 1,
+          startTimeMs: 100,
+          name: "p10",
+          user: "",
+          command: "p10 --run",
+        },
+        {
+          key: 1,
+          pid: 11,
+          ppid: 1,
+          startTimeMs: 110,
+          name: "p11",
+          user: "",
+          command: "p11 --run",
+        },
+      ],
+      removed: [],
+      rows: { key: [0, 1], cpu: [5, 1], rss: [100, 200] },
+    });
+    expect(state).toMatchObject({ generation: 0, sequence: 0, nextKey: 2, lastReadAtMs: 1_000 });
+  });
+
+  it("diffs: only new processes in added, departed keys in removed, kept keys stable", () => {
+    const [, first] = nextFrame(initialFrameBuilderState, input());
+    const [frame, second] = nextFrame(
+      first,
+      input({ readAtMs: 2_000, nowMs: 2_000, processes: [proc(11, 3, 250), proc(12, 7, 300)] }),
+    );
+    expect(frame).toMatchObject({
+      full: false,
+      sequence: 1,
+      sampleAgeMs: 0,
+      removed: [0],
+      rows: { key: [1, 2], cpu: [3, 7], rss: [250, 300] },
+    });
+    expect(frame?.added.map((added) => [added.key, added.pid])).toEqual([[2, 12]]);
+
+    const [third] = nextFrame(
+      second,
+      input({ readAtMs: 3_000, processes: [proc(11, 4, 260), proc(12, 8, 310)] }),
+    );
+    expect(third).toMatchObject({ full: false, sequence: 2, added: [], removed: [] });
+    expect(third?.rows.key).toEqual([1, 2]);
+  });
+
+  it("treats a reused pid with a new start time as a different process", () => {
+    const [, first] = nextFrame(initialFrameBuilderState, input({ processes: [proc(10, 1, 1)] }));
+    const reused = proc(10, 1, 1, { identity: { pid: 10, startTimeMs: 999 } });
+    const [frame] = nextFrame(first, input({ readAtMs: 2_000, processes: [reused] }));
+    expect(frame).toMatchObject({ removed: [0], rows: { key: [1] } });
+    expect(frame?.added.map((added) => added.key)).toEqual([1]);
+  });
+
+  it("sends no frame when no new sample arrived", () => {
+    const [, first] = nextFrame(initialFrameBuilderState, input());
+    const [frame, state] = nextFrame(first, input({ nowMs: 9_000 }));
+    expect(frame).toBeNull();
+    expect(state).toBe(first);
+  });
+
+  it("sends a full frame with keys reset when the generation changes", () => {
+    const [, first] = nextFrame(initialFrameBuilderState, input());
+    const [, second] = nextFrame(
+      first,
+      input({ readAtMs: 2_000, processes: [proc(11, 1, 1), proc(12, 1, 1)] }),
+    );
+    expect(second.nextKey).toBe(3);
+    // Same readAt as the last frame: a new generation still sends a frame.
+    const [frame] = nextFrame(
+      second,
+      input({ generation: 1, readAtMs: 2_000, processes: [proc(12, 1, 1)] }),
+    );
+    expect(frame).toMatchObject({
+      generation: 1,
+      full: true,
+      sequence: 2,
+      removed: [],
+      rows: { key: [0] },
+    });
+    expect(frame?.added.map((added) => [added.key, added.pid])).toEqual([[0, 12]]);
+  });
+
+  it("sends empty rows when the monitor is unavailable and removes what the client held", () => {
+    const [, first] = nextFrame(initialFrameBuilderState, input());
+    const [frame] = nextFrame(first, input({ readAtMs: 2_000, monitorAvailable: false }));
+    expect(frame).toMatchObject({
+      full: false,
+      added: [],
+      removed: [0, 1],
+      rows: { key: [], cpu: [], rss: [] },
+    });
+
+    const [fresh] = nextFrame(initialFrameBuilderState, input({ monitorAvailable: false }));
+    expect(fresh).toMatchObject({ full: true, added: [], removed: [], rows: { key: [] } });
+  });
+
+  it("sets truncated past the row cap and leaves it out otherwise", () => {
+    const processes = Array.from({ length: MACHINE_PROCESSES_MAX_ROWS + 1 }, (_, index) =>
+      proc(index + 1, index, 1),
+    );
+    const [frame] = nextFrame(initialFrameBuilderState, input({ processes }));
+    expect(frame?.truncated).toBe(1);
+    expect(frame?.rows.key).toHaveLength(MACHINE_PROCESSES_MAX_ROWS);
+
+    const [small] = nextFrame(initialFrameBuilderState, input());
+    expect(small).not.toHaveProperty("truncated");
+  });
+
+  it("applies top to the frame's rows", () => {
+    const processes = [proc(1, 90, 1), proc(2, 1, 900), proc(3, 50, 50)];
+    const [frame] = nextFrame(initialFrameBuilderState, input({ processes, top: 1 }));
+    expect(frame?.added.map((added) => added.pid).toSorted()).toEqual([1, 2]);
+  });
+});
+
+const emptyAggregate: ResourceTelemetryAggregate = {
+  processCount: 0,
+  currentCpuPercent: 0,
+  cpuTimeMs: 0,
+  currentRssBytes: 0,
+  peakRssBytes: 0,
+  ioReadBytes: 0,
+  ioWriteBytes: 0,
+  ioReadBytesPerSecond: 0,
+  ioWriteBytesPerSecond: 0,
+  processStarts: 0,
+  processExits: 0,
+};
+
+function telemetrySnapshot(readAtMs: number): ResourceTelemetrySnapshot {
+  const source = {
+    status: "healthy" as const,
+    lastSampleAt: Option.none(),
+    lastError: Option.none(),
+  };
+  return {
+    readAt: DateTime.makeUnsafe(readAtMs),
+    sampleIntervalMs: 1_000,
+    processes: [proc(10, 5, 100)],
+    groups: {
+      backend: emptyAggregate,
+      electron: emptyAggregate,
+      monitor: emptyAggregate,
+      allT3: emptyAggregate,
+    },
+    power: {
+      source: "electron-main",
+      idle: "false",
+      idleSeconds: 0,
+      locked: "false",
+      suspended: false,
+      onBattery: "false",
+      lowPowerMode: "unknown",
+      thermalState: "nominal",
+      stale: false,
+      updatedAt: EPOCH,
+    },
+    speedLimitPercent: Option.none(),
+    attribution: { readAt: EPOCH, entries: [] },
+    health: {
+      native: source,
+      desktop: source,
+      sidecarVersion: Option.none(),
+      sidecarPid: Option.none(),
+      restartCount: 0,
+      collectionDurationMicros: 0,
+      scannedProcessCount: 1,
+      retainedProcessCount: 1,
+      inaccessibleProcessCount: 0,
+    },
+  };
+}
+
+interface HostRowSpec {
+  readonly pid: number;
+  readonly cpu?: number;
+  readonly rss?: number;
+  readonly startTimeMs?: number;
+}
+
+function hostStatic(
+  pid: number,
+  overrides: Partial<ResourceMonitorHostProcessStatic> = {},
+): ResourceMonitorHostProcessStatic {
+  return {
+    pid,
+    startTimeMs: pid * 10,
+    name: `p${pid}`,
+    user: "dev",
+    command: `p${pid} --run`,
+    exe: `/usr/bin/p${pid}`,
+    cwd: "/",
+    cgroup: "/user.slice",
+    containerId: "",
+    ...overrides,
+  };
+}
+
+function hostSample(
+  rows: ReadonlyArray<HostRowSpec>,
+  options: {
+    readonly generation?: number;
+    readonly sampledAtUnixMs?: number;
+    readonly staticReset?: boolean;
+    readonly statics?: ReadonlyArray<ResourceMonitorHostProcessStatic>;
+    readonly gpus?: ReadonlyArray<GpuDeviceSample>;
+    readonly gpuProcesses?: ReadonlyArray<GpuProcessSample>;
+    readonly gpuProcessDevices?: ReadonlyArray<string>;
+  } = {},
+): NativeTelemetryClient.NativeHostSample {
+  const startTime = (row: HostRowSpec) => row.startTimeMs ?? row.pid * 10;
+  const statics = options.statics ?? rows.map((row) => hostStatic(row.pid));
+  return {
+    generation: options.generation ?? 0,
+    statics: new Map(statics.map((entry) => [entry.pid, entry])),
+    sample: {
+      version: 4,
+      type: "hostSample",
+      sequence: 0,
+      sampledAtUnixMs: options.sampledAtUnixMs ?? 10_000,
+      collectionDurationMicros: 1,
+      scannedProcessCount: rows.length,
+      inaccessibleProcessCount: 0,
+      staticReset: options.staticReset ?? false,
+      processes: {
+        pid: rows.map((row) => row.pid),
+        ppid: rows.map(() => 1),
+        startTimeMs: rows.map(startTime),
+        cpuPercent: rows.map((row) => row.cpu ?? 1),
+        residentBytes: rows.map((row) => row.rss ?? 100),
+      },
+      ...(options.gpus ? { gpus: options.gpus } : {}),
+      ...(options.gpuProcesses ? { gpuProcesses: options.gpuProcesses } : {}),
+      ...(options.gpuProcessDevices ? { gpuProcessDevices: options.gpuProcessDevices } : {}),
+    },
+  };
+}
+
+function hostInput(
+  sample: NativeTelemetryClient.NativeHostSample,
+  overrides: Partial<Omit<HostFrameInput, "sample">> = {},
+): HostFrameInput {
+  return {
+    sample,
+    nowMs: sample.sample.sampledAtUnixMs + 250,
+    intervalMs: 1_000,
+    top: undefined,
+    gpuProcesses: false,
+    ...overrides,
+  };
+}
+
+const threeRows: ReadonlyArray<HostRowSpec> = [
+  { pid: 1, cpu: 1, rss: 100 },
+  { pid: 2, cpu: 2, rss: 200 },
+  { pid: 3, cpu: 3, rss: 300 },
+];
+
+const gpuDevice: GpuDeviceSample = {
+  id: "gpu-a",
+  vendor: "nvidia",
+  name: "Test GPU",
+  status: "active",
+  utilPercent: 40,
+  vramTotalBytes: 8_000,
+  vramUsedBytes: 1_000,
+  sharedMemory: false,
+};
+const gpuDeviceB: GpuDeviceSample = { ...gpuDevice, id: "gpu-b", name: "Second GPU" };
+const bothWalked = ["gpu-a", "gpu-b"];
+
+const addedKeys = (frame: MachineProcessFrame) => frame.added.map((added) => added.key);
+
+describe("nextHostFrames", () => {
+  it("sends one full frame for the first sample with keys from 0", () => {
+    const [frames, state] = nextHostFrames(
+      initialHostFrameBuilderState,
+      hostInput(hostSample(threeRows)),
+    );
+
+    expect(frames).toEqual([
+      {
+        generation: 0,
+        full: true,
+        sequence: 0,
+        sampleAgeMs: 250,
+        source: "host",
+        added: [1, 2, 3].map((pid, key) => ({
+          key,
+          pid,
+          ppid: 1,
+          startTimeMs: pid * 10,
+          name: `p${pid}`,
+          user: "dev",
+          command: `p${pid} --run`,
+        })),
+        removed: [],
+        rows: { key: [0, 1, 2], cpu: [1, 2, 3], rss: [100, 200, 300] },
+      },
+    ]);
+    expect(state).toMatchObject({
+      generation: 0,
+      sequence: 0,
+      nextKey: 3,
+      lastSampledAtMs: 10_000,
+    });
+  });
+
+  it("restarts keys in a full frame on a new generation or a static reset, even inside the interval", () => {
+    const [, first] = nextHostFrames(
+      initialHostFrameBuilderState,
+      hostInput(hostSample(threeRows)),
+    );
+
+    for (const sample of [
+      hostSample([{ pid: 3 }, { pid: 4 }], { generation: 1, sampledAtUnixMs: 10_100 }),
+      hostSample([{ pid: 3 }, { pid: 4 }], { staticReset: true, sampledAtUnixMs: 10_100 }),
+    ]) {
+      const [[frame], state] = nextHostFrames(first, hostInput(sample));
+      expect(frame).toMatchObject({
+        generation: sample.generation,
+        full: true,
+        sequence: 1,
+        removed: [],
+        rows: { key: [0, 1] },
+      });
+      expect(frame).not.toHaveProperty("complete");
+      expect(frame!.added.map((added) => [added.key, added.pid])).toEqual([
+        [0, 3],
+        [1, 4],
+      ]);
+      expect(state.nextKey).toBe(2);
+    }
+  });
+
+  it("skips a diff sooner than the interval less min(500 ms, half the interval)", () => {
+    for (const [intervalMs, earliestMs] of [
+      [2_000, 1_500],
+      [600, 300],
+    ] as const) {
+      const [, first] = nextHostFrames(
+        initialHostFrameBuilderState,
+        hostInput(hostSample(threeRows), { intervalMs }),
+      );
+      const early = hostSample(threeRows, { sampledAtUnixMs: 10_000 + earliestMs - 1 });
+      const [skipped, unchanged] = nextHostFrames(first, hostInput(early, { intervalMs }));
+      expect(skipped).toEqual([]);
+      expect(unchanged).toBe(first);
+
+      const due = hostSample(threeRows, { sampledAtUnixMs: 10_000 + earliestMs });
+      const [[frame]] = nextHostFrames(first, hostInput(due, { intervalMs }));
+      expect(frame).toMatchObject({ full: false, sequence: 1 });
+    }
+  });
+
+  it("diffs only changed rows, new keys and removed keys", () => {
+    const [, first] = nextHostFrames(
+      initialHostFrameBuilderState,
+      hostInput(hostSample(threeRows)),
+    );
+    const next = hostSample(
+      [
+        // 1.04 rounds to the 1.0 already sent.
+        { pid: 1, cpu: 1.04, rss: 100 },
+        { pid: 2, cpu: 2, rss: 250 },
+        { pid: 4, cpu: 4, rss: 400 },
+      ],
+      { sampledAtUnixMs: 11_000 },
+    );
+    const [[frame], second] = nextHostFrames(first, hostInput(next));
+
+    expect(frame).toMatchObject({
+      full: false,
+      sequence: 1,
+      removed: [2],
+      rows: { key: [1, 3], cpu: [2, 4], rss: [250, 400] },
+    });
+    expect(frame!.added.map((added) => [added.key, added.pid])).toEqual([[3, 4]]);
+
+    const cpuMoved = hostSample(
+      [
+        { pid: 1, cpu: 1.06, rss: 100 },
+        { pid: 2, cpu: 2, rss: 250 },
+        { pid: 4, cpu: 4, rss: 400 },
+      ],
+      { sampledAtUnixMs: 12_000 },
+    );
+    const [[moved]] = nextHostFrames(second, hostInput(cpuMoved));
+    expect(moved).toMatchObject({ added: [], removed: [], rows: { key: [0], cpu: [1.1] } });
+  });
+
+  it("splits a large full frame into parts that share a sequence and rebuild the table", () => {
+    const pids = Array.from({ length: 1_000 }, (_, index) => index + 1);
+    const sample = hostSample(
+      pids.map((pid) => ({ pid, cpu: pid / 10, rss: pid })),
+      {
+        statics: pids.map((pid) => hostStatic(pid, { command: "x".repeat(1_000) })),
+        gpus: [gpuDevice],
+        gpuProcesses: [],
+      },
+    );
+    const [frames] = nextHostFrames(
+      initialHostFrameBuilderState,
+      hostInput(sample, { gpuProcesses: true }),
+    );
+
+    expect(frames.length).toBeGreaterThan(1);
+    const last = frames.length - 1;
+    frames.forEach((frame, index) => {
+      expect(frame).toMatchObject({ full: true, complete: index === last, sequence: 0 });
+      expect(frame.rows.key).toEqual(addedKeys(frame));
+      const staticBytes = frame.added.reduce(
+        (total, added) =>
+          total + 120 + added.name.length + added.user.length + added.command.length,
+        0,
+      );
+      expect(staticBytes).toBeLessThanOrEqual(512 * 1024);
+      if (index !== last) {
+        expect(frame.removed).toEqual([]);
+        expect(frame).not.toHaveProperty("gpus");
+      }
+    });
+    expect(frames[last]!.gpus).toEqual([gpuDevice]);
+    expect(frames.flatMap(addedKeys)).toEqual(pids.map((_, key) => key));
+
+    const applier = createMachineProcessFrameApplier();
+    for (const frame of frames.slice(0, last)) expect(applier.apply(frame)).toBeNull();
+    const table = applier.apply(frames[last]!);
+    expect(table?.rows).toHaveLength(1_000);
+    expect(table?.rows.find((row) => row.pid === 500)).toMatchObject({ cpu: 50, rss: 500 });
+  });
+
+  it("caps the whole table at the row limit and reports truncated on the last part only", () => {
+    const rows = Array.from({ length: MACHINE_PROCESSES_MAX_ROWS + 1 }, (_, index) => ({
+      pid: index + 1,
+      cpu: index,
+    }));
+    const [frames] = nextHostFrames(initialHostFrameBuilderState, hostInput(hostSample(rows)));
+
+    const keys = frames.flatMap((frame) => frame.rows.key);
+    expect(keys).toHaveLength(MACHINE_PROCESSES_MAX_ROWS);
+    expect(frames.flatMap((frame) => frame.added.map((added) => added.pid))).not.toContain(1);
+    expect(frames.at(-1)?.truncated).toBe(1);
+    for (const frame of frames.slice(0, -1)) expect(frame).not.toHaveProperty("truncated");
+  });
+
+  it("keeps the top N by CPU together with the top N by memory", () => {
+    const sample = hostSample([
+      { pid: 1, cpu: 90, rss: 9_000 },
+      { pid: 2, cpu: 80, rss: 10 },
+      { pid: 3, cpu: 1, rss: 8_000 },
+      { pid: 4, cpu: 70, rss: 20 },
+      { pid: 5, cpu: 0, rss: 7_000 },
+    ]);
+    const [[frame]] = nextHostFrames(initialHostFrameBuilderState, hostInput(sample, { top: 2 }));
+
+    expect(frame!.added.map((added) => added.pid).toSorted()).toEqual([1, 2, 3]);
+    expect(frame!.rows.key.toSorted()).toEqual(addedKeys(frame!).toSorted());
+    expect(frame).not.toHaveProperty("truncated");
+  });
+
+  it("sums GPU use per process identity across devices only when asked", () => {
+    const gpuProcesses: ReadonlyArray<GpuProcessSample> = [
+      { pid: 1, startTimeMs: 10, deviceId: "gpu-a", utilPercent: 10, vramBytes: 100 },
+      { pid: 1, startTimeMs: 10, deviceId: "gpu-b", utilPercent: 5, vramBytes: 50 },
+      { pid: 2, startTimeMs: 20, deviceId: "gpu-a", utilPercent: null, vramBytes: null },
+      // A reused pid's old identity does not count toward the live process.
+      { pid: 3, startTimeMs: 999, deviceId: "gpu-a", utilPercent: 70, vramBytes: 700 },
+    ];
+    const sample = hostSample(threeRows, {
+      gpus: [gpuDevice, gpuDeviceB],
+      gpuProcesses,
+      gpuProcessDevices: bothWalked,
+    });
+
+    const [[withGpu], state] = nextHostFrames(
+      initialHostFrameBuilderState,
+      hostInput(sample, { gpuProcesses: true }),
+    );
+    expect(withGpu!.rows).toEqual({
+      key: [0, 1, 2],
+      cpu: [1, 2, 3],
+      rss: [100, 200, 300],
+      gpuUtil: [15, null, 0],
+      vram: [150, null, 0],
+    });
+    expect(withGpu!.gpus).toEqual([gpuDevice, gpuDeviceB]);
+
+    const [[withoutGpu]] = nextHostFrames(initialHostFrameBuilderState, hostInput(sample));
+    expect(withoutGpu!.rows).not.toHaveProperty("gpuUtil");
+    expect(withoutGpu!.rows).not.toHaveProperty("vram");
+    expect(withoutGpu).not.toHaveProperty("gpus");
+
+    const [[noGpuColumns]] = nextHostFrames(
+      initialHostFrameBuilderState,
+      hostInput(hostSample(threeRows), { gpuProcesses: true }),
+    );
+    expect(noGpuColumns!.rows).toMatchObject({
+      key: [0, 1, 2],
+      gpuUtil: [null, null, null],
+      vram: [null, null, null],
+    });
+
+    // GPU rows stop (GPUs off): measured values turn null once, then rows go quiet.
+    const [[unmeasured], unmeasuredState] = nextHostFrames(
+      state,
+      hostInput(hostSample(threeRows, { sampledAtUnixMs: 11_000 }), { gpuProcesses: true }),
+    );
+    expect(unmeasured!.rows).toEqual({
+      key: [0, 2],
+      cpu: [1, 3],
+      rss: [100, 300],
+      gpuUtil: [null, null],
+      vram: [null, null],
+    });
+    const [[quiet]] = nextHostFrames(
+      unmeasuredState,
+      hostInput(hostSample(threeRows, { sampledAtUnixMs: 12_000 }), { gpuProcesses: true }),
+    );
+    expect(quiet!.rows).toEqual({ key: [], cpu: [], rss: [], gpuUtil: [], vram: [] });
+
+    const vramMoved = hostSample(threeRows, {
+      sampledAtUnixMs: 11_000,
+      gpuProcessDevices: bothWalked,
+      gpuProcesses: [
+        { pid: 1, startTimeMs: 10, deviceId: "gpu-a", utilPercent: 10, vramBytes: 300 },
+        { pid: 1, startTimeMs: 10, deviceId: "gpu-b", utilPercent: 5, vramBytes: 50 },
+        { pid: 2, startTimeMs: 20, deviceId: "gpu-a", utilPercent: null, vramBytes: null },
+      ],
+    });
+    const [[diff]] = nextHostFrames(state, hostInput(vramMoved, { gpuProcesses: true }));
+    expect(diff!.rows).toEqual({ key: [0], cpu: [1], rss: [100], gpuUtil: [15], vram: [350] });
+  });
+
+  it("leaves every process unmeasured unless every GPU's process walk succeeded", () => {
+    const gpus = [gpuDevice, gpuDeviceB];
+    const gpuProcesses: ReadonlyArray<GpuProcessSample> = [
+      { pid: 1, startTimeMs: 10, deviceId: "gpu-a", utilPercent: 10, vramBytes: 100 },
+      { pid: 1, startTimeMs: 10, deviceId: "gpu-b", utilPercent: 5, vramBytes: 50 },
+    ];
+    const rowsFor = (options: Parameters<typeof hostSample>[1]) =>
+      nextHostFrames(
+        initialHostFrameBuilderState,
+        hostInput(hostSample(threeRows, options), { gpuProcesses: true }),
+      )[0][0]!.rows;
+    const unmeasured = { gpuUtil: [null, null, null], vram: [null, null, null] };
+
+    // Walked: a process without GPU rows used none; one with rows sums its devices.
+    expect(rowsFor({ gpus, gpuProcesses, gpuProcessDevices: bothWalked })).toMatchObject({
+      gpuUtil: [15, 0, 0],
+      vram: [150, 0, 0],
+    });
+    // gpu-b's walk failed: no process is measured, not even on gpu-a.
+    expect(rowsFor({ gpus, gpuProcesses, gpuProcessDevices: ["gpu-a"] })).toMatchObject(unmeasured);
+    expect(rowsFor({ gpus, gpuProcesses, gpuProcessDevices: [] })).toMatchObject(unmeasured);
+    // An older v4 monitor sends no walked list.
+    expect(rowsFor({ gpus, gpuProcesses })).toMatchObject(unmeasured);
+
+    // Measured → a failed walk sends null once, then the rows stay quiet until it recovers.
+    const [, measuredState] = nextHostFrames(
+      initialHostFrameBuilderState,
+      hostInput(hostSample(threeRows, { gpus, gpuProcesses, gpuProcessDevices: bothWalked }), {
+        gpuProcesses: true,
+      }),
+    );
+    const failedWalk = (sampledAtUnixMs: number) =>
+      hostInput(
+        hostSample(threeRows, {
+          sampledAtUnixMs,
+          gpus,
+          gpuProcesses,
+          gpuProcessDevices: ["gpu-a"],
+        }),
+        { gpuProcesses: true },
+      );
+    const [[failed], failedState] = nextHostFrames(measuredState, failedWalk(11_000));
+    expect(failed!.rows).toEqual({
+      key: [0, 1, 2],
+      cpu: [1, 2, 3],
+      rss: [100, 200, 300],
+      gpuUtil: [null, null, null],
+      vram: [null, null, null],
+    });
+    const [[stillFailed], stillFailedState] = nextHostFrames(failedState, failedWalk(12_000));
+    expect(stillFailed!.rows).toEqual({ key: [], cpu: [], rss: [], gpuUtil: [], vram: [] });
+    const [[recovered]] = nextHostFrames(
+      stillFailedState,
+      hostInput(
+        hostSample(threeRows, {
+          sampledAtUnixMs: 13_000,
+          gpus,
+          gpuProcesses,
+          gpuProcessDevices: bothWalked,
+        }),
+        { gpuProcesses: true },
+      ),
+    );
+    expect(recovered!.rows).toMatchObject({
+      key: [0, 1, 2],
+      gpuUtil: [15, 0, 0],
+      vram: [150, 0, 0],
+    });
+  });
+
+  it("gives a reused pid a new key with empty static fields and omits empty container ids", () => {
+    const statics = [
+      hostStatic(1, { containerId: "c0ffee" }),
+      hostStatic(2),
+      hostStatic(3, { startTimeMs: 999 }),
+    ];
+    const [[frame], state] = nextHostFrames(
+      initialHostFrameBuilderState,
+      hostInput(hostSample(threeRows, { statics })),
+    );
+    expect(frame!.added[0]).toMatchObject({ pid: 1, containerId: "c0ffee" });
+    expect(frame!.added[1]).not.toHaveProperty("containerId");
+    expect(frame!.added[2]).toMatchObject({ pid: 3, name: "", user: "", command: "" });
+
+    const reused = hostSample(
+      [{ pid: 1, cpu: 1, rss: 100 }, { pid: 2, cpu: 2, rss: 200, startTimeMs: 77 }, threeRows[2]!],
+      { sampledAtUnixMs: 11_000, statics },
+    );
+    const [[diff], reusedState] = nextHostFrames(state, hostInput(reused));
+    expect(diff).toMatchObject({ removed: [1], rows: { key: [3] } });
+    expect(diff!.added).toEqual([
+      { key: 3, pid: 2, ppid: 1, startTimeMs: 77, name: "", user: "", command: "" },
+    ]);
+
+    // Once the statics match, an unnamed row is re-added named, with its unchanged values.
+    const reusedRows = [
+      threeRows[0]!,
+      { pid: 2, cpu: 2, rss: 200, startTimeMs: 77 },
+      threeRows[2]!,
+    ];
+    const namedStatics = [statics[0]!, hostStatic(2, { startTimeMs: 77 }), hostStatic(3)];
+    const named = (sampledAtUnixMs: number) =>
+      hostInput(hostSample(reusedRows, { sampledAtUnixMs, statics: namedStatics }));
+    const [[renamed], renamedState] = nextHostFrames(reusedState, named(12_000));
+    expect(renamed!.added.map((added) => [added.key, added.pid, added.name]).toSorted()).toEqual([
+      [2, 3, "p3"],
+      [3, 2, "p2"],
+    ]);
+    expect(renamed!.removed).toEqual([]);
+    expect(renamed!.rows.key.toSorted()).toEqual([2, 3]);
+    expect(renamed!.rows.cpu.toSorted()).toEqual([2, 3]);
+
+    const [[settled]] = nextHostFrames(renamedState, named(13_000));
+    expect(settled).toMatchObject({ added: [], removed: [], rows: { key: [] } });
+  });
+});
+
+describe("frame owners and claims", () => {
+  const threadA = ThreadId.make("thread-a");
+  const ownerA: ProcessOwner = { type: "thread", threadId: threadA };
+  const ownerB: ProcessOwner = { type: "t3", label: "machine terminal" };
+  const claim = (id: string): Claim => ({
+    id: ClaimId.make(id),
+    threadId: threadA,
+    target: { type: "process", pid: 2, startTimeMs: 20 },
+    createdAt: EPOCH,
+    createdBy: { type: "agent", threadId: threadA },
+  });
+  const claims = [claim("claim-1")];
+  const owners = (entries: ReadonlyArray<readonly [string, ProcessOwner]>) => new Map(entries);
+
+  it("puts an owner on the rows that have one and re-adds a row whose owner changed", () => {
+    const [[first], firstState] = nextHostFrames(
+      initialHostFrameBuilderState,
+      hostInput(hostSample(threeRows), { owners: owners([["1:10", ownerA]]) }),
+    );
+    expect(first!.added.map((added) => [added.pid, added.owner])).toEqual([
+      [1, ownerA],
+      [2, undefined],
+      [3, undefined],
+    ]);
+    expect(first!.added[1]).not.toHaveProperty("owner");
+
+    const next = (
+      sampledAtUnixMs: number,
+      entries: ReadonlyArray<readonly [string, ProcessOwner]>,
+    ) => hostInput(hostSample(threeRows, { sampledAtUnixMs }), { owners: owners(entries) });
+    const [[same], sameState] = nextHostFrames(firstState, next(11_000, [["1:10", ownerA]]));
+    expect(same).toMatchObject({ added: [], rows: { key: [] } });
+
+    const [[changed], changedState] = nextHostFrames(
+      sameState,
+      next(12_000, [
+        ["1:10", ownerB],
+        ["2:20", ownerA],
+      ]),
+    );
+    expect(changed!.added.map((added) => [added.key, added.owner])).toEqual([
+      [0, ownerB],
+      [1, ownerA],
+    ]);
+    expect(changed!.rows).toEqual({ key: [0, 1], cpu: [1, 2], rss: [100, 200] });
+
+    const [[cleared]] = nextHostFrames(changedState, next(13_000, [["2:20", ownerA]]));
+    expect(cleared!.added.map((added) => [added.key, added.owner])).toEqual([[0, undefined]]);
+  });
+
+  it("sends claims on full frames and when the array changes, never when absent", () => {
+    const at = (sampledAtUnixMs: number, overrides: Partial<Omit<HostFrameInput, "sample">>) =>
+      hostInput(hostSample(threeRows, { sampledAtUnixMs }), overrides);
+    const [[none], noneState] = nextHostFrames(initialHostFrameBuilderState, at(10_000, {}));
+    expect(none).not.toHaveProperty("claims");
+
+    const [[first], firstState] = nextHostFrames(noneState, at(11_000, { claims }));
+    expect(first!.claims).toBe(claims);
+    const [[same], sameState] = nextHostFrames(firstState, at(12_000, { claims }));
+    expect(same).not.toHaveProperty("claims");
+    const emptied: ReadonlyArray<Claim> = [];
+    const [[released]] = nextHostFrames(sameState, at(13_000, { claims: emptied }));
+    expect(released!.claims).toBe(emptied);
+
+    const [[restarted]] = nextHostFrames(
+      sameState,
+      hostInput(hostSample(threeRows, { generation: 1, sampledAtUnixMs: 12_100 }), { claims }),
+    );
+    expect(restarted).toMatchObject({ full: true, claims });
+  });
+
+  it("puts claims on the last part of a split full frame only", () => {
+    const pids = Array.from({ length: 1_000 }, (_, index) => index + 1);
+    const sample = hostSample(
+      pids.map((pid) => ({ pid })),
+      { statics: pids.map((pid) => hostStatic(pid, { command: "x".repeat(1_000) })) },
+    );
+    const [frames] = nextHostFrames(initialHostFrameBuilderState, hostInput(sample, { claims }));
+    expect(frames.length).toBeGreaterThan(1);
+    expect(frames.map((frame) => frame.claims)).toEqual([
+      ...frames.slice(1).map(() => undefined),
+      claims,
+    ]);
+  });
+
+  it("keeps only the rows a lineage owns, directly or through a claim, when asked", () => {
+    const child = ThreadId.make("thread-a-child");
+    const claimedByChild: ProcessOwner = {
+      type: "claimed",
+      claimId: ClaimId.make("claim-1"),
+      threadId: child,
+    };
+    const ownerSibling: ProcessOwner = { type: "thread", threadId: ThreadId.make("thread-b") };
+    const lineage = new Set([threadA, child]);
+    const [[host]] = nextHostFrames(
+      initialHostFrameBuilderState,
+      hostInput(hostSample(threeRows), {
+        threadIds: lineage,
+        owners: owners([
+          ["1:10", ownerA],
+          ["2:20", claimedByChild],
+          ["3:30", ownerSibling],
+        ]),
+      }),
+    );
+    expect(host!.added.map((added) => added.pid)).toEqual([1, 2]);
+
+    const [subtree] = nextFrame(
+      initialFrameBuilderState,
+      input({
+        processes: [proc(10, 5, 100), proc(11, 1, 200), proc(12, 1, 300), proc(13, 1, 400)],
+        threadIds: lineage,
+        owners: owners([
+          ["10:100", ownerB],
+          ["11:110", claimedByChild],
+          ["12:120", ownerA],
+          ["13:130", ownerSibling],
+        ]),
+      }),
+    );
+    expect(subtree!.added.map((added) => added.pid)).toEqual([11, 12]);
+  });
+
+  it("does the same for subtree frames", () => {
+    const [first, firstState] = nextFrame(
+      initialFrameBuilderState,
+      input({ owners: owners([["10:100", ownerA]]), claims }),
+    );
+    expect(first!.added.map((added) => [added.pid, added.owner])).toEqual([
+      [10, ownerA],
+      [11, undefined],
+    ]);
+    expect(first!.claims).toBe(claims);
+
+    const [same, sameState] = nextFrame(
+      firstState,
+      input({ readAtMs: 2_000, owners: owners([["10:100", ownerA]]), claims }),
+    );
+    expect(same).toMatchObject({ added: [] });
+    expect(same).not.toHaveProperty("claims");
+
+    const [changed] = nextFrame(
+      sameState,
+      input({ readAtMs: 3_000, owners: owners([["10:100", ownerB]]), claims: [] }),
+    );
+    expect(changed!.added.map((added) => [added.key, added.owner])).toEqual([[0, ownerB]]);
+    expect(changed!.claims).toEqual([]);
+  });
+
+  it("reads attribution rows from a host sample, statics only for the same process", () => {
+    const sample = hostSample([{ pid: 1 }, { pid: 2, startTimeMs: 999 }]);
+    expect(hostOwnershipRows(sample.sample, sample.statics)).toEqual([
+      {
+        pid: 1,
+        ppid: 1,
+        startTimeMs: 10,
+        name: "p1",
+        command: "p1 --run",
+        exe: "/usr/bin/p1",
+        cwd: "/",
+        user: "dev",
+        cgroup: "/user.slice",
+        containerId: "",
+      },
+      {
+        pid: 2,
+        ppid: 1,
+        startTimeMs: 999,
+        name: "",
+        command: "",
+        exe: "",
+        cwd: "",
+        user: "",
+        cgroup: "",
+        containerId: "",
+      },
+    ]);
+    expect(subtreeOwnershipRows([proc(10, 1, 1, { ppid: 4 })])).toEqual([
+      {
+        pid: 10,
+        ppid: 4,
+        startTimeMs: 100,
+        name: "p10",
+        command: "p10 --run",
+        exe: "",
+        cwd: "",
+        user: "",
+        cgroup: "",
+        containerId: "",
+      },
+    ]);
+  });
+});
+
+describe("buildProcessSnapshot", () => {
+  const threadA = ThreadId.make("thread-a");
+  const bucketDev = MachineBucketId.make("bucket:dev");
+  const bucketCi = MachineBucketId.make("bucket:ci");
+  const row = (
+    pid: number,
+    cpuPercent: number,
+    rssBytes: number,
+    overrides: Partial<SnapshotRow> = {},
+  ): SnapshotRow => ({
+    identity: `${pid}:${pid * 10}`,
+    pid,
+    ppid: 1,
+    name: `p${pid}`,
+    user: "dev",
+    command: `p${pid} --run`,
+    cpuPercent,
+    rssBytes,
+    gpuUtilPercent: null,
+    vramBytes: null,
+    ...overrides,
+  });
+  const build = (overrides: Partial<SnapshotBuildInput> = {}) =>
+    buildProcessSnapshot({
+      rows: [row(1, 5, 100), row(2, 50, 200), row(3, 1, 9_000), row(4, 20, 300)],
+      owners: new Map(),
+      source: "host",
+      sampleAgeMs: 250,
+      limit: 20,
+      groupBy: "none",
+      commands: true,
+      bucketNames: new Map(),
+      ...overrides,
+    });
+  const listedPids = (result: ReturnType<typeof buildProcessSnapshot>) =>
+    result.snapshot.processes.map((process) => process.pid);
+
+  it("lists the busiest by CPU together with the largest by memory, busiest first", () => {
+    const all = build();
+    expect(listedPids(all)).toEqual([2, 4, 1, 3]);
+    expect(all.snapshot).not.toHaveProperty("truncated");
+    expect(all.snapshot).not.toHaveProperty("groups");
+    expect(all.snapshot).toMatchObject({ source: "host", sampleAgeMs: 250 });
+
+    // Two by CPU and two by memory: the low-CPU memory hog makes the cut, and a process
+    // topping both takes one row, so fewer than `limit` can be listed.
+    const four = build({
+      rows: [row(1, 5, 100), row(2, 50, 200), row(3, 1, 9_000), row(4, 20, 300), row(5, 2, 50)],
+      limit: 4,
+    });
+    expect(listedPids(four)).toEqual([2, 4, 3]);
+    expect(four.snapshot.truncated).toBe(2);
+
+    const two = build({ limit: 2 });
+    expect(listedPids(two)).toEqual([2, 3]);
+    expect(two.snapshot.truncated).toBe(2);
+  });
+
+  it("lists nothing and reports nothing truncated at limit 0, but still totals buckets", () => {
+    const result = build({
+      limit: 0,
+      owners: new Map([["2:20", { type: "bucket", bucketId: bucketDev }]]),
+      bucketNames: new Map([[bucketDev, "Dev"]]),
+    });
+    expect(result.snapshot.processes).toEqual([]);
+    expect(result.snapshot).not.toHaveProperty("truncated");
+    expect(result.buckets).toEqual([
+      { bucketId: bucketDev, name: "Dev", cpuPercent: 50, rssBytes: 200, count: 1 },
+    ]);
+  });
+
+  it("puts command lines in only when asked, cut to 512 characters", () => {
+    const long = "x".repeat(2_000);
+    const rows = [row(1, 5, 100, { command: long })];
+    const withCommands = build({ rows });
+    expect(withCommands.snapshot.processes[0]?.command).toBe(long.slice(0, 512));
+
+    const without = build({ rows, commands: false });
+    expect(without.snapshot.processes[0]).toEqual({
+      pid: 1,
+      ppid: 1,
+      name: "p1",
+      user: "dev",
+      cpuPercent: 5,
+      rssBytes: 100,
+    });
+    expect(JSON.stringify(without)).not.toContain("xxx");
+  });
+
+  it("rounds CPU to one decimal, clamps a negative sample age and adds measured GPU use only", () => {
+    const result = build({
+      rows: [
+        row(1, 12.345, 100, { gpuUtilPercent: 30, vramBytes: 4_096 }),
+        row(2, 0.04, 100, { gpuUtilPercent: 0, vramBytes: 0 }),
+        row(3, 1, 100),
+      ],
+      sampleAgeMs: -40.6,
+      owners: new Map([["1:10", { type: "thread", threadId: threadA }]]),
+    });
+    expect(result.snapshot.sampleAgeMs).toBe(0);
+    expect(result.snapshot.processes).toEqual([
+      expect.objectContaining({
+        pid: 1,
+        cpuPercent: 12.3,
+        gpuUtilPercent: 30,
+        vramBytes: 4_096,
+        owner: { type: "thread", threadId: threadA },
+      }),
+      expect.not.objectContaining({ gpuUtilPercent: expect.anything() }),
+      expect.not.objectContaining({ vramBytes: expect.anything() }),
+    ]);
+    expect(result.snapshot.processes[2]).not.toHaveProperty("owner");
+  });
+
+  it("groups by owner: a thread with its claims, and unowned with other, every process once", () => {
+    const owners = new Map<string, ProcessOwner>([
+      ["1:10", { type: "thread", threadId: threadA }],
+      ["2:20", { type: "claimed", claimId: ClaimId.make("claim-1"), threadId: threadA }],
+      ["4:40", { type: "other" }],
+      ["5:50", { type: "container", id: "0123456789abcdef0123" }],
+      ["6:60", { type: "bucket", bucketId: bucketDev }],
+      ["7:70", { type: "provider", provider: ProviderDriverKind.make("codex") }],
+      ["8:80", { type: "t3", label: "server" }],
+      [
+        "9:90",
+        {
+          type: "shared",
+          provider: ProviderDriverKind.make("claude"),
+          label: "Claude MCP",
+          threadCount: 2,
+        },
+      ],
+    ]);
+    const rows = [
+      row(1, 10, 100),
+      row(2, 5, 50),
+      row(3, 1, 10),
+      row(4, 1, 20),
+      row(5, 4, 1),
+      row(6, 3, 1),
+      row(7, 2.5, 1),
+      row(8, 2, 1),
+      row(9, 0.5, 1),
+    ];
+    const { snapshot } = build({ rows, owners, groupBy: "owner", limit: 1 });
+    expect(snapshot.groups).toEqual([
+      {
+        label: "thread thread-a",
+        owner: { type: "thread", threadId: threadA },
+        cpuPercent: 15,
+        rssBytes: 150,
+        count: 2,
+      },
+      {
+        label: "container 0123456789ab",
+        owner: { type: "container", id: "0123456789abcdef0123" },
+        cpuPercent: 4,
+        rssBytes: 1,
+        count: 1,
+      },
+      {
+        label: "bucket:dev",
+        owner: { type: "bucket", bucketId: bucketDev },
+        bucketId: bucketDev,
+        cpuPercent: 3,
+        rssBytes: 1,
+        count: 1,
+      },
+      {
+        label: "codex",
+        owner: { type: "provider", provider: "codex" },
+        cpuPercent: 2.5,
+        rssBytes: 1,
+        count: 1,
+      },
+      { label: "other", cpuPercent: 2, rssBytes: 30, count: 2 },
+      {
+        label: "server",
+        owner: { type: "t3", label: "server" },
+        cpuPercent: 2,
+        rssBytes: 1,
+        count: 1,
+      },
+      {
+        label: "Claude MCP",
+        owner: { type: "shared", provider: "claude", label: "Claude MCP", threadCount: 2 },
+        cpuPercent: 0.5,
+        rssBytes: 1,
+        count: 1,
+      },
+    ]);
+    expect(snapshot.groups!.reduce((sum, group) => sum + group.count, 0)).toBe(rows.length);
+    expect(snapshot.processes).toHaveLength(1);
+  });
+
+  it("groups by bucket with names, an id fallback and one group for the rest", () => {
+    const owners = new Map<string, ProcessOwner>([
+      ["1:10", { type: "bucket", bucketId: bucketDev }],
+      ["2:20", { type: "bucket", bucketId: bucketCi }],
+      ["3:30", { type: "bucket", bucketId: bucketDev }],
+      ["4:40", { type: "thread", threadId: threadA }],
+    ]);
+    const result = build({
+      owners,
+      groupBy: "bucket",
+      bucketNames: new Map([[bucketDev, "Dev"]]),
+    });
+    expect(result.snapshot.groups).toEqual([
+      {
+        label: "bucket:ci",
+        owner: { type: "bucket", bucketId: bucketCi },
+        bucketId: bucketCi,
+        cpuPercent: 50,
+        rssBytes: 200,
+        count: 1,
+      },
+      { label: "not in a bucket", cpuPercent: 20, rssBytes: 300, count: 1 },
+      {
+        label: "Dev",
+        owner: { type: "bucket", bucketId: bucketDev },
+        bucketId: bucketDev,
+        cpuPercent: 6,
+        rssBytes: 9_100,
+        count: 2,
+      },
+    ]);
+    expect(result.buckets).toEqual([
+      { bucketId: bucketCi, name: "bucket:ci", cpuPercent: 50, rssBytes: 200, count: 1 },
+      { bucketId: bucketDev, name: "Dev", cpuPercent: 6, rssBytes: 9_100, count: 2 },
+    ]);
+  });
+
+  it("breaks a CPU tie between groups by memory", () => {
+    const owners = new Map<string, ProcessOwner>([
+      ["1:10", { type: "bucket", bucketId: bucketDev }],
+      ["2:20", { type: "bucket", bucketId: bucketCi }],
+    ]);
+    const { buckets } = build({ rows: [row(1, 5, 100), row(2, 5, 900)], owners });
+    expect(buckets.map((bucket) => bucket.bucketId)).toEqual([bucketCi, bucketDev]);
+  });
+});
+
+describe("snapshot rows", () => {
+  it("fills a host row from its static only when the start time matches", () => {
+    const sample = hostSample([
+      { pid: 1, cpu: 7, rss: 70 },
+      { pid: 2, startTimeMs: 999 },
+    ]);
+    expect(hostSnapshotRows(sample)).toEqual([
+      {
+        identity: "1:10",
+        pid: 1,
+        ppid: 1,
+        name: "p1",
+        user: "dev",
+        command: "p1 --run",
+        cpuPercent: 7,
+        rssBytes: 70,
+        gpuUtilPercent: null,
+        vramBytes: null,
+      },
+      {
+        identity: "2:999",
+        pid: 2,
+        ppid: 1,
+        name: "",
+        user: "",
+        command: "",
+        cpuPercent: 1,
+        rssBytes: 100,
+        gpuUtilPercent: null,
+        vramBytes: null,
+      },
+    ]);
+  });
+
+  it("sums GPU use across devices, and drops it from every row when one device's walk failed", () => {
+    const gpuProcesses: ReadonlyArray<GpuProcessSample> = [
+      { pid: 1, startTimeMs: 10, deviceId: "gpu-a", utilPercent: 10, vramBytes: 100 },
+      { pid: 1, startTimeMs: 10, deviceId: "gpu-b", utilPercent: 5, vramBytes: null },
+      { pid: 2, startTimeMs: 20, deviceId: "gpu-b", utilPercent: null, vramBytes: 300 },
+    ];
+    const walked = hostSnapshotRows(
+      hostSample([{ pid: 1 }, { pid: 2 }, { pid: 3 }], {
+        gpus: [gpuDevice, gpuDeviceB],
+        gpuProcesses,
+        gpuProcessDevices: bothWalked,
+      }),
+    );
+    expect(walked.map((row) => [row.pid, row.gpuUtilPercent, row.vramBytes])).toEqual([
+      [1, 15, 100],
+      [2, null, 300],
+      [3, null, null],
+    ]);
+
+    const partial = hostSnapshotRows(
+      hostSample([{ pid: 1 }, { pid: 2 }], {
+        gpus: [gpuDevice, gpuDeviceB],
+        gpuProcesses,
+        gpuProcessDevices: ["gpu-a"],
+      }),
+    );
+    expect(partial.map((row) => [row.gpuUtilPercent, row.vramBytes])).toEqual([
+      [null, null],
+      [null, null],
+    ]);
+  });
+
+  it("reads subtree rows with no user and no GPU use", () => {
+    expect(subtreeSnapshotRows([proc(10, 3, 300, { ppid: 4 })])).toEqual([
+      {
+        identity: "10:100",
+        pid: 10,
+        ppid: 4,
+        name: "p10",
+        user: "",
+        command: "p10 --run",
+        cpuPercent: 3,
+        rssBytes: 300,
+        gpuUtilPercent: null,
+        vramBytes: null,
+      },
+    ]);
+  });
+});
+
+function nativeHealth(
+  status: NativeTelemetryClient.NativeTelemetryClientHealth["status"],
+  hostProcesses?: boolean,
+): NativeTelemetryClient.NativeTelemetryClientHealth {
+  return {
+    status,
+    hello:
+      hostProcesses === undefined
+        ? Option.none()
+        : Option.some({
+            version: 4,
+            type: "hello",
+            sidecarVersion: "0.4.0",
+            sidecarPid: 4_242,
+            platform: "linux",
+            arch: "x64",
+            capabilities: {
+              cumulativeCpuTime: true,
+              currentCpuPercent: true,
+              residentMemory: true,
+              virtualMemory: true,
+              ioBytes: true,
+              processStartTime: true,
+              processTree: true,
+              hostProcesses,
+            },
+          }),
+    lastSampleAt: Option.none(),
+    lastError: Option.none(),
+    restartCount: 0,
+    sampleIntervalMs: 1_000,
+  };
+}
+
+function telemetryLayer(
+  latest: Ref.Ref<ResourceTelemetrySnapshot>,
+  holders: Ref.Ref<number>,
+  refresh: ResourceTelemetry["Service"]["refresh"] = Effect.die("unused"),
+): Layer.Layer<ResourceTelemetry> {
+  return Layer.succeed(
+    ResourceTelemetry,
+    ResourceTelemetry.of({
+      latest: Ref.get(latest),
+      changes: Stream.empty,
+      subscribe: Effect.acquireRelease(
+        Effect.flatMap(
+          Ref.update(holders, (count) => count + 1),
+          () =>
+            Effect.map(Ref.get(latest), (snapshot) => ({
+              latest: snapshot,
+              changes: Stream.empty,
+            })),
+        ),
+        () => Ref.update(holders, (count) => count - 1),
+      ),
+      readHistory: () => Effect.die("unused"),
+      refresh,
+      retry: Effect.die("unused"),
+    }),
+  );
+}
+
+const makeHostProcesses = Effect.fn("test.makeHostProcesses")(function* (
+  health: NativeTelemetryClient.NativeTelemetryClientHealth,
+  changes: Stream.Stream<NativeTelemetryClient.NativeTelemetryClientHealth> = Stream.empty,
+  overrides: {
+    readonly hostSampleNow?: NativeTelemetryClient.NativeTelemetryClient["Service"]["hostSampleNow"];
+    readonly refresh?: ResourceTelemetry["Service"]["refresh"];
+    readonly latest?: ResourceTelemetrySnapshot;
+  } = {},
+) {
+  const holders = yield* Ref.make(0);
+  const latest = yield* Ref.make(overrides.latest ?? telemetrySnapshot(0));
+  const demands = yield* Ref.make<ReadonlyArray<NativeTelemetryClient.HostSampleDemand>>([]);
+  const native = NativeTelemetryClient.layerTest({
+    ...(overrides.hostSampleNow === undefined ? {} : { hostSampleNow: overrides.hostSampleNow }),
+    subscribeHealth: Effect.succeed({ latest: health, changes }),
+    hostSamples: (demand) =>
+      Stream.unwrap(
+        Ref.update(demands, (all) => [...all, demand]).pipe(
+          Effect.as(Stream.make(hostSample(threeRows, { gpus: [gpuDevice], gpuProcesses: [] }))),
+        ),
+      ),
+  });
+  const processes = yield* HostProcesses.pipe(
+    Effect.provide(
+      hostProcessesLayer.pipe(
+        Layer.provide(Layer.merge(telemetryLayer(latest, holders, overrides.refresh), native)),
+      ),
+    ),
+  );
+  return { processes, holders, latest, demands };
+});
+
+const firstFrame = (processes: HostProcesses["Service"]) =>
+  processes
+    .frames({ intervalMs: 100, gpuProcesses: true })
+    .pipe(Stream.runHead, Effect.map(Option.getOrThrow));
+
+describe("HostProcesses.frames", () => {
+  it.effect("holds the telemetry subscription while the stream runs and releases it on close", () =>
+    Effect.gen(function* () {
+      const { processes, holders, latest } = yield* makeHostProcesses(
+        nativeHealth("healthy", false),
+      );
+
+      const scope = yield* Scope.make();
+      // 100 ms is below the floor; the stream runs at 1 s.
+      const queue = yield* Stream.toQueue(processes.frames({ intervalMs: 100 }), {
+        capacity: "unbounded",
+      }).pipe(Scope.provide(scope));
+      expect(yield* Queue.take(queue)).toMatchObject({ full: true, sequence: 0, source: "t3" });
+      expect(yield* Ref.get(holders)).toBe(1);
+
+      yield* Ref.set(latest, telemetrySnapshot(5_000));
+      yield* TestClock.adjust("999 millis");
+      expect(yield* Queue.size(queue)).toBe(0);
+      yield* TestClock.adjust("1 millis");
+      expect(yield* Queue.take(queue)).toMatchObject({ full: false, sequence: 1 });
+
+      yield* Scope.close(scope, Exit.void);
+      expect(yield* Ref.get(holders)).toBe(0);
+    }),
+  );
+
+  it.effect("streams host frames when the monitor speaks host mode", () =>
+    Effect.gen(function* () {
+      const { processes, holders, demands } = yield* makeHostProcesses(
+        nativeHealth("healthy", true),
+      );
+
+      const frame = yield* firstFrame(processes);
+      expect(frame).toMatchObject({ source: "host", full: true, gpus: [gpuDevice] });
+      expect(frame.rows.key).toEqual([0, 1, 2]);
+      expect(yield* Ref.get(demands)).toEqual([
+        { intervalMs: 1_000, processes: true, gpus: true, gpuProcesses: true },
+      ]);
+      expect(yield* Ref.get(holders)).toBe(0);
+    }),
+  );
+
+  it.effect("falls back to the T3 subtree without a hello", () =>
+    Effect.gen(function* () {
+      const { processes, demands } = yield* makeHostProcesses(nativeHealth("unavailable"));
+
+      expect((yield* firstFrame(processes)).source).toBe("t3");
+      expect(yield* Ref.get(demands)).toEqual([]);
+    }),
+  );
+
+  it.effect("waits for a starting monitor to settle before choosing", () =>
+    Effect.gen(function* () {
+      for (const [settled, source] of [
+        [nativeHealth("healthy", true), "host"],
+        [nativeHealth("degraded"), "t3"],
+      ] as const) {
+        const changes = yield* Queue.unbounded<NativeTelemetryClient.NativeTelemetryClientHealth>();
+        const { processes } = yield* makeHostProcesses(
+          nativeHealth("starting"),
+          Stream.fromQueue(changes),
+        );
+        const frame = yield* firstFrame(processes).pipe(Effect.forkChild);
+        yield* Queue.offerAll(changes, [nativeHealth("starting"), settled]);
+        expect((yield* Fiber.join(frame)).source).toBe(source);
+      }
+    }),
+  );
+});
+
+describe("HostProcesses.snapshot", () => {
+  const snapshotInput = {
+    limit: 20,
+    groupBy: "none" as const,
+    commands: true,
+    bucketNames: new Map(),
+  };
+  const recordingHostSampleNow =
+    (
+      requests: Ref.Ref<ReadonlyArray<unknown>>,
+      result: Effect.Effect<
+        NativeTelemetryClient.NativeHostSample,
+        NativeTelemetryClient.NativeTelemetryClientError
+      >,
+    ): NativeTelemetryClient.NativeTelemetryClient["Service"]["hostSampleNow"] =>
+    (options) =>
+      Ref.update(requests, (all) => [...all, options]).pipe(Effect.andThen(result));
+
+  it.effect("walks the whole host in host mode, skipping the GPU walk at limit 0", () =>
+    Effect.gen(function* () {
+      const requests = yield* Ref.make<ReadonlyArray<unknown>>([]);
+      const { processes } = yield* makeHostProcesses(nativeHealth("healthy", true), Stream.empty, {
+        hostSampleNow: recordingHostSampleNow(
+          requests,
+          Effect.succeed(hostSample(threeRows, { sampledAtUnixMs: 0 })),
+        ),
+      });
+      yield* TestClock.adjust("1500 millis");
+      const { snapshot } = yield* processes.snapshot(snapshotInput);
+      expect(snapshot).toMatchObject({ source: "host", sampleAgeMs: 1_500 });
+      expect(snapshot.processes.map((process) => process.pid)).toEqual([3, 2, 1]);
+
+      yield* processes.snapshot({ ...snapshotInput, limit: 0 });
+      expect(yield* Ref.get(requests)).toEqual([
+        { processes: true, gpus: true, gpuProcesses: true },
+        { processes: true, gpus: false, gpuProcesses: false },
+      ]);
+    }),
+  );
+
+  it.effect("falls back to the T3 subtree when the host walk fails or host mode is missing", () =>
+    Effect.gen(function* () {
+      const failing = recordingHostSampleNow(
+        yield* Ref.make<ReadonlyArray<unknown>>([]),
+        Effect.fail(
+          new NativeTelemetryClient.NativeTelemetryUnavailable({ reason: "monitor restarting" }),
+        ),
+      );
+      for (const health of [nativeHealth("healthy", true), nativeHealth("healthy", false)]) {
+        const { processes } = yield* makeHostProcesses(health, Stream.empty, {
+          hostSampleNow: failing,
+          refresh: Effect.succeed(telemetrySnapshot(0)),
+        });
+        const { snapshot } = yield* processes.snapshot(snapshotInput);
+        expect(snapshot.source).toBe("t3");
+        expect(snapshot.processes.map((process) => process.pid)).toEqual([10]);
+      }
+    }),
+  );
+
+  it.effect("reads the latest subtree when a refresh fails", () =>
+    Effect.gen(function* () {
+      const { processes } = yield* makeHostProcesses(nativeHealth("healthy", false), Stream.empty, {
+        refresh: Effect.fail(
+          new ResourceTelemetryRefreshFailed({ operation: "refresh", cause: new Error("busy") }),
+        ),
+        latest: telemetrySnapshot(0),
+      });
+      expect((yield* processes.snapshot(snapshotInput)).snapshot.source).toBe("t3");
+    }),
+  );
+
+  it.effect.each(["unavailable", "stopped"] as const)(
+    "fails as unavailable when the monitor is %s",
+    (status) =>
+      Effect.gen(function* () {
+        const snapshot = telemetrySnapshot(0);
+        const down = {
+          ...snapshot,
+          health: { ...snapshot.health, native: { ...snapshot.health.native, status } },
+        };
+        const { processes } = yield* makeHostProcesses(nativeHealth("unavailable"), Stream.empty, {
+          refresh: Effect.succeed(down),
+        });
+        const error = yield* processes.snapshot(snapshotInput).pipe(Effect.flip);
+        expect(error).toBeInstanceOf(HostProcessesUnavailable);
+      }),
+  );
+});
+
+describe("unbucketed processes", () => {
+  const threadA = ThreadId.make("thread-a");
+  const bucketDev = MachineBucketId.make("bucket:dev");
+  const owned = new Map<string, ProcessOwner>([
+    ["1:10", { type: "thread", threadId: threadA }],
+    ["2:20", { type: "claimed", claimId: ClaimId.make("claim-1"), threadId: threadA }],
+    ["3:30", { type: "bucket", bucketId: bucketDev }],
+    ["4:40", { type: "provider", provider: ProviderDriverKind.make("codex") }],
+    ["5:50", { type: "t3", label: "server" }],
+    ["6:60", { type: "other" }],
+    ["7:70", { type: "container", id: "0123456789abcdef0123" }],
+  ]);
+  const shareRow = (pid: number, cpu: number, rss: number) => ({
+    identity: `${pid}:${pid * 10}`,
+    cpu,
+    rss,
+  });
+
+  it("counts only other, container and unowned processes, by the larger of CPU and memory", () => {
+    const rows = [
+      shareRow(1, 40, 1_000),
+      shareRow(2, 10, 1_000),
+      shareRow(3, 10, 1_000),
+      shareRow(4, 10, 1_000),
+      shareRow(5, 5, 500),
+      shareRow(6, 20, 100),
+      shareRow(7, 5, 4_400),
+      shareRow(8, 0, 0),
+    ];
+    expect(unbucketedSharePercent(rows, owned)).toBe(50);
+    expect(
+      unbucketedSharePercent(
+        rows.map((row) => ({ ...row, rss: 0 })),
+        owned,
+      ),
+    ).toBe(25);
+    expect(
+      unbucketedSharePercent(
+        rows.map((row) => ({ ...row, cpu: 0 })),
+        owned,
+      ),
+    ).toBe(50);
+    expect(unbucketedSharePercent([shareRow(1, 2, 0), shareRow(6, 1, 0)], owned)).toBe(33.3);
+  });
+
+  it("has no share when no process measured CPU or memory", () => {
+    expect(unbucketedSharePercent([], owned)).toBeNull();
+    expect(unbucketedSharePercent([shareRow(6, 0, 0), shareRow(9, 0, 0)], owned)).toBeNull();
+  });
+
+  const sample = hostSample(
+    [
+      { pid: 1, cpu: 90, rss: 9_000 },
+      { pid: 3, cpu: 80, rss: 8_000 },
+      { pid: 6, cpu: 50, rss: 100 },
+      { pid: 7, cpu: 1, rss: 5_000 },
+      { pid: 8, cpu: 30, rss: 200 },
+      { pid: 9, cpu: 2, rss: 300 },
+      { pid: 10, cpu: 3, rss: 50 },
+    ],
+    {
+      sampledAtUnixMs: 10_000,
+      statics: [
+        hostStatic(1, { name: "zsh" }),
+        hostStatic(3),
+        hostStatic(6, { command: `node ${"x".repeat(5_000)}`, cwd: `/srv/${"w".repeat(600)}` }),
+        hostStatic(7, { containerId: "0123456789abcdef0123" }),
+        hostStatic(8),
+        hostStatic(9),
+        hostStatic(10),
+      ],
+    },
+  );
+  const unbucketed = (limit: number, commands = true) =>
+    buildUnbucketed({
+      sample,
+      owners: owned,
+      nowMs: 12_500,
+      limit,
+      commands,
+      bucketNames: new Map([[bucketDev, "Dev"]]),
+    });
+
+  it("lists the busiest unbucketed by CPU together with the largest by memory", () => {
+    const top = unbucketed(2);
+    expect(top.processes.map((process) => process.pid)).toEqual([6, 7]);
+    expect(top.truncated).toBe(3);
+
+    const three = unbucketed(3);
+    expect(three.processes.map((process) => process.pid)).toEqual([6, 8, 7]);
+    expect(three.truncated).toBe(2);
+
+    const four = unbucketed(4);
+    expect(four.processes.map((process) => process.pid)).toEqual([6, 8, 9, 7]);
+    expect(four.truncated).toBe(1);
+
+    const all = unbucketed(20);
+    expect(all.processes.map((process) => process.pid)).toEqual([6, 8, 10, 9, 7]);
+    expect(all).not.toHaveProperty("truncated");
+    expect(all.sampleAgeMs).toBe(2_500);
+    expect(all.buckets).toEqual([
+      { bucketId: bucketDev, name: "Dev", cpuPercent: 80, rssBytes: 8_000, count: 1 },
+    ]);
+
+    const shareOnly = unbucketed(0);
+    expect(shareOnly.processes).toEqual([]);
+    expect(shareOnly).not.toHaveProperty("truncated");
+    expect(shareOnly.sharePercent).toBe(all.sharePercent);
+  });
+
+  it("fills every slot by memory when one process tops both CPU and memory", () => {
+    const { processes, truncated } = buildUnbucketed({
+      sample: hostSample([
+        { pid: 6, cpu: 50, rss: 9_000 },
+        { pid: 7, cpu: 1, rss: 5_000 },
+        { pid: 8, cpu: 30, rss: 200 },
+        { pid: 9, cpu: 2, rss: 300 },
+      ]),
+      owners: owned,
+      nowMs: 0,
+      limit: 2,
+      commands: false,
+      bucketNames: new Map(),
+    });
+    expect(processes.map((process) => process.pid)).toEqual([6, 7]);
+    expect(truncated).toBe(2);
+  });
+
+  it("fills the fields bucket rules match on, and command and cwd only when asked", () => {
+    const [node, container] = unbucketed(2).processes;
+    expect(node).toEqual({
+      pid: 6,
+      ppid: 1,
+      name: "p6",
+      exe: "/usr/bin/p6",
+      command: `node ${"x".repeat(5_000)}`.slice(0, 512),
+      cwd: `/srv/${"w".repeat(600)}`.slice(0, 512),
+      user: "dev",
+      parent: "zsh",
+      cpuPercent: 50,
+      rssBytes: 100,
+    });
+    expect(container).toMatchObject({ pid: 7, container: "0123456789abcdef0123" });
+    expect(node).not.toHaveProperty("container");
+
+    for (const process of unbucketed(20, false).processes) {
+      expect(process).not.toHaveProperty("command");
+      expect(process).not.toHaveProperty("cwd");
+    }
+  });
+});
+
+describe("HostProcesses.unbucketed", () => {
+  const unbucketedInput = { limit: 20, commands: true, bucketNames: new Map() };
+
+  it.effect("walks the host once without the GPU, and lists every process nothing owns", () =>
+    Effect.gen(function* () {
+      const requests = yield* Ref.make<ReadonlyArray<unknown>>([]);
+      const { processes } = yield* makeHostProcesses(nativeHealth("healthy", true), Stream.empty, {
+        hostSampleNow: (options) =>
+          Ref.update(requests, (all) => [...all, options]).pipe(
+            Effect.as(hostSample(threeRows, { sampledAtUnixMs: 0 })),
+          ),
+      });
+      yield* TestClock.adjust("1500 millis");
+      const result = yield* processes.unbucketed(unbucketedInput);
+      expect(result).toMatchObject({ sharePercent: 100, sampleAgeMs: 1_500 });
+      expect(result.processes.map((process) => process.pid)).toEqual([3, 2, 1]);
+      expect(yield* Ref.get(requests)).toEqual([
+        { processes: true, gpus: false, gpuProcesses: false },
+      ]);
+    }),
+  );
+
+  it.effect("is unavailable off host mode or when the walk fails", () =>
+    Effect.gen(function* () {
+      const failing: NativeTelemetryClient.NativeTelemetryClient["Service"]["hostSampleNow"] = () =>
+        Effect.fail(
+          new NativeTelemetryClient.NativeTelemetryUnavailable({ reason: "monitor restarting" }),
+        );
+      for (const health of [nativeHealth("healthy", false), nativeHealth("healthy", true)]) {
+        const { processes } = yield* makeHostProcesses(health, Stream.empty, {
+          hostSampleNow: failing,
+        });
+        const error = yield* processes.unbucketed(unbucketedInput).pipe(Effect.flip);
+        expect(error).toBeInstanceOf(HostProcessesUnavailable);
+      }
+    }),
+  );
+});

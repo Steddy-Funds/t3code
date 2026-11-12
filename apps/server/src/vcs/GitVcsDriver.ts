@@ -1569,6 +1569,39 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
       return new Set(pathLists.flat().filter((path) => path.length > 0));
     }),
 
+    readCheckpointFile: Effect.fn("GitVcsDriver.checkpoints.readCheckpointFile")(function* (input) {
+      const operation = "GitVcsDriver.checkpoints.readCheckpointFile";
+      // --full-tree makes the path repository-relative when cwd is a subdirectory.
+      const listing = yield* execute({
+        operation,
+        cwd: input.cwd,
+        args: [
+          "ls-tree",
+          "-z",
+          "--long",
+          "--full-tree",
+          `${input.checkpointRef}^{commit}`,
+          "--",
+          `:(literal)${input.path}`,
+        ],
+      });
+      const entry = /^\d+ (\w+) ([0-9a-f]+) +(\d+|-)\t/.exec(listing.stdout);
+      if (!entry) return { kind: "missing" };
+      const [, type = "", objectId = "", size = ""] = entry;
+      // A directory or a submodule has no text to show.
+      if (type !== "blob") return { kind: "not_a_file" };
+      if (Number(size) > input.maxBytes) return { kind: "too_large" };
+      const blob = yield* execute({
+        operation,
+        cwd: input.cwd,
+        args: ["cat-file", "blob", objectId],
+        maxOutputBytes: input.maxBytes,
+      });
+      return blob.stdout.includes("\0")
+        ? { kind: "binary" }
+        : { kind: "text", contents: blob.stdout };
+    }),
+
     deleteCheckpointRefs: Effect.fn("GitVcsDriver.checkpoints.deleteCheckpointRefs")(
       function* (input) {
         yield* Effect.forEach(

@@ -56,6 +56,7 @@ import * as ThreadLaunch from "../orchestration-v2/ThreadLaunchService.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as PeerForwarding from "./PeerForwarding.ts";
 import * as PeerLinkRequests from "./PeerLinkRequests.ts";
+import * as ReviewNotes from "../mcp/ReviewNotes.ts";
 import * as PeerLinks from "./PeerLinks.ts";
 import {
   descriptorOf,
@@ -154,6 +155,7 @@ const makeLaptop = Effect.gen(function* () {
   const layerHere = McpHttpServer.layerOrchestratorToolkit.pipe(
     Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
     Layer.provideMerge(PeerLinkRequests.layer),
+    Layer.provide(Layer.mock(ReviewNotes.ReviewNotes)({})),
     Layer.provide(Layer.mock(PeerForwarding.PeerForwarding)({})),
     Layer.provide(Layer.mock(RemoteDelegation.RemoteDelegation)({})),
     Layer.provide(Layer.succeedContext(linking)),

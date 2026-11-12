@@ -131,6 +131,8 @@ export interface McpInvocationScope {
   readonly client: McpClientCaller | undefined;
   /** False while the Linked environments beta is off here; `/mcp` reads it per request. */
   readonly linkedEnvironments?: boolean;
+  /** False while agent review notes are off here; `/mcp` reads it per request. */
+  readonly reviewNotes?: boolean;
 }
 
 /**
@@ -170,6 +172,13 @@ export const hiddenWhileLinksOff = (): boolean => {
   const fiber = Fiber.getCurrent();
   const scope = fiber && Context.getOrUndefined(fiber.context, McpInvocationContext);
   return scope?.linkedEnvironments !== false;
+};
+
+/** `McpSchema.EnabledWhen` for `flag_for_review`, hidden while review notes are off. */
+export const hiddenWhileReviewNotesOff = (): boolean => {
+  const fiber = Fiber.getCurrent();
+  const scope = fiber && Context.getOrUndefined(fiber.context, McpInvocationContext);
+  return scope?.reviewNotes !== false;
 };
 
 export type McpCapabilityError<C extends McpCapability> = C extends "preview"

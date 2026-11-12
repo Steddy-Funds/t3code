@@ -4,6 +4,7 @@ import { TERMINAL_PALETTES, terminalOutputSpans } from "@t3tools/shared/terminal
 import { useLayoutEffect, useRef } from "react";
 
 import { useTheme } from "../../hooks/useTheme";
+import { usePaintedThemeEditorColors } from "../../lib/paintedThemeEditorColors";
 import { useServerConfigs } from "../../state/entities";
 import { orchestrationEnvironment } from "../../state/orchestration";
 import { useEnvironmentQuery } from "../../state/query";
@@ -39,6 +40,7 @@ export function CommandOutputPanel(props: {
   const followRef = useRef(true);
   const text = data?.output.text ?? "";
   const { resolvedTheme } = useTheme();
+  const editorColors = usePaintedThemeEditorColors();
 
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- pins the output scroller's scrollTop to the bottom after each commit while the user follows
   useLayoutEffect(() => {
@@ -52,7 +54,12 @@ export function CommandOutputPanel(props: {
     return data.running ? null : <div className="text-muted-foreground italic">No output.</div>;
   }
   // Parse after all hooks to preserve the text/theme compiler cache.
-  const spans = terminalOutputSpans(text, TERMINAL_PALETTES[resolvedTheme]);
+  const spans = terminalOutputSpans(
+    text,
+    editorColors?.syntax.appearance === resolvedTheme
+      ? editorColors.ansi
+      : TERMINAL_PALETTES[resolvedTheme],
+  );
   return (
     <div>
       {data?.output.truncated ? (

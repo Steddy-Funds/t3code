@@ -298,6 +298,49 @@ describe("ClaudeAdapterV2 runtime query policy", () => {
     assert.isUndefined(options.extraArgs?.["dangerously-skip-permissions"]);
   });
 
+  it.each([
+    { picked: "500k", window: 500_000 },
+    { picked: "default", window: 300_000 },
+  ])("sends the thread's auto-compact window $picked ahead of the instance's", (row) => {
+    const options = ClaudeAdapterV2.makeClaudeQueryOptions({
+      modelSelection: {
+        ...CLAUDE_TEST_MODEL_SELECTION,
+        model: "claude-opus-5-5",
+        options: [{ id: "autoCompactWindow", value: row.picked }],
+      },
+      nativeThreadId: "native-auto-compact",
+      resume: false,
+      cwd: "/workspace",
+      settings: AUTO_COMPACT_CLAUDE_SETTINGS,
+    });
+    assert.deepInclude(options.settings, { autoCompactWindow: row.window });
+  });
+
+  it("sends the thread's auto-compact window ahead of a launch-argument window for its model", () => {
+    const launchModelSettings = (window: number | "auto") => ({
+      "claude-opus-5-5": { maxEffortLevel: "high" as const, autoCompactWindow: window },
+      "claude-sonnet-5-5": { autoCompactWindow: 450_000 },
+    });
+    const settingsFor = (picked: string) =>
+      ClaudeAdapterV2.makeClaudeQueryOptions({
+        modelSelection: {
+          ...CLAUDE_TEST_MODEL_SELECTION,
+          model: "claude-opus-5-5",
+          options: [{ id: "autoCompactWindow", value: picked }],
+        },
+        nativeThreadId: "native-auto-compact-model",
+        resume: false,
+        cwd: "/workspace",
+        sdkSettings: { modelSettings: launchModelSettings(400_000) },
+      }).settings;
+    assert.deepInclude(settingsFor("200k"), {
+      autoCompactWindow: 200_000,
+      modelSettings: launchModelSettings(200_000),
+    });
+    assert.deepInclude(settingsFor("default"), { modelSettings: launchModelSettings(400_000) });
+    assert.notProperty(settingsFor("default"), "autoCompactWindow");
+  });
+
   it("passes every --add-dir launch directory to Claude", () => {
     const options = ClaudeAdapterV2.makeClaudeQueryOptions({
       modelSelection: CLAUDE_TEST_MODEL_SELECTION,
@@ -5916,6 +5959,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           for (const [ordinal, selection] of [
             [5, CLAUDE_TEST_RESTART_MODEL_SELECTION],
             [6, { ...normal, model: "claude-haiku-4-5-20251001" }],
+            [7, { ...normal, options: [{ id: "autoCompactWindow", value: "300k" }] }],
           ] as const) {
             const refused = yield* harness.runtime
               .startTurn(turn(ordinal, selection))
@@ -8172,9 +8216,24 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         '{"autoCompactWindow":500000,"modelSettings":{"claude-opus-5-5":{"autoCompactWindow":50000}}}',
       threshold: 467_000,
     },
+    // A window picked for the thread beats the instance's and Claude's own settings.
+    {
+      autoCompactWindow: "300000",
+      model: "claude-opus-5-5",
+      picked: "200k",
+      userSettings: '{"autoCompactWindow":500000}',
+      threshold: 167_000,
+    },
+    { autoCompactWindow: "300000", model: "claude-opus-5-5", picked: "1m", threshold: undefined },
+    {
+      autoCompactWindow: "300000",
+      model: "claude-opus-5-5",
+      picked: "default",
+      threshold: 267_000,
+    },
   ])(
     "ignores stale snapshots after compaction and reports threshold $autoCompactWindow for $model",
-    ({ autoCompactWindow, model, threshold, userSettings, projectSettings, launchArgs }) =>
+    ({ autoCompactWindow, model, picked, threshold, userSettings, projectSettings, launchArgs }) =>
       Effect.gen(function* () {
         const fileSystem = yield* FileSystem.FileSystem;
         const path = yield* Path.Path;
@@ -8206,7 +8265,13 @@ describe("ClaudeAdapterV2 background wake turns", () => {
             attemptId: RunAttemptId.make("attempt-snapshot-usage-compaction"),
             text: "Continue.",
             attachments: [],
-            modelSelection: { ...CLAUDE_TEST_MODEL_SELECTION, model },
+            modelSelection: {
+              ...CLAUDE_TEST_MODEL_SELECTION,
+              model,
+              ...(picked === undefined
+                ? {}
+                : { options: [{ id: "autoCompactWindow", value: picked }] }),
+            },
             runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
               ...CLAUDE_TEST_RUNTIME_POLICY,
               cwd: project,

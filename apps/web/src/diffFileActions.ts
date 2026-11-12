@@ -12,6 +12,8 @@ import { resolvePathLinkTarget } from "@t3tools/shared/fileLinks";
 interface OpenDiffFilePrimaryActionInput {
   readonly threadRef: ScopedThreadRef | null;
   readonly filePath: string;
+  /** The line to open the file at, 1-based. */
+  readonly line?: number | undefined;
   readonly activeCwd: string | undefined;
   readonly repositoryRoot?: string | undefined;
   readonly openInEditor: (targetPath: string) => void;
@@ -89,9 +91,31 @@ export function resolveDiffPathForWorkspace(input: {
   return relativeSegments.length > 0 ? relativeSegments.join("/") : null;
 }
 
+/** The repository-relative path a diff names a workspace-relative file by. */
+export function diffPathForWorkspaceFile(input: {
+  readonly filePath: string;
+  readonly workspaceRoot: string | undefined;
+  readonly repositoryRoot: string | undefined;
+}): string {
+  const workspaceSegments = repositoryRelativeWorkspaceSegments(
+    input.workspaceRoot,
+    input.repositoryRoot,
+  );
+  if (!input.workspaceRoot || !workspaceSegments || workspaceSegments.length === 0) {
+    return input.filePath;
+  }
+  // The comparison form lowercases a Windows root; the diff keeps the folders' own case.
+  const folders = input.workspaceRoot
+    .split(/[\\/]+/)
+    .filter(Boolean)
+    .slice(-workspaceSegments.length);
+  return [...folders, input.filePath].join("/");
+}
+
 export function openDiffFilePrimaryAction({
   threadRef,
   filePath,
+  line,
   activeCwd,
   repositoryRoot,
   openInEditor,
@@ -104,7 +128,7 @@ export function openDiffFilePrimaryAction({
   if (!workspaceFilePath) return;
 
   if (threadRef) {
-    useRightPanelStore.getState().openFile(threadRef, workspaceFilePath);
+    useRightPanelStore.getState().openFile(threadRef, workspaceFilePath, line);
     return;
   }
 

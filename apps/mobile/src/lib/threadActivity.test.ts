@@ -9,6 +9,7 @@ import {
   ProviderDriverKind,
   ProviderThreadId,
   ProviderTurnId,
+  REVIEW_NOTE_TOOL_NAME,
   RunId,
   RunAttemptId,
   ThreadId,
@@ -55,6 +56,110 @@ it("shows a captured MCP app for a failed deferred write", () => {
     output: { t3McpApp: mcpApp, result: { content: [], isError: true } },
   };
   expect(buildThreadFeed([projected(item, 0)])).toMatchObject([{ type: "mcp-app", app: mcpApp }]);
+});
+
+it("keeps an agent's machine card out of the settled run's fold", () => {
+  const machineCard = {
+    environmentId: "environment:mac",
+    snapshot: { verdict: "ok", reason: null, totals: null },
+  };
+  const read = (toolName: string): OrchestrationV2TurnItem => ({
+    ...base("machine-read", "2026-06-20T00:00:02.500Z", 2),
+    type: "dynamic_tool",
+    toolName,
+    input: { show: true },
+    output: { structuredContent: { machineCard }, content: [] },
+  });
+  const feedFor = (toolName: string, visibility: "local" | "inherited" = "local") =>
+    buildThreadFeed([
+      projected(userMessage(), 0),
+      projected(command(), 1),
+      projected(read(toolName), 2, visibility),
+      projected({ ...assistantMessage(), ordinal: 3 }, 3),
+    ]);
+  const latestRun = {
+    runId,
+    status: "completed" as const,
+    startedAt: "2026-06-20T00:00:01.000Z",
+    completedAt: "2026-06-20T00:00:03.000Z",
+  };
+
+  const feed = feedFor("mcp__t3-code__t3_machine_read");
+  expect(feed.find((entry) => entry.type === "machine-card")).toMatchObject({
+    id: "machine-card:local:thread-1:machine-read",
+    runId,
+    card: machineCard,
+  });
+  expect(
+    feedFor("t3_machine_read", "inherited").find((entry) => entry.type === "machine-card")?.id,
+  ).toBe("machine-card:inherited:thread-source:machine-read");
+  expect(
+    deriveThreadFeedPresentation(feed, latestRun, new Set()).map((entry) => entry.type),
+  ).toEqual(["message", "run-fold", "machine-card", "message"]);
+
+  const foreign = feedFor("other.t3_machine_read");
+  expect(foreign.some((entry) => entry.type === "machine-card")).toBe(false);
+  expect(
+    deriveThreadFeedPresentation(foreign, latestRun, new Set()).map((entry) => entry.type),
+  ).toEqual(["message", "run-fold", "message"]);
+});
+
+it("shows the server's review note as a card outside the run fold, and a lookalike as work", () => {
+  const input = {
+    kind: "review_note",
+    path: "src/http/retry.ts",
+    startLine: 3,
+    endLine: 3,
+    note: "Every caller now retries three times.",
+    question: "Should payments opt out?",
+    excerpt: "export const DEFAULT_RETRIES = 3;",
+    excerptTruncated: false,
+    contentRevision: "a".repeat(40),
+    runId,
+  };
+  const note: OrchestrationV2TurnItem = {
+    ...base("turn-item:review-note:thread-1:n1", "2026-06-20T00:00:02.500Z", 2),
+    type: "dynamic_tool",
+    toolName: REVIEW_NOTE_TOOL_NAME,
+    input,
+  };
+  const latestRun = {
+    runId,
+    status: "completed" as const,
+    startedAt: "2026-06-20T00:00:01.000Z",
+    completedAt: "2026-06-20T00:00:03.000Z",
+  };
+  const feedWith = (item: OrchestrationV2TurnItem) =>
+    deriveThreadFeedPresentation(
+      buildThreadFeed([
+        projected(userMessage(), 0),
+        projected(command(), 1),
+        projected(item, 2),
+        projected({ ...assistantMessage(), ordinal: 3 }, 3),
+      ]),
+      latestRun,
+      new Set(),
+    );
+
+  const shown = feedWith(note);
+  expect(shown.map((entry) => entry.type)).toEqual([
+    "message",
+    "run-fold",
+    "review-note",
+    "message",
+  ]);
+  expect(shown[2]).toMatchObject({ note: { ...input, id: note.id } });
+
+  const lookalike = feedWith({
+    ...note,
+    id: TurnItemId.make("turn-item:provider:claude:native-item:toolu_1"),
+    nativeItemRef: {
+      driver: ProviderDriverKind.make("claude"),
+      nativeId: "toolu_1",
+      strength: "strong",
+    },
+  });
+  expect(lookalike.map((entry) => entry.type)).toEqual(["message", "run-fold", "message"]);
 });
 
 it("keeps historical plan detail accessible from its paged turn item", () => {

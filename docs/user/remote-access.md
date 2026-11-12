@@ -164,8 +164,104 @@ The composer checks eligible machines when choosing a draft's environment, then 
 that choice stable. Choose **Auto balance** again to check current resources, or choose
 a specific machine to override it. Choosing a branch or worktree also keeps the draft
 on that machine. Existing threads stay where they started. If resource checks are
-unavailable or all eligible machines are full, choose a machine manually to continue.
-Mobile keeps its manual environment selection.
+unavailable or all eligible machines are full or stressed, choose a machine manually to
+continue. A machine marked [stressed](#see-when-a-machine-is-stressed) is skipped until it
+recovers. Mobile keeps its manual environment selection.
+
+### See when a machine is stressed
+
+Machine icons stay plain while a machine is fine. When its load or memory stays over a
+limit for a while, its icon turns red and drips, and a thread's hover preview says why, for
+example "Stressed: load 14.0 / 12.5 per core, 2 m". A dimmed icon means no reading has arrived yet
+or the machine is unreachable; an unreachable machine says when it was last seen.
+
+On web and desktop, hover or click the machine icon in the chat header, on a connection row,
+or on a machine you mention in a message; on mobile, tap it on a connection row or use the machine button
+in the thread header. Either way you see CPU, load, memory, and the top processes. The
+process list needs a connection with diagnostics access.
+
+To change a machine's limits on web and desktop, open its settings button in
+**Settings → Environments**, or in **Settings → Sharing & access** for the machine you are
+on. Limits are saved on that machine, so every client sees the same verdict. You get an alert
+when a connected machine goes from fine to stressed while desktop or in-app notifications
+are on; turn off **Machine becomes stressed** in **Settings → General → Notifications** to stop
+it. Machines running an older T3 Code version keep the plain icon.
+
+#### Task manager
+
+Open **Machines** at the bottom of the sidebar to see every machine in one list, worst first,
+or click a machine's icon to open its task manager. The command palette has both as well.
+A task manager shows CPU, memory, load, and GPU graphs over the last 15 minutes or hour, the
+machine's processes, and the T3 threads running on it.
+
+To end a process, use its kill button. **Kill** asks the process to exit; **Force kill** stops
+it at once and can lose unsaved work. On Windows there is a single **Kill**. T3 Code refuses to
+signal itself, the resource monitor, or a process that has since exited and had its ID reused.
+Killing needs the `environment:maintain` permission.
+
+**Open terminal** starts a shell in the machine's home directory. It needs the
+`terminal:operate` permission.
+
+#### Who is using a machine
+
+The **Owner** column says which thread, terminal, bucket or provider each process belongs to.
+Choose **Grouped** to sum processes by thread, bucket or provider, and the memory graph colours
+memory by its biggest owners. A process an agent's provider starts belongs to that thread. When one
+provider process serves several threads, such as Codex's app server, its tools are split by
+thread and the rest shows as shared. Cursor runs inside the T3 server, so only the shells it
+starts count toward a thread. Anything else is **Other** until a bucket or a claim covers it.
+
+**Buckets** name processes T3 didn't start, such as a database or a build watcher. Create one in
+**Buckets & claims** or in the machine's settings, with rules that match a command, executable,
+directory, user, container, parent or thread, or pin process IDs. Buckets are saved on that
+machine. Agents can create them too, and the list shows who made each one. Totals read
+"unmeasured" when the machine's resource monitor isn't running, since T3 then sees only its own
+processes. Saving buckets needs a machine on this version of T3 Code or newer.
+
+**Auto-buckets** makes buckets for you. Turn it on or off in the machine's settings, and pick the
+model it uses there; **Auto** picks a fast model from an enabled provider. When processes nothing
+owns pass a quarter of what's running, T3 starts a background thread that groups them into a few
+named buckets. While they stay above that it checks again every hour, and runs at most every 6
+hours, only when new processes appear. It only changes buckets it made itself, so a bucket you
+created or edited stays as it is. It shows as the built-in **Machine buckets** task in
+**Settings → Scheduled tasks**, where **Run now** starts it at once. With no provider enabled it
+shows as blocked and doesn't run.
+
+**Claims** tie a process, a container or a cgroup to a thread, so a dev server or a Docker
+container an agent started counts toward that thread. Agents make claims. A claim ends when its
+process exits, its container or cgroup is removed, or its thread is deleted, and when the server
+restarts; archiving a thread keeps them. Removing a claim stops nothing.
+
+To see one thread's use, open the thread's details: **Resources** shows the CPU and memory of the
+thread and its subagents, now and over the last 10 minutes. Click it to see their processes on the
+machine tab. T3 records this while a turn runs, even with nothing open.
+
+Agents can read the machine too: ask one what is using it, and it can show the machine's state
+as a card in the chat. The card stays live until the next turn starts, then keeps the reading it
+had.
+
+#### Load management
+
+Load management keeps background agents from overloading a machine. It is off by default; turn on
+**Load management** in the same machine settings as its limits. It reaches only agent sessions and
+terminals started after you change it, so restart a running agent to include it.
+
+While it is on, agents run heavy builds and test suites as `"$T3CODE_GUARD" -- <command>`. If the
+machine stays stressed for the **Guard hold** time, the guard stops the command and exits with code
+75, and the agent waits for the machine to free up before trying again. The guard looks at CPU and
+RAM only, not GPUs.
+
+When the machine stays stressed for the **Pause hold** time, T3 also pauses low-priority threads
+that cause a real share of the load, along with Docker containers only those threads claimed. A
+paused thread shows **Paused for load** and continues on its own when the machine clears, or after
+30 minutes at most. **Resume now** continues it at once, and so does sending it a message. Turning
+load management off resumes every paused thread.
+
+Backgrounded threads are low priority unless you set one to **Normal**; set **Priority** to **Low**
+or **Normal** in a thread's ⋯ menu or its details. T3 never pauses a normal-priority thread, a
+thread you are looking at or opened in the last 15 minutes, a thread waiting on your approval or
+answer, a thread coordinating other agents, a thread whose delegated agents are still working, or
+a delegated thread its parent is waiting on.
 
 ### Tailscale HTTPS
 
@@ -194,6 +290,27 @@ tailscale serve --https=443 --set-path=/ off
 
 If that port is already in use, choose another with
 `--tailscale-serve-port`. See `t3 pair --help` for other pairing options.
+
+### Share a server an agent started
+
+Ask an agent to share a server it started and it publishes the server at an
+HTTPS address on your tailnet, such as `https://machine.tailnet.ts.net:5173`.
+The server's machine needs Tailscale signed in with MagicDNS on. The site
+appears under **Sites** in the thread's details, where you can copy its URL or
+stop it. It goes away by itself when the server's processes exit. Stop ends the
+server's processes and their children; a daemon that detached from them keeps
+running.
+
+Public URLs, reachable off the tailnet, need a hook command you provide. Set
+`servedSites.publicExposeCommand` in the server's `settings.json` to the
+command's argv, such as `["/usr/local/bin/expose-site"]`. T3 Code runs
+`<command> expose <name> http://127.0.0.1:<port>`, with `T3_SITE_ID`,
+`T3_ENVIRONMENT_ID`, `T3_SITE_THREAD_ID` and `T3_SITE_PROJECT_CWD` set, and uses the one `https://` line it prints as the
+public URL; exit code 3 refuses the site. It runs
+`<command> unexpose <name>` with the same variables when the site goes away.
+Names are unique per T3 server, not per machine, so a hook shared by several
+servers should key on `T3_ENVIRONMENT_ID` and the name. Exposed routes stay up
+while T3 Code is stopped and are cleaned up when it starts again.
 
 ### Hosted web app
 
@@ -311,6 +428,38 @@ For a systemd service, add `Environment=T3CODE_SERVER_BROWSER_SANDBOX=0` under
 `[Service]` in its configuration, run `sudo systemctl daemon-reload`, then restart
 your T3 service. Setting the variable in an agent's terminal does not change the
 environment of an already running T3 server.
+
+### Cloudflare Browser Run
+
+Agent tabs can run on [Cloudflare Browser Run](https://developers.cloudflare.com/browser-run/),
+Cloudflare's hosted Chrome, so the host stops spending memory and CPU on the
+pages agents browse. Open **Settings → Browser → Cloudflare Browser Run**,
+enter your Cloudflare account ID and an API token with the **Browser Rendering
+Edit** permission, select **Check connection**, then turn it on. The setting
+belongs to the environment, and applies to a server that runs without the
+desktop app, which shows its own environment's tabs itself.
+
+A new agent tab goes to Browser Run when its address resolves to a public
+address from the host. It starts logged out: a hosted browser does not hold
+your browser profiles. An agent that needs a login opens the tab with that
+profile, and the tab stays on the host. `localhost`, private and tailnet
+addresses, and names only the host's DNS knows also keep opening in the host's
+Chrome. If Cloudflare is unreachable or refuses the token, tabs open on the
+host instead.
+
+A tab keeps the browser it opened in. In a Browser Run tab:
+
+- Local addresses do not load, including a redirect to one, such as a sign-in
+  callback on `localhost`. Agents open those in a new tab.
+- Downloads are not saved.
+- Sites see Cloudflare's addresses and its bot headers, and some block them.
+  Turn the setting off to browse those from the host.
+- The tab closes if the host sleeps or loses its connection for two minutes,
+  because Cloudflare ends a browser the host stops talking to.
+
+Cloudflare bills browser time and concurrent browsers. An environment's Browser
+Run tabs share one browser, which T3 Code closes five minutes after its last
+tab.
 
 ## Connect an outside agent
 

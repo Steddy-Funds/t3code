@@ -60,6 +60,7 @@ import {
   CheckIcon,
   ChevronRightIcon,
   CornerLeftUpIcon,
+  CpuIcon,
   FileSearchIcon,
   FolderGit2Icon,
   FolderIcon,
@@ -79,6 +80,7 @@ import {
   UserPlusIcon,
 } from "lucide-react";
 import { openThreadFind } from "./chat/threadFindStore";
+import { useCapableMachines } from "./nodeResources/capableMachines";
 import {
   useDeferredValue,
   useEffect,
@@ -669,6 +671,7 @@ function OpenCommandPaletteDialog(props: {
   };
 
   const { projectByKey } = useProjectLookups();
+  const capableMachines = useCapableMachines();
 
   const activeThreadKey = activeThread
     ? scopedThreadKey(scopeThreadRef(activeThread.environmentId, activeThread.id))
@@ -1164,7 +1167,13 @@ function OpenCommandPaletteDialog(props: {
         : option.environmentId
       : option.status,
     disabled: !option.isConnected,
-    icon: <EnvironmentMachineIcon kind={option.machine} className={ITEM_ICON_CLASS} />,
+    icon: (
+      <EnvironmentMachineIcon
+        kind={option.machine}
+        environmentId={option.environmentId}
+        className={ITEM_ICON_CLASS}
+      />
+    ),
     keepOpen: true,
     run: async () => {
       run(option.environmentId);
@@ -1434,6 +1443,25 @@ function OpenCommandPaletteDialog(props: {
     });
   }
 
+  const activeThreadMachine =
+    activeThread === null
+      ? undefined
+      : capableMachines.find((machine) => machine.environmentId === activeThread.environmentId);
+  if (activeThread !== null && activeThreadMachine) {
+    const threadRef = scopeThreadRef(activeThread.environmentId, activeThread.id);
+    const { environmentId, label } = activeThreadMachine;
+    actionItems.push({
+      kind: "action",
+      value: "action:show-thread-machine",
+      searchTerms: ["machine", "task manager", "resources", "cpu", "memory", "load", label],
+      title: `Show ${label} beside chat`,
+      icon: <CpuIcon className={ITEM_ICON_CLASS} />,
+      run: async () => {
+        useRightPanelStore.getState().openMachine(threadRef, environmentId);
+      },
+    });
+  }
+
   if (activeThread !== null && canShareActiveThreadWithGuest) {
     const threadRef = scopeThreadRef(activeThread.environmentId, activeThread.id);
     actionItems.push({
@@ -1643,6 +1671,34 @@ function OpenCommandPaletteDialog(props: {
       await navigate({ to: "/usage" });
     },
   });
+
+  if (capableMachines.length > 0) {
+    actionItems.push({
+      kind: "action",
+      value: "action:machines",
+      searchTerms: ["machines", "task manager", "resources", "cpu", "memory", "load", "processes"],
+      title: "Open machines",
+      icon: <CpuIcon className={ITEM_ICON_CLASS} />,
+      run: async () => {
+        await navigate({ to: "/machines" });
+      },
+    });
+  }
+  for (const machine of capableMachines) {
+    actionItems.push({
+      kind: "action",
+      value: `action:machine:${machine.environmentId}`,
+      searchTerms: ["machine", "task manager", "resources", "processes", machine.label],
+      title: `Open ${machine.label} task manager`,
+      icon: <CpuIcon className={ITEM_ICON_CLASS} />,
+      run: async () => {
+        await navigate({
+          to: "/machines/$environmentId",
+          params: { environmentId: machine.environmentId },
+        });
+      },
+    });
+  }
 
   for (const direction of [1, -1] as const) {
     const title = direction === 1 ? "Focus Next Workspace Area" : "Focus Previous Workspace Area";

@@ -79,6 +79,10 @@
       "types": "./src/linkRequest.ts",
       "default": "./src/linkRequest.ts"
     },
+    "./scheduled-task-schedule": {
+      "types": "./src/scheduledTaskSchedule.ts",
+      "default": "./src/scheduledTaskSchedule.ts"
+    },
     "./scheduled-task-webhook": {
       "types": "./src/scheduledTaskWebhook.ts",
       "default": "./src/scheduledTaskWebhook.ts"
@@ -150,6 +154,34 @@
     "./relay": {
       "types": "./src/relay/index.ts",
       "default": "./src/relay/index.ts"
+    },
+    "./state/machineResources": {
+      "types": "./src/state/machineResources.ts",
+      "default": "./src/state/machineResources.ts"
+    },
+    "./state/machineHistory": {
+      "types": "./src/state/machineHistory.ts",
+      "default": "./src/state/machineHistory.ts"
+    },
+    "./state/machineProcessFrames": {
+      "types": "./src/state/machineProcessFrames.ts",
+      "default": "./src/state/machineProcessFrames.ts"
+    },
+    "./state/machineIndicator": {
+      "types": "./src/state/machineIndicator.ts",
+      "default": "./src/state/machineIndicator.ts"
+    },
+    "./state/tokenBurnRates": {
+      "types": "./src/state/tokenBurnRates.ts",
+      "default": "./src/state/tokenBurnRates.ts"
+    },
+    "./state/machineFormat": {
+      "types": "./src/state/machineFormat.ts",
+      "default": "./src/state/machineFormat.ts"
+    },
+    "./state/loadPause": {
+      "types": "./src/state/loadPause.ts",
+      "default": "./src/state/loadPause.ts"
     },
     "./state/auth": {
       "types": "./src/state/auth.ts",
@@ -254,6 +286,10 @@
     "./state/preview": {
       "types": "./src/state/preview.ts",
       "default": "./src/state/preview.ts"
+    },
+    "./state/servedSites": {
+      "types": "./src/state/servedSites.ts",
+      "default": "./src/state/servedSites.ts"
     },
     "./state/projects": {
       "types": "./src/state/projects.ts",

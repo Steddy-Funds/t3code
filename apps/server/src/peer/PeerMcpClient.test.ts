@@ -195,6 +195,7 @@ it.effect("renews a missing peer session once and reuses its replacement", () =>
                   },
                   url: "https://peer.example",
                   token: "fixture",
+                  capabilities: {},
                 }),
               recordOutcome: (_, outcome) => Effect.sync(() => outcomes.push(outcome.error)),
             }),
@@ -235,5 +236,93 @@ it.effect("renews a missing peer session once and reuses its replacement", () =>
       "renewed",
       "renewed",
     ]);
+  }).pipe(Effect.scoped),
+);
+
+it.effect.each([
+  ["a peer without load schedules", {}, true],
+  ["a peer that reports them off", { loadSchedules: false }, true],
+  ["a peer with load schedules", { loadSchedules: true }, false],
+] as const)("gates a call on the capability it requires: %s", ([, capabilities, refused]) =>
+  Effect.gen(function* () {
+    const posts: Array<string> = [];
+    const http = HttpClient.make((request) =>
+      Effect.sync(() => {
+        posts.push(request.url);
+        return HttpClientResponse.fromWeb(
+          request,
+          new Response(
+            posts.length === 1
+              ? ""
+              : posts.length === 2
+                ? ""
+                : JSON.stringify({
+                    result: { content: [{ type: "text", text: '{"modes":"ok"}' }] },
+                  }),
+            { status: posts.length === 2 ? 202 : 200, headers: { "mcp-session-id": "session" } },
+          ),
+        );
+      }),
+    );
+    const box = descriptorOf("environment-box", "Box");
+    const context = yield* Layer.build(
+      PeerMcpClient.layer.pipe(
+        Layer.provide(
+          Layer.mergeAll(
+            Layer.succeed(HttpClient.HttpClient, http),
+            Layer.mock(PeerLinks.PeerLinks)({
+              resolve: () =>
+                Effect.succeed({
+                  link: {
+                    environmentId: box.environmentId,
+                    label: box.label,
+                    urls: ["https://peer.example"],
+                    access: "auto",
+                    linkedAt: DateTime.makeUnsafe(0),
+                    expiresAt: DateTime.makeUnsafe(1),
+                    lastReachedAt: null,
+                    lastError: null,
+                  },
+                  url: "https://peer.example",
+                  token: "fixture",
+                  capabilities,
+                }),
+              recordOutcome: () => Effect.void,
+            }),
+          ),
+        ),
+      ),
+    );
+    const client = Context.get(context, PeerMcpClient.PeerMcpClient);
+    const call = (requires?: { readonly capability: "loadSchedules"; readonly refused: string }) =>
+      client
+        .call({
+          environmentId: box.environmentId,
+          tool: "probe",
+          arguments: {},
+          limits: { runtimeMode: "approval-required", interactionMode: "plan" },
+          success: Result,
+          ...(requires === undefined ? {} : { requires }),
+        })
+        .pipe(Effect.exit);
+    const gated = yield* call({
+      capability: "loadSchedules",
+      refused: "cannot take load schedules.",
+    });
+    if (refused) {
+      expect(gated).toMatchObject({
+        _tag: "Failure",
+        cause: {
+          reasons: [
+            { error: { code: "invalid_request", message: "Box cannot take load schedules." } },
+          ],
+        },
+      });
+      expect(posts).toEqual([]);
+    } else {
+      expect(gated).toMatchObject({ _tag: "Success", value: { modes: "ok" } });
+    }
+    // A call that requires nothing reaches the same peer either way.
+    expect(yield* call()).toMatchObject({ _tag: "Success", value: { modes: "ok" } });
   }).pipe(Effect.scoped),
 );

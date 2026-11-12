@@ -1,5 +1,5 @@
 import { useAtomValue } from "@effect/atom-react";
-import { NotificationSettings } from "./NotificationSettings";
+import { MachineStressedNotificationSetting, NotificationSettings } from "./NotificationSettings";
 import { PRIVACY_POLICY_URL } from "../../legalLinks";
 import { CheckIcon } from "lucide-react";
 import { Link, useNavigate } from "@tanstack/react-router";
@@ -139,9 +139,11 @@ const TIMESTAMP_FORMAT_LABELS = {
   "24-hour": "24-hour",
 } as const;
 
-const DIFF_LAYOUT_LABELS: Record<DiffLayout, string> = {
+// Side by side is its own setting, so a build without it still reads the stored layout.
+const DIFF_LAYOUT_LABELS: Record<DiffLayout | "side-by-side", string> = {
   stacked: "Stacked",
   split: "Split",
+  "side-by-side": "Side by side",
 };
 
 const QUIT_CONFIRMATION_MODE_LABELS: Record<QuitConfirmationMode, string> = {
@@ -482,6 +484,9 @@ export function useSettingsRestore(onRestored?: () => void) {
     ...(settings.inAppNotificationsEnabled !== DEFAULT_UNIFIED_SETTINGS.inAppNotificationsEnabled
       ? ["In-app notifications"]
       : []),
+    ...(settings.notifyOnMachineStressed !== DEFAULT_UNIFIED_SETTINGS.notifyOnMachineStressed
+      ? ["Machine becomes stressed"]
+      : []),
     ...(settings.sidebarProjectGroupingMode !== DEFAULT_UNIFIED_SETTINGS.sidebarProjectGroupingMode
       ? ["Project Grouping"]
       : []),
@@ -490,6 +495,14 @@ export function useSettingsRestore(onRestored?: () => void) {
       : []),
     ...(settings.sidebarWorkingShelfEnabled !== DEFAULT_UNIFIED_SETTINGS.sidebarWorkingShelfEnabled
       ? ["Working section"]
+      : []),
+    ...(settings.sidebarPullRequestShelfEnabled !==
+    DEFAULT_UNIFIED_SETTINGS.sidebarPullRequestShelfEnabled
+      ? ["PR review section"]
+      : []),
+    ...(settings.sidebarBackgroundedShelfEnabled !==
+    DEFAULT_UNIFIED_SETTINGS.sidebarBackgroundedShelfEnabled
+      ? ["Background threads"]
       : []),
     ...(settings.sidebarAutoSettleAfterDays !== DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleAfterDays
       ? ["Auto-settle inactive threads"]
@@ -522,17 +535,27 @@ export function useSettingsRestore(onRestored?: () => void) {
     ...(settings.diffIgnoreWhitespace !== DEFAULT_UNIFIED_SETTINGS.diffIgnoreWhitespace
       ? ["Diff whitespace changes"]
       : []),
-    ...(settings.diffLayout !== DEFAULT_UNIFIED_SETTINGS.diffLayout ? ["Diff layout"] : []),
+    ...(settings.diffLayout !== DEFAULT_UNIFIED_SETTINGS.diffLayout ||
+    settings.diffSideBySide !== DEFAULT_UNIFIED_SETTINGS.diffSideBySide
+      ? ["Diff layout"]
+      : []),
     ...(settings.proactivePanelsEnabled !== DEFAULT_UNIFIED_SETTINGS.proactivePanelsEnabled
       ? ["Open pull requests and changes panels proactively"]
       : []),
     ...(settings.showSkillsInSlashMenu !== DEFAULT_UNIFIED_SETTINGS.showSkillsInSlashMenu
       ? ["Show skills in slash menu"]
       : []),
+    ...(settings.shortcutQuickReferenceEnabled !==
+    DEFAULT_UNIFIED_SETTINGS.shortcutQuickReferenceEnabled
+      ? ["Shortcut quick reference"]
+      : []),
     ...(settings.composerRichTextEnabled !== DEFAULT_UNIFIED_SETTINGS.composerRichTextEnabled
       ? ["Rich text composer"]
       : []),
     ...(settings.sendShortcut !== DEFAULT_UNIFIED_SETTINGS.sendShortcut ? ["Send shortcut"] : []),
+    ...(settings.swipeReplyTarget !== DEFAULT_UNIFIED_SETTINGS.swipeReplyTarget
+      ? ["Swipe to reply"]
+      : []),
     ...(settings.followUpBehavior !== DEFAULT_UNIFIED_SETTINGS.followUpBehavior
       ? ["Follow-up behavior"]
       : []),
@@ -643,15 +666,19 @@ export function useSettingsRestore(onRestored?: () => void) {
       timestampFormat: DEFAULT_UNIFIED_SETTINGS.timestampFormat,
       notificationMode: DEFAULT_UNIFIED_SETTINGS.notificationMode,
       inAppNotificationsEnabled: DEFAULT_UNIFIED_SETTINGS.inAppNotificationsEnabled,
+      notifyOnMachineStressed: DEFAULT_UNIFIED_SETTINGS.notifyOnMachineStressed,
       wordWrap: DEFAULT_UNIFIED_SETTINGS.wordWrap,
       persistComposerContextStrip: DEFAULT_UNIFIED_SETTINGS.persistComposerContextStrip,
       diffFilesCollapsed: DEFAULT_UNIFIED_SETTINGS.diffFilesCollapsed,
       diffIgnoreWhitespace: DEFAULT_UNIFIED_SETTINGS.diffIgnoreWhitespace,
       diffLayout: DEFAULT_UNIFIED_SETTINGS.diffLayout,
+      diffSideBySide: DEFAULT_UNIFIED_SETTINGS.diffSideBySide,
       proactivePanelsEnabled: DEFAULT_UNIFIED_SETTINGS.proactivePanelsEnabled,
       showSkillsInSlashMenu: DEFAULT_UNIFIED_SETTINGS.showSkillsInSlashMenu,
+      shortcutQuickReferenceEnabled: DEFAULT_UNIFIED_SETTINGS.shortcutQuickReferenceEnabled,
       composerRichTextEnabled: DEFAULT_UNIFIED_SETTINGS.composerRichTextEnabled,
       sendShortcut: DEFAULT_UNIFIED_SETTINGS.sendShortcut,
+      swipeReplyTarget: DEFAULT_UNIFIED_SETTINGS.swipeReplyTarget,
       followUpBehavior: DEFAULT_UNIFIED_SETTINGS.followUpBehavior,
       toolCallVisibility: DEFAULT_UNIFIED_SETTINGS.toolCallVisibility,
       environmentIdentificationMode: DEFAULT_UNIFIED_SETTINGS.environmentIdentificationMode,
@@ -660,6 +687,8 @@ export function useSettingsRestore(onRestored?: () => void) {
       sidebarProjectGroupingMode: DEFAULT_UNIFIED_SETTINGS.sidebarProjectGroupingMode,
       sidebarProjectSortOrder: DEFAULT_UNIFIED_SETTINGS.sidebarProjectSortOrder,
       sidebarWorkingShelfEnabled: DEFAULT_UNIFIED_SETTINGS.sidebarWorkingShelfEnabled,
+      sidebarPullRequestShelfEnabled: DEFAULT_UNIFIED_SETTINGS.sidebarPullRequestShelfEnabled,
+      sidebarBackgroundedShelfEnabled: DEFAULT_UNIFIED_SETTINGS.sidebarBackgroundedShelfEnabled,
       sidebarAutoSettleAfterDays: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleAfterDays,
       sidebarAutoSettleKeepPullRequests: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleKeepPullRequests,
       sidebarAutoSettleOnMerge: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleOnMerge,
@@ -765,6 +794,7 @@ export function GeneralSettingsPanel() {
     <SettingsPageContainer>
       <SettingsSection id="notifications" title="Notifications">
         <NotificationSettings />
+        <MachineStressedNotificationSetting />
         <SettingsRow
           {...searchableSetting("in-app-notifications")}
           description="Show a toast when another thread finishes, fails, or needs input or approval while this app has focus."
@@ -877,6 +907,60 @@ export function GeneralSettingsPanel() {
                 updateSettings({ sidebarWorkingShelfEnabled: Boolean(checked) })
               }
               aria-label="Working section"
+            />
+          }
+        />
+        <SettingsRow
+          {...searchableSetting("pull-request-shelf")}
+          description="Gather threads watching a pull request into a PR review section, filtered by All, Draft or Open, instead of the Working section."
+          resetAction={
+            settings.sidebarPullRequestShelfEnabled !==
+            DEFAULT_UNIFIED_SETTINGS.sidebarPullRequestShelfEnabled ? (
+              <SettingResetButton
+                label="PR review section"
+                onClick={() =>
+                  updateSettings({
+                    sidebarPullRequestShelfEnabled:
+                      DEFAULT_UNIFIED_SETTINGS.sidebarPullRequestShelfEnabled,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Switch
+              checked={settings.sidebarPullRequestShelfEnabled}
+              onCheckedChange={(checked) =>
+                updateSettings({ sidebarPullRequestShelfEnabled: Boolean(checked) })
+              }
+              aria-label="PR review section"
+            />
+          }
+        />
+        <SettingsRow
+          {...searchableSetting("backgrounded-shelf")}
+          description="Add Background to the thread menu. Backgrounded threads leave the inbox for a collapsed Backgrounded section and send no notifications. Agents can background threads too."
+          resetAction={
+            settings.sidebarBackgroundedShelfEnabled !==
+            DEFAULT_UNIFIED_SETTINGS.sidebarBackgroundedShelfEnabled ? (
+              <SettingResetButton
+                label="background threads"
+                onClick={() =>
+                  updateSettings({
+                    sidebarBackgroundedShelfEnabled:
+                      DEFAULT_UNIFIED_SETTINGS.sidebarBackgroundedShelfEnabled,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Switch
+              checked={settings.sidebarBackgroundedShelfEnabled}
+              onCheckedChange={(checked) =>
+                updateSettings({ sidebarBackgroundedShelfEnabled: Boolean(checked) })
+              }
+              aria-label="Background threads"
             />
           }
         />
@@ -1133,6 +1217,43 @@ export function ChatSettingsPanel() {
             </Select>
           }
         />
+        <SettingsRow
+          {...searchableSetting("swipe-reply-target")}
+          description={
+            "What a two-finger swipe right on a message replies to: the section under the pointer or the whole message." +
+            (modifierLabel === "⌘" ? " Hold ⌘ while you swipe for the other." : "")
+          }
+          resetAction={
+            settings.swipeReplyTarget !== DEFAULT_UNIFIED_SETTINGS.swipeReplyTarget ? (
+              <SettingResetButton
+                label="swipe to reply"
+                onClick={() =>
+                  updateSettings({ swipeReplyTarget: DEFAULT_UNIFIED_SETTINGS.swipeReplyTarget })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Select
+              value={settings.swipeReplyTarget}
+              onValueChange={(value) => {
+                if (value === "section" || value === "message") {
+                  updateSettings({ swipeReplyTarget: value });
+                }
+              }}
+            >
+              <SelectTrigger size="sm" className="w-auto min-w-0" aria-label="Swipe to reply">
+                <SelectValue>
+                  {settings.swipeReplyTarget === "section" ? "Section" : "Whole message"}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectPopup align="end" alignItemWithTrigger={false}>
+                <SelectItem value="section">Section</SelectItem>
+                <SelectItem value="message">Whole message</SelectItem>
+              </SelectPopup>
+            </Select>
+          }
+        />
         <AdvancedSettings targetIds={[searchableSetting("skills-in-slash-menu").id]}>
           <SettingsRow
             {...searchableSetting("skills-in-slash-menu")}
@@ -1324,26 +1445,40 @@ export function DiffsSettingsPanel() {
       <SettingsSection id="diffs" title="Diffs">
         <SettingsRow
           {...searchableSetting("diff-layout")}
-          description="Show diffs stacked or side by side. The toggle in the diff toolbar changes this too."
+          description="Show diffs stacked, split, or side by side as two whole files. The toggle in the diff toolbar changes this too."
           resetAction={
-            settings.diffLayout !== DEFAULT_UNIFIED_SETTINGS.diffLayout ? (
+            settings.diffLayout !== DEFAULT_UNIFIED_SETTINGS.diffLayout ||
+            settings.diffSideBySide !== DEFAULT_UNIFIED_SETTINGS.diffSideBySide ? (
               <SettingResetButton
                 label="diff layout"
-                onClick={() => updateSettings({ diffLayout: DEFAULT_UNIFIED_SETTINGS.diffLayout })}
+                onClick={() =>
+                  updateSettings({
+                    diffLayout: DEFAULT_UNIFIED_SETTINGS.diffLayout,
+                    diffSideBySide: DEFAULT_UNIFIED_SETTINGS.diffSideBySide,
+                  })
+                }
               />
             ) : null
           }
           control={
             <Select
-              value={settings.diffLayout}
+              value={settings.diffSideBySide ? "side-by-side" : settings.diffLayout}
               onValueChange={(value) => {
                 if (value === "stacked" || value === "split") {
-                  updateSettings({ diffLayout: value });
+                  updateSettings({ diffLayout: value, diffSideBySide: false });
+                } else if (value === "side-by-side") {
+                  updateSettings({ diffSideBySide: true });
                 }
               }}
             >
               <SelectTrigger size="sm" className="w-full sm:w-40" aria-label="Diff layout">
-                <SelectValue>{DIFF_LAYOUT_LABELS[settings.diffLayout]}</SelectValue>
+                <SelectValue>
+                  {
+                    DIFF_LAYOUT_LABELS[
+                      settings.diffSideBySide ? "side-by-side" : settings.diffLayout
+                    ]
+                  }
+                </SelectValue>
               </SelectTrigger>
               <SelectPopup align="end" alignItemWithTrigger={false}>
                 <SelectItem hideIndicator value="stacked">
@@ -1351,6 +1486,9 @@ export function DiffsSettingsPanel() {
                 </SelectItem>
                 <SelectItem hideIndicator value="split">
                   {DIFF_LAYOUT_LABELS.split}
+                </SelectItem>
+                <SelectItem hideIndicator value="side-by-side">
+                  {DIFF_LAYOUT_LABELS["side-by-side"]}
                 </SelectItem>
               </SelectPopup>
             </Select>

@@ -39,6 +39,8 @@ export interface AgentScopeShape {
    * it, even when the next session runs without one (Cursor, OpenCode).
    */
   readonly clear: (threadId: string) => Effect.Effect<void>;
+  /** The unit's cgroup path, known at `wrap` time so it is ready before systemd creates the scope. */
+  readonly controlGroup: (unit: string) => Effect.Effect<string | undefined>;
 }
 
 export interface AgentScopeCommand {
@@ -55,6 +57,7 @@ export const AgentScope = Context.Reference<AgentScopeShape>("@t3tools/shared/Ag
     stop: () => Effect.void,
     kill: () => Effect.succeed(false),
     clear: () => Effect.void,
+    controlGroup: () => Effect.undefined,
   }),
 });
 

@@ -8,6 +8,7 @@ import {
   type UsagePricing,
   type UsageSummary,
   type UsageSummaryInput,
+  type UsageTokenTotals,
   UsageReadError,
 } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
@@ -40,7 +41,12 @@ import type {
   UsageRecord,
 } from "@t3tools/provider-core/server/usage";
 import { canonicalModelFilter, resolveModelAliases, UsageAggregator } from "./usageAggregation.ts";
-import { createOverrideRateTable, parseRateTable, type RateTable } from "./usagePricing.ts";
+import {
+  createOverrideRateTable,
+  parseRateTable,
+  priceUsage,
+  type RateTable,
+} from "./usagePricing.ts";
 import {
   listTranscriptFiles,
   readDirectoryVolumeId,
@@ -139,11 +145,19 @@ const decodeCachedSources = Schema.decodeUnknownOption(
   Schema.Struct({ sources: Schema.Record(Schema.String, CachedSource) }),
 );
 
+/** Prices tokens at standard-speed list rates after the user's aliases and overrides. */
+export interface UsagePricer {
+  readonly pricing: UsagePricing;
+  /** Null when the model has no known rate. */
+  readonly price: (model: string, totals: UsageTokenTotals) => number | null;
+}
+
 export class UsageService extends Context.Service<
   UsageService,
   {
     readonly readSummary: (input: UsageSummaryInput) => Effect.Effect<UsageSummary, UsageReadError>;
     readonly refreshRates: Effect.Effect<UsagePricing>;
+    readonly pricer: Effect.Effect<UsagePricer, UsageReadError>;
   }
 >()("t3/usage/UsageService") {}
 
@@ -938,7 +952,26 @@ export const make = Effect.gen(function* () {
     return yield* Deferred.await(deferred);
   });
 
-  return { readSummary, refreshRates, awaitPersisted } as const;
+  const pricer = Effect.gen(function* () {
+    yield* ensureRates(false);
+    const settings = yield* readSettings;
+    const table = rates;
+    const overrides = createOverrideRateTable(settings.usagePriceOverrides);
+    const aliases = resolveModelAliases(settings.usageModelAliases);
+    return {
+      pricing: pricing(),
+      price: (model, totals) => {
+        const priced = priceUsage(
+          table,
+          { model: aliases.get(model) ?? model, totals, speed: "standard", reportedCostUsd: null },
+          overrides,
+        );
+        return priced.costSource === "unpriced" ? null : priced.costUsd;
+      },
+    } satisfies UsagePricer;
+  }).pipe(Effect.withSpan("UsageService.pricer"));
+
+  return { readSummary, refreshRates, pricer, awaitPersisted } as const;
 });
 
 export const layer = Layer.effect(UsageService, make);

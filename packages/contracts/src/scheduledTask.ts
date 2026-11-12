@@ -190,12 +190,53 @@ const ScheduledTaskUpsertWebhookSchedule = Schema.Struct({
     "Run per webhook request. Prompt can use {{body.path}}, {{headers.name}}, {{query.name}}, {{body}}, {{request}}.",
 });
 
+export const LoadMetric = Schema.Literals([
+  "verdict",
+  "loadPerCore",
+  "memoryUsedPercent",
+  "swapUsedPercent",
+  "cpuPercent",
+  "gpuUtilPercent",
+  "vramUsedPercent",
+  "unbucketedSharePercent",
+]).annotate({
+  description:
+    "verdict: 1 stressed, 0 ok. loadPerCore: 5-min load / cores. Others percent. GPU: max over GPUs unless gpuId. unbucketedSharePercent: hourly.",
+});
+export type LoadMetric = typeof LoadMetric.Type;
+
+export const MAX_LOAD_SUSTAIN_SECONDS = 3600;
+
+export const LoadCondition = Schema.Struct({
+  metric: LoadMetric,
+  op: Schema.Literals([">=", "<="]),
+  threshold: Schema.Finite,
+  sustainSeconds: Schema.Int.check(
+    Schema.isBetween({ minimum: 0, maximum: MAX_LOAD_SUSTAIN_SECONDS }),
+  ).annotate({ description: "Must hold this long. 0 to 3600." }),
+  gpuId: Schema.optional(TrimmedNonEmptyString),
+});
+export type LoadCondition = typeof LoadCondition.Type;
+
+export const ScheduledTaskLoadSchedule = Schema.Struct({
+  type: Schema.Literal("load"),
+  condition: LoadCondition,
+  clear: Schema.optional(LoadCondition).annotate({
+    description: "Re-arms after this. Default: condition fails for max(sustainSeconds, 60) s.",
+  }),
+}).annotate({
+  description:
+    "Runs each time this machine's metric meets the condition, again after it clears, at most once a minute, and after a restart. For a one-time wake, the run deletes the task. '<=' monitors start one at a time, 20 to 40 s apart.",
+});
+export type ScheduledTaskLoadSchedule = typeof ScheduledTaskLoadSchedule.Type;
+
 /** Accept legacy sub-minute schedules so users can still manage them. */
 export const ScheduledTaskSchedule = Schema.Union([
   ScheduledTaskIntervalSchedule,
   ScheduledTaskFixedTimeSchedule,
   ScheduledTaskOnceSchedule,
   ScheduledTaskWebhookSchedule,
+  ScheduledTaskLoadSchedule,
 ]);
 export type ScheduledTaskSchedule = typeof ScheduledTaskSchedule.Type;
 
@@ -211,6 +252,7 @@ export const ScheduledTaskUpsertSchedule = Schema.Union([
   ScheduledTaskFixedTimeSchedule,
   ScheduledTaskOnceSchedule,
   ScheduledTaskUpsertWebhookSchedule,
+  ScheduledTaskLoadSchedule,
 ]);
 export type ScheduledTaskUpsertSchedule = typeof ScheduledTaskUpsertSchedule.Type;
 
@@ -263,6 +305,8 @@ export const ScheduledTask = Schema.Struct({
   webhook: Schema.optional(ScheduledTaskWebhookEndpoint),
   /** Why the task cannot run regardless of `enabled`, such as a managed policy refusing webhooks. */
   blockedByPolicy: Schema.optionalKey(Schema.String),
+  /** A task T3 keeps in step with a setting; clients show it read-only. */
+  builtIn: Schema.optionalKey(Schema.Literals(["machine-buckets"])),
 });
 export type ScheduledTask = typeof ScheduledTask.Type;
 

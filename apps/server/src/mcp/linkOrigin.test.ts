@@ -46,6 +46,7 @@ import * as McpInvocationContext from "./McpInvocationContext.ts";
 import * as PeerForwarding from "../peer/PeerForwarding.ts";
 import * as ThreadSearch from "../orchestration-v2/ThreadSearch.ts";
 import * as PeerLinkRequests from "../peer/PeerLinkRequests.ts";
+import * as ReviewNotes from "./ReviewNotes.ts";
 import * as PeerLinks from "../peer/PeerLinks.ts";
 
 // A linked environment's session drives this one's real orchestrator through
@@ -161,7 +162,12 @@ const layerTools = Layer.mergeAll(
   Layer.provide(Layer.mock(ProjectCloneTracker.ProjectCloneTracker)({})),
   Layer.provide(Layer.mock(SecretRequests.SecretRequests)({})),
   Layer.provide(Layer.mock(PeerForwarding.PeerForwarding)({})),
-  Layer.provide(Layer.mock(PeerLinkRequests.PeerLinkRequests)({})),
+  Layer.provide(
+    Layer.merge(
+      Layer.mock(PeerLinkRequests.PeerLinkRequests)({}),
+      Layer.mock(ReviewNotes.ReviewNotes)({}),
+    ),
+  ),
   Layer.provide(Layer.mock(PeerLinks.PeerLinks)({})),
   Layer.provide(Layer.mock(ThreadSearch.ThreadSearch)({})),
   Layer.provide(Layer.mock(RemoteDelegation.RemoteDelegation)({})),
@@ -330,10 +336,19 @@ it.layer(Layer.provideMerge(layerTools, layerOrchestration))("work a link starts
         threadId: "thread:laptop-parent",
         title: "Laptop parent",
       };
-      const task = yield* launch(laptop, "Delegated from the laptop", { delegatedFrom });
-      assert.deepEqual((yield* projections.getThreadShell(task))?.delegatedFrom, delegatedFrom);
-      const claimed = yield* launch(claudeCode, "Claims a parent", { delegatedFrom });
-      assert.equal((yield* projections.getThreadShell(claimed))?.delegatedFrom, undefined);
+      const task = yield* launch(laptop, "Delegated from the laptop", {
+        delegatedFrom: { ...delegatedFrom, autonomy: "on" },
+      });
+      const taskShell = yield* projections.getThreadShell(task);
+      // The parent's autonomy lands as the child's tag, which the user can change there.
+      assert.deepEqual(taskShell?.delegatedFrom, delegatedFrom);
+      assert.deepEqual(taskShell?.tags, ["autonomy:on"]);
+      const claimed = yield* launch(claudeCode, "Claims a parent", {
+        delegatedFrom: { ...delegatedFrom, autonomy: "on" },
+      });
+      const claimedShell = yield* projections.getThreadShell(claimed);
+      assert.equal(claimedShell?.delegatedFrom, undefined);
+      assert.notInclude(claimedShell?.tags ?? [], "autonomy:on");
     }),
   );
 

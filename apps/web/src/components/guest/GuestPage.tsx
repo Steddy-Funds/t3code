@@ -497,6 +497,7 @@ function GuestThread({
             onFileOpen={openFile}
             onFileDownload={openFile}
             renderHtmlRender={renderHtmlRender}
+            liveMachineCards={false}
             turnItemSource={turnItemSource}
             historyControls={historyControls}
             activeThreadEnvironmentId={GUEST_ENVIRONMENT_ID}

@@ -479,6 +479,18 @@ export const tailscaleServeOffArgs = (
         "off",
       ];
 
+const isTailscaleCommandExitError = Schema.is(TailscaleCommandExitError);
+
+// Turning off a route that is already gone has done what was asked.
+const runTailscaleServeOff = (args: readonly string[]) =>
+  runTailscaleCommand(args, TAILSCALE_SERVE_TIMEOUT).pipe(
+    Effect.catchIf(
+      (error) =>
+        isTailscaleCommandExitError(error) && error.stderrDiagnostic === "no-existing-handler",
+      () => Effect.void,
+    ),
+  );
+
 /** Removes the web handler at `mount` on `servePort`, the root one `ensureTailscaleServe` adds by default. */
 export const disableTailscaleServe = Effect.fn("tailscale.disableTailscaleServe")(function* (
   input: {
@@ -486,18 +498,17 @@ export const disableTailscaleServe = Effect.fn("tailscale.disableTailscaleServe"
     readonly mount?: string;
   } = {},
 ): Effect.fn.Return<void, TailscaleCommandError, ChildProcessSpawner.ChildProcessSpawner> {
-  return yield* runTailscaleCommand(
+  return yield* runTailscaleServeOff(
     tailscaleServeOffArgs({
       servePort: input.servePort ?? DEFAULT_TAILSCALE_SERVE_PORT,
       mount: input.mount ?? "/",
     })!,
-    TAILSCALE_SERVE_TIMEOUT,
   );
 });
 
 /** Removes a TCP forward on `servePort`; one port holds one forward, so nothing else goes. */
 export const disableTailscaleServeTcp = (servePort: number) =>
-  runTailscaleCommand(tailscaleServeOffArgs({ servePort })!, TAILSCALE_SERVE_TIMEOUT);
+  runTailscaleServeOff(tailscaleServeOffArgs({ servePort })!);
 
 const TailscaleServeConfigJson = Schema.Struct({
   TCP: Schema.optional(
@@ -665,4 +676,44 @@ export const probeTailscaleHttpsEndpoint = Effect.fn("tailscale.probeTailscaleHt
     });
   },
   Effect.orElseSucceed(() => false),
+);
+
+/** Every port a Serve route listens on, the node's own and its Services' and foreground sessions'. */
+export const parseTailscaleServePorts = (
+  rawServeStatusJson: string,
+): ReadonlySet<number> | undefined => {
+  const status = decodeTailscaleServeStatusJson(rawServeStatusJson);
+  if (Option.isNone(status)) return undefined;
+  const portsIn = (config: typeof TailscaleServeConfigJson.Type | undefined) => [
+    ...Object.keys(config?.TCP ?? {}).map(Number),
+    ...Object.keys(config?.Web ?? {}).map((hostPort) =>
+      Number(hostPort.slice(hostPort.lastIndexOf(":") + 1)),
+    ),
+  ];
+  const configs = [
+    status.value ?? undefined,
+    ...Object.values(status.value?.Services ?? {}),
+    ...Object.values(status.value?.Foreground ?? {}),
+  ];
+  return new Set(configs.flatMap(portsIn).filter(Number.isInteger));
+};
+
+/** Every Serve port in use, and whether a port's route proxies to a given 127.0.0.1 port. */
+export const readTailscaleServeRoutes = readTailscaleOutput("serve", [
+  "serve",
+  "status",
+  "--json",
+]).pipe(
+  Effect.flatMap((status) => {
+    const ports = parseTailscaleServePorts(status);
+    return ports === undefined
+      ? Effect.fail(new TailscaleStatusParseError({ cause: "unreadable serve status" }))
+      : Effect.succeed({
+          ports,
+          proxies: (servePort: number, localPort: number) =>
+            (
+              parseTailscaleServeRoutesTo(status, { host: "127.0.0.1", port: localPort }) ?? []
+            ).some((route) => route.servePort === servePort),
+        });
+  }),
 );

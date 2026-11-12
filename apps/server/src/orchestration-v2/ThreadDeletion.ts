@@ -6,7 +6,7 @@ import type {
 import type * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 
-import type { PendingOrchestrationEffectV2 } from "./EffectOutbox.ts";
+import { loadPauseCleanupEffect, type PendingOrchestrationEffectV2 } from "./EffectOutbox.ts";
 import type * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 
 export interface ThreadDeletionPlan {
@@ -62,6 +62,7 @@ export const planThreadDeletion = Effect.fn("ThreadDeletion.planThreadDeletion")
       ...projection.thread,
       deletedAt: projection.thread.deletedAt ?? now,
       titleRegeneration: null,
+      loadPause: null,
       updatedAt: now,
     },
   });
@@ -226,6 +227,22 @@ export const planThreadDeletion = Effect.fn("ThreadDeletion.planThreadDeletion")
     threadId: command.threadId,
     request: { type: "preview.cleanup" },
   });
+  effects.push({
+    id: `effect:${command.commandId}:machine-claims.cleanup`,
+    commandId: command.commandId,
+    threadId: command.threadId,
+    request: { type: "machine-claims.cleanup" },
+  });
+  const loadPauseCleanup =
+    projection.thread.loadPause == null
+      ? null
+      : loadPauseCleanupEffect({
+          commandId: command.commandId,
+          threadId: command.threadId,
+          loadPause: projection.thread.loadPause,
+          continueRun: false,
+        });
+  if (loadPauseCleanup !== null) effects.push(loadPauseCleanup);
   const attachmentIds = Array.from(new Set(input.attachmentIds));
   if (attachmentIds.length > 0) {
     effects.push({

@@ -13,6 +13,7 @@ import { lazy, Suspense } from "react";
 import SideChatPane from "./SideChatPane";
 import type { ComposerImageAttachment, DraftId } from "../../composerDraftStore";
 import type { ShortcutMatchContext } from "../../keybindings";
+import type { SendReviewComments } from "../diffs/useReviewCommentDrafts";
 import type { SideChatParentPanel } from "../../lib/sideChatPane";
 import { type RightPanelSurface, useRightPanelStore } from "../../rightPanelStore";
 import {
@@ -33,6 +34,11 @@ const DevicePanel = lazy(() =>
   import("../device/DevicePanel").then((module) => ({ default: module.DevicePanel })),
 );
 const FilePreviewPanel = lazy(() => import("../files/FilePreviewPanel"));
+const TaskManagerView = lazy(() =>
+  import("../nodeResources/TaskManagerView").then((module) => ({
+    default: module.TaskManagerView,
+  })),
+);
 
 type RightPanelTerminalProps = Omit<
   PersistentThreadTerminalPanelProps,
@@ -66,6 +72,11 @@ export function RightPanelSurfaceContent(props: {
   readonly environmentId: EnvironmentId;
   readonly visible: boolean;
   readonly composerDraftTarget: ScopedThreadRef | DraftId;
+  /**
+   * The thread's own draft, also while a queued message is being edited. Review comments wait
+   * there, so they never join that edit and are never dropped with it.
+   */
+  readonly reviewDraftTarget: ScopedThreadRef | DraftId;
   readonly keybindings: ResolvedKeybindingsConfig;
   readonly configuredPreviewUrls: ReadonlyArray<string>;
   readonly workspaceMutationId: string | null;
@@ -74,6 +85,8 @@ export function RightPanelSurfaceContent(props: {
     annotation: PreviewAnnotationPayload,
     image: ComposerImageAttachment | null,
   ) => void;
+  /** Absent where there is no thread to send to, or this connection cannot send. */
+  readonly onSendReviewComments?: SendReviewComments;
   readonly onCloseSurface: (surface: RightPanelSurface) => void;
   readonly terminal: RightPanelTerminalProps;
   readonly pullRequest: RightPanelPullRequestProps;
@@ -111,9 +124,12 @@ export function RightPanelSurfaceContent(props: {
           <DiffPanel
             key={scopedThreadKey(threadRef)}
             mode="embedded"
-            composerDraftTarget={props.composerDraftTarget}
+            composerDraftTarget={props.reviewDraftTarget}
             workspaceMutationId={props.workspaceMutationId}
             visible={visible}
+            {...(props.onSendReviewComments
+              ? { onSendReviewComments: props.onSendReviewComments }
+              : {})}
           />
         </Suspense>
       );
@@ -196,6 +212,20 @@ export function RightPanelSurfaceContent(props: {
           />
         </Suspense>
       );
+    case "machine":
+      return (
+        <Suspense fallback={null}>
+          <div className="h-full min-h-0 overflow-y-auto p-3">
+            <TaskManagerView
+              environmentId={surface.environmentId}
+              focusThreadId={surface.focusThreadId}
+              onClearFocus={() =>
+                useRightPanelStore.getState().openMachine(threadRef, surface.environmentId)
+              }
+            />
+          </div>
+        </Suspense>
+      );
     case "files":
     case "file": {
       const files = props.files;
@@ -212,7 +242,7 @@ export function RightPanelSurfaceContent(props: {
             projectName={files.projectName ?? ""}
             projectId={files.projectId}
             threadRef={threadRef}
-            composerDraftTarget={props.composerDraftTarget}
+            composerDraftTarget={props.reviewDraftTarget}
             keybindings={props.keybindings}
             availableEditors={files.availableEditors}
             openInShortcutEnabled={visible}
@@ -230,6 +260,9 @@ export function RightPanelSurfaceContent(props: {
             onPendingChange={files.onPendingChange}
             selectedFilePending={surface.kind === "file" && files.pendingSurfaceIds.has(surface.id)}
             workspaceMutationId={props.workspaceMutationId}
+            {...(props.onSendReviewComments
+              ? { onSendReviewComments: props.onSendReviewComments }
+              : {})}
           />
         </Suspense>
       );

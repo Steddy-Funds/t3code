@@ -1,9 +1,16 @@
-import { memo, useRef } from "react";
-import { describe, expect, it } from "vite-plus/test";
+import { memo, useRef, useState } from "react";
+import { describe, expect, it, vi } from "vite-plus/test";
 import type { EnvironmentId, ScopedThreadRef, ThreadId } from "@t3tools/contracts";
+import { scopedThreadKey } from "@t3tools/client-runtime/environment";
 
-import { act, render } from "../../../test/render";
-import { THREAD_CONTEXT_DROP_EVENT, useThreadContextDrop } from "./threadContextDrag";
+import { act, fakeTimers, render } from "../../../test/render";
+import { SidebarSwipeMention } from "../sidebar/SidebarSwipeMention";
+import { SWIPE_REPLY_RELEASE_IDLE_MS } from "./messageSwipeReply.logic";
+import {
+  THREAD_CONTEXT_DROP_EVENT,
+  threadContextDropTargetProps,
+  useThreadContextDrop,
+} from "./threadContextDrag";
 
 const ENVIRONMENT_ID = "environment-local" as EnvironmentId;
 
@@ -80,5 +87,61 @@ describe("useThreadContextDrop", () => {
 
     expect(latest).toEqual(["thread-dropped"]);
     expect(first).toEqual([]);
+  });
+});
+
+const SWIPED_KEY = scopedThreadKey({
+  environmentId: ENVIRONMENT_ID,
+  threadId: "thread-swiped" as ThreadId,
+});
+
+function SwipeMentionFixture({ received }: { received: Array<ThreadId> }) {
+  const [list, setList] = useState<HTMLUListElement | null>(null);
+  const targetRef = useRef<HTMLDivElement | null>(null);
+  useThreadContextDrop(targetRef, ENVIRONMENT_ID, "thread-a", (refs) => {
+    received.push(...refs.map((ref) => ref.threadId));
+  });
+  return (
+    <>
+      <div ref={targetRef} {...threadContextDropTargetProps()} />
+      <ul ref={setList} style={{ width: 240 }}>
+        <li data-thread-item={SWIPED_KEY}>
+          <div data-sidebar-row={SWIPED_KEY}>Swiped thread</div>
+        </li>
+      </ul>
+      <SidebarSwipeMention list={list} />
+    </>
+  );
+}
+
+describe("SidebarSwipeMention", () => {
+  it.each([
+    ["Cmd swiping a thread past the threshold mentions it", "MacIntel", true, 8, true, true],
+    ["a short Cmd swipe leaves the composer alone", "MacIntel", true, 3, true, false],
+    ["a plain swipe leaves the composer alone", "MacIntel", false, 8, false, false],
+    ["Cmd swiping off macOS leaves the composer alone", "Linux x86_64", true, 8, false, false],
+  ] as const)("%s", async (_name, platform, metaKey, steps, tracks, mentions) => {
+    using _platform = vi.spyOn(navigator, "platform", "get").mockReturnValue(platform);
+    const received: Array<ThreadId> = [];
+    await using screen = await render(<SwipeMentionFixture received={received} />);
+    const row = screen.container.querySelector<HTMLElement>("[data-sidebar-row]")!;
+    using _timers = fakeTimers();
+
+    await act(() => {
+      for (let step = 0; step < steps; step += 1) {
+        row.dispatchEvent(new WheelEvent("wheel", { deltaX: -10, bubbles: true, metaKey }));
+      }
+    });
+    const indicator = document.querySelector<HTMLElement>(".swipe-reply-indicator");
+    expect(indicator?.hidden === false).toBe(tracks);
+    expect(indicator?.dataset.armed).toBe(String(mentions));
+    if (tracks) {
+      expect(indicator!.querySelector(".lucide-quote")).not.toBeNull();
+      expect(indicator!.querySelector(".lucide-reply")).toBeNull();
+    }
+    // The fingers lift when the wheel events stop.
+    await act(() => vi.advanceTimersByTime(SWIPE_REPLY_RELEASE_IDLE_MS));
+
+    expect(received).toEqual(mentions ? ["thread-swiped"] : []);
   });
 });

@@ -197,6 +197,7 @@ function ConnectedCloudEnvironmentRow(props: {
   }
   return (
     <CloudEnvironmentRowShell
+      environmentId={props.environment.environmentId}
       opensDetails={props.onOpen !== undefined}
       onOpen={props.onOpen}
       onRemove={props.onRemove}
@@ -262,6 +263,8 @@ function CloudEnvironmentRow(props: {
 }
 
 function CloudEnvironmentRowShell(props: {
+  /** Set for saved environments, whose symbol shows the machine's stress. */
+  readonly environmentId?: EnvironmentId;
   readonly showChevron?: boolean;
   readonly opensDetails?: boolean;
   readonly onOpen?: (() => void) | undefined;
@@ -336,6 +339,7 @@ function CloudEnvironmentRowShell(props: {
         <View className="min-w-0 flex-row items-center gap-2">
           <ConnectionStatusDot state={props.connectionState} pulse={shouldPulse} size={7} />
           <EnvironmentMachineSymbol
+            environmentId={props.environmentId}
             kind={props.machine}
             size={14}
             tintColorClassName="accent-foreground-muted"

@@ -74,6 +74,7 @@ export function PullRequestRoutingSettings({
         <EnvironmentRow
           key={environment.environmentId}
           kind={resolveEnvironmentMachineKind(environment.serverConfig)}
+          environmentId={environment.environmentId}
           label={environment.label}
           subtitle={<EnvironmentTransportLabel environment={environment} />}
         >

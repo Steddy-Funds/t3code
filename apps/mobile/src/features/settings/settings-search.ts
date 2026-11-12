@@ -49,7 +49,15 @@ const SETTINGS_SEARCH_TERMS = {
     "microphone order",
     "bluetooth",
   ],
-  SettingsScheduledTasks: ["automations", "schedule", "cron", "recurring", "webhook"],
+  SettingsScheduledTasks: [
+    "automations",
+    "schedule",
+    "cron",
+    "recurring",
+    "webhook",
+    "load monitor",
+    "when machine is busy",
+  ],
   SettingsProjectOverview: ["project", "overview", "checkouts", "delete project"],
   SettingsOrganization: [
     "project grouping",

@@ -1,4 +1,5 @@
 import type { ResourceTelemetryProcess } from "@t3tools/contracts";
+import { processProviderGroup } from "@t3tools/shared/processProviderGroup";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -26,32 +27,19 @@ const processCount = Metric.gauge("t3_process_group_count", {
 
 // Each direct child of the server names the group of its whole subtree. A fixed set keeps one
 // series per group per server, however many agents and processes come and go.
-const PROVIDER_GROUPS: ReadonlyArray<readonly [RegExp, string]> = [
-  [/codex/, "codex"],
-  [/claude/, "claude"],
-  [/cursor/, "cursor"],
-  [/opencode/, "opencode"],
-  [/grok/, "grok"],
-  [/antigravity|gemini/, "antigravity"],
-];
 const OTHER_GROUPS: ReadonlyArray<readonly [RegExp, string]> = [
   [/chrom/, "browser"],
   [/^(?:ba|z|fi|da|c)?sh(?:\.exe)?$|^pwsh|^powershell|^cmd\.exe$/, "terminal"],
 ];
-// A CLI shipped as a script runs under a JavaScript runtime, so its process name is the
-// runtime's (older Claude packages run `node .../@anthropic-ai/claude-code/cli.js`). Only those
-// are matched by command line; any other name is matched by name alone, so a shell or `git`
-// whose arguments mention a provider stays in its own group.
-const SCRIPT_RUNTIME = /^(?:node|bun|deno)(?:\.exe)?$/;
 
-const match = (groups: ReadonlyArray<readonly [RegExp, string]>, text: string) =>
-  groups.find(([pattern]) => pattern.test(text))?.[1];
-
-const childGroup = (name: string, command: string) => {
+/** The group a direct child of the server names for its subtree: a provider, "browser", "terminal" or "other". */
+export const childGroup = (name: string, command: string) => {
   const lowerName = name.toLowerCase();
-  if (SCRIPT_RUNTIME.test(lowerName))
-    return match(PROVIDER_GROUPS, command.toLowerCase()) ?? "other";
-  return match(PROVIDER_GROUPS, lowerName) ?? match(OTHER_GROUPS, lowerName) ?? "other";
+  return (
+    processProviderGroup(name, command) ??
+    OTHER_GROUPS.find(([pattern]) => pattern.test(lowerName))?.[1] ??
+    "other"
+  );
 };
 
 export interface ProcessGroupTotals {

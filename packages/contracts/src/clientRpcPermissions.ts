@@ -3,6 +3,7 @@ import { GitPreparePullRequestThreadInput, GitRunStackedActionInput } from "./gi
 import {
   AuthAccessWriteScope,
   AuthEnvironmentMaintainScope,
+  AuthFilesystemReadScope,
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
   AuthPreviewOperateScope,
@@ -21,10 +22,19 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [WS_METHODS.previewClose]: AuthPreviewOperateScope,
   // Stopping a server signals its processes, as closing a terminal does.
   [WS_METHODS.previewStopLocalServer]: AuthTerminalOperateScope,
+  // Stopping a site signals its processes or runs its stop command, as stopping a server does.
+  [WS_METHODS.servedSitesStop]: AuthTerminalOperateScope,
+  [WS_METHODS.servedSitesDismiss]: AuthTerminalOperateScope,
   [WS_METHODS.serverRunStorageCleanup]: AuthSettingsWriteScope,
   // Restarts the server, as an update does.
   [WS_METHODS.serverReclaimDatabaseSpace]: AuthEnvironmentMaintainScope,
   [WS_METHODS.serverCheckOtlpEndpoint]: AuthSettingsWriteScope,
+  // Signals any process on the host (pid and start time rechecked server-side).
+  [WS_METHODS.serverSignalProcess]: AuthEnvironmentMaintainScope,
+  // Releasing a claim changes which thread a process counts toward, and what load pause may stop.
+  [WS_METHODS.machineClaimsRelease]: AuthEnvironmentMaintainScope,
+  // The check spends the stored API token.
+  [WS_METHODS.serverCheckBrowserRun]: AuthSettingsWriteScope,
   // Downloads and installs a language server binary on the host, as a settings change can.
   [WS_METHODS.codeIntelInstallServer]: AuthSettingsWriteScope,
   // Listing models spends the stored API key, so only those who can choose a model may.
@@ -89,6 +99,9 @@ export function clientRpcRequiredScopes(
   method: string,
   input: unknown,
 ): readonly AuthEnvironmentScope[] {
+  // Whole files of a turn's diff: the thread's diff and file contents, so both grants.
+  if (method === ORCHESTRATION_V2_WS_METHODS.getTurnDiffFileContents)
+    return [AuthOrchestrationReadScope, AuthFilesystemReadScope];
   if (method === WS_METHODS.gitPreparePullRequestThread && input !== undefined) {
     const payload = decodePrepareThread(input);
     if (payload.mode === "worktree" && payload.threadId !== undefined)

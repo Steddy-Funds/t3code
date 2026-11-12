@@ -10,6 +10,7 @@ import {
 import { canSnooze, effectiveSnoozed } from "@t3tools/client-runtime/state/thread-settled";
 import {
   AuthOrchestrationOperateScope,
+  isBackgroundedThread,
   type ScopedThreadRef,
   type ThreadId,
 } from "@t3tools/contracts";
@@ -28,6 +29,7 @@ import { threadEnvironment } from "../state/threads";
 import { useOrchestrationCommand } from "../state/use-orchestration-command";
 import { readEnvironmentScope } from "../state/session";
 import {
+  readEnvironmentServerConfig,
   readEnvironmentServerConfigLoaded,
   readEnvironmentSupportsAutoSettleOptOut,
   readThreadShell,
@@ -46,6 +48,7 @@ import { threadRuntimeCanArchive } from "@t3tools/client-runtime/state/models";
 import { useCopyToClipboard } from "./useCopyToClipboard";
 import { useNewThreadHandler } from "./useHandleNewThread";
 import { useClientSettings } from "./useSettings";
+import { threadLoadMenuState, useThreadLoadMenuActions } from "./useThreadLoadMenuActions";
 import { canTurnThreadIntoProject, useThreadActions } from "./useThreadActions";
 
 function failureToast(title: string, error: unknown) {
@@ -83,6 +86,7 @@ export function useThreadActionMenu(input: {
     pinThread,
     confirmAndUnpinThread,
     setThreadAutoSettle,
+    setThreadBackgrounded,
     archiveThread,
     deleteThread,
     markThreadUnread,
@@ -91,10 +95,12 @@ export function useThreadActionMenu(input: {
   const updateThreadMetadata = useOrchestrationCommand(threadEnvironment.updateMetadata, {
     reportFailure: false,
   });
+  const runLoadMenuAction = useThreadLoadMenuActions();
   const handleNewThread = useNewThreadHandler();
   const confirmThreadDelete = useClientSettings((s) => s.confirmThreadDelete);
   const confirmThreadArchive = useClientSettings((s) => s.confirmThreadArchive);
   const timestampFormat = useClientSettings((s) => s.timestampFormat);
+  const backgroundedShelfEnabled = useClientSettings((s) => s.sidebarBackgroundedShelfEnabled);
   const { copyToClipboard: copyPathToClipboard } = useCopyToClipboard<{ path: string }>({
     onCopy: ({ path }) => {
       toastManager.add({ type: "success", title: "Path copied", description: path });
@@ -132,6 +138,7 @@ export function useThreadActionMenu(input: {
         titleRegeneration: configLoaded,
       };
       const isRegeneratingTitle = thread.titleRegeneration != null;
+      const serverConfig = readEnvironmentServerConfig(threadRef.environmentId);
       const snoozePresets = resolveSnoozePresets(now, timestampFormat, threadRef.environmentId);
       const items = buildThreadActionMenuItems({
         canOperate: readEnvironmentScope(threadRef.environmentId, AuthOrchestrationOperateScope),
@@ -142,6 +149,7 @@ export function useThreadActionMenu(input: {
         isSettled: supports.settlement && thread.settledOverride === "settled",
         autoSettleEnabled: thread.autoSettleDisabledAt == null,
         isSnoozed: supports.snooze && effectiveSnoozed(thread, { now: now.toISOString() }),
+        isBackgrounded: backgroundedShelfEnabled ? isBackgroundedThread(thread.source) : undefined,
         canSnoozeNow: canSnooze(thread, { now: now.toISOString() }),
         isRegeneratingTitle,
         isRunning: !threadRuntimeCanArchive(thread.runtime),
@@ -149,6 +157,7 @@ export function useThreadActionMenu(input: {
         snoozePresets,
         canShareWithGuest,
         canTurnIntoProject: canTurnThreadIntoProject(threadRef),
+        ...threadLoadMenuState(serverConfig, thread),
       });
       const clicked = await settlePromise(() => api.contextMenu.show(items, position));
       if (clicked._tag === "Failure" || clicked.value === null) return;
@@ -234,6 +243,12 @@ export function useThreadActionMenu(input: {
         case "pin":
           await reportFailure("Failed to pin thread", () => pinThread(threadRef));
           return;
+        case "background":
+        case "unbackground":
+          await reportFailure("Failed to update thread", () =>
+            setThreadBackgrounded(threadRef, action === "background"),
+          );
+          return;
         case "unpin": {
           await reportFailure("Failed to unpin thread", () => confirmAndUnpinThread(threadRef));
           return;
@@ -243,6 +258,12 @@ export function useThreadActionMenu(input: {
           await reportFailure("Failed to update auto-settle", () =>
             setThreadAutoSettle(threadRef, action === "auto-settle:enabled"),
           );
+          return;
+        case "priority:low":
+        case "priority:normal":
+        case "priority:default":
+        case "resume-load-pause":
+          await runLoadMenuAction(action, threadRef);
           return;
         case "rename":
           onStartRename();

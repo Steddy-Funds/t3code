@@ -1,7 +1,19 @@
 import { hydratePartialDiff } from "@pierre/diffs";
+import {
+  GROVE_THEME,
+  MATERIAL_OCEAN_THEME,
+  THEME_SYNTAX_THEME_NAMES,
+  getThemeEditorColors,
+  type ThemeEditorColors,
+} from "@t3tools/shared/themePalettes";
 import { describe, expect, it } from "vite-plus/test";
 import { resolveDiffReviewPosition } from "../reviewCommentContext";
 import {
+  ALL_DIFF_THEME_NAMES,
+  DIFF_THEME_NAMES,
+  DIFF_SURFACE_THEME_UNSAFE_CSS,
+  resolveDiffThemeName,
+  themeEditorSurfaceCss,
   buildFileDiffContentVersion,
   buildFileDiffIdentityKey,
   buildFileDiffRenderKey,
@@ -403,5 +415,123 @@ describe("a file whose name a patch header cannot carry plainly", () => {
 
     expect(resolveFileDiffPath(file)).toBe("new\tname.ts");
     expect(resolveFileDiffPreviousPath(file)).toBe("old\tname.ts");
+  });
+});
+
+describe("resolveDiffThemeName", () => {
+  const materialDark = getThemeEditorColors(MATERIAL_OCEAN_THEME, "dark");
+
+  it("keeps the stock pair for a theme without editor colours", () => {
+    expect(resolveDiffThemeName("light")).toBe(DIFF_THEME_NAMES.light);
+    expect(resolveDiffThemeName("dark")).toBe(DIFF_THEME_NAMES.dark);
+    expect(resolveDiffThemeName("light", null)).toBe("t3-light");
+    expect(resolveDiffThemeName("dark", null)).toBe("pierre-dark");
+    expect(resolveDiffThemeName("dark", getThemeEditorColors(GROVE_THEME, "dark"))).toBe(
+      "pierre-dark",
+    );
+  });
+
+  it("takes the editor's syntax theme when its appearance is the one asked for", () => {
+    expect(materialDark).not.toBeNull();
+    expect(resolveDiffThemeName("dark", materialDark)).toBe("material-deep-ocean");
+  });
+
+  it("falls back to the stock pair when the block's appearance differs from the one asked for", () => {
+    expect(resolveDiffThemeName("light", materialDark)).toBe("t3-light");
+    const lightBlock: ThemeEditorColors = {
+      ...materialDark!,
+      syntax: { ...materialDark!.syntax, appearance: "light" },
+    };
+    expect(resolveDiffThemeName("dark", lightBlock)).toBe("pierre-dark");
+    expect(resolveDiffThemeName("light", lightBlock)).toBe("material-deep-ocean");
+  });
+});
+
+describe("ALL_DIFF_THEME_NAMES", () => {
+  it("is the stock pair plus every theme syntax name, with no duplicates", () => {
+    expect([...ALL_DIFF_THEME_NAMES]).toEqual([
+      ...Object.values(DIFF_THEME_NAMES),
+      ...THEME_SYNTAX_THEME_NAMES,
+    ]);
+    expect(new Set(ALL_DIFF_THEME_NAMES).size).toBe(ALL_DIFF_THEME_NAMES.length);
+    expect(ALL_DIFF_THEME_NAMES).toContain("material-deep-ocean");
+  });
+});
+
+describe("DIFF_SURFACE_THEME_UNSAFE_CSS", () => {
+  it("carries no theme's editor colours, so every other theme paints from the stock tints", () => {
+    expect(DIFF_SURFACE_THEME_UNSAFE_CSS).not.toContain("data-diff-span");
+    expect(DIFF_SURFACE_THEME_UNSAFE_CSS).not.toContain("--diffs-computed-");
+    expect(DIFF_SURFACE_THEME_UNSAFE_CSS).not.toContain("--diffs-fg-number-override");
+    expect(DIFF_SURFACE_THEME_UNSAFE_CSS).not.toContain("search-match");
+  });
+});
+
+describe("themeEditorSurfaceCss", () => {
+  const sentinel: ThemeEditorColors = {
+    ...getThemeEditorColors(MATERIAL_OCEAN_THEME, "dark")!,
+    lineNumber: "#010101",
+    caretRow: "#020202",
+    diff: {
+      inserted: "#030303",
+      deleted: "#060606",
+      modified: "#090909",
+      modifiedMuted: "#0a0a0a",
+    },
+    find: { match: "#0f0f0f", currentMatch: "#101010", foreground: "#111111" },
+  };
+  const css = themeEditorSurfaceCss(sentinel);
+  const declaration = (property: string, value: string) =>
+    expect(css, `${property}: ${value}`).toMatch(
+      new RegExp(`${property.replace(/[()[\]-]/g, "\\$&")}:\\s*${value};`),
+    );
+
+  it("is empty without editor colours", () => {
+    expect(themeEditorSurfaceCss(null)).toBe("");
+  });
+
+  it("is the same text for the same colours", () => {
+    expect(themeEditorSurfaceCss(sentinel)).toBe(css);
+  });
+
+  it("is not empty for Material Ocean", () => {
+    const own = themeEditorSurfaceCss(getThemeEditorColors(MATERIAL_OCEAN_THEME, "dark"));
+    expect(own.length).toBeGreaterThan(0);
+    expect(own).not.toContain("undefined");
+  });
+
+  it("paints the gutter with the scheme's line number and its inserted and deleted line colours", () => {
+    declaration("--diffs-fg-number-override", "#010101");
+    declaration("--diffs-bg-addition-number-override", "#030303");
+    declaration("--diffs-bg-deletion-number-override", "#060606");
+  });
+
+  it("paints find matches with the scheme's colours", () => {
+    declaration("--diffs-bg-search-match-override", "#0f0f0f");
+    declaration("--diffs-bg-search-match-current-override", "#101010");
+    declaration("--diffs-fg-search-match-override", "#111111");
+  });
+
+  it("paints a changed line at the exact inserted or deleted colour, not a mix", () => {
+    expect(css).toMatch(
+      /\[data-line-type="change-addition"\]\s*\{\s*--diffs-computed-diff-line-bg:\s*#030303;/,
+    );
+    expect(css).toMatch(
+      /\[data-line-type="change-deletion"\]\s*\{\s*--diffs-computed-diff-line-bg:\s*#060606;/,
+    );
+    expect(css).not.toContain("color-mix");
+  });
+
+  it("paints a changed line that holds changed words as a modified line", () => {
+    expect(css).toMatch(
+      /:has\(\[data-diff-span\]\)\s*\{\s*--diffs-computed-diff-line-bg:\s*#0a0a0a;/,
+    );
+    expect(css).toMatch(/\[data-diff-span\]\s*\{\s*background-color:\s*#090909;/);
+  });
+
+  it("paints the caret row", () => {
+    expect(css).toMatch(
+      /\[data-editor-active-line\]\s*\{\s*--diffs-computed-editor-active-line-bg:\s*#020202;/,
+    );
   });
 });

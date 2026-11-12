@@ -146,6 +146,24 @@ describe("isAutoSettlementCandidate", () => {
     ).toBe(true);
   });
 
+  it("never settles a load-paused thread", () => {
+    expect(ThreadSettlementService.isAutoSettlementCandidate(shell(), NOW_MS)).toBe(true);
+    expect(
+      ThreadSettlementService.isAutoSettlementCandidate(
+        shell({
+          loadPause: {
+            runId: RunId.make("run-1"),
+            episodeId: "episode:1",
+            pausedAt: "2026-01-01T00:00:00.000Z",
+            reason: { rule: "loadPerCore", value: 4, threshold: 3, shareOfLoad: 0.8 },
+            containersPaused: [],
+          },
+        }),
+        NOW_MS,
+      ),
+    ).toBe(false);
+  });
+
   it("never settles, or keeps snoozed, a thread whose guest is waiting on the owner", () => {
     expect(
       ThreadSettlementService.isAutoSettlementCandidate(

@@ -61,6 +61,7 @@ export function ActOnEnvironmentPicker({
             <span className="flex min-w-0 items-center gap-2">
               <EnvironmentMachineIcon
                 kind={environment.machine ?? "server"}
+                environmentId={environment.environmentId}
                 className="size-3.5 shrink-0"
               />
               <span className="truncate">{environment.label}</span>

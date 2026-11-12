@@ -14,6 +14,16 @@ const descriptor = {
 } as const;
 
 describe("ExecutionEnvironmentDescriptor", () => {
+  it("decodes a descriptor without machineOwnership as not capable, and keeps it when set", () => {
+    expect(decodeDescriptor(descriptor).capabilities.machineOwnership).toBeUndefined();
+    expect(
+      decodeDescriptor({
+        ...descriptor,
+        capabilities: { ...descriptor.capabilities, machineOwnership: true },
+      }).capabilities.machineOwnership,
+    ).toBe(true);
+  });
+
   it("decodes old, recognized and future manual installation descriptors", () => {
     expect(decodeDescriptor(descriptor).capabilities.serverInstallation).toBeUndefined();
     for (const installation of [{ kind: "npx" }, { kind: "npm-global", prefix: "/opt/node" }]) {

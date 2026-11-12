@@ -1,6 +1,8 @@
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
+  MachineBucketId,
+  DEFAULT_MACHINE_THRESHOLDS,
   DEFAULT_SERVER_SETTINGS,
   globalIdleCompaction,
   type ManagedPolicyDocument,
@@ -17,12 +19,14 @@ import {
   UsageLimitSourceId,
 } from "@t3tools/contracts";
 import { createModelSelection } from "@t3tools/shared/model";
-import { assert, it } from "@effect/vitest";
+import { assert, expect, it } from "@effect/vitest";
+import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Logger from "effect/Logger";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
@@ -134,6 +138,158 @@ function strictSecretReferencePaths(
   if (SchemaAST.isSuspend(ast)) return strictSecretReferencePaths(ast.thunk(), path, seen);
   return [];
 }
+
+/** A bucket as `settings.json` holds it: JSON, so the timestamp is a string. */
+const storedBucket = (id: string) => ({
+  id,
+  name: "Builds",
+  rules: [{ field: "exe", op: "equals", value: "cargo" }],
+  provenance: {
+    createdBy: { type: "user" },
+    updatedBy: { type: "auto", threadId: "thread-a" },
+    updatedAt: "2026-11-07T00:00:00.000Z",
+  },
+});
+
+it.each([
+  ["no machineResources", { a: 1 }, { a: 1 }, []],
+  ["no thresholds", { machineResources: {} }, { machineResources: {} }, []],
+  [
+    "all thresholds valid",
+    { machineResources: { thresholds: { loadPerCore: 4, exitFactor: 1 } } },
+    { machineResources: { thresholds: { loadPerCore: 4, exitFactor: 1 } } },
+    [],
+  ],
+  [
+    "one key out of bounds",
+    { a: 1, machineResources: { thresholds: { loadPerCore: 0, enterHoldMs: 0 } } },
+    { a: 1, machineResources: { thresholds: { enterHoldMs: 0 } } },
+    ["machineResources.thresholds.loadPerCore"],
+  ],
+  [
+    "a wrong type, a fractional hold and a value past the hold cap",
+    {
+      machineResources: {
+        thresholds: {
+          memoryUsedPercent: "90",
+          exitHoldMs: 1.5,
+          windowsCpuHoldMs: 3_600_001,
+          exitFactor: 0.5,
+        },
+      },
+    },
+    { machineResources: { thresholds: { exitFactor: 0.5 } } },
+    [
+      "machineResources.thresholds.memoryUsedPercent",
+      "machineResources.thresholds.exitHoldMs",
+      "machineResources.thresholds.windowsCpuHoldMs",
+    ],
+  ],
+  [
+    "thresholds that are not an object",
+    { machineResources: { thresholds: [1], other: true } },
+    { machineResources: { other: true } },
+    ["machineResources.thresholds"],
+  ],
+  [
+    "machineResources that is not an object",
+    { a: 1, machineResources: "high" },
+    { a: 1 },
+    ["machineResources"],
+  ],
+  [
+    "a valid bucket as settings.json stores it",
+    { machineResources: { buckets: { builds: storedBucket("builds") } } },
+    { machineResources: { buckets: { builds: storedBucket("builds") } } },
+    [],
+  ],
+  [
+    "a bucket filed under another id, one without provenance and one with an unknown rule",
+    {
+      machineResources: {
+        buckets: {
+          builds: storedBucket("builds"),
+          moved: storedBucket("elsewhere"),
+          unstamped: { id: "unstamped", name: "x", rules: [] },
+          odd: { ...storedBucket("odd"), rules: [{ field: "colour", op: "equals", value: "x" }] },
+        },
+      },
+    },
+    { machineResources: { buckets: { builds: storedBucket("builds") } } },
+    [
+      "machineResources.buckets.moved",
+      "machineResources.buckets.unstamped",
+      "machineResources.buckets.odd",
+    ],
+  ],
+  [
+    "buckets that are not an object, beside a bad threshold",
+    { machineResources: { thresholds: { loadPerCore: 0 }, buckets: [1] } },
+    { machineResources: { thresholds: {} } },
+    ["machineResources.thresholds.loadPerCore", "machineResources.buckets"],
+  ],
+  ["a file that is not an object", null, null, []],
+] as const)("dropInvalidMachineThresholds with %s", (_name, file, expected, dropped) => {
+  const { unreadableBuckets, ...rest } = ServerSettingsModule.dropInvalidMachineThresholds(file);
+  expect(rest).toEqual({ file: expected, dropped });
+  const droppedBuckets = dropped.flatMap((path) =>
+    path.startsWith("machineResources.buckets.")
+      ? [path.slice("machineResources.buckets.".length)]
+      : [],
+  );
+  expect(Object.keys(unreadableBuckets)).toEqual(droppedBuckets);
+});
+
+it("returns each unreadable bucket as the file held it", () => {
+  const odd = { ...storedBucket("odd"), rules: [{ field: "gpu", value: "0" }] };
+  const result = ServerSettingsModule.dropInvalidMachineThresholds({
+    machineResources: { buckets: { builds: storedBucket("builds"), odd } },
+  });
+  expect(result.unreadableBuckets).toStrictEqual({ odd });
+});
+
+it("keeps an unknown threshold key a newer server saved", () => {
+  const file = { machineResources: { thresholds: { gpuVramPercent: 90 } } };
+  expect(ServerSettingsModule.dropInvalidMachineThresholds(file)).toEqual({
+    file,
+    dropped: [],
+    unreadableBuckets: {},
+  });
+});
+
+it("keepUnreadableBuckets puts unreadable buckets back unless a readable one took the id", () => {
+  const odd = { ...storedBucket("odd"), rules: [{ field: "gpu", value: "0" }] };
+  const json = JSON.stringify({ enableProviderUpdateChecks: false }, null, 2);
+  expect(ServerSettingsModule.keepUnreadableBuckets(json, {})).toBe(json);
+  expect(JSON.parse(ServerSettingsModule.keepUnreadableBuckets(json, { odd }))).toStrictEqual({
+    enableProviderUpdateChecks: false,
+    machineResources: { buckets: { odd } },
+  });
+
+  const readable = {
+    machineResources: {
+      thresholds: { loadPerCore: 4 },
+      buckets: { builds: storedBucket("builds"), odd: storedBucket("odd") },
+    },
+  };
+  expect(
+    JSON.parse(
+      ServerSettingsModule.keepUnreadableBuckets(JSON.stringify(readable), {
+        odd,
+        other: { id: "other", rules: [{ field: "gpu" }] },
+      }),
+    ),
+  ).toStrictEqual({
+    machineResources: {
+      thresholds: { loadPerCore: 4 },
+      buckets: {
+        other: { id: "other", rules: [{ field: "gpu" }] },
+        builds: storedBucket("builds"),
+        odd: storedBucket("odd"),
+      },
+    },
+  });
+});
 
 it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("server settings", (it) => {
   it.effect("serializes concurrent model preference edits without cancelling duplicate adds", () =>
@@ -1754,6 +1910,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("server settings"
         const router = ProviderInstanceId.make("openrouter");
         const withUsage = yield* serverSettings.updateSettings({
           cloudSpeechCredentials: { openai: usageReference, xai: "literal-fixture" },
+          browserRun: { apiToken: usageReference },
           textGenerators: {
             [router]: {
               kind: "openaiCompatible",
@@ -1812,6 +1969,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("server settings"
           xai: SECRET_REDACTED,
           openrouter: "",
         });
+        assert.equal(legacy.browserRun.apiToken, SECRET_REDACTED);
         assert.equal(legacy.sourceControlHosts.bitbucket?.accessToken, SECRET_REDACTED);
         assert.equal(legacy.usageLimitSources[hub]?.managementKey, SECRET_REDACTED);
         assert.equal(legacy.textGenerators[router]?.apiKey, SECRET_REDACTED);
@@ -1823,6 +1981,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("server settings"
         assert.equal(configOf(legacy, openCode)?.serverPassword, SECRET_REDACTED);
         const echoed = yield* serverSettings.updateSettings({
           cloudSpeechCredentials: legacy.cloudSpeechCredentials,
+          browserRun: legacy.browserRun,
           sourceControlHosts: legacy.sourceControlHosts,
           usageLimitSources: legacy.usageLimitSources,
           textGenerators: legacy.textGenerators,
@@ -1844,6 +2003,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("server settings"
         });
         assert.deepEqual(echoed.easDeviceHosts[0]?.accessToken, easReference);
         assert.deepEqual(echoed.simlockDeviceHosts[0]?.agentToken, simlockReference);
+        assert.deepEqual(echoed.browserRun.apiToken, usageReference);
         assert.deepEqual(configOf(echoed, antigravity)?.apiKey, antigravityReference);
         assert.deepEqual(configOf(echoed, openCode)?.serverPassword, openCodeReference);
         assert.isTrue(Option.isSome(yield* stored("github", "tokens", "ghe.acme.test")));
@@ -1936,6 +2096,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("server settings"
     Effect.sync(() => {
       // Shipped clients decode these as strings. Each must be covered by the older-client case above.
       assert.deepEqual(strictSecretReferencePaths(ServerSettings.ast), [
+        "browserRun.apiToken",
         "cloudSpeechCredentials.openai",
         "cloudSpeechCredentials.xai",
         "cloudSpeechCredentials.openrouter",
@@ -2350,6 +2511,150 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("server settings"
       assert.isTrue(persisted.projectSettingsFolded);
       assert.isUndefined(persisted.projectSettingsOverrides[legacyProject]);
     }).pipe(Effect.provide(layerServerSettings())),
+  );
+
+  it.effect(
+    "falls back per key for a hand-edited machine threshold and keeps other settings",
+    () => {
+      const warnings: Array<string> = [];
+      const logger = Logger.make(({ logLevel, message }) => {
+        if (logLevel === "Warn") warnings.push(JSON.stringify(message));
+      });
+      return Effect.gen(function* () {
+        const config = yield* ServerConfig.ServerConfig;
+        const fs = yield* FileSystem.FileSystem;
+        const service = yield* ServerSettingsModule.ServerSettingsService;
+        yield* fs.writeFileString(
+          config.settingsPath,
+          JSON.stringify({
+            continueThreadsAfterServerUpdate: true,
+            enableAgentBrowserAccess: false,
+            machineResources: { thresholds: { loadPerCore: 0, memoryUsedPercent: 80 } },
+          }),
+        );
+
+        const settings = yield* service.getSettings;
+        yield* service.getSettings;
+        assert.deepEqual(settings.machineResources.thresholds, {
+          ...DEFAULT_MACHINE_THRESHOLDS,
+          memoryUsedPercent: 80,
+        });
+        assert.isFalse(settings.enableAgentBrowserAccess);
+        assert.isTrue(settings.continueThreadsAfterServerUpdate);
+        const machineWarnings = warnings.filter((warning) =>
+          warning.includes("machine thresholds"),
+        );
+        assert.lengthOf(machineWarnings, 1);
+        assert.include(machineWarnings[0], "machineResources.thresholds.loadPerCore");
+        assert.isFalse(
+          warnings.some((warning) => warning.includes("failed to parse settings.json")),
+        );
+
+        const updated = yield* service.updateSettings({
+          machineResources: { thresholds: { enterHoldMs: 0 } },
+        });
+        assert.deepEqual(updated.machineResources.thresholds, {
+          ...DEFAULT_MACHINE_THRESHOLDS,
+          memoryUsedPercent: 80,
+          enterHoldMs: 0,
+        });
+        const reloaded = yield* decodeServerSettingsJson(
+          yield* fs.readFileString(config.settingsPath),
+        );
+        assert.deepEqual(reloaded.machineResources.thresholds, updated.machineResources.thresholds);
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            layerServerSettings(),
+            Logger.layer([logger], { mergeWithExisting: false }),
+          ),
+        ),
+      );
+    },
+  );
+
+  it.effect("keeps stamped buckets across a restart and stores no unstamped entry", () =>
+    Effect.gen(function* () {
+      const bucketId = MachineBucketId.make("builds");
+      const bucket = {
+        id: bucketId,
+        name: "Builds",
+        rules: [{ field: "exe" as const, op: "equals" as const, value: "cargo" }],
+      };
+      const provenance = {
+        createdBy: { type: "user" as const },
+        updatedBy: { type: "user" as const },
+        updatedAt: DateTime.makeUnsafe("2026-11-07T00:00:00.000Z"),
+      };
+      const written = yield* Effect.gen(function* () {
+        const config = yield* ServerConfig.ServerConfig;
+        const fs = yield* FileSystem.FileSystem;
+        const service = yield* ServerSettingsModule.ServerSettingsService;
+        const updated = yield* service.updateSettings({
+          machineResources: {
+            buckets: {
+              [bucketId]: { ...bucket, provenance },
+              [MachineBucketId.make("unstamped")]: {
+                ...bucket,
+                id: MachineBucketId.make("unstamped"),
+              },
+            },
+          },
+        });
+        assert.deepEqual(Object.keys(updated.machineResources.buckets), ["builds"]);
+        return yield* fs.readFileString(config.settingsPath);
+      }).pipe(Effect.provide(layerServerSettings()));
+
+      const reloaded = yield* Effect.gen(function* () {
+        const config = yield* ServerConfig.ServerConfig;
+        const fs = yield* FileSystem.FileSystem;
+        yield* fs.writeFileString(config.settingsPath, written);
+        const service = yield* ServerSettingsModule.ServerSettingsService;
+        return yield* service.getSettings;
+      }).pipe(Effect.provide(layerServerSettings()));
+      assert.deepEqual(reloaded.machineResources.buckets, {
+        [MachineBucketId.make("builds")]: { ...bucket, provenance },
+      });
+    }),
+  );
+
+  it.effect("keeps a bucket it cannot read through an unrelated settings write", () =>
+    Effect.gen(function* () {
+      const config = yield* ServerConfig.ServerConfig;
+      const fs = yield* FileSystem.FileSystem;
+      const service = yield* ServerSettingsModule.ServerSettingsService;
+      const unknown = {
+        ...storedBucket("gpu-jobs"),
+        name: "GPU jobs",
+        rules: [{ field: "gpu", value: "0" }],
+      };
+      yield* fs.writeFileString(
+        config.settingsPath,
+        JSON.stringify({
+          machineResources: { buckets: { builds: storedBucket("builds"), "gpu-jobs": unknown } },
+        }),
+      );
+
+      const updated = yield* service.updateSettings({ enableProviderUpdateChecks: false });
+      assert.deepEqual(Object.keys(updated.machineResources.buckets), ["builds"]);
+
+      const onDisk = JSON.parse(yield* fs.readFileString(config.settingsPath));
+      assert.isFalse(onDisk.enableProviderUpdateChecks);
+      assert.deepEqual(onDisk.machineResources.buckets.builds, storedBucket("builds"));
+      assert.equal(
+        JSON.stringify(onDisk.machineResources.buckets["gpu-jobs"]),
+        JSON.stringify(unknown),
+      );
+    }).pipe(Effect.provide(layerServerSettings())),
+  );
+
+  it.effect("rejects a zero load-per-core threshold in a settings patch", () =>
+    Effect.gen(function* () {
+      const error = yield* Effect.flip(
+        decodeServerSettingsPatch({ machineResources: { thresholds: { loadPerCore: 0 } } }),
+      );
+      assert.equal(error._tag, "SchemaError");
+    }),
   );
 
   it.effect("leaves an unreadable settings.json untouched instead of folding over it", () =>

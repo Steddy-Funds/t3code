@@ -1,4 +1,8 @@
-import { ASSISTANT_CITATION_CONTEXT_LENGTH, type AssistantCitation } from "@t3tools/contracts";
+import {
+  ASSISTANT_CITATION_CONTEXT_LENGTH,
+  ASSISTANT_CITATION_MAX_TEXT_LENGTH,
+  type AssistantCitation,
+} from "@t3tools/contracts";
 
 import { mathWrapperOf } from "../markdown-clipboard";
 
@@ -246,6 +250,28 @@ export function captureAssistantTextSelection(
   if (rawStart === null) return null;
   const selector = createAssistantTextSelector(stream.text, rawStart, rawEnd);
   return selector === null ? null : { source, selector, range };
+}
+
+/** A rendered message or one of its blocks, cut to the citation limit. Offsets stay message-wide. */
+export function captureAssistantMessageSelector(
+  source: HTMLElement,
+  block: Element = source,
+): AssistantTextSelector | null {
+  const { text, chunks } = readAssistantText(source);
+  const inside = chunks.filter((chunk) => block.contains(chunk.node));
+  const first = inside[0];
+  const last = inside.at(-1);
+  if (!first || !last) return null;
+  const excerpt = text.slice(first.start, last.end);
+  const leading = excerpt.search(/\S/);
+  if (leading === -1) return null;
+  const start = first.start + leading;
+  let end = Math.min(
+    first.start + excerpt.trimEnd().length,
+    start + ASSISTANT_CITATION_MAX_TEXT_LENGTH,
+  );
+  if (splitsSurrogatePair(text, end)) end -= 1;
+  return createAssistantTextSelector(text, start, end);
 }
 
 function rawTextOffset(text: string, normalizedOffset: number): number {

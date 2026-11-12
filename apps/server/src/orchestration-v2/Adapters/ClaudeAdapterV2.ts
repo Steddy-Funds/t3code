@@ -82,6 +82,8 @@ import {
   mcpAppToolResourceUri,
 } from "@t3tools/shared/mcpApp";
 import { AgentScope } from "@t3tools/shared/AgentScope";
+import { GuardEnvironment } from "@t3tools/shared/GuardEnvironment";
+import { ProcessOwnershipRegistry } from "@t3tools/shared/ProcessOwnershipRegistry";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { applyClaudePromptEffortPrefix } from "@t3tools/shared/model";
 import {
@@ -1167,6 +1169,8 @@ export const layerQueryRunner: Layer.Layer<
     const runFork = Effect.runForkWith(yield* Effect.context<never>());
     const hostEnvironment = yield* HostProcess.Environment;
     const portDiscovery = yield* PortScanner.PortDiscovery;
+    const ownership = yield* ProcessOwnershipRegistry;
+    const guardEnvironment = yield* GuardEnvironment;
 
     return ClaudeAgentSdkQueryRunner.of({
       allocateSessionId: random.uuidV4(),
@@ -1195,6 +1199,7 @@ export const layerQueryRunner: Layer.Layer<
             env: {
               ...(sdkOptions.env ?? hostEnvironment),
               [PortScanner.AGENT_THREAD_ENV]: input.threadId,
+              ...guardEnvironment.env(),
             },
           };
           // The SDK can prepend a scope wrapper to native binaries; script entries run through node.
@@ -1219,6 +1224,7 @@ export const layerQueryRunner: Layer.Layer<
                   executableArgs: [...launch.args, ...(queryOptions.executableArgs ?? [])],
                 };
           const unit = launch?.unit;
+          const cgroup = unit === undefined ? undefined : yield* agentScope.controlGroup(unit);
           const stopScope =
             unit === undefined ? undefined : () => void runFork(agentScope.stop(unit));
           // Only a CLI that fails before its first message explains itself on
@@ -1258,10 +1264,21 @@ export const layerQueryRunner: Layer.Layer<
           const spawnClaudeCodeProcess = (spawnOptions: ClaudeSpawnOptions) => {
             const child = spawnProcess(spawnOptions);
             spawnedProcess = child;
-            // A spawn that fails emits only "error".
+            // The SDK's process type hides the pid that Node's child carries.
+            const pid = "pid" in child && typeof child.pid === "number" ? child.pid : undefined;
             const releaseAgent = portDiscovery.trackAgent();
-            child.once("exit", releaseAgent);
-            child.on("error", releaseAgent);
+            const releaseRoot = ownership.registerRoot({
+              ...(pid === undefined ? {} : { pid }),
+              ...(cgroup === undefined ? {} : { cgroup }),
+              owner: { type: "thread", threadId: input.threadId },
+            });
+            const release = () => {
+              releaseAgent();
+              releaseRoot();
+            };
+            // A spawn that fails emits only "error".
+            child.once("exit", release);
+            child.on("error", release);
             processExited = child.exitCode !== null || child.signalCode != null;
             processExit = new Promise<void>((resolve) => {
               if (processExited) resolve();
@@ -1664,13 +1681,17 @@ export const layerQueryRunner: Layer.Layer<
 
 type ClaudeFlagSettings = Parameters<ClaudeQuery["applyFlagSettings"]>[0];
 
-/** Thinking requires a new process. Clearing effort also requires one to reload user settings instead of model defaults. */
+/**
+ * Thinking requires a new process. Clearing effort also requires one to reload user settings instead of model defaults.
+ * So does the auto-compact window: clearing it live would also drop the instance's and the launch arguments' window.
+ */
 function canApplyClaudeSelectionLive(
   live: CompiledClaudeModelSelection,
   next: CompiledClaudeModelSelection,
 ): boolean {
   return (
     live.settings.alwaysThinkingEnabled === next.settings.alwaysThinkingEnabled &&
+    live.settings.autoCompactWindow === next.settings.autoCompactWindow &&
     (next.effort !== undefined || live.effort === undefined)
   );
 }
@@ -1818,13 +1839,29 @@ export function makeClaudeQueryOptions(input: {
       : typeof input.sdkSettings === "object" && input.sdkSettings !== null
         ? ({ ...input.sdkSettings, ...selectionSettings } as ClaudeSdkSettings)
         : selectionSettings;
+  const pickedWindow = compiledSelection.settings.autoCompactWindow;
+  const pickedWindowModel = compiledSelection.apiModelId.replace(/\[1m\]$/i, "");
+  // A window picked for the thread beats the instance's. Within one settings source Claude reads
+  // a model's own window ahead of the top-level one, so the pick is written there too.
   const compactQuerySettings =
-    input.settings?.autoCompactWindow === undefined || input.settings.autoCompactWindow.length === 0
-      ? querySettings
-      : ({
-          ...(typeof querySettings === "object" && querySettings !== null ? querySettings : {}),
-          autoCompactWindow: Number(input.settings.autoCompactWindow),
-        } as ClaudeSdkSettings);
+    pickedWindow !== undefined && typeof querySettings === "object" && querySettings !== null
+      ? ({
+          ...querySettings,
+          modelSettings: {
+            ...querySettings.modelSettings,
+            [pickedWindowModel]: {
+              ...querySettings.modelSettings?.[pickedWindowModel],
+              autoCompactWindow: pickedWindow,
+            },
+          },
+        } as ClaudeSdkSettings)
+      : input.settings?.autoCompactWindow === undefined ||
+          input.settings.autoCompactWindow.length === 0
+        ? querySettings
+        : ({
+            ...(typeof querySettings === "object" && querySettings !== null ? querySettings : {}),
+            autoCompactWindow: Number(input.settings.autoCompactWindow),
+          } as ClaudeSdkSettings);
   // A settings file path cannot take extra keys, so it goes through unchanged.
   const effectiveQuerySettings =
     input.toolSearchOverride === undefined || typeof compactQuerySettings === "string"
@@ -2002,6 +2039,7 @@ export const CLAUDE_READ_ONLY_T3_MCP_ALLOWED_TOOLS: ReadonlyArray<string> = [
   "mcp__t3-code__t3_preview_list",
   "mcp__t3-code__t3_environment_read",
   "mcp__t3-code__t3_environment_links",
+  "mcp__t3-code__t3_machine_read",
   "mcp__t3-code__html_preview",
   "mcp__t3-code__html_render",
 ];
@@ -5045,9 +5083,12 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
     modelSelection: ModelSelection,
     launchArgSettings: ClaudeSdkSettings | undefined,
   ) {
+    const compiledSelection = compileClaudeModelSelection(modelSelection, modelCatalog);
+    if (compiledSelection.settings.autoCompactWindow !== undefined)
+      return String(compiledSelection.settings.autoCompactWindow);
     if (adapterOptions.settings.autoCompactWindow !== "")
       return adapterOptions.settings.autoCompactWindow;
-    const model = compileClaudeModelSelection(modelSelection).apiModelId.replace(/\[1m\]$/i, "");
+    const model = compiledSelection.apiModelId.replace(/\[1m\]$/i, "");
     const windowFrom = (settings: unknown) => {
       if (typeof settings !== "object" || settings === null) return undefined;
       const models = Reflect.get(settings, "modelSettings");

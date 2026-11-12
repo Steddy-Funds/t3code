@@ -1,3 +1,4 @@
+import { useDiffThemeName, useThemeEditorSurfaceCss } from "../../hooks/useDiffThemeName";
 import { documentChipKindForFileName } from "~/pierre-icons";
 import { isSvgAttachment } from "@t3tools/shared/image";
 import { useRenderedAppearance } from "../../hooks/useTheme";
@@ -15,11 +16,7 @@ import {
   isImageAttachment,
   isVideoAttachment,
 } from "../../types";
-import {
-  getRenderablePatch,
-  resolveDiffThemeName,
-  resolveFileDiffPath,
-} from "../../lib/diffRendering";
+import { getRenderablePatch, resolveFileDiffPath } from "../../lib/diffRendering";
 import { PREFERRED_HIGHLIGHTER } from "../../lib/syntaxHighlighting";
 import ChatMarkdown from "../ChatMarkdown";
 import { EnvironmentContextChip } from "../EnvironmentContextChip";
@@ -538,6 +535,8 @@ export function UserMessageContextReferenceChip(props: {
 
 function UserMessageReviewCommentCard({ comment }: { comment: ReviewCommentContext }) {
   const renderedAppearance = useRenderedAppearance();
+  const diffThemeName = useDiffThemeName(renderedAppearance);
+  const themeCss = useThemeEditorSurfaceCss();
   const ctx = use(TimelineRowCtx);
   const fenceLanguage = comment.fenceLanguage ?? "diff";
   const renderablePatch = getRenderablePatch(
@@ -585,8 +584,9 @@ function UserMessageReviewCommentCard({ comment }: { comment: ReviewCommentConte
               options={{
                 collapsed: false,
                 diffStyle: "unified",
-                theme: resolveDiffThemeName(renderedAppearance),
+                theme: diffThemeName,
                 preferredHighlighter: PREFERRED_HIGHLIGHTER,
+                ...(themeCss ? { unsafeCSS: themeCss } : {}),
               }}
             />
           ))}

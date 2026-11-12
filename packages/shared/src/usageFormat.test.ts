@@ -2,7 +2,28 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 import type { UsageSource } from "@t3tools/contracts";
 
-import { formatHourShort, makeWindow, usageSourceMessages } from "./usageFormat.ts";
+import {
+  formatCompactUsd,
+  formatHourShort,
+  formatTokens,
+  makeWindow,
+  usageSourceMessages,
+} from "./usageFormat.ts";
+
+describe("compact amounts", () => {
+  it("keeps three significant digits and moves up a unit when rounding reaches it", () => {
+    expect([0.684, 1.5686, 15.68, 156.8, 999.6, 1568, 15_680_000].map(formatCompactUsd)).toEqual([
+      "$0.68",
+      "$1.57",
+      "$15.7",
+      "$157",
+      "$1K",
+      "$1.57K",
+      "$15.7M",
+    ]);
+    expect([999, 1_608_400, 999_600].map(formatTokens)).toEqual(["999", "1.61M", "1M"]);
+  });
+});
 
 function malformedSource(count: number, overrides: Partial<UsageSource> = {}): UsageSource {
   return {

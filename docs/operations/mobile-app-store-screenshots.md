@@ -116,7 +116,8 @@ Edit [mobile-showcase.config.ts](../../scripts/mobile-showcase.config.ts) to cha
 names, light/dark appearance, default palette, iOS orientation, scenes, output directory, capture
 delay, Android ABI, or viewport. The selectable palette ids come from `MOBILE_THEME_IDS` in
 [themePalettes.ts](../../packages/shared/src/themePalettes.ts), so the harness and the app's
-appearance settings can never drift apart.
+appearance settings can never drift apart. A palette with one appearance only (`material-ocean` is
+dark-only) is left out: a capture applies its palette to both color schemes.
 
 ## Capture in GitHub Actions
 

@@ -1,0 +1,159 @@
+import { ArrowDownIcon, ArrowUpIcon, FoldVerticalIcon, HighlighterIcon } from "lucide-react";
+import type { ReactNode } from "react";
+
+import { Button } from "../../ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from "../../ui/menu";
+import { Toggle } from "../../ui/toggle-group";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../../ui/tooltip";
+import type { SbsHighlightMode } from "./sbsInline";
+
+const HIGHLIGHT_MODE_LABELS: Record<SbsHighlightMode, string> = {
+  words: "Highlight words",
+  lines: "Highlight lines",
+  none: "Do not highlight",
+};
+
+const HIGHLIGHT_MODES = ["words", "lines", "none"] as const;
+
+function isHighlightMode(value: unknown): value is SbsHighlightMode {
+  return value === "words" || value === "lines" || value === "none";
+}
+
+/** The row above the panes: what the caller names the file with, then this layout's controls. */
+export function SbsBar({ leading, children }: { leading?: ReactNode; children?: ReactNode }) {
+  return (
+    <div className="flex h-8 shrink-0 items-center gap-2 border-b border-border/70 bg-background ps-3 pe-1.5">
+      <div className="flex min-w-0 flex-1 items-center gap-1.5">{leading}</div>
+      {children}
+    </div>
+  );
+}
+
+export interface SbsToolbarProps {
+  readonly statusLabel: string;
+  readonly canStep: boolean;
+  readonly onStep: (direction: "next" | "previous") => void;
+  /** The keys the keymap gives Next and Previous Change in a diff; null when it gives none. */
+  readonly nextShortcut: string | null;
+  readonly previousShortcut: string | null;
+  readonly collapseUnchanged: boolean;
+  readonly onCollapseUnchangedChange: (collapse: boolean) => void;
+  readonly highlightMode: SbsHighlightMode;
+  readonly onHighlightModeChange: (mode: SbsHighlightMode) => void;
+}
+
+export function SbsToolbar({
+  statusLabel,
+  canStep,
+  onStep,
+  nextShortcut,
+  previousShortcut,
+  collapseUnchanged,
+  onCollapseUnchangedChange,
+  highlightMode,
+  onHighlightModeChange,
+}: SbsToolbarProps) {
+  return (
+    <div className="flex shrink-0 items-center gap-0.5">
+      {/* First, so its changing width never moves the buttons. */}
+      <span
+        className="me-1 whitespace-nowrap text-2xs tabular-nums text-muted-foreground"
+        aria-live="polite"
+        data-sbs-status=""
+      >
+        {statusLabel}
+      </span>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <Button
+              type="button"
+              size="icon-xs"
+              variant="ghost"
+              aria-label="Previous difference"
+              disabled={!canStep}
+              onClick={() => onStep("previous")}
+            />
+          }
+        >
+          <ArrowUpIcon className="size-3.5" />
+        </TooltipTrigger>
+        <TooltipPopup side="top">
+          {previousShortcut ? `Previous difference (${previousShortcut})` : "Previous difference"}
+        </TooltipPopup>
+      </Tooltip>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <Button
+              type="button"
+              size="icon-xs"
+              variant="ghost"
+              aria-label="Next difference"
+              disabled={!canStep}
+              onClick={() => onStep("next")}
+            />
+          }
+        >
+          <ArrowDownIcon className="size-3.5" />
+        </TooltipTrigger>
+        <TooltipPopup side="top">
+          {nextShortcut ? `Next difference (${nextShortcut})` : "Next difference"}
+        </TooltipPopup>
+      </Tooltip>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <Toggle
+              aria-label="Collapse unchanged lines"
+              variant="ghost"
+              size="sm"
+              pressed={collapseUnchanged}
+              onPressedChange={(pressed) => onCollapseUnchangedChange(Boolean(pressed))}
+            />
+          }
+        >
+          <FoldVerticalIcon className="size-3.5" />
+        </TooltipTrigger>
+        <TooltipPopup side="top">
+          {collapseUnchanged ? "Show unchanged lines" : "Collapse unchanged lines"}
+        </TooltipPopup>
+      </Tooltip>
+      <DropdownMenu>
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <DropdownMenuTrigger
+                render={<Button type="button" size="icon-xs" variant="ghost" />}
+                aria-label={`Highlighting: ${HIGHLIGHT_MODE_LABELS[highlightMode]}`}
+              />
+            }
+          >
+            <HighlighterIcon className="size-3.5" />
+          </TooltipTrigger>
+          <TooltipPopup side="top">{HIGHLIGHT_MODE_LABELS[highlightMode]}</TooltipPopup>
+        </Tooltip>
+        <DropdownMenuContent align="end">
+          <DropdownMenuRadioGroup
+            value={highlightMode}
+            onValueChange={(value) => {
+              if (isHighlightMode(value)) onHighlightModeChange(value);
+            }}
+          >
+            {HIGHLIGHT_MODES.map((mode) => (
+              <DropdownMenuRadioItem key={mode} value={mode} closeOnClick>
+                {HIGHLIGHT_MODE_LABELS[mode]}
+              </DropdownMenuRadioItem>
+            ))}
+          </DropdownMenuRadioGroup>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </div>
+  );
+}

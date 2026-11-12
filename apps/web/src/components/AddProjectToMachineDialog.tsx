@@ -237,6 +237,7 @@ function AddProjectToMachineDialog({ request }: { request: AddProjectToMachineRe
                 <span className="flex min-w-0 items-center gap-1.5 font-medium text-sm">
                   <EnvironmentMachineIcon
                     kind={resolveEnvironmentMachineKind(source?.serverConfig ?? null)}
+                    environmentId={source?.environmentId}
                     className="size-3.5 shrink-0"
                   />
                   <span className="truncate">{source?.label ?? "This machine"}</span>
@@ -268,7 +269,11 @@ function AddProjectToMachineDialog({ request }: { request: AddProjectToMachineRe
                   >
                     <SelectTrigger size="sm" aria-label="Machine to add the project to">
                       {target ? (
-                        <EnvironmentMachineIcon kind={target.machine} className="size-3.5" />
+                        <EnvironmentMachineIcon
+                          kind={target.machine}
+                          environmentId={target.environmentId}
+                          className="size-3.5"
+                        />
                       ) : null}
                       <SelectValue />
                     </SelectTrigger>
@@ -276,7 +281,11 @@ function AddProjectToMachineDialog({ request }: { request: AddProjectToMachineRe
                       {targets.map((t) => (
                         <SelectItem key={t.environmentId} value={t.environmentId}>
                           <span className="inline-flex items-center gap-1.5">
-                            <EnvironmentMachineIcon kind={t.machine} className="size-3" />
+                            <EnvironmentMachineIcon
+                              kind={t.machine}
+                              environmentId={t.environmentId}
+                              className="size-3"
+                            />
                             {t.label}
                           </span>
                         </SelectItem>
@@ -286,7 +295,11 @@ function AddProjectToMachineDialog({ request }: { request: AddProjectToMachineRe
                 ) : (
                   <span className="flex min-w-0 items-center gap-1.5 font-medium text-sm">
                     {target ? (
-                      <EnvironmentMachineIcon kind={target.machine} className="size-3.5 shrink-0" />
+                      <EnvironmentMachineIcon
+                        kind={target.machine}
+                        environmentId={target.environmentId}
+                        className="size-3.5 shrink-0"
+                      />
                     ) : null}
                     <span className="truncate">{target?.label ?? "No machine available"}</span>
                   </span>

@@ -3,6 +3,11 @@ import * as Schema from "effect/Schema";
 
 import { type CommandId, ProjectId } from "./baseSchemas.ts";
 import {
+  DEFAULT_MACHINE_THRESHOLDS,
+  MACHINE_BUCKETS_MAX,
+  MACHINE_HOLD_MAX_MS,
+} from "./machineResources.ts";
+import {
   ProviderDriverKind,
   ProviderInstanceEnvironment,
   ProviderInstanceId,
@@ -310,6 +315,140 @@ describe("ClientSettings notifications", () => {
     expect(decodeClientSettingsPatch({})).not.toHaveProperty("inAppNotificationsEnabled");
     expect(decodeClientSettingsPatch({})).not.toHaveProperty("notificationMode");
   });
+
+  it("notifies on a stressed machine unless the user turned it off", () => {
+    expect(decodeClientSettings({}).notifyOnMachineStressed).toBe(true);
+    expect(decodeClientSettings({ notifyOnMachineStressed: false }).notifyOnMachineStressed).toBe(
+      false,
+    );
+    expect(decodeClientSettingsPatch({})).not.toHaveProperty("notifyOnMachineStressed");
+  });
+});
+
+describe("ServerSettings machine resource thresholds", () => {
+  const patchThresholds = (thresholds: Record<string, unknown>) =>
+    decodeServerSettingsPatch({ machineResources: { thresholds } });
+
+  it.each([
+    ["loadPerCore", [0.001, 1_000], [0, -1]],
+    ["memoryUsedPercent", [0.001, 100], [0, 100.001]],
+    ["windowsCpuPercent", [0.001, 100], [0, 100.001]],
+    ["windowsCpuHoldMs", [0, MACHINE_HOLD_MAX_MS], [-1, MACHINE_HOLD_MAX_MS + 1, 1.5]],
+    ["enterHoldMs", [0, MACHINE_HOLD_MAX_MS], [-1, MACHINE_HOLD_MAX_MS + 1, 1.5]],
+    ["exitHoldMs", [0, MACHINE_HOLD_MAX_MS], [-1, MACHINE_HOLD_MAX_MS + 1, 1.5]],
+    ["exitFactor", [0.001, 1], [0, 1.001]],
+  ] as const)("bounds %s at both edges", (key, accepted, rejected) => {
+    for (const value of accepted) {
+      expect(patchThresholds({ [key]: value }).machineResources?.thresholds).toEqual({
+        [key]: value,
+      });
+      expect(
+        decodeServerSettings({ machineResources: { thresholds: { [key]: value } } })
+          .machineResources.thresholds,
+      ).toEqual({ ...DEFAULT_MACHINE_THRESHOLDS, [key]: value });
+    }
+    for (const value of rejected) {
+      expect(() => patchThresholds({ [key]: value })).toThrow();
+    }
+  });
+
+  it("defaults the thresholds when stored settings predate them", () => {
+    expect(decodeServerSettings({}).machineResources.thresholds).toEqual(
+      DEFAULT_MACHINE_THRESHOLDS,
+    );
+    expect(decodeServerSettings({ machineResources: {} }).machineResources.thresholds).toEqual(
+      DEFAULT_MACHINE_THRESHOLDS,
+    );
+    expect(DEFAULT_SERVER_SETTINGS.machineResources.thresholds).toEqual(DEFAULT_MACHINE_THRESHOLDS);
+    // The load management lane is off until the user turns it on.
+    for (const stored of [
+      {},
+      { machineResources: {} },
+      { machineResources: { loadManagement: {} } },
+    ]) {
+      expect(decodeServerSettings(stored).machineResources.loadManagement).toEqual({
+        enabled: false,
+        guardHoldSeconds: 120,
+        pauseHoldSeconds: 60,
+      });
+    }
+    expect(DEFAULT_MACHINE_THRESHOLDS).toEqual({
+      loadPerCore: 12.5,
+      memoryUsedPercent: 92.5,
+      windowsCpuPercent: 95,
+      windowsCpuHoldMs: 300_000,
+      enterHoldMs: 10_000,
+      exitHoldMs: 60_000,
+      exitFactor: 0.85,
+      gpuVramUsedPercent: 92.5,
+      gpuUtilPercent: 95,
+      gpuUtilHoldMs: 300_000,
+    });
+  });
+
+  it("patches only the thresholds it names", () => {
+    expect(decodeServerSettingsPatch({ machineResources: {} })).toEqual({ machineResources: {} });
+    expect(patchThresholds({ enterHoldMs: 0, exitFactor: 0.5 })).toEqual({
+      machineResources: { thresholds: { enterHoldMs: 0, exitFactor: 0.5 } },
+    });
+  });
+});
+
+describe("ServerSettings machine buckets", () => {
+  const rules = [{ field: "command", op: "contains", value: "cargo" }];
+  const stored = {
+    id: "builds",
+    name: "Builds",
+    rules,
+    provenance: {
+      createdBy: { type: "user" },
+      updatedBy: { type: "auto", threadId: "thread-a" },
+      updatedAt: "2026-11-07T00:00:00.000Z",
+    },
+  };
+
+  it("defaults to no buckets for settings stored before them", () => {
+    expect(decodeServerSettings({}).machineResources.buckets).toEqual({});
+    expect(
+      decodeServerSettings({ machineResources: { thresholds: {} } }).machineResources,
+    ).toMatchObject({ buckets: {} });
+    expect(DEFAULT_SERVER_SETTINGS.machineResources.buckets).toEqual({});
+  });
+
+  it("reads a bucket back from the settings file", () => {
+    const decodeFile = Schema.decodeUnknownSync(Schema.fromJsonString(ServerSettings));
+    const settings = decodeFile(
+      JSON.stringify({ machineResources: { buckets: { builds: stored } } }),
+    );
+    expect(settings.machineResources.buckets).toMatchObject({
+      builds: { id: "builds", name: "Builds", rules },
+    });
+  });
+
+  it("patches buckets per entry, null deleting one, provenance optional", () => {
+    expect(
+      decodeServerSettingsPatch({
+        machineResources: {
+          buckets: { builds: { id: "builds", name: "Builds", rules }, old: null },
+        },
+      }),
+    ).toEqual({
+      machineResources: { buckets: { builds: { id: "builds", name: "Builds", rules }, old: null } },
+    });
+  });
+
+  it("caps a patch at the bucket limit", () => {
+    const entries = (count: number) =>
+      Object.fromEntries(Array.from({ length: count }, (_, index) => [`b${index}`, null]));
+    expect(() =>
+      decodeServerSettingsPatch({ machineResources: { buckets: entries(MACHINE_BUCKETS_MAX) } }),
+    ).not.toThrow();
+    expect(() =>
+      decodeServerSettingsPatch({
+        machineResources: { buckets: entries(MACHINE_BUCKETS_MAX + 1) },
+      }),
+    ).toThrow();
+  });
 });
 
 describe("ClientSettings quit confirmation", () => {
@@ -321,6 +460,38 @@ describe("ClientSettings quit confirmation", () => {
 
     expect(settings.confirmQuit).toBe(mode);
     expect(encodeClientSettings(settings).confirmQuit).toBe(mode);
+  });
+});
+
+describe("ClientSettings side-by-side diff", () => {
+  it("is off unless settings or a patch say otherwise", () => {
+    expect(decodeClientSettings({}).diffSideBySide).toBe(false);
+    expect(decodeClientSettings({ diffSideBySide: true }).diffSideBySide).toBe(true);
+    expect(decodeClientSettingsPatch({})).not.toHaveProperty("diffSideBySide");
+    expect(decodeClientSettingsPatch({ diffSideBySide: true })).toEqual({ diffSideBySide: true });
+    expect(() => decodeClientSettingsPatch({ diffSideBySide: "yes" })).toThrow();
+  });
+
+  it.each([
+    { value: "stacked", valid: true },
+    { value: "split", valid: true },
+    { value: "sideBySide", valid: false },
+    { value: "side-by-side", valid: false },
+  ])("decodes diffLayout $value: $valid", ({ value, valid }) => {
+    if (valid) {
+      expect(decodeClientSettings({ diffLayout: value }).diffLayout).toBe(value);
+      expect(decodeClientSettingsPatch({ diffLayout: value })).toEqual({ diffLayout: value });
+    } else {
+      expect(() => decodeClientSettings({ diffLayout: value })).toThrow();
+      expect(() => decodeClientSettingsPatch({ diffLayout: value })).toThrow();
+    }
+  });
+
+  it("writes only diffLayout values an older build decodes", () => {
+    const written = encodeClientSettings(decodeClientSettings({ diffSideBySide: true }));
+    expect(["stacked", "split"]).toContain(written.diffLayout);
+    expect(written.diffSideBySide).toBe(true);
+    expect(encodeClientSettings(decodeClientSettings({})).diffLayout).toBe("stacked");
   });
 });
 

@@ -1,4 +1,5 @@
 import {
+  getMobileThemeAnsiColors,
   getMobileThemeColors,
   getMobileThemeVariables,
   themeColorToNativeColor,
@@ -111,6 +112,7 @@ export function getMobileTerminalTheme(
     border: colors["--color-border"],
     cursorForeground: themeColorToNativeColor(palette.terminalCursor),
     cursorBackground: background,
+    palette: getMobileThemeAnsiColors(themeId, scheme) ?? base.palette,
   };
 }
 

@@ -1085,6 +1085,28 @@ describe("showing a note that was asked for", () => {
     expect(onNoteUnplaced).not.toHaveBeenCalled();
   });
 
+  it("opens the fold a note asked for is in, with unchanged lines collapsed", async () => {
+    using _drafts = setup();
+    localStorage.setItem(COLLAPSE_KEY, "true");
+    const note = noteOf(1, 180);
+    const onNoteRevealed = vi.fn();
+    await using screen = await mount({
+      files: [entryOf("a.ts", LONG_A)],
+      loadFileContents: loaderOf({ "a.ts": LONG_A }),
+      reviewNotes: notesOf([exact(note)]),
+      noteReveal: { noteId: note.id },
+      onNoteRevealed,
+    });
+
+    await vi.waitFor(() => expect(cardOf(screen)?.dataset.sbsAnnotationCard).toBe(note.id));
+    await vi.waitFor(() => expect(rowByNumber(screen, "additions", 180)).toBeDefined());
+    expect(isVisible(rowByNumber(screen, "additions", 180)!, scrollerOf(screen, "additions"))).toBe(
+      true,
+    );
+    expect(markersOf(screen)).toEqual([note.id]);
+    expect(onNoteRevealed).toHaveBeenCalledOnce();
+  });
+
   it("calls onNoteRevealed once, even as the panel renders again", async () => {
     using _drafts = setup();
     const note = noteOf(1, 12);

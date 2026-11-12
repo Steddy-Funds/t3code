@@ -1013,7 +1013,8 @@ describe("CodeIntel", () => {
           "scripts/package.json": '{ "name": "scripts" }\n',
           "scripts/tsconfig.json": "{}\n",
           "scripts/build.ts": ALPHA,
-          "apps/desktop/package.json": '{ "name": "desktop", "dependencies": { "contracts": "*" } }\n',
+          "apps/desktop/package.json":
+            '{ "name": "desktop", "dependencies": { "contracts": "*" } }\n',
           "apps/desktop/tsconfig.json": "{}\n",
           "apps/desktop/main.ts": ALPHA,
           "apps/server/package.json":
@@ -1110,7 +1111,10 @@ describe("CodeIntel", () => {
           s.flagsByLanguage.set("typescript", [`--record=${typescript}`]);
           const other = NodePath.join(s.scratch, "other");
           NodeFS.mkdirSync(other, { recursive: true });
-          NodeFS.writeFileSync(NodePath.join(other, "tsconfig.json"), '{ "files": ["other.ts"] }\n');
+          NodeFS.writeFileSync(
+            NodePath.join(other, "tsconfig.json"),
+            '{ "files": ["other.ts"] }\n',
+          );
           NodeFS.writeFileSync(NodePath.join(other, "other.ts"), ALPHA);
           const cwd = yield* makeWorkspace({
             "packages/b/tsconfig.json": '{ "include": ["src"] }\n',

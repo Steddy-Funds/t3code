@@ -189,7 +189,9 @@ const STRING_LITERAL = /(["'`])(?:\\.|(?!\1).)*\1/g;
 const isCommentLine = (text: string, name: string) => {
   const code = text.trimStart();
   return (
-    code.startsWith("//") || code.startsWith("/*") || (code.startsWith("#") && !name.startsWith("#"))
+    code.startsWith("//") ||
+    code.startsWith("/*") ||
+    (code.startsWith("#") && !name.startsWith("#"))
   );
 };
 

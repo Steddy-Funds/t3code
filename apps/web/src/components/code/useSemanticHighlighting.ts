@@ -51,6 +51,7 @@ interface SemanticAnswer {
 /** The server state a revision and chunk was last asked in, and whether that ask is still out. */
 interface AskRecord {
   readonly key: string;
+  readonly documentKey: string;
   readonly revision: string;
   readonly state: CodeServerState;
   pending: boolean;
@@ -168,10 +169,9 @@ export function useSemanticHighlighting(options: SemanticHighlightingOptions) {
 
   // Kept and painted with the latest render's props, so a theme switch meanwhile paints the new one.
   const keep = useEffectEvent(
-    (
-      answer: Omit<SemanticAnswer, "documentKey" | "chunks"> & { readonly chunk: number | null },
-    ) => {
-      if (documentKey === null) return;
+    (answer: Omit<SemanticAnswer, "chunks"> & { readonly chunk: number | null }) => {
+      // The last file's answer can land after a switch, before the switch's cleanup aborts it.
+      if (documentKey === null || answer.documentKey !== documentKey) return;
       const current = answerRef.current;
       if (
         answer.chunk !== null &&
@@ -237,6 +237,7 @@ export function useSemanticHighlighting(options: SemanticHighlightingOptions) {
       result.value.revision === record.revision
     ) {
       keep({
+        documentKey: record.documentKey,
         lines: textLines(asked),
         revision: record.revision,
         chunk,
@@ -263,6 +264,12 @@ export function useSemanticHighlighting(options: SemanticHighlightingOptions) {
       if (span === null) return;
       chunks = semanticChunksFor(span.first, span.last);
     }
+    if (lastAskedRef.current !== revision) {
+      // An undo can bring back a text asked about before, whose answer has since been replaced.
+      for (const [key, record] of askedRef.current) {
+        if (record.revision !== revision) askedRef.current.delete(key);
+      }
+    }
     lastAskedRef.current = revision;
     for (const chunk of chunks) {
       const key = `${revision}:${chunk ?? "all"}`;
@@ -273,7 +280,7 @@ export function useSemanticHighlighting(options: SemanticHighlightingOptions) {
       ) {
         continue;
       }
-      const record: AskRecord = { key, revision, state: serverState, pending: true };
+      const record: AskRecord = { key, documentKey, revision, state: serverState, pending: true };
       askedRef.current.set(key, record);
       void ask(record, path, asked, chunk, previous !== undefined);
     }

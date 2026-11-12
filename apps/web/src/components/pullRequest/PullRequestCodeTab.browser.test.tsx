@@ -422,6 +422,18 @@ it("shows the first file side by side when the setting is on and the area is wid
     .not.toBeInTheDocument();
 });
 
+it("reads the shown file once while the tab renders again", async () => {
+  setup({ paged: true });
+  using _settings = withSettings({ diffSideBySide: true });
+  await using screen = await render(sbsTab(), { container: areaOf(1000) });
+  await vi.waitFor(() => expect(sbsRow(screen, "additions", 1)?.textContent).toContain("after()"));
+
+  await screen.rerender(sbsTab());
+  await screen.rerender(sbsTab());
+
+  expect(mocks.fileContents).toHaveBeenCalledOnce();
+});
+
 it("keeps the stacked view when the setting is off", async () => {
   setup({ paged: false });
   using _settings = withSettings({ diffSideBySide: false });

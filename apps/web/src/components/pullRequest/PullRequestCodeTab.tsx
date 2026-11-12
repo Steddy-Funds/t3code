@@ -3,7 +3,12 @@ import {
   capitalizeTerm,
   sourceControlClients,
 } from "@t3tools/client-runtime/source-control-clients";
-import type { CodeViewItem, DiffLineAnnotation, SelectedLineRange } from "@pierre/diffs";
+import type {
+  CodeViewItem,
+  DiffLineAnnotation,
+  FileDiffContentsLoader,
+  SelectedLineRange,
+} from "@pierre/diffs";
 import type { CodeViewAnnotationArgs, CodeViewDiffItem } from "@pierre/diffs/react";
 import type {
   EnvironmentId,
@@ -75,6 +80,7 @@ import { APP_BASE_NAME } from "~/branding";
 import { PREFERRED_HIGHLIGHTER } from "~/lib/syntaxHighlighting";
 import { cn } from "~/lib/utils";
 import { createPullRequestDiffFileContentsLoader } from "~/lib/diffFileContents";
+import { useStableCallback } from "~/hooks/useStableCallback";
 import {
   buildDiffReviewComment,
   resolveDiffReviewAnchor,
@@ -579,12 +585,16 @@ function PullRequestCodeTab({
   const codeViewReveal = useCodeViewFileReveal();
   const answeredRevealNonce = useRef<number | null>(null);
 
-  const loadDiffFiles = createPullRequestDiffFileContentsLoader(getDiffFileContents, {
-    environmentId,
-    reference,
-    commit,
-    cacheKey: `pull-request:${referenceKey}:${detail.updatedAt}:${commit ?? "all"}`,
-  });
+  // Stable, as the side-by-side panel reads again for a new loader; scopeKey and contentsKey
+  // carry what changes the files.
+  const loadDiffFiles: FileDiffContentsLoader = useStableCallback((fileDiff) =>
+    createPullRequestDiffFileContentsLoader(getDiffFileContents, {
+      environmentId,
+      reference,
+      commit,
+      cacheKey: `pull-request:${referenceKey}:${detail.updatedAt}:${commit ?? "all"}`,
+    })(fileDiff),
+  );
   const completionScope = pullRequestCompletionScope(detail, environmentId, reference);
   const hostReview = detail.capabilities.review;
   const review = {

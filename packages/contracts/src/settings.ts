@@ -2031,8 +2031,6 @@ export const ClientSettingsPatch = Schema.Struct({
   showSkillsInSlashMenu: Schema.optionalKey(Schema.Boolean),
   boringSidebarEnabled: Schema.optionalKey(Schema.Boolean),
   boringSidebarMultilineRows: Schema.optionalKey(Schema.Boolean),
-  glintEnabled: Schema.optionalKey(Schema.Boolean),
-  glintHelperPath: Schema.optionalKey(Schema.String),
   toolCallVisibility: Schema.optionalKey(ToolCallVisibility),
   threadDetailsUsageEnabled: Schema.optionalKey(Schema.Boolean),
   threadDetailsItems: Schema.optionalKey(Schema.Record(Schema.String, Schema.Boolean)),
@@ -2060,6 +2058,8 @@ export const ClientSettingsPatch = Schema.Struct({
   snapShotSound: Schema.optionalKey(SnapShotSound),
   snapShotFlash: Schema.optionalKey(Schema.Boolean),
   snapShotAnimations: Schema.optionalKey(Schema.Boolean),
+  glintEnabled: Schema.optionalKey(Schema.Boolean),
+  glintHelperPath: Schema.optionalKey(Schema.String),
   wordWrap: Schema.optionalKey(Schema.Boolean),
   mathRenderingEnabled: Schema.optionalKey(Schema.Boolean),
 });

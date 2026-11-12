@@ -1269,8 +1269,8 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
         <span className="flex-1" />
       )}
       {terminalStatusIcon}
-      {agentBadge}
       {burnBadge}
+      {agentBadge}
       {prBadge}
       {diff ? (
         <span className="shrink-0 font-mono">
@@ -1304,8 +1304,8 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     twoRow && hasRowIcons ? (
       <span className="inline-flex shrink-0 items-center gap-1.5 text-secondary-label text-xs">
         {terminalStatusIcon}
-        {agentBadge}
         {burnBadge}
+        {agentBadge}
         {prBadge}
         {diff ? (
           <span className="shrink-0 font-mono">

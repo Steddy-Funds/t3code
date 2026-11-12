@@ -176,6 +176,7 @@ import {
 import * as ServerConfig from "../../config.ts";
 import * as PortScanner from "../../preview/PortScanner.ts";
 import * as ServerSettings from "../../serverSettings.ts";
+import * as TokenBurnRates from "../../usage/TokenBurnRates.ts";
 import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
 import { spawnAndCollect } from "@t3tools/provider-core/server/snapshotProbe";
 import { signalProcessGroup } from "@t3tools/provider-core/server/processGroup";
@@ -4910,6 +4911,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
   const mcpSessions = yield* McpProviderSessions.McpProviderSessions;
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const serverSettings = yield* Effect.serviceOption(ServerSettings.ServerSettingsService);
+  const tokenBurnRates = yield* Effect.serviceOption(TokenBurnRates.TokenBurnRatesService);
   const { attachmentsDir, fileSystem, path, random, idAllocator, queryRunner } = adapterOptions;
   const loadModelCatalog = (
     adapterOptions.modelCatalog ?? Effect.succeed(BUNDLED_CLAUDE_MODEL_CATALOG)
@@ -9485,6 +9487,22 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               }
             }
             const parentToolUseId = message.parent_tool_use_id;
+            const subagentUsage = message.message.usage;
+            if (
+              parentToolUseId !== null &&
+              subagentUsage !== undefined &&
+              message.message.model !== "<synthetic>" &&
+              Option.isSome(tokenBurnRates)
+            ) {
+              const subagent = yield* resolveSubagentByToolUseId(context, parentToolUseId);
+              if (subagent !== undefined) {
+                yield* tokenBurnRates.value.recordSubagentRequest(subagent.childThreadId, {
+                  requestId: message.message.id,
+                  inputTokens: claudeMessageInputTokens(subagentUsage),
+                  outputTokens: subagentUsage.output_tokens,
+                });
+              }
+            }
             const snapshotModel =
               typeof message.message.model === "string" ? message.message.model.trim() : "";
             // "<synthetic>" identifies CLI notices, not the subagent model.

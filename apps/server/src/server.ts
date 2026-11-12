@@ -712,7 +712,6 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   ),
   layerThreadPullRequestWorker,
   DelegatedTaskAnalytics.layer,
-  TokenBurnRates.layer.pipe(Layer.provide(RuntimeLayer.layerEventSink)),
   Layer.effectDiscard(
     Effect.gen(function* () {
       const service = yield* PullRequestSyncReactor.PullRequestSyncReactor;
@@ -765,6 +764,8 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   ),
   Layer.provideMerge(ProviderRegistry.layer),
   Layer.provideMerge(ProviderInstanceRegistryHydration.layer),
+  // Below the providers, so Claude can report its subagents' requests to it.
+  Layer.provideMerge(TokenBurnRates.layer.pipe(Layer.provide(RuntimeLayer.layerEventSink))),
   // Provider hydration builds the Claude runner, which reports agents to the same scanner the
   // terminal and preview layers share.
   Layer.provideMerge(layerPortScanner),

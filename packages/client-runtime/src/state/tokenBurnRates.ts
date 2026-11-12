@@ -107,6 +107,12 @@ export function createTokenBurnRateAtoms<R, E>(
     }).pipe(Atom.withLabel("token-burn-rates:tree"));
   })();
 
+  const totalRateAtom = Atom.make((get) => {
+    let total = 0;
+    for (const rate of get(ownRatesAtom).values()) total += rate;
+    return total;
+  }).pipe(Atom.withLabel("token-burn-rates:total"));
+
   const treeRateAtomFamily = Atom.family((key: string) =>
     Atom.make((get) => get(treeRatesAtom).get(key) ?? 0).pipe(
       Atom.withLabel(`token-burn-rate:${key}`),
@@ -116,6 +122,8 @@ export function createTokenBurnRateAtoms<R, E>(
   return {
     /** Tokens per minute in each thread's agent tree, by thread key; idle trees are absent. */
     treeRatesAtom,
+    /** Tokens per minute across every connected environment. */
+    totalRateAtom,
     treeRateAtom: (key: string) => treeRateAtomFamily(key),
   };
 }

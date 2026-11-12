@@ -24,6 +24,10 @@ interface RequestCursor {
   readonly outputTokens: number;
 }
 
+interface SubagentRequestCursor extends RequestCursor {
+  readonly requestId: string;
+}
+
 interface Sample {
   readonly atMs: number;
   readonly totals: ReadonlyMap<ThreadId, number>;
@@ -38,7 +42,12 @@ interface Sample {
 export function makeTokenBurnMeter() {
   const totals = new Map<ThreadId, number>();
   const cursors = new Map<string, RequestCursor>();
+  const subagentCursors = new Map<ThreadId, SubagentRequestCursor>();
   const samples: Sample[] = [];
+
+  const add = (threadId: ThreadId, tokens: number) => {
+    if (tokens > 0) totals.set(threadId, (totals.get(threadId) ?? 0) + tokens);
+  };
 
   const record = (threadId: ThreadId, turn: OrchestrationV2ProviderTurn) => {
     const usage = turn.tokenUsage;
@@ -54,7 +63,37 @@ export function makeTokenBurnMeter() {
         ? next.inputTokens + next.outputTokens
         : next.outputTokens - previous.outputTokens;
     if (running) cursors.set(turn.id, next);
-    if (added > 0) totals.set(threadId, (totals.get(threadId) ?? 0) + added);
+    add(threadId, added);
+  };
+
+  /**
+   * A provider subagent's request, which has no provider turn of its own. Snapshots of one
+   * request repeat its id and may fill its usage in late, so only growth counts.
+   */
+  const recordSubagentRequest = (
+    threadId: ThreadId,
+    request: {
+      readonly requestId: string;
+      readonly inputTokens: number;
+      readonly outputTokens: number;
+    },
+  ) => {
+    const previous = subagentCursors.get(threadId);
+    const same = previous?.requestId === request.requestId;
+    const next = {
+      requestId: request.requestId,
+      inputTokens: same ? Math.max(previous.inputTokens, request.inputTokens) : request.inputTokens,
+      outputTokens: same
+        ? Math.max(previous.outputTokens, request.outputTokens)
+        : request.outputTokens,
+    };
+    subagentCursors.set(threadId, next);
+    add(
+      threadId,
+      same
+        ? next.inputTokens - previous.inputTokens + next.outputTokens - previous.outputTokens
+        : next.inputTokens + next.outputTokens,
+    );
   };
 
   const sample = (atMs: number): ReadonlyArray<ThreadTokenBurnRate> => {
@@ -74,10 +113,13 @@ export function makeTokenBurnMeter() {
       if (minutes <= 0) continue;
       rates.push({ threadId, tokensPerMinute: Math.round(burned / minutes) });
     }
+    for (const threadId of subagentCursors.keys()) {
+      if (!totals.has(threadId)) subagentCursors.delete(threadId);
+    }
     return rates.toSorted((a, b) => b.tokensPerMinute - a.tokensPerMinute);
   };
 
-  return { record, sample } as const;
+  return { record, recordSubagentRequest, sample } as const;
 }
 
 export class TokenBurnRatesService extends Context.Service<
@@ -85,6 +127,9 @@ export class TokenBurnRatesService extends Context.Service<
   {
     /** The latest rates, then each minute's. */
     readonly changes: Stream.Stream<TokenBurnRates>;
+    readonly recordSubagentRequest: (
+      ...args: Parameters<ReturnType<typeof makeTokenBurnMeter>["recordSubagentRequest"]>
+    ) => Effect.Effect<void>;
   }
 >()("t3/usage/TokenBurnRates/TokenBurnRatesService") {}
 
@@ -117,7 +162,11 @@ const make = Effect.gen(function* () {
     });
   }).pipe(Effect.repeat(Schedule.spaced(TOKEN_BURN_SAMPLE_INTERVAL_MS)), Effect.forkScoped);
 
-  return { changes: SubscriptionRef.changes(latest) } as const;
+  return {
+    changes: SubscriptionRef.changes(latest),
+    recordSubagentRequest: (threadId, request) =>
+      Effect.sync(() => meter.recordSubagentRequest(threadId, request)),
+  } satisfies TokenBurnRatesService["Service"];
 });
 
 export const layer = Layer.effect(TokenBurnRatesService, make);

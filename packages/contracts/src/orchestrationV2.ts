@@ -6,6 +6,7 @@ import * as Schema from "effect/Schema";
 import * as SchemaAST from "effect/SchemaAST";
 import * as SchemaGetter from "effect/SchemaGetter";
 import * as SchemaTransformation from "effect/SchemaTransformation";
+import * as Struct from "effect/Struct";
 
 import {
   CheckpointId,
@@ -1617,6 +1618,35 @@ const OrchestrationV2LinkRequestFields = {
   linkedAccess: Schema.optional(AuthMcpClientAccess),
   failure: Schema.optional(Schema.String),
 } as const;
+
+/** The MCP tool an agent leaves a review note with, and the `toolName` of the note's record. */
+export const REVIEW_NOTE_TOOL_NAME = "flag_for_review";
+
+/**
+ * Only the server's `review_note.record` writes turn item ids under this prefix
+ * (provider items are `turn-item:provider:…`), so clients key the note card on it.
+ */
+export const REVIEW_NOTE_TURN_ITEM_PREFIX = "turn-item:review-note:";
+
+/**
+ * A note an agent left on lines it changed: the `input` of a `dynamic_tool`
+ * item, so a build without notes reads it as a plain tool row.
+ */
+export const OrchestrationV2ReviewNote = Schema.Struct({
+  kind: Schema.Literal("review_note"),
+  path: TrimmedNonEmptyString,
+  startLine: PositiveInt,
+  endLine: PositiveInt,
+  note: Schema.String,
+  question: Schema.optional(Schema.String),
+  /** The lines at call time, cut to whole lines when `excerptTruncated`. */
+  excerpt: Schema.String,
+  excerptTruncated: Schema.Boolean,
+  /** The git blob id of the file at call time. */
+  contentRevision: TrimmedNonEmptyString,
+  runId: RunId,
+});
+export type OrchestrationV2ReviewNote = typeof OrchestrationV2ReviewNote.Type;
 
 export const OrchestrationV2TurnItem = Schema.Union([
   Schema.Struct({
@@ -3604,6 +3634,19 @@ const OrchestrationV2InternalCommand = Schema.Union([
         notification: OrchestrationV2Notification,
       }),
     ),
+  }),
+  /**
+   * Records a review note an agent left. Internal so the note card's item can
+   * only come from the server, whatever a provider records for the tool call.
+   */
+  Schema.Struct({
+    type: Schema.Literal("review_note.record"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    runId: RunId,
+    nodeId: NodeId,
+    turnItemId: TurnItemId,
+    note: OrchestrationV2ReviewNote.mapFields(Struct.omit(["kind", "runId"])),
   }),
 ]);
 export type OrchestrationV2InternalCommand = typeof OrchestrationV2InternalCommand.Type;

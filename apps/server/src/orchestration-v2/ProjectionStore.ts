@@ -1,5 +1,5 @@
 import type { ProjectThreadAwarenessV2Input } from "@t3tools/shared/agentAwareness";
-import { pendingGuestMessageCount } from "@t3tools/contracts";
+import { pendingGuestMessageCount, REVIEW_NOTE_TURN_ITEM_PREFIX } from "@t3tools/contracts";
 import { applyThreadPullRequestLinkUpdate } from "../sourceControl/threadPullRequests.ts";
 import { projectTurnItemForWire } from "./WireProjection.ts";
 import * as Stream from "effect/Stream";
@@ -1981,10 +1981,12 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
 
+    // A review note stays on the timeline: only the server's record has its id prefix.
     const inlineWorkOutput = sql`item.type = 'dynamic_tool' AND (
       item.payload_json LIKE '%htmlRender%' OR item.payload_json LIKE ${`%${MCP_APP_OUTPUT_KEY}%`}
       OR item.payload_json LIKE '%"viewedImagePath"%'
-      OR item.payload_json LIKE '%"toolName":"%delegate_task"%')`;
+      OR item.payload_json LIKE '%"toolName":"%delegate_task"%'
+      OR item.turn_item_id LIKE ${`${REVIEW_NOTE_TURN_ITEM_PREFIX}%`})`;
 
     // Start from the few owned provider threads; a thread can have a large settled node history.
     const nodesOwningProviderThreads = (threadId: ThreadId) => sql`

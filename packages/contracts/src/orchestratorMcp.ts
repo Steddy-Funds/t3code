@@ -813,6 +813,29 @@ export const OrchestratorMcpRequestSecretResult = Schema.Union([
 ]);
 export type OrchestratorMcpRequestSecretResult = typeof OrchestratorMcpRequestSecretResult.Type;
 
+export const REVIEW_NOTE_MAX_LINES = 200;
+
+export const OrchestratorMcpFlagForReviewInput = Schema.Struct({
+  path: TrimmedNonEmptyString.check(Schema.isMaxLength(1_024)).annotate({
+    description: "Workspace-relative.",
+  }),
+  startLine: PositiveInt.annotate({ description: "1-based, in the file as it is now." }),
+  endLine: PositiveInt.annotate({ description: "Inclusive; at most 200 lines." }),
+  note: TrimmedNonEmptyString.check(Schema.isMaxLength(600)).annotate({
+    description: "What changed and why it matters. Stands alone.",
+  }),
+  question: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(300))).annotate({
+    description: "Only a decision you need from the user.",
+  }),
+});
+export type OrchestratorMcpFlagForReviewInput = typeof OrchestratorMcpFlagForReviewInput.Type;
+
+export const OrchestratorMcpFlagForReviewResult = Schema.Struct({
+  status: Schema.Literal("recorded"),
+  noteId: TurnItemId,
+});
+export type OrchestratorMcpFlagForReviewResult = typeof OrchestratorMcpFlagForReviewResult.Type;
+
 export const OrchestratorMcpEnvironmentLinkInput = Schema.Struct({
   environmentId: Schema.optional(EnvironmentId).annotate({
     description:

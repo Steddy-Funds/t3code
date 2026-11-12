@@ -45,6 +45,7 @@ upstream; a feature can, from its own branch, when Akiva decides.
 | Agent messages queued behind one another on a busy thread start in one turn, each its own message                                             | #73 | 364f161 |
 | Claude auto-compact window per thread, in the model picker and from `delegate_task` and `t3_thread_launch` (`autoCompactWindow`)              | #75 | cabfbbb |
 | Sidebar token burn rate (tokens per minute over 5 minutes, agents included) beside the bot count; the Working shelf sorts by it               | #76 | f813ada |
+| Review comments in the diff and the file viewer: Send straight to the agent, Send N, quoted selection                                         | #78 | d4019f5 |
 
 Held: #38 (pods notes in the t3-orchestration skill). It edits
 `.agents/skills/t3-orchestration/`, which exists only on

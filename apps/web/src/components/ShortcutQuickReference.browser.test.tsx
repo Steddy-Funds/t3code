@@ -1,4 +1,12 @@
 import { DEFAULT_CLIENT_SETTINGS, type ClientSettings } from "@t3tools/contracts/settings";
+import {
+  createMemoryHistory,
+  createRootRoute,
+  createRoute,
+  createRouter,
+  RouterProvider,
+} from "@tanstack/react-router";
+import type { ReactNode } from "react";
 import { describe, expect, it, vi } from "vite-plus/test";
 import { commands, page, userEvent } from "vite-plus/test/browser";
 
@@ -38,6 +46,24 @@ async function setup(settings: Partial<ClientSettings> = {}) {
 
 const macPlatform = () => vi.spyOn(navigator, "platform", "get").mockReturnValue("MacIntel");
 
+const THREAD_PATH = "/environment-1/thread-1";
+
+/** Renders on a router that has a thread route, which is where the list arms, and Settings. */
+async function renderAt(path: string, ui: ReactNode = <ShortcutQuickReference />) {
+  const rootRoute = createRootRoute({ component: () => ui });
+  const router = createRouter({
+    routeTree: rootRoute.addChildren([
+      createRoute({ getParentRoute: () => rootRoute, path: "/$environmentId/$threadId" }),
+      createRoute({ getParentRoute: () => rootRoute, path: "/settings/keybindings" }),
+    ]),
+    history: createMemoryHistory({ initialEntries: [path] }),
+    disableGlobalCatchBoundary: true,
+  });
+  await router.load();
+  // The test brings its own router: the default one has no thread route.
+  return render(<RouterProvider router={router} />, { router: false });
+}
+
 const overlay = () => document.querySelector<HTMLElement>("[data-shortcut-quick-reference]");
 const row = (label: string) =>
   [...(overlay()?.querySelectorAll("span") ?? [])].find((span) => span.textContent === label)
@@ -75,7 +101,7 @@ describe("ShortcutQuickReference", () => {
   it("lists the shortcuts of the focused context once Cmd has been held alone for 700 ms", async () => {
     await setup();
     using _platform = macPlatform();
-    await using screen = await render(<ShortcutQuickReference />);
+    await using screen = await renderAt(THREAD_PATH);
     using _timers = fakeTimers();
 
     await holdCmd();
@@ -107,7 +133,8 @@ describe("ShortcutQuickReference", () => {
     await setup();
     using _platform = macPlatform();
     const onClick = vi.fn();
-    await using screen = await render(
+    await using screen = await renderAt(
+      THREAD_PATH,
       <>
         <button type="button" className="fixed inset-0" onClick={onClick}>
           Under the list
@@ -167,7 +194,7 @@ describe("ShortcutQuickReference", () => {
   ])("stays hidden after %s until Cmd is released and held again", async (_name, interruption) => {
     await setup();
     using _platform = macPlatform();
-    await using _screen = await render(<ShortcutQuickReference />);
+    await using _screen = await renderAt(THREAD_PATH);
     using _timers = fakeTimers();
     const interrupt = async () => {
       for (const event of interruption()) await send(event);
@@ -190,7 +217,7 @@ describe("ShortcutQuickReference", () => {
   it("stays hidden when Cmd goes down while a pointer button is held", async () => {
     await setup();
     using _platform = macPlatform();
-    await using _screen = await render(<ShortcutQuickReference />);
+    await using _screen = await renderAt(THREAD_PATH);
     using _timers = fakeTimers();
 
     await send(new PointerEvent("pointerdown", { bubbles: true, buttons: 1 }));
@@ -208,7 +235,7 @@ describe("ShortcutQuickReference", () => {
   it("keeps its timer when Shift joins the hold, and leads with the Cmd+Shift chords", async () => {
     await setup();
     using _platform = macPlatform();
-    await using _screen = await render(<ShortcutQuickReference />);
+    await using _screen = await renderAt(THREAD_PATH);
     using _timers = fakeTimers();
 
     await holdCmd();
@@ -229,7 +256,7 @@ describe("ShortcutQuickReference", () => {
   it("arms when Cmd goes down after Shift", async () => {
     await setup();
     using _platform = macPlatform();
-    await using _screen = await render(<ShortcutQuickReference />);
+    await using _screen = await renderAt(THREAD_PATH);
     using _timers = fakeTimers();
 
     await key("keydown", "Shift", { shift: true });
@@ -246,7 +273,7 @@ describe("ShortcutQuickReference", () => {
   it("stays visible while Alt is pressed and released, and the list follows", async () => {
     await setup();
     using _platform = macPlatform();
-    await using _screen = await render(<ShortcutQuickReference />);
+    await using _screen = await renderAt(THREAD_PATH);
     using _timers = fakeTimers();
 
     await holdCmd();
@@ -269,7 +296,7 @@ describe("ShortcutQuickReference", () => {
   ])("closes when %s, though the Cmd release never arrives", async (_name, loseModifier) => {
     await setup();
     using _platform = macPlatform();
-    await using _screen = await render(<ShortcutQuickReference />);
+    await using _screen = await renderAt(THREAD_PATH);
     using _timers = fakeTimers();
 
     await holdCmd();
@@ -308,14 +335,6 @@ describe("ShortcutQuickReference", () => {
       },
     ],
     [
-      "a keybinding is being recorded",
-      async (container: HTMLElement) => {
-        const capture = append(container, document.createElement("div"));
-        capture.dataset.keybindingCapture = "";
-        append(capture, document.createElement("input")).focus();
-      },
-    ],
-    [
       "the command palette is open",
       async (container: HTMLElement) => {
         append(container, document.createElement("div")).dataset.commandPalette = "";
@@ -324,7 +343,7 @@ describe("ShortcutQuickReference", () => {
   ])("never arms while %s", async (_name, arrange) => {
     await setup();
     using _platform = macPlatform();
-    await using screen = await render(<ShortcutQuickReference />);
+    await using screen = await renderAt(THREAD_PATH);
     const stage = append(screen.container, document.createElement("div"));
     await arrange(stage);
     using _timers = fakeTimers();
@@ -341,10 +360,21 @@ describe("ShortcutQuickReference", () => {
     expect(overlay()).not.toBeNull();
   });
 
+  it("never arms off a thread, where the chat's shortcuts are not live", async () => {
+    await setup();
+    using _platform = macPlatform();
+    await using _screen = await renderAt("/settings/keybindings");
+    using _timers = fakeTimers();
+
+    await holdCmd();
+    await wait(2_000);
+    expect(overlay()).toBeNull();
+  });
+
   it("never shows with the setting off", async () => {
     await setup({ shortcutQuickReferenceEnabled: false });
     using _platform = macPlatform();
-    await using _screen = await render(<ShortcutQuickReference />);
+    await using _screen = await renderAt(THREAD_PATH);
     using _timers = fakeTimers();
 
     await holdCmd();
@@ -361,7 +391,7 @@ describe("ShortcutQuickReference", () => {
       await setup();
       await page.viewport(width, height);
       using _platform = macPlatform();
-      await using screen = await render(<ShortcutQuickReference />);
+      await using screen = await renderAt(THREAD_PATH);
       const sidebar = append(
         screen.container,
         document.createElement("div"),

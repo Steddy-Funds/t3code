@@ -1,12 +1,15 @@
 import { assert, describe, it } from "vite-plus/test";
 import {
   compileResolvedKeybindingsConfig,
+  DEFAULT_KEYBINDINGS,
   DEFAULT_RESOLVED_KEYBINDINGS,
+  insertMissingDefaultKeybindings,
   mergeWithDefaultKeybindings,
 } from "@t3tools/shared/keybindings";
 
 import {
   type KeybindingCommand,
+  type KeybindingRule,
   type KeybindingShortcut,
   type KeybindingWhenNode,
   type ResolvedKeybindingsConfig,
@@ -17,11 +20,15 @@ import {
   isRichTextBoldShortcut,
   isTerminalNewShortcut,
   isTerminalSplitShortcut,
+  provideShortcutCapability,
   resolveChatShortcutCommand,
   resolveShortcutCommand,
+  ruleCanMatch,
+  shortcutConflictKey,
   shouldShowThreadJumpHintsForModifiers,
   shortcutLabelForCommand,
   terminalNavigationShortcutData,
+  type ShortcutCapability,
   type ShortcutEventLike,
 } from "./keybindings";
 
@@ -934,6 +941,506 @@ describe("Usage shortcuts", () => {
       resolveShortcutCommand(shortcut, DEFAULT_RESOLVED_KEYBINDINGS, {
         platform: "Linux",
       }),
+    );
+  });
+});
+
+const PLATFORMS = ["MacIntel", "Linux"] as const;
+
+function pressOf(shortcut: KeybindingShortcut, platform: string): ShortcutEventLike {
+  const mac = platform === "MacIntel";
+  return event({
+    key: shortcut.key,
+    metaKey: shortcut.metaKey || (shortcut.modKey && mac),
+    ctrlKey: shortcut.ctrlKey || (shortcut.modKey && !mac),
+    shiftKey: shortcut.shiftKey,
+    altKey: shortcut.altKey,
+  });
+}
+
+function press(key: string, platform: string): ShortcutEventLike {
+  const [rule] = compileResolvedKeybindingsConfig([{ key, command: "chat.new" }]);
+  return pressOf(rule!.shortcut, platform);
+}
+
+function provide(
+  names: ReadonlyArray<ShortcutCapability>,
+  isAvailable: () => boolean = () => true,
+): Disposable {
+  const stack = new DisposableStack();
+  for (const name of names) stack.defer(provideShortcutCapability(name, isAvailable));
+  return stack;
+}
+
+function whenVariables(node: KeybindingWhenNode | undefined, names = new Set<string>()) {
+  if (!node) return names;
+  if (node.type === "identifier") names.add(node.name);
+  else if (node.type === "not") whenVariables(node.node, names);
+  else {
+    whenVariables(node.left, names);
+    whenVariables(node.right, names);
+  }
+  return names;
+}
+
+// What the JetBrains keymap added: its own commands, and three more shortcuts for older ones.
+const isJetBrainsRule = ({ command, shortcut }: ResolvedKeybindingsConfig[number]) =>
+  /^(code|projectPane)\.|^diff\.(nextChange|previousChange|jumpToSource)$/.test(command) ||
+  (command.startsWith("navigation.") && shortcut.altKey) ||
+  (command === "filePicker.toggle" && shortcut.key === "o");
+const EARLIER_DEFAULTS = DEFAULT_RESOLVED_KEYBINDINGS.filter((rule) => !isJetBrainsRule(rule));
+
+describe("JetBrains keymap defaults", () => {
+  it("leaves every earlier default as it was wherever no focus scope holds", () => {
+    using _capabilities = provide(["codeNavigation", "codeSymbols", "projectPane"]);
+    const added = new Set([
+      "codeFocus",
+      "diffFocus",
+      "projectTreeFocus",
+      "codeNavigation",
+      "codeSymbols",
+      "projectPane",
+    ]);
+    assert.isAbove(EARLIER_DEFAULTS.length, 80);
+
+    for (const platform of PLATFORMS) {
+      for (const { shortcut } of EARLIER_DEFAULTS) {
+        const keydown = pressOf(shortcut, platform);
+        // Only rules on this key can match, so every combination of the variables they read
+        // is every context a listener can build for it.
+        const read = DEFAULT_RESOLVED_KEYBINDINGS.filter(
+          (rule) => rule.shortcut.key === shortcut.key,
+        ).reduce(
+          (names, rule) => whenVariables(rule.whenAst, names),
+          new Set(["composerRequiresModifier"]),
+        );
+        const variables = [...read].filter((name) => !added.has(name));
+        for (let bits = 0; bits < 2 ** variables.length; bits += 1) {
+          const context = Object.fromEntries(
+            variables.map((name, index) => [name, (bits & (1 << index)) !== 0]),
+          );
+          const now = resolveShortcutCommand(keydown, DEFAULT_RESOLVED_KEYBINDINGS, {
+            platform,
+            context,
+          });
+          const before = resolveShortcutCommand(keydown, EARLIER_DEFAULTS, { platform, context });
+          if (now !== before) {
+            assert.fail(
+              `${shortcutConflictKey(shortcut, platform)} on ${platform} resolved to ${now}, was ${before}, in ${JSON.stringify(context)}`,
+            );
+          }
+        }
+      }
+    }
+  });
+
+  const desktop = { isDesktop: true, isWeb: false };
+  const web = { isDesktop: false, isWeb: true };
+  const navigation = ["codeNavigation"] as const;
+  it.each<{
+    key: string;
+    context: Record<string, boolean>;
+    capabilities?: ReadonlyArray<ShortcutCapability>;
+    /** Provided, but its feature does not work where focus is. */
+    unavailable?: ReadonlyArray<ShortcutCapability>;
+    command: KeybindingCommand | null;
+  }>([
+    // A command without a handler runs nothing, so a key keeps its earlier command until the
+    // feature is provided, and wherever the feature says it does not work.
+    { key: "mod+b", context: { codeFocus: true }, command: "sidebar.toggle" },
+    {
+      key: "mod+b",
+      context: { codeFocus: true },
+      unavailable: navigation,
+      command: "sidebar.toggle",
+    },
+    {
+      key: "mod+b",
+      context: { codeFocus: true },
+      capabilities: navigation,
+      command: "code.goToDeclaration",
+    },
+    {
+      key: "mod+b",
+      context: { composerFocus: true },
+      capabilities: navigation,
+      command: "sidebar.toggle",
+    },
+    {
+      key: "mod+b",
+      context: { diffFocus: true },
+      capabilities: navigation,
+      command: "sidebar.toggle",
+    },
+    {
+      key: "mod+shift+b",
+      context: { codeFocus: true },
+      capabilities: navigation,
+      command: "code.goToTypeDeclaration",
+    },
+    { key: "mod+shift+b", context: { codeFocus: true }, command: "threadPanel.toggle" },
+    {
+      key: "mod+alt+b",
+      context: { codeFocus: true },
+      capabilities: navigation,
+      command: "code.goToImplementation",
+    },
+    {
+      key: "mod+alt+b",
+      context: { codeFocus: true },
+      unavailable: navigation,
+      command: "rightPanel.toggle",
+    },
+    {
+      key: "mod+l",
+      context: { codeFocus: true },
+      capabilities: navigation,
+      command: "code.goToLine",
+    },
+    {
+      key: "mod+l",
+      context: { codeFocus: true, previewFocus: true },
+      unavailable: navigation,
+      command: "preview.focusUrl",
+    },
+    {
+      key: "alt+space",
+      context: { codeFocus: true },
+      capabilities: navigation,
+      command: "code.quickDefinition",
+    },
+    { key: "alt+space", context: { codeFocus: true }, command: null },
+    { key: "f7", context: { codeFocus: true, diffFocus: true }, command: "diff.nextChange" },
+    { key: "f7", context: { codeFocus: true }, capabilities: navigation, command: null },
+    { key: "mod+arrowdown", context: { diffFocus: true }, command: "diff.jumpToSource" },
+    { key: "mod+shift+o", context: { codeFocus: true }, command: "filePicker.toggle" },
+    { key: "mod+shift+o", context: { projectTreeFocus: true }, command: "filePicker.toggle" },
+    { key: "mod+o", context: { codeFocus: true }, command: "editor.openFavorite" },
+    {
+      key: "mod+o",
+      context: { codeFocus: true },
+      unavailable: ["codeSymbols"],
+      command: "editor.openFavorite",
+    },
+    {
+      key: "mod+o",
+      context: { codeFocus: true },
+      capabilities: ["codeSymbols"],
+      command: "code.goToClass",
+    },
+    {
+      key: "mod+o",
+      context: { projectTreeFocus: true },
+      capabilities: ["codeSymbols"],
+      command: "code.goToClass",
+    },
+    { key: "mod+o", context: {}, capabilities: ["codeSymbols"], command: "editor.openFavorite" },
+    { key: "mod+e", context: {}, command: null },
+    { key: "mod+e", context: {}, capabilities: ["codeSymbols"], command: "code.recentFiles" },
+    {
+      key: "mod+e",
+      context: { terminalFocus: true },
+      capabilities: ["codeSymbols"],
+      command: null,
+    },
+    {
+      key: "ctrl+shift+arrowdown",
+      context: { codeFocus: true },
+      capabilities: ["codeSymbols"],
+      command: "code.nextMethod",
+    },
+    { key: "mod+1", context: { ...desktop, codeFocus: true }, command: "thread.jump.1" },
+    {
+      key: "mod+1",
+      context: { ...desktop, codeFocus: true },
+      unavailable: ["projectPane"],
+      command: "thread.jump.1",
+    },
+    {
+      key: "mod+1",
+      context: { ...desktop, codeFocus: true },
+      capabilities: ["projectPane"],
+      command: "projectPane.toggle",
+    },
+    {
+      key: "mod+1",
+      context: { ...desktop, projectTreeFocus: true },
+      capabilities: ["projectPane"],
+      command: "projectPane.toggle",
+    },
+    {
+      key: "mod+1",
+      context: { ...desktop, terminalFocus: true },
+      capabilities: ["projectPane"],
+      command: "thread.jump.1",
+    },
+    // Browsers keep these keys for their tabs.
+    {
+      key: "mod+1",
+      context: { ...web, codeFocus: true },
+      capabilities: ["projectPane"],
+      command: null,
+    },
+    { key: "mod+alt+arrowleft", context: desktop, command: "navigation.back" },
+    { key: "mod+alt+arrowright", context: desktop, command: "navigation.forward" },
+    { key: "mod+alt+arrowleft", context: web, command: null },
+    { key: "mod+alt+arrowleft", context: { ...desktop, terminalFocus: true }, command: null },
+  ])("resolves $key to $command in $context with $capabilities, without $unavailable", (row) => {
+    using _capabilities = provide(row.capabilities ?? []);
+    using _unavailable = provide(row.unavailable ?? [], () => false);
+    for (const platform of PLATFORMS) {
+      assert.strictEqual(
+        resolveShortcutCommand(press(row.key, platform), DEFAULT_RESOLVED_KEYBINDINGS, {
+          platform,
+          context: row.context,
+        }),
+        row.command,
+        platform,
+      );
+    }
+  });
+
+  it("keeps the older shortcut as the one a command is labelled with", () => {
+    for (const platform of PLATFORMS) {
+      for (const [command, key] of [
+        ["navigation.back", "["],
+        ["navigation.forward", "]"],
+      ] as const) {
+        assert.strictEqual(
+          shortcutLabelForCommand(DEFAULT_RESOLVED_KEYBINDINGS, command, {
+            platform,
+            context: { isDesktop: true },
+          }),
+          formatShortcutLabel(modShortcut(key), platform),
+        );
+      }
+    }
+  });
+
+  it("holds a capability while any provider says it works, read at each key", () => {
+    const resolve = () =>
+      resolveShortcutCommand(press("mod+e", "MacIntel"), DEFAULT_RESOLVED_KEYBINDINGS, {
+        platform: "MacIntel",
+      });
+    const works = { here: false };
+    const sameCheck = () => works.here;
+    const withdrawFirst = provideShortcutCapability("codeSymbols", sameCheck);
+    const withdrawSecond = provideShortcutCapability("codeSymbols", sameCheck);
+    assert.isNull(resolve());
+    works.here = true;
+    assert.strictEqual(resolve(), "code.recentFiles");
+
+    withdrawFirst();
+    withdrawFirst();
+    assert.strictEqual(resolve(), "code.recentFiles");
+    withdrawSecond();
+    assert.isNull(resolve());
+  });
+
+  it("tells which rules can never match outside the focus scopes", () => {
+    const noScopes = { codeFocus: false, diffFocus: false, projectTreeFocus: false };
+    const rule = (when?: string) =>
+      compileResolvedKeybindingsConfig([
+        when === undefined
+          ? { key: "mod+b", command: "chat.new" }
+          : { key: "mod+b", command: "chat.new", when },
+      ])[0]!;
+    for (const [when, canMatch] of [
+      [undefined, true],
+      ["codeFocus", false],
+      ["!codeFocus", true],
+      ["(codeFocus || projectTreeFocus) && codeSymbols", false],
+      ["codeFocus || terminalFocus", true],
+      ["!terminalFocus && codeSymbols", true],
+      ["!(codeFocus || !diffFocus)", false],
+    ] as const) {
+      assert.strictEqual(ruleCanMatch(rule(when), noScopes), canMatch, String(when));
+    }
+  });
+});
+
+describe("defaults merged into a server's rules", () => {
+  const resolveIn = (bindings: ResolvedKeybindingsConfig, key: string, context = {}) =>
+    resolveShortcutCommand(press(key, "MacIntel"), bindings, { platform: "MacIntel", context });
+  const inCode = { codeFocus: true, codeNavigation: true };
+  const userRules = compileResolvedKeybindingsConfig([
+    { key: "mod+b", command: "chat.newLocal" },
+    { key: "meta+shift+b", command: "thread.pin" },
+  ]);
+
+  it("ranks new scoped defaults above the earlier defaults a server still sends", () => {
+    const merged = mergeWithDefaultKeybindings(EARLIER_DEFAULTS);
+
+    assert.deepStrictEqual(
+      merged.filter((binding) => EARLIER_DEFAULTS.includes(binding)),
+      EARLIER_DEFAULTS,
+    );
+    assert.strictEqual(resolveIn(merged, "mod+b", inCode), "code.goToDeclaration");
+    assert.strictEqual(resolveIn(merged, "mod+b"), "sidebar.toggle");
+    assert.strictEqual(resolveIn(merged, "f7", { diffFocus: true }), "diff.nextChange");
+    // Extra shortcuts for a command the server already sends come only from its own config.
+    assert.strictEqual(resolveIn(merged, "mod+shift+o", { codeFocus: true }), "chat.new");
+  });
+
+  it("keeps a rule the user wrote above every default it adds", () => {
+    const merged = mergeWithDefaultKeybindings([...EARLIER_DEFAULTS, ...userRules]);
+
+    for (const context of [{}, inCode]) {
+      assert.strictEqual(resolveIn(merged, "mod+b", context), "chat.newLocal");
+      assert.strictEqual(resolveIn(merged, "mod+shift+b", context), "thread.pin");
+    }
+  });
+
+  // The placement rule, one layout of a shortcut's rules per row. A missing default goes right
+  // after the earlier defaults on its shortcut. A rule the user wrote above all of those ranks
+  // below them already and does not count; one among or after them still out-ranks the default.
+  const rules = Object.fromEntries(
+    Object.entries({
+      jump: { key: "mod+1", command: "thread.jump.1", when: "!modelPickerOpen && isDesktop" },
+      picker: { key: "mod+1", command: "modelPicker.jump.1", when: "modelPickerOpen && isDesktop" },
+      olderJump: { key: "mod+1", command: "thread.jump.1" },
+      pane: DEFAULT_KEYBINDINGS.find(({ command }) => command === "projectPane.toggle")!,
+      sidebar: { key: "mod+b", command: "sidebar.toggle" },
+      declaration: DEFAULT_KEYBINDINGS.find(({ command }) => command === "code.goToDeclaration")!,
+      user: { key: "mod+1", command: "chat.newLocal" },
+      userCtrl: { key: "ctrl+1", command: "thread.pin" },
+      userOnB: { key: "mod+b", command: "chat.newLocal" },
+      userMetaB: { key: "meta+b", command: "thread.pin" },
+      backAlt: DEFAULT_KEYBINDINGS.find(({ key }) => key === "mod+alt+arrowleft")!,
+      back: DEFAULT_KEYBINDINGS.find(({ key }) => key === "mod+[")!,
+      userOnBracket: { key: "mod+[", command: "chat.newLocal" },
+    } satisfies Record<string, KeybindingRule>).map(([name, rule]) => [
+      name,
+      compileResolvedKeybindingsConfig([rule])[0]!,
+    ]),
+  );
+  it.each<{ config: string; missing: string; placed: string }>([
+    { config: "", missing: "pane", placed: "pane" },
+    { config: "jump picker", missing: "pane", placed: "jump picker pane" },
+    { config: "jump picker user", missing: "pane", placed: "jump picker pane user" },
+    { config: "user jump picker", missing: "pane", placed: "user jump picker pane" },
+    {
+      config: "userCtrl jump picker user",
+      missing: "pane",
+      placed: "userCtrl jump picker pane user",
+    },
+    { config: "jump user picker", missing: "pane", placed: "jump pane user picker" },
+    { config: "jump userCtrl picker", missing: "pane", placed: "jump pane userCtrl picker" },
+    { config: "olderJump picker", missing: "pane", placed: "olderJump picker pane" },
+    { config: "user", missing: "pane", placed: "pane user" },
+    { config: "sidebar", missing: "declaration", placed: "sidebar declaration" },
+    { config: "userOnB sidebar", missing: "declaration", placed: "userOnB sidebar declaration" },
+    {
+      config: "userMetaB sidebar",
+      missing: "declaration",
+      placed: "userMetaB sidebar declaration",
+    },
+    { config: "sidebar userOnB", missing: "declaration", placed: "sidebar declaration userOnB" },
+    // A default the config lacks goes below the later defaults on its shortcut.
+    { config: "declaration", missing: "sidebar", placed: "sidebar declaration" },
+    { config: "userOnB declaration", missing: "sidebar", placed: "sidebar userOnB declaration" },
+    {
+      config: "jump user picker",
+      missing: "sidebar declaration",
+      placed: "sidebar declaration jump user picker",
+    },
+    // It also goes below its own command's earlier defaults, which would otherwise name it.
+    { config: "backAlt", missing: "back", placed: "backAlt back" },
+    { config: "backAlt userOnBracket", missing: "back", placed: "backAlt back userOnBracket" },
+    // Which command a key runs comes before which shortcut names a command.
+    { config: "userOnBracket backAlt", missing: "back", placed: "back userOnBracket backAlt" },
+  ])("places $missing into [$config] as [$placed]", ({ config, missing, placed }) => {
+    const named = (names: string) =>
+      names
+        .split(" ")
+        .filter(Boolean)
+        .map((name) => rules[name]!);
+    assert.deepStrictEqual(
+      insertMissingDefaultKeybindings(named(config), named(missing), (rule) => rule),
+      named(placed),
+    );
+  });
+
+  it("ranks a new default above defaults from earlier builds", () => {
+    using _capabilities = provide(["projectPane"]);
+    const olderSpelling = compileResolvedKeybindingsConfig([
+      { key: "mod+1", command: "thread.jump.1" },
+      { key: "mod+1", command: "modelPicker.jump.1", when: "modelPickerOpen" },
+    ]);
+    const merged = mergeWithDefaultKeybindings([
+      ...EARLIER_DEFAULTS.filter(
+        ({ command }) => command !== "thread.jump.1" && command !== "modelPicker.jump.1",
+      ),
+      ...olderSpelling,
+    ]);
+
+    assert.strictEqual(
+      resolveIn(merged, "mod+1", { isDesktop: true, codeFocus: true }),
+      "projectPane.toggle",
+    );
+    assert.strictEqual(resolveIn(merged, "mod+1", { isDesktop: true }), "thread.jump.1");
+  });
+
+  // Settings' "Reset to default" saves one default back into a config that holds the rest.
+  it("puts every default back where a fresh config has it", () => {
+    const shortcutOf = ({ shortcut }: ResolvedKeybindingsConfig[number]) =>
+      [
+        shortcut.key,
+        shortcut.modKey || shortcut.metaKey || shortcut.ctrlKey,
+        shortcut.shiftKey,
+        shortcut.altKey,
+      ].join("|");
+    for (const [index, rule] of DEFAULT_RESOLVED_KEYBINDINGS.entries()) {
+      const restored = insertMissingDefaultKeybindings(
+        DEFAULT_RESOLVED_KEYBINDINGS.toSpliced(index, 1),
+        [rule],
+        (entry) => entry,
+      );
+      for (const sameGroup of [
+        (entry: ResolvedKeybindingsConfig[number]) => entry.command === rule.command,
+        (entry: ResolvedKeybindingsConfig[number]) => shortcutOf(entry) === shortcutOf(rule),
+      ]) {
+        assert.deepStrictEqual(
+          restored.filter(sameGroup),
+          DEFAULT_RESOLVED_KEYBINDINGS.filter(sameGroup),
+          `${rule.command} on ${shortcutOf(rule)}`,
+        );
+      }
+    }
+  });
+
+  it("puts a default the server lacks below the later defaults on its shortcut", () => {
+    const merged = mergeWithDefaultKeybindings(
+      DEFAULT_RESOLVED_KEYBINDINGS.filter(({ command }) => command !== "sidebar.toggle"),
+    );
+
+    assert.strictEqual(resolveIn(merged, "mod+b", inCode), "code.goToDeclaration");
+    assert.strictEqual(resolveIn(merged, "mod+b"), "sidebar.toggle");
+  });
+
+  it("drops defaults, never a server rule, at the rule cap", () => {
+    const full = [
+      ...EARLIER_DEFAULTS,
+      ...compileResolvedKeybindingsConfig(
+        Array.from({ length: 256 - EARLIER_DEFAULTS.length }, (_, index) => ({
+          key: "mod+alt+f9",
+          command: `script.filler-${index}.run` as const,
+        })),
+      ),
+    ];
+
+    assert.deepStrictEqual(mergeWithDefaultKeybindings(full), full);
+    // With four free slots the first three missing commands fit; the two-shortcut fourth waits
+    // whole, as it does when the server writes its config.
+    const nearlyFull = full.slice(0, -4);
+    const merged = mergeWithDefaultKeybindings(nearlyFull);
+    assert.deepStrictEqual(
+      merged.filter((binding) => nearlyFull.includes(binding)),
+      nearlyFull,
+    );
+    assert.sameMembers(
+      merged.filter((binding) => !nearlyFull.includes(binding)).map(({ command }) => command),
+      ["code.goToDeclaration", "code.goToTypeDeclaration", "code.goToImplementation"],
     );
   });
 });

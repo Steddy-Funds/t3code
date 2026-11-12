@@ -2,6 +2,7 @@ import { assert, describe, expect, it } from "vite-plus/test";
 import type { ResolvedKeybindingsConfig } from "@t3tools/contracts";
 import {
   compileResolvedKeybindingsConfig,
+  DEFAULT_RESOLVED_KEYBINDINGS,
   parseKeybindingShortcut,
 } from "@t3tools/shared/keybindings";
 
@@ -10,6 +11,7 @@ import { resolveShortcutCommand } from "../../keybindings";
 import {
   buildKeybindingRows,
   buildWhenVariableOptions,
+  groupKeybindingRows,
   keybindingConflictLabels,
   keybindingFromKeyboardEvent,
   parseWhenExpressionDraft,
@@ -305,5 +307,47 @@ describe("KeybindingsSettings.logic", () => {
     );
 
     expect(rows.map((row) => row.conflicts)).toEqual([[], []]);
+  });
+
+  it("reports no conflict between untouched defaults, only against rules the user wrote", () => {
+    const defaults = buildKeybindingRows(DEFAULT_RESOLVED_KEYBINDINGS, "MacIntel");
+    expect(defaults.filter((row) => row.conflicts.length > 0)).toEqual([]);
+
+    const rows = buildKeybindingRows(
+      [
+        ...DEFAULT_RESOLVED_KEYBINDINGS,
+        ...compileResolvedKeybindingsConfig([{ command: "chat.newLocal", key: "mod+b" }]),
+      ],
+      "MacIntel",
+    );
+    const conflictsOf = (command: string, key: string) =>
+      rows.find((row) => row.command === command && row.key === key)?.conflicts;
+    expect(conflictsOf("sidebar.toggle", "mod+b")).toEqual(["Chat: New Local"]);
+    expect(conflictsOf("chat.newLocal", "mod+b")).toEqual([
+      "Code: Go to Declaration or Usages",
+      "Sidebar: Toggle",
+    ]);
+
+    // A default being edited is the user's rule from then on.
+    const sidebar = defaults.find((row) => row.command === "sidebar.toggle");
+    expect(
+      keybindingConflictLabels(
+        defaults,
+        { rowId: sidebar?.id ?? "", key: "mod+j", when: "" },
+        "MacIntel",
+      ),
+    ).toEqual(["Terminal: Toggle"]);
+  });
+
+  it("lists code navigation and the Project pane under Code", () => {
+    const groups = groupKeybindingRows(
+      buildKeybindingRows(DEFAULT_RESOLVED_KEYBINDINGS, "MacIntel"),
+    );
+    const groupOf = (command: string) =>
+      groups.find((group) => group.rows.some((row) => row.command === command))?.title;
+
+    expect(groupOf("code.goToDeclaration")).toBe("Code");
+    expect(groupOf("projectPane.toggle")).toBe("Code");
+    expect(groupOf("diff.nextChange")).toBe("Preview & diff");
   });
 });

@@ -3,6 +3,7 @@ import type { KeybindingCommand } from "@t3tools/contracts";
 import { compileResolvedKeybindingsConfig } from "@t3tools/shared/keybindings";
 import { resolveShortcutCommand } from "./keybindings";
 import * as editableFocus from "./lib/editableFocus";
+import * as focusScopes from "./lib/focusScopes";
 
 function setupFocus() {
   const editor = new EventTarget();
@@ -11,11 +12,17 @@ function setupFocus() {
   const focus = vi
     .spyOn(editableFocus, "isEditableFocused")
     .mockImplementation((target) => target === editor);
+  // The editor stands for a code pane: the one place a focus scope holds.
+  const scopes = vi.spyOn(focusScopes, "readFocusScopes").mockImplementation((target) => ({
+    ...focusScopes.NO_FOCUS_SCOPES,
+    codeFocus: target === editor,
+  }));
   return {
     editor,
     other,
     [Symbol.dispose]() {
       focus.mockRestore();
+      scopes.mockRestore();
       vi.unstubAllGlobals();
     },
   };
@@ -94,6 +101,58 @@ describe("editable shortcut conditions", () => {
     expect(
       resolveShortcutCommand(keydown(focus.editor), bindings("commandPalette.toggle", "true"), {
         platform: "Linux",
+      }),
+    ).toBe("commandPalette.toggle");
+  });
+});
+
+describe("focus scope conditions", () => {
+  it("reads the scope from the key's target, whatever context the listener built", () => {
+    using focus = setupFocus();
+    const rules = bindings("commandPalette.toggle", "codeFocus");
+    for (const options of [
+      { platform: "Linux" },
+      { platform: "Linux", context: { terminalFocus: false, editableFocus: true } },
+    ]) {
+      expect(resolveShortcutCommand(keydown(focus.editor), rules, options)).toBe(
+        "commandPalette.toggle",
+      );
+      expect(resolveShortcutCommand(keydown(focus.other), rules, options)).toBeNull();
+    }
+    expect(resolveShortcutCommand(keydown(), rules, { platform: "Linux" })).toBe(
+      "commandPalette.toggle",
+    );
+  });
+
+  it("gives every listener of one key press the same scope, though focus moved between them", () => {
+    using focus = setupFocus();
+    const rules = bindings("commandPalette.toggle", "codeFocus");
+    const pressed = keydown(focus.editor);
+    expect(resolveShortcutCommand(pressed, rules, { platform: "Linux" })).toBe(
+      "commandPalette.toggle",
+    );
+
+    // An earlier listener's handler moved focus out of the code before the next one resolved.
+    vi.mocked(focusScopes.readFocusScopes).mockReturnValue(focusScopes.NO_FOCUS_SCOPES);
+    expect(resolveShortcutCommand(pressed, rules, { platform: "Linux" })).toBe(
+      "commandPalette.toggle",
+    );
+    expect(resolveShortcutCommand(keydown(focus.editor), rules, { platform: "Linux" })).toBeNull();
+  });
+
+  it("preserves a scope the listener sets itself", () => {
+    using focus = setupFocus();
+    const rules = bindings("commandPalette.toggle", "codeFocus");
+    expect(
+      resolveShortcutCommand(keydown(focus.editor), rules, {
+        platform: "Linux",
+        context: { codeFocus: false },
+      }),
+    ).toBeNull();
+    expect(
+      resolveShortcutCommand(keydown(focus.other), rules, {
+        platform: "Linux",
+        context: { codeFocus: true },
       }),
     ).toBe("commandPalette.toggle");
   });

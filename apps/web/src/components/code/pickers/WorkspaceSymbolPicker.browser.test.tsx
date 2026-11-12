@@ -144,4 +144,34 @@ describe("Go to class", () => {
     expect(setOpen).toHaveBeenCalledWith(false);
     expect(mocks.navigateToCodeLocation).toHaveBeenCalledWith(threadRef, invoice.location);
   });
+
+  it("narrows the last answer to the new query while it runs, so Enter opens a match", async () => {
+    setup();
+    await using _screen = await render(
+      <CommandDialog open>
+        <CommandDialogPopup aria-label="Command palette">
+          <WorkspaceSymbolPicker scope="classes" escapeLabel="Back" setOpen={vi.fn()} />
+        </CommandDialogPopup>
+      </CommandDialog>,
+    );
+    using _timers = fakeTimers();
+    const input = page.getByPlaceholder("Search classes…");
+    await userEvent.type(input, "Inv");
+    await act(() => vi.advanceTimersByTimeAsync(150));
+    await vi.waitFor(() => expect(page.getByRole("option").elements()).toHaveLength(3));
+
+    // Still within the debounce: the answer on screen is the one for "Inv".
+    await userEvent.type(input, "oiceL");
+    await vi.waitFor(() =>
+      expect(
+        page
+          .getByRole("option")
+          .elements()
+          .map((option) => option.textContent),
+      ).toEqual([expect.stringContaining("billing/models.py:53")]),
+    );
+    await userEvent.keyboard("{Enter}");
+
+    expect(mocks.navigateToCodeLocation).toHaveBeenCalledWith(threadRef, invoiceLine.location);
+  });
 });

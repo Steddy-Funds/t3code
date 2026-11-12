@@ -439,7 +439,6 @@ it.effect.each([
     request: fileContentsRequest("src/a.ts"),
     expected: { oldContents: "old\n", newContents: "new\n" },
     reads: ["from:src/a.ts", "to:src/a.ts"],
-    filePaths: ["src/a.ts"],
   },
   {
     name: "a renamed file",
@@ -449,7 +448,6 @@ it.effect.each([
     request: fileContentsRequest("src/b.ts", "src/a.ts"),
     expected: { oldContents: "old\n", newContents: "new\n" },
     reads: ["from:src/a.ts", "to:src/b.ts"],
-    filePaths: ["src/a.ts", "src/b.ts"],
   },
   {
     name: "an added file",
@@ -459,7 +457,6 @@ it.effect.each([
     request: fileContentsRequest("src/a.ts"),
     expected: { oldContents: "", newContents: "new\n" },
     reads: ["from:src/a.ts", "to:src/a.ts"],
-    filePaths: ["src/a.ts"],
   },
   {
     name: "a deleted file",
@@ -469,7 +466,6 @@ it.effect.each([
     request: fileContentsRequest("src/a.ts"),
     expected: { oldContents: "old\n", newContents: "" },
     reads: ["from:src/a.ts", "to:src/a.ts"],
-    filePaths: ["src/a.ts"],
   },
 ])("reads both sides of $name from the range's refs", (row) => {
   const fixture = fileContentsFixture({ numstat: numstatOf(...row.files), ...row });
@@ -495,7 +491,8 @@ it.effect.each([
         cwd: "/repo",
         to: secondRef,
         format: "numstat",
-        filePaths: row.filePaths,
+        // The whole range, never a path-limited listing.
+        filePaths: undefined,
         ignoreWhitespace: false,
         fallbackFromToHead: false,
       },
@@ -819,6 +816,10 @@ it.effect("reads whole files of a real turn range from its checkpoints", () =>
     yield* write("old name.txt", `${renameBody}before\n`);
     yield* write("binary.bin", "\0before");
     yield* write("big.txt", "small\n");
+    // Two near-twins renamed apart: a path-limited diff would pair them the other way.
+    const twinBody = Array.from({ length: 12 }, (_, index) => `twin line ${index}\n`).join("");
+    yield* write("twin a.txt", `${twinBody}a\n`);
+    yield* write("twin c.txt", `${twinBody}c\n`);
     yield* store.captureCheckpoint({ cwd, checkpointRef: fromCheckpointRef });
 
     // The old commit models a file a pull brought in after the baseline was captured.
@@ -836,6 +837,8 @@ it.effect("reads whole files of a real turn range from its checkpoints", () =>
     yield* write("moved/new name.txt", `${renameBody}after\n`);
     yield* write("binary.bin", "\0after");
     yield* write("big.txt", "y".repeat(1_048_577));
+    yield* fs.rename(path.join(cwd, "twin a.txt"), path.join(cwd, "twin b.txt"));
+    yield* fs.rename(path.join(cwd, "twin c.txt"), path.join(cwd, "twin d.txt"));
     yield* store.captureCheckpoint({ cwd, checkpointRef: toCheckpointRef });
     // The checkpoint's text must come back, not the file as it is now.
     yield* write("changed.txt", "WORKING TREE\n");
@@ -882,6 +885,10 @@ it.effect("reads whole files of a real turn range from its checkpoints", () =>
       oldContents: "a b\n",
       newContents: "a  b\n",
     });
+    assert.deepEqual(yield* read("twin d.txt", "twin c.txt"), {
+      oldContents: `${twinBody}c\n`,
+      newContents: `${twinBody}c\n`,
+    });
     assert.deepEqual(yield* read("moved/new name.txt", "old name.txt"), {
       oldContents: `${renameBody}before\n`,
       newContents: `${renameBody}after\n`,
@@ -894,6 +901,8 @@ it.effect("reads whole files of a real turn range from its checkpoints", () =>
       wrongSource: yield* read("moved/new name.txt", "changed.txt").pipe(Effect.flip),
       missingSource: yield* read("moved/new name.txt", "nothing.txt").pipe(Effect.flip),
       notRenamed: yield* read("changed.txt", "old name.txt").pipe(Effect.flip),
+      otherTwin: yield* read("twin b.txt", "twin c.txt").pipe(Effect.flip),
+      renameSourceAlone: yield* read("twin c.txt").pipe(Effect.flip),
       binary: yield* read("binary.bin").pipe(Effect.flip),
       big: yield* read("big.txt").pipe(Effect.flip),
     };
@@ -909,6 +918,8 @@ it.effect("reads whole files of a real turn range from its checkpoints", () =>
         ["wrongSource", "not_in_diff"],
         ["missingSource", "not_in_diff"],
         ["notRenamed", "not_in_diff"],
+        ["otherTwin", "not_in_diff"],
+        ["renameSourceAlone", "not_in_diff"],
         ["binary", "binary"],
         ["big", "too_large"],
       ],

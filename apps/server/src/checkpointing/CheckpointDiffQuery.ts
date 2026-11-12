@@ -356,13 +356,9 @@ export const make = Effect.gen(function* () {
       const [authoredPaths, files] = yield* Effect.all(
         [
           checkpointStore.listAuthoredPaths(comparison).pipe(Effect.orElseSucceed(() => null)),
+          // The whole range: a path-limited diff lets git pair renames differently.
           checkpointStore
-            .diffCheckpoints({
-              ...comparison,
-              format: "numstat",
-              filePaths:
-                input.previousPath === undefined ? [input.path] : [input.previousPath, input.path],
-            })
+            .diffCheckpoints({ ...comparison, format: "numstat" })
             .pipe(Effect.map(parseTurnDiffFilesFromNumstat)),
         ],
         { concurrency: 2 },

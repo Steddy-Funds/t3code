@@ -241,14 +241,27 @@ describe("sbsCommentLines", () => {
     {
       name: "a range across sides ending on additions",
       selection: { start: 3, side: "deletions" as const, end: 12, endSide: "additions" as const },
-      diff: "@@ -3,4 +10,5 @@\n x",
-      lines: { side: "additions", startLine: 10, endLine: 14 },
+      diff: "@@ -3,4 +10,3 @@\n x",
+      lines: { side: "additions", startLine: 10, endLine: 12 },
     },
     {
       name: "a range across sides ending on deletions",
       selection: { start: 12, side: "additions" as const, end: 4, endSide: "deletions" as const },
-      diff: "@@ -3,4 +10,5 @@\n x",
-      lines: { side: "deletions", startLine: 3, endLine: 6 },
+      diff: "@@ -3,2 +12,3 @@\n x",
+      lines: { side: "deletions", startLine: 3, endLine: 4 },
+    },
+    // The stacked view skips the lines between hunks, so a count from the header's start overruns.
+    {
+      name: "a range across sides and hunks, dragged down",
+      selection: { start: 21, side: "deletions" as const, end: 81, endSide: "additions" as const },
+      diff: "@@ -21,4 +22,6 @@\n x",
+      lines: { side: "additions", startLine: 22, endLine: 81 },
+    },
+    {
+      name: "a range across sides and hunks, dragged up",
+      selection: { start: 81, side: "additions" as const, end: 21, endSide: "deletions" as const },
+      diff: "@@ -21,4 +22,6 @@\n x",
+      lines: { side: "additions", startLine: 22, endLine: 81 },
     },
     {
       name: "no selection, preferring additions",

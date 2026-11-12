@@ -148,6 +148,12 @@ type PanelProps = Partial<SbsReviewPanelProps> & { readonly files: ReadonlyArray
  */
 function Harness({ noteReveal = null, onNoteRevealed, onNoteUnplaced, ...rest }: PanelProps) {
   const [reveal, setReveal] = useState(noteReveal);
+  // A new request in a rerender is a new step, as DiffPanel sets one.
+  const [asked, setAsked] = useState(noteReveal);
+  if (noteReveal !== asked) {
+    setAsked(noteReveal);
+    setReveal(noteReveal);
+  }
   return (
     <SbsReviewPanel
       selectedFileKey={null}
@@ -1173,6 +1179,60 @@ describe("showing a note that was asked for", () => {
     expect(onNoteUnplaced).not.toHaveBeenCalled();
     expect(cardOf(screen)).toBeNull();
     expect(markersOf(screen)).toEqual([]);
+  });
+
+  it("puts an open box's words in the draft, then opens a note asked for in its file", async () => {
+    using _drafts = setup();
+    const note = noteOf(1, 30);
+    const onNoteRevealed = vi.fn();
+    const props = { files: [A], reviewNotes: notesOf([exact(note)]), onNoteRevealed };
+    await using screen = await mount(props);
+    await vi.waitFor(() => expect(markersOf(screen)).toEqual([note.id]));
+    await openBox(screen, "additions", 12, 12, "Typed before the step");
+
+    await screen.rerender(<Harness {...props} noteReveal={{ noteId: note.id }} />);
+
+    await vi.waitFor(() => expect(cardOf(screen)?.dataset.sbsAnnotationCard).toBe(note.id));
+    expect(cardText(screen)).toContain("Flagged note number 1.");
+    expect(saved()).toHaveLength(1);
+    expect(saved()[0]).toMatchObject({
+      filePath: "a.ts",
+      text: "Typed before the step",
+      selection: SELECTION_OF(12, "additions", 12),
+    });
+    expect(onNoteRevealed).toHaveBeenCalledOnce();
+  });
+
+  it("keeps a reply open for its own note, and puts it in the draft for another", async () => {
+    using _drafts = setup();
+    const first = noteOf(1, 12);
+    const second = noteOf(2, 30);
+    const onNoteRevealed = vi.fn();
+    const props = {
+      files: [A],
+      reviewNotes: notesOf([exact(first), exact(second)]),
+      onNoteRevealed,
+    };
+    await using screen = await mount(props);
+    await vi.waitFor(() => expect(markersOf(screen)).toEqual([first.id, second.id]));
+    await userEvent.click(markerOf(screen, first.id));
+    await userEvent.click(screen.getByRole("button", { name: "Reply" }));
+    await userEvent.fill(screen.getByRole("textbox"), "Half written reply");
+
+    await screen.rerender(<Harness {...props} noteReveal={{ noteId: first.id }} />);
+    await vi.waitFor(() => expect(onNoteRevealed).toHaveBeenCalledOnce());
+    await expect.element(screen.getByRole("textbox")).toHaveValue("Half written reply");
+    expect(saved()).toHaveLength(0);
+
+    await screen.rerender(<Harness {...props} noteReveal={{ noteId: second.id }} />);
+
+    await vi.waitFor(() => expect(cardOf(screen)?.dataset.sbsAnnotationCard).toBe(second.id));
+    expect(saved()).toHaveLength(1);
+    expect(saved()[0]).toMatchObject({
+      sectionId: reviewNoteSectionId(first.id),
+      text: "Half written reply",
+    });
+    expect(onNoteRevealed).toHaveBeenCalledTimes(2);
   });
 });
 

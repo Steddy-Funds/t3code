@@ -261,10 +261,6 @@ const requiredScopesForRpcCall = (
   if (method === WS_METHODS.serverRetryResourceTelemetry) {
     return [AuthEnvironmentMaintainScope, AuthDiagnosticsReadScope];
   }
-  // Whole files of a turn's diff: the thread's diff and file contents, so both grants.
-  if (method === ORCHESTRATION_V2_WS_METHODS.getTurnDiffFileContents) {
-    return [AuthOrchestrationReadScope, AuthFilesystemReadScope];
-  }
   if (method === WS_METHODS.assetsCreateUrl) {
     const { resource } = decodeAssetCreateUrlInput(payload);
     return [

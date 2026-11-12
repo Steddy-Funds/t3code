@@ -292,6 +292,11 @@ export default function DiffPanel({
     reportFailure: false,
     reportDefect: false,
   });
+  const canReadWholeTurnFiles = useAtomValue(
+    orchestrationEnvironment.turnDiffFileContents.permissionAtom(
+      activeThread?.environmentId ?? null,
+    ),
+  );
   const gitStatusQuery = useEnvironmentQuery(
     activeThread !== null && activeThread !== undefined && activeCwd != null
       ? vcsEnvironment.status({
@@ -572,10 +577,13 @@ export default function DiffPanel({
     }
     return currentLoadDiffFiles(fileDiff);
   });
-  // Whole files of a turn need the file read grant on top of the thread's own.
   const currentLoadWholeFiles =
     currentLoadDiffFiles ??
-    (selectedTurn && activeThread && activeThreadId && selectedCheckpointRange && canReadFiles
+    (selectedTurn &&
+    activeThread &&
+    activeThreadId &&
+    selectedCheckpointRange &&
+    canReadWholeTurnFiles
       ? createTurnDiffFileContentsLoader(getTurnDiffFileContents, {
           environmentId: activeThread.environmentId,
           threadId: activeThreadId,

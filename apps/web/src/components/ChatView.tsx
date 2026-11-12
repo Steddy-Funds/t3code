@@ -2798,8 +2798,11 @@ export default function ChatView(props: ChatViewProps) {
       "thread.copyReference": ({ event }) => {
         if (!event.repeat) copyActiveThreadReference();
       },
-      "chat.find": () => {
+      "chat.find": ({ event }) => {
         if (!isServerThread || serverConfig?.threadFind !== true || activeThreadKey === null)
+          return false;
+        // The side-by-side diff's find field keeps Mod+F; text fields are outside `diffFocus`.
+        if (event.target instanceof Element && event.target.closest("[data-sbs-find]"))
           return false;
         openThreadFind(activeThreadKey);
       },

@@ -4,7 +4,11 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
 import type { CheckpointStoreError } from "./Errors.ts";
-import type { VcsCheckpointOps } from "../vcs/VcsDriver.ts";
+import type {
+  VcsCheckpointFile,
+  VcsCheckpointOps,
+  VcsReadCheckpointFileInput,
+} from "../vcs/VcsDriver.ts";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
 
 export interface CaptureCheckpointInput {
@@ -68,6 +72,10 @@ export class CheckpointStore extends Context.Service<
       input: ListAuthoredPathsInput,
     ) => Effect.Effect<ReadonlySet<string> | null, CheckpointStoreError>;
 
+    readonly readCheckpointFile: (
+      input: VcsReadCheckpointFileInput,
+    ) => Effect.Effect<VcsCheckpointFile, CheckpointStoreError>;
+
     readonly deleteCheckpointRefs: (
       input: DeleteCheckpointRefsInput,
     ) => Effect.Effect<void, CheckpointStoreError>;
@@ -125,6 +133,13 @@ export const make = Effect.gen(function* () {
     return yield* checkpoints.listAuthoredPaths(input);
   });
 
+  const readCheckpointFile: CheckpointStore["Service"]["readCheckpointFile"] = Effect.fn(
+    "readCheckpointFile",
+  )(function* (input) {
+    const checkpoints = yield* resolveCheckpoints(input.cwd);
+    return yield* checkpoints.readCheckpointFile(input);
+  });
+
   const deleteCheckpointRefs: CheckpointStore["Service"]["deleteCheckpointRefs"] = Effect.fn(
     "deleteCheckpointRefs",
   )(function* (input) {
@@ -139,6 +154,7 @@ export const make = Effect.gen(function* () {
     restoreCheckpoint,
     diffCheckpoints,
     listAuthoredPaths,
+    readCheckpointFile,
     deleteCheckpointRefs,
   });
 });

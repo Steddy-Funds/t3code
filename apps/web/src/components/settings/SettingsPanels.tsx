@@ -139,9 +139,11 @@ const TIMESTAMP_FORMAT_LABELS = {
   "24-hour": "24-hour",
 } as const;
 
-const DIFF_LAYOUT_LABELS: Record<DiffLayout, string> = {
+// Side by side is its own setting, so a build without it still reads the stored layout.
+const DIFF_LAYOUT_LABELS: Record<DiffLayout | "side-by-side", string> = {
   stacked: "Stacked",
   split: "Split",
+  "side-by-side": "Side by side",
 };
 
 const QUIT_CONFIRMATION_MODE_LABELS: Record<QuitConfirmationMode, string> = {
@@ -533,7 +535,10 @@ export function useSettingsRestore(onRestored?: () => void) {
     ...(settings.diffIgnoreWhitespace !== DEFAULT_UNIFIED_SETTINGS.diffIgnoreWhitespace
       ? ["Diff whitespace changes"]
       : []),
-    ...(settings.diffLayout !== DEFAULT_UNIFIED_SETTINGS.diffLayout ? ["Diff layout"] : []),
+    ...(settings.diffLayout !== DEFAULT_UNIFIED_SETTINGS.diffLayout ||
+    settings.diffSideBySide !== DEFAULT_UNIFIED_SETTINGS.diffSideBySide
+      ? ["Diff layout"]
+      : []),
     ...(settings.proactivePanelsEnabled !== DEFAULT_UNIFIED_SETTINGS.proactivePanelsEnabled
       ? ["Open pull requests and changes panels proactively"]
       : []),
@@ -667,6 +672,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       diffFilesCollapsed: DEFAULT_UNIFIED_SETTINGS.diffFilesCollapsed,
       diffIgnoreWhitespace: DEFAULT_UNIFIED_SETTINGS.diffIgnoreWhitespace,
       diffLayout: DEFAULT_UNIFIED_SETTINGS.diffLayout,
+      diffSideBySide: DEFAULT_UNIFIED_SETTINGS.diffSideBySide,
       proactivePanelsEnabled: DEFAULT_UNIFIED_SETTINGS.proactivePanelsEnabled,
       showSkillsInSlashMenu: DEFAULT_UNIFIED_SETTINGS.showSkillsInSlashMenu,
       shortcutQuickReferenceEnabled: DEFAULT_UNIFIED_SETTINGS.shortcutQuickReferenceEnabled,
@@ -1439,26 +1445,40 @@ export function DiffsSettingsPanel() {
       <SettingsSection id="diffs" title="Diffs">
         <SettingsRow
           {...searchableSetting("diff-layout")}
-          description="Show diffs stacked or side by side. The toggle in the diff toolbar changes this too."
+          description="Show diffs stacked, split, or side by side as two whole files. The toggle in the diff toolbar changes this too."
           resetAction={
-            settings.diffLayout !== DEFAULT_UNIFIED_SETTINGS.diffLayout ? (
+            settings.diffLayout !== DEFAULT_UNIFIED_SETTINGS.diffLayout ||
+            settings.diffSideBySide !== DEFAULT_UNIFIED_SETTINGS.diffSideBySide ? (
               <SettingResetButton
                 label="diff layout"
-                onClick={() => updateSettings({ diffLayout: DEFAULT_UNIFIED_SETTINGS.diffLayout })}
+                onClick={() =>
+                  updateSettings({
+                    diffLayout: DEFAULT_UNIFIED_SETTINGS.diffLayout,
+                    diffSideBySide: DEFAULT_UNIFIED_SETTINGS.diffSideBySide,
+                  })
+                }
               />
             ) : null
           }
           control={
             <Select
-              value={settings.diffLayout}
+              value={settings.diffSideBySide ? "side-by-side" : settings.diffLayout}
               onValueChange={(value) => {
                 if (value === "stacked" || value === "split") {
-                  updateSettings({ diffLayout: value });
+                  updateSettings({ diffLayout: value, diffSideBySide: false });
+                } else if (value === "side-by-side") {
+                  updateSettings({ diffSideBySide: true });
                 }
               }}
             >
               <SelectTrigger size="sm" className="w-full sm:w-40" aria-label="Diff layout">
-                <SelectValue>{DIFF_LAYOUT_LABELS[settings.diffLayout]}</SelectValue>
+                <SelectValue>
+                  {
+                    DIFF_LAYOUT_LABELS[
+                      settings.diffSideBySide ? "side-by-side" : settings.diffLayout
+                    ]
+                  }
+                </SelectValue>
               </SelectTrigger>
               <SelectPopup align="end" alignItemWithTrigger={false}>
                 <SelectItem hideIndicator value="stacked">
@@ -1466,6 +1486,9 @@ export function DiffsSettingsPanel() {
                 </SelectItem>
                 <SelectItem hideIndicator value="split">
                   {DIFF_LAYOUT_LABELS.split}
+                </SelectItem>
+                <SelectItem hideIndicator value="side-by-side">
+                  {DIFF_LAYOUT_LABELS["side-by-side"]}
                 </SelectItem>
               </SelectPopup>
             </Select>

@@ -463,6 +463,38 @@ describe("ClientSettings quit confirmation", () => {
   });
 });
 
+describe("ClientSettings side-by-side diff", () => {
+  it("is off unless settings or a patch say otherwise", () => {
+    expect(decodeClientSettings({}).diffSideBySide).toBe(false);
+    expect(decodeClientSettings({ diffSideBySide: true }).diffSideBySide).toBe(true);
+    expect(decodeClientSettingsPatch({})).not.toHaveProperty("diffSideBySide");
+    expect(decodeClientSettingsPatch({ diffSideBySide: true })).toEqual({ diffSideBySide: true });
+    expect(() => decodeClientSettingsPatch({ diffSideBySide: "yes" })).toThrow();
+  });
+
+  it.each([
+    { value: "stacked", valid: true },
+    { value: "split", valid: true },
+    { value: "sideBySide", valid: false },
+    { value: "side-by-side", valid: false },
+  ])("decodes diffLayout $value: $valid", ({ value, valid }) => {
+    if (valid) {
+      expect(decodeClientSettings({ diffLayout: value }).diffLayout).toBe(value);
+      expect(decodeClientSettingsPatch({ diffLayout: value })).toEqual({ diffLayout: value });
+    } else {
+      expect(() => decodeClientSettings({ diffLayout: value })).toThrow();
+      expect(() => decodeClientSettingsPatch({ diffLayout: value })).toThrow();
+    }
+  });
+
+  it("writes only diffLayout values an older build decodes", () => {
+    const written = encodeClientSettings(decodeClientSettings({ diffSideBySide: true }));
+    expect(["stacked", "split"]).toContain(written.diffLayout);
+    expect(written.diffSideBySide).toBe(true);
+    expect(encodeClientSettings(decodeClientSettings({})).diffLayout).toBe("stacked");
+  });
+});
+
 describe("provider enabled defaults", () => {
   it("resolves instance enabled state with explicit false winning", () => {
     const grok = ProviderDriverKind.make("grok");

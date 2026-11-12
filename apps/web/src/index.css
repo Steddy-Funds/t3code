@@ -2442,6 +2442,277 @@ code {
   --diff-deletion-foreground: light-dark(var(--color-red-700), var(--color-red-400));
 }
 
+/* Side-by-side diff. Every theme gets this colour for a changed line; a theme with editor
+   colours replaces the block colours below on the view itself. */
+:root {
+  --diff-modified: light-dark(var(--color-blue-600), var(--color-blue-400));
+}
+
+/* That scheme's additions are already blue. */
+:root[data-diff-color-scheme="blue-orange"] {
+  --diff-modified: light-dark(var(--color-violet-600), var(--color-violet-400));
+}
+
+/* Declared here, not on :root, so they mix over the background this view paints on. */
+.sbs-diff {
+  --diff-block-inserted: color-mix(in srgb, var(--diff-addition) 20%, var(--code-background));
+  --diff-block-deleted: color-mix(in srgb, var(--diff-deletion) 20%, var(--code-background));
+  --diff-block-modified: color-mix(in srgb, var(--diff-modified) 24%, var(--code-background));
+  /* A modified block whose changed words carry the colour, as JetBrains derives it:
+     40% of the block colour over 60% of the editor background. */
+  --diff-block-modified-muted: color-mix(
+    in srgb,
+    var(--diff-block-modified) 40%,
+    var(--code-background)
+  );
+  --diff-fold-wave: color-mix(in srgb, var(--code-foreground) 32%, transparent);
+  --sbs-gutter-width: calc(var(--sbs-gutter-digits, 3) * 1ch + 1.75rem);
+  background: var(--code-background);
+  color: var(--code-foreground);
+  font-family: var(--font-mono);
+  font-variant-ligatures: none;
+  tab-size: 4;
+}
+
+/* Rows are swapped under the viewport as it scrolls; anchoring to one would move the pane. */
+.sbs-scroller {
+  overflow-anchor: none;
+}
+
+.sbs-sheet {
+  position: relative;
+  min-width: max(100%, calc(var(--sbs-content-columns, 0) * 1ch + var(--sbs-gutter-width) + 2rem));
+}
+
+.sbs-window {
+  position: relative;
+  min-width: max-content;
+}
+
+.sbs-row {
+  --sbs-row-bg: var(--code-background);
+  display: flex;
+  width: 100%;
+  height: var(--sbs-line-height);
+  line-height: var(--sbs-line-height);
+  background: var(--sbs-row-bg);
+}
+
+.sbs-row[data-tint="inserted"] {
+  --sbs-row-bg: var(--diff-block-inserted);
+}
+
+.sbs-row[data-tint="deleted"] {
+  --sbs-row-bg: var(--diff-block-deleted);
+}
+
+.sbs-row[data-tint="modified"] {
+  --sbs-row-bg: var(--diff-block-modified);
+}
+
+.sbs-row[data-tint="modified-muted"] {
+  --sbs-row-bg: var(--diff-block-modified-muted);
+}
+
+.sbs-row[data-selected],
+[data-sbs-all-selected] .sbs-row {
+  background: color-mix(in srgb, var(--primary) 16%, var(--sbs-row-bg));
+}
+
+/* Where the other side's lines belong on a side that has none: a line, not a row. */
+.sbs-row[data-insert-above="inserted"] {
+  box-shadow: inset 0 2px 0 var(--diff-addition);
+}
+
+.sbs-row[data-insert-above="deleted"] {
+  box-shadow: inset 0 2px 0 var(--diff-deletion);
+}
+
+.sbs-row[data-insert-below="inserted"] {
+  box-shadow: inset 0 -2px 0 var(--diff-addition);
+}
+
+.sbs-row[data-insert-below="deleted"] {
+  box-shadow: inset 0 -2px 0 var(--diff-deletion);
+}
+
+.sbs-gutter {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  flex: none;
+  width: var(--sbs-gutter-width);
+  padding-inline: 0.75rem 0.5rem;
+  background: inherit;
+  color: var(--sbs-line-number, color-mix(in srgb, var(--code-foreground) 45%, transparent));
+  text-align: right;
+  cursor: default;
+  user-select: none;
+}
+
+.sbs-gutter[data-annotated] {
+  box-shadow: inset 3px 0 0 color-mix(in srgb, var(--primary) 55%, transparent);
+}
+
+.sbs-gutter[data-annotation-open] {
+  box-shadow: inset 3px 0 0 var(--primary);
+}
+
+.sbs-annotation-marker {
+  position: absolute;
+  inset-block: 0;
+  left: 3px;
+  width: 0.75rem;
+  cursor: pointer;
+}
+
+.sbs-annotation-marker::before {
+  position: absolute;
+  top: 50%;
+  left: 3px;
+  width: 6px;
+  height: 6px;
+  border-radius: 9999px;
+  background: var(--primary);
+  content: "";
+  transform: translateY(-50%);
+}
+
+.sbs-code {
+  flex: 1 0 auto;
+  padding-right: 2rem;
+  white-space: pre;
+}
+
+.sbs-word {
+  border-radius: 2px;
+  background: var(--diff-block-modified);
+}
+
+/* The thread find's colours, or the editor theme's own. */
+.sbs-match {
+  background: var(
+    --sbs-find-match,
+    var(--app-theme-search-match-background, light-dark(oklch(0.915 0.11 85), oklch(0.55 0.1 85)))
+  );
+  color: var(
+    --sbs-find-foreground,
+    var(
+      --app-theme-search-match-foreground,
+      light-dark(oklch(0.216164 0.028283 77.423), oklch(0.970151 0 0))
+    )
+  );
+}
+
+.sbs-match-current {
+  background: var(
+    --sbs-find-current,
+    var(--app-theme-search-match-active-background, oklch(0.774202 0.151946 74.331))
+  );
+  color: var(
+    --sbs-find-foreground,
+    var(--app-theme-search-match-active-foreground, oklch(0.216164 0.028283 77.423))
+  );
+}
+
+/* A collapsed run of unchanged lines: JetBrains' wave, drawn through a mask so it takes a colour. */
+.sbs-fold,
+.sbs-omitted {
+  position: relative;
+  cursor: default;
+}
+
+.sbs-fold::before,
+.sbs-omitted::before {
+  position: absolute;
+  inset: 0;
+  background: var(--diff-fold-wave);
+  content: "";
+  mask: url("data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 width=%2712%27 height=%276%27 viewBox=%270 0 12 6%27%3E%3Cpath d=%27M0 3Q3 0 6 3T12 3%27 fill=%27none%27 stroke=%27%23000%27 stroke-width=%271%27/%3E%3C/svg%3E")
+    repeat-x left center / 12px 6px;
+}
+
+.sbs-fold {
+  cursor: pointer;
+}
+
+.sbs-fold:is(:hover, :focus-visible)::before {
+  background: color-mix(in srgb, var(--code-foreground) 70%, transparent);
+}
+
+.sbs-omitted::before {
+  opacity: 0.6;
+}
+
+.sbs-omitted-label {
+  position: sticky;
+  left: calc(var(--sbs-gutter-width) + 0.5rem);
+  z-index: 1;
+  align-self: center;
+  padding-inline: 0.5rem;
+  background: var(--code-background);
+  color: var(--muted-foreground);
+  font-family: var(--font-sans);
+  font-size: 11px;
+  line-height: 1;
+  user-select: none;
+}
+
+.sbs-divider {
+  background: var(--code-background);
+}
+
+.sbs-connector {
+  stroke-width: 1px;
+}
+
+.sbs-connector[data-kind="inserted"] {
+  fill: var(--diff-block-inserted);
+  stroke: var(--diff-block-inserted);
+}
+
+.sbs-connector[data-kind="deleted"] {
+  fill: var(--diff-block-deleted);
+  stroke: var(--diff-block-deleted);
+}
+
+.sbs-connector[data-kind="modified"] {
+  fill: var(--diff-block-modified);
+  stroke: var(--diff-block-modified);
+}
+
+.sbs-fold-link {
+  cursor: pointer;
+}
+
+.sbs-fold-link-hit {
+  fill: none;
+  stroke: transparent;
+  stroke-width: 12px;
+}
+
+.sbs-fold-link-line {
+  fill: none;
+  stroke: var(--diff-fold-wave);
+  stroke-width: 1px;
+}
+
+.sbs-fold-link:hover .sbs-fold-link-line {
+  stroke: color-mix(in srgb, var(--code-foreground) 70%, transparent);
+}
+
+.sbs-scroll-marks rect[data-kind="inserted"] {
+  fill: var(--diff-addition);
+}
+
+.sbs-scroll-marks rect[data-kind="deleted"] {
+  fill: var(--diff-deletion);
+}
+
+.sbs-scroll-marks rect[data-kind="modified"] {
+  fill: var(--diff-modified);
+}
+
 /* Chat width setting. Comfortable keeps the default --chat-content-max-width,
    which sizes the timeline lane, the composer, and ChatCanvas's width probe. */
 :root[data-chat-width="wide"] {

@@ -12,6 +12,8 @@ import { resolvePathLinkTarget } from "@t3tools/shared/fileLinks";
 interface OpenDiffFilePrimaryActionInput {
   readonly threadRef: ScopedThreadRef | null;
   readonly filePath: string;
+  /** The line to open the file at, 1-based. */
+  readonly line?: number | undefined;
   readonly activeCwd: string | undefined;
   readonly repositoryRoot?: string | undefined;
   readonly openInEditor: (targetPath: string) => void;
@@ -113,6 +115,7 @@ export function diffPathForWorkspaceFile(input: {
 export function openDiffFilePrimaryAction({
   threadRef,
   filePath,
+  line,
   activeCwd,
   repositoryRoot,
   openInEditor,
@@ -125,7 +128,7 @@ export function openDiffFilePrimaryAction({
   if (!workspaceFilePath) return;
 
   if (threadRef) {
-    useRightPanelStore.getState().openFile(threadRef, workspaceFilePath);
+    useRightPanelStore.getState().openFile(threadRef, workspaceFilePath, line);
     return;
   }
 

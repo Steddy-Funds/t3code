@@ -540,6 +540,10 @@ export function useSettingsRestore(onRestored?: () => void) {
     ...(settings.showSkillsInSlashMenu !== DEFAULT_UNIFIED_SETTINGS.showSkillsInSlashMenu
       ? ["Show skills in slash menu"]
       : []),
+    ...(settings.shortcutQuickReferenceEnabled !==
+    DEFAULT_UNIFIED_SETTINGS.shortcutQuickReferenceEnabled
+      ? ["Shortcut quick reference"]
+      : []),
     ...(settings.composerRichTextEnabled !== DEFAULT_UNIFIED_SETTINGS.composerRichTextEnabled
       ? ["Rich text composer"]
       : []),
@@ -665,6 +669,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       diffLayout: DEFAULT_UNIFIED_SETTINGS.diffLayout,
       proactivePanelsEnabled: DEFAULT_UNIFIED_SETTINGS.proactivePanelsEnabled,
       showSkillsInSlashMenu: DEFAULT_UNIFIED_SETTINGS.showSkillsInSlashMenu,
+      shortcutQuickReferenceEnabled: DEFAULT_UNIFIED_SETTINGS.shortcutQuickReferenceEnabled,
       composerRichTextEnabled: DEFAULT_UNIFIED_SETTINGS.composerRichTextEnabled,
       sendShortcut: DEFAULT_UNIFIED_SETTINGS.sendShortcut,
       swipeReplyTarget: DEFAULT_UNIFIED_SETTINGS.swipeReplyTarget,

@@ -522,6 +522,9 @@ export const ClientSettingsSchema = Schema.Struct({
   swipeReplyTarget: SwipeReplyTarget.pipe(Schema.withDecodingDefault(Effect.succeed("section"))),
   proactivePanelsEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   showSkillsInSlashMenu: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  shortcutQuickReferenceEnabled: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(true)),
+  ),
   boringSidebarEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   boringSidebarMultilineRows: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(false)),
@@ -2087,6 +2090,7 @@ export const ClientSettingsPatch = Schema.Struct({
   swipeReplyTarget: Schema.optionalKey(SwipeReplyTarget),
   proactivePanelsEnabled: Schema.optionalKey(Schema.Boolean),
   showSkillsInSlashMenu: Schema.optionalKey(Schema.Boolean),
+  shortcutQuickReferenceEnabled: Schema.optionalKey(Schema.Boolean),
   boringSidebarEnabled: Schema.optionalKey(Schema.Boolean),
   boringSidebarMultilineRows: Schema.optionalKey(Schema.Boolean),
   gambaModeEnabled: Schema.optionalKey(Schema.Boolean),

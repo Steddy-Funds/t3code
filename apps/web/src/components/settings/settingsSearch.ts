@@ -166,6 +166,9 @@ export function keybindingSearchAnchorId<Command extends KeybindingCommand>(comm
   return `keybinding-${command}` as const;
 }
 
+const SHORTCUT_MODIFIER_NAME =
+  typeof navigator !== "undefined" && isMacPlatform(navigator.platform) ? "Cmd" : "Ctrl";
+
 const KEYBINDING_SEARCH_ITEMS = STATIC_KEYBINDING_COMMANDS.toSorted((left, right) =>
   commandLabel(left).localeCompare(commandLabel(right)),
 ).map((command) => {
@@ -933,6 +936,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     title: "Keybindings",
     to: "/settings/keybindings",
     searchTerms: ["keyboard shortcuts hotkeys commands bindings json"],
+  },
+  {
+    id: "shortcut-quick-reference",
+    title: `Show shortcuts while ${SHORTCUT_MODIFIER_NAME} is held`,
+    to: "/settings/keybindings",
+    searchTerms: ["quick reference cheat sheet hold command control overlay hints"],
   },
   ...KEYBINDING_SEARCH_ITEMS,
   {

@@ -2112,26 +2112,31 @@ describe("annotations", () => {
       expect(card.getBoundingClientRect().width).toBeCloseTo(30 * remPx(), 0);
     });
 
-    // Its own gutter stays free, so a Shift+click there can still extend the picked lines.
-    it.each([400, 1000])(
-      "narrows to stay inside a %ipx body, clear of the right pane's gutter",
-      async (width) => {
+    // Its own gutter stays free, so a Shift+click there can still extend the picked lines, and the
+    // old pane's card leaves the new pane's gutter and markers in sight.
+    it.each([
+      { width: 400, side: "additions" as const, annotation: near },
+      { width: 1000, side: "additions" as const, annotation: near },
+      { width: 1000, side: "deletions" as const, annotation: onOld },
+    ])(
+      "narrows to stay inside its $side pane of a $width px body, clear of the gutters",
+      async ({ width, side, annotation }) => {
         await using screen = await mount(
           {
             fileDiff: threeChanges(),
-            annotations: [near],
-            openAnnotationId: "near",
+            annotations: [annotation],
+            openAnnotationId: annotation.id,
             renderAnnotation,
           },
           { width },
         );
         await vi.waitFor(() => expect(cardOf(screen)).not.toBeNull());
         const card = cardOf(screen)!.getBoundingClientRect();
-        const body = one(screen.container, ".sbs-diff")!.getBoundingClientRect();
-        const gutter = one(scrollerOf(screen, "additions"), ".sbs-gutter")!.getBoundingClientRect();
+        const pane = scrollerOf(screen, side).parentElement!.getBoundingClientRect();
+        const gutter = one(scrollerOf(screen, side), ".sbs-gutter")!.getBoundingClientRect();
 
         expect(card.left).toBeGreaterThanOrEqual(gutter.right);
-        expect(card.right).toBeLessThanOrEqual(body.right - remPx() + 0.5);
+        expect(card.right).toBeLessThanOrEqual(pane.right - remPx() + 0.5);
       },
     );
 

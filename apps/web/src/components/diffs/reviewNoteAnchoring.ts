@@ -83,6 +83,9 @@ function findExcerpt(fileDiff: FileDiffMetadata, note: ReviewNote): number[] {
   return starts;
 }
 
+/** How the viewer shows a file: its patch's hunks, or the whole file around them. */
+export type ReviewNoteShownLines = "hunks" | "whole-file";
+
 /**
  * Where `note` sits in `fileDiff`, the shown diff of its file. Exact when the new side is the file
  * the agent flagged; moved when the flagged lines occur exactly once on the new side. Anything
@@ -92,10 +95,12 @@ export function anchorReviewNote(
   note: ReviewNote,
   fileDiff: FileDiffMetadata,
   diffPath = note.path,
+  shownLines: ReviewNoteShownLines = "hunks",
 ): ReviewNoteAnchor {
   if (fileDiff.type === "deleted" || fileDiff.name !== diffPath) return UNATTACHED;
   if (isRevisionOf(fileDiff.newObjectId, note.contentRevision)) {
-    return showsLines(fileDiff, note.startLine, note.endLine)
+    // The flagged file is the new side, so its lines are all there to show whole.
+    return shownLines === "whole-file" || showsLines(fileDiff, note.startLine, note.endLine)
       ? { kind: "exact", startLine: note.startLine, endLine: note.endLine }
       : UNATTACHED;
   }
@@ -117,16 +122,23 @@ export function cachedReviewNoteAnchor(
   note: ReviewNote,
   fileDiff: FileDiffMetadata,
   diffPath: string,
+  shownLines: ReviewNoteShownLines = "hunks",
 ): ReviewNoteAnchor {
   let byNote = anchorCache.get(fileDiff);
   if (!byNote) {
     byNote = new Map();
     anchorCache.set(fileDiff, byNote);
   }
-  const key = JSON.stringify([note.id, note.contentRevision, fileDiff.isPartial, diffPath]);
+  const key = JSON.stringify([
+    note.id,
+    note.contentRevision,
+    fileDiff.isPartial,
+    diffPath,
+    shownLines,
+  ]);
   let anchor = byNote.get(key);
   if (!anchor) {
-    anchor = anchorReviewNote(note, fileDiff, diffPath);
+    anchor = anchorReviewNote(note, fileDiff, diffPath, shownLines);
     byNote.set(key, anchor);
   }
   return anchor;
@@ -150,6 +162,7 @@ export function placeReviewNotes(
     readonly workspaceRoot: string | undefined;
     readonly repositoryRoot: string | undefined;
   },
+  shownLines: ReviewNoteShownLines = "hunks",
 ): PlacedReviewNote[] {
   const placed: Array<{ readonly order: number; readonly placed: PlacedReviewNote }> = [];
   for (const note of notes) {
@@ -166,7 +179,7 @@ export function placeReviewNotes(
         fileKey: file.fileKey,
         anchor: file.pending
           ? { kind: "pending" }
-          : cachedReviewNoteAnchor(note, file.fileDiff, diffPath),
+          : cachedReviewNoteAnchor(note, file.fileDiff, diffPath, shownLines),
       },
     });
   }

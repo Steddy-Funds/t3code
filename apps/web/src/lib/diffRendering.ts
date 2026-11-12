@@ -372,6 +372,8 @@ const DIFF_SURFACE_ROOTS =
   ":host, [data-diffs-header], [data-diff], [data-file], [data-error-wrapper], [data-virtualizer-buffer]";
 const CHANGED_LINE =
   ':is([data-line], [data-no-newline]):is([data-line-type="change-addition"], [data-line-type="change-deletion"])';
+const ADDED_LINE = ':is([data-line], [data-no-newline])[data-line-type="change-addition"]';
+const DELETED_LINE = ':is([data-line], [data-no-newline])[data-line-type="change-deletion"]';
 
 /**
  * A theme's own line number, caret row, diff and find colours for Pierre's surfaces. Appended
@@ -406,6 +408,20 @@ ${CHANGED_LINE}:has([data-diff-span]) {
 }
 ${CHANGED_LINE} [data-diff-span] {
   background-color: ${diff.modified};
+}
+
+/* Stacked, a changed line keeps its side's colour, as an IDE's unified view does. */
+[data-diff-type="single"] ${ADDED_LINE}:has([data-diff-span]) {
+  --diffs-computed-diff-line-bg: ${diff.insertedMuted};
+}
+[data-diff-type="single"] ${ADDED_LINE} [data-diff-span] {
+  background-color: ${diff.inserted};
+}
+[data-diff-type="single"] ${DELETED_LINE}:has([data-diff-span]) {
+  --diffs-computed-diff-line-bg: ${diff.deletedMuted};
+}
+[data-diff-type="single"] ${DELETED_LINE} [data-diff-span] {
+  background-color: ${diff.deleted};
 }
 
 :is([data-line], [data-column-number])[data-editor-active-line] {

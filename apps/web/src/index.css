@@ -2466,6 +2466,10 @@ code {
     var(--code-background)
   );
   --diff-fold-wave: color-mix(in srgb, var(--code-foreground) 32%, transparent);
+  /* The scrollbar's marks and insertion lines: the diff colour itself, or the scheme's marker. */
+  --sbs-marker-inserted: var(--diff-addition);
+  --sbs-marker-deleted: var(--diff-deletion);
+  --sbs-marker-modified: var(--diff-modified);
   --sbs-gutter-width: calc(var(--sbs-gutter-digits, 3) * 1ch + 1.75rem);
   background: var(--code-background);
   color: var(--code-foreground);
@@ -2521,19 +2525,19 @@ code {
 
 /* Where the other side's lines belong on a side that has none: a line, not a row. */
 .sbs-row[data-insert-above="inserted"] {
-  box-shadow: inset 0 2px 0 var(--diff-addition);
+  box-shadow: inset 0 2px 0 var(--sbs-marker-inserted);
 }
 
 .sbs-row[data-insert-above="deleted"] {
-  box-shadow: inset 0 2px 0 var(--diff-deletion);
+  box-shadow: inset 0 2px 0 var(--sbs-marker-deleted);
 }
 
 .sbs-row[data-insert-below="inserted"] {
-  box-shadow: inset 0 -2px 0 var(--diff-addition);
+  box-shadow: inset 0 -2px 0 var(--sbs-marker-inserted);
 }
 
 .sbs-row[data-insert-below="deleted"] {
-  box-shadow: inset 0 -2px 0 var(--diff-deletion);
+  box-shadow: inset 0 -2px 0 var(--sbs-marker-deleted);
 }
 
 .sbs-gutter {
@@ -2640,6 +2644,23 @@ code {
   background: color-mix(in srgb, var(--code-foreground) 70%, transparent);
 }
 
+/* The same dot as a note's marker, so a fold says it hides one. */
+.sbs-fold[data-annotated] {
+  box-shadow: inset 3px 0 0 color-mix(in srgb, var(--primary) 55%, transparent);
+}
+
+.sbs-fold[data-annotated]::after {
+  position: absolute;
+  top: 50%;
+  left: 6px;
+  width: 6px;
+  height: 6px;
+  border-radius: 9999px;
+  background: var(--primary);
+  content: "";
+  transform: translateY(-50%);
+}
+
 .sbs-omitted::before {
   opacity: 0.6;
 }
@@ -2702,15 +2723,15 @@ code {
 }
 
 .sbs-scroll-marks rect[data-kind="inserted"] {
-  fill: var(--diff-addition);
+  fill: var(--sbs-marker-inserted);
 }
 
 .sbs-scroll-marks rect[data-kind="deleted"] {
-  fill: var(--diff-deletion);
+  fill: var(--sbs-marker-deleted);
 }
 
 .sbs-scroll-marks rect[data-kind="modified"] {
-  fill: var(--diff-modified);
+  fill: var(--sbs-marker-modified);
 }
 
 /* Chat width setting. Comfortable keeps the default --chat-content-max-width,

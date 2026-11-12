@@ -9,7 +9,7 @@ import type {
 import type { CodeViewHandle } from "@pierre/diffs/react";
 import type { EnvironmentId, ProjectId, ScopedThreadRef, TurnItemId } from "@t3tools/contracts";
 import { type ReviewNote, reviewNoteSectionId } from "@t3tools/shared/reviewNote";
-import { useEffect, useRef, useState, type ReactNode, type Ref } from "react";
+import { useEffect, useEffectEvent, useRef, useState, type ReactNode, type Ref } from "react";
 
 import type { DraftId } from "~/composerDraftStore";
 import { fnv1a32, resolveFileDiffPath, resolveFileDiffPreviousPath } from "~/lib/diffRendering";
@@ -21,6 +21,7 @@ import { ReviewNoteAnnotation } from "./ReviewNoteAnnotation";
 import { isAttachedReviewNote, type PlacedReviewNote } from "./reviewNoteAnchoring";
 import { StyledDiffCodeView, type StyledDiffCodeViewOptions } from "./StyledDiffCodeView";
 import {
+  keepDraftWords,
   type SendReviewComments,
   useReviewCommentDrafts,
   withQuotedSelection,
@@ -225,10 +226,16 @@ export function AnnotatableCodeView({
     noteDraft && (draftAnchor === undefined || draftAnchor === "unattached") ? noteDraft : null;
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- a reply whose note left its lines (the file changed under it) keeps its words in the composer's draft store
   useEffect(() => {
-    if (!orphanedReply) return;
-    if (orphanedReply.text.trim() === "") noteReplies.cancel();
-    else noteReplies.addToMessage(orphanedReply.text);
+    if (orphanedReply) keepDraftWords(noteReplies, orphanedReply.text);
   }, [orphanedReply, noteReplies]);
+  const keepOpenBoxWords = useEffectEvent(() => {
+    if (draft && !draft.sending) keepDraftWords(comments, draft.text);
+    if (noteDraft && !noteDraft.sending) keepDraftWords(noteReplies, noteDraft.text);
+  });
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- the view goes with a box open (another layout, the panel closed, another turn shown); its words go to the composer's draft store
+  useEffect(() => () => keepOpenBoxWords(), []);
+  // One box at a time: a comment or a reply stays open until it is sent, saved or cancelled.
+  const boxOpen = draft !== undefined || noteDraft !== undefined;
 
   const items: CodeViewDiffItem<DiffCommentAnnotationGroup>[] = files.map(
     ({ fileDiff, filePath, fileKey, fileVersion, collapsed }) => {
@@ -332,8 +339,8 @@ export function AnnotatableCodeView({
         onSelectedLinesChange={setSelectedLines}
         options={{
           ...options,
-          enableGutterUtility: draft === undefined,
-          enableLineSelection: draft === undefined,
+          enableGutterUtility: !boxOpen,
+          enableLineSelection: !boxOpen,
           onGutterUtilityClick: beginComment,
           onRevealSearchMatch: (item) => onRevealSearchMatch(item.id),
         }}
@@ -363,7 +370,7 @@ export function AnnotatableCodeView({
                       note={note}
                       moved={placed.anchor.kind === "moved"}
                       answered={reviewNotes.answeredIds.has(note.id)}
-                      replying={replies.some((reply) => reply.kind === "draft")}
+                      replying={boxOpen}
                       onReply={() => noteReplies.beginComment(note, selectedTextRef.current)}
                       onDismiss={() => reviewNotes.onDismiss(note.id)}
                       replies={

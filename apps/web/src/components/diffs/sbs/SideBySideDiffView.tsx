@@ -24,10 +24,12 @@ import { focusScopeProps } from "~/lib/focusScopes";
 import { observeResize } from "~/lib/observeResize";
 import { usePaintedThemeEditorColors } from "~/lib/paintedThemeEditorColors";
 import { cn } from "~/lib/utils";
+import { registerCommands } from "~/shortcuts/dispatcher";
 import { primaryServerKeybindingsAtom } from "~/state/server";
 
 import { fileContentRevision } from "@t3tools/shared/fileContentRevision";
 import { Button } from "../../ui/button";
+import { SBS_DIVIDER_WIDTH } from "./sbsConnectors";
 import { SbsDivider } from "./SbsDivider";
 import { SbsFindBar, SbsScrollMarks } from "./SbsOverlays";
 import { SbsPane, type SbsPaneAnnotation } from "./SbsPane";
@@ -72,7 +74,7 @@ export interface SbsLineSelection {
   readonly selectedText: string;
 }
 
-/** A Cmd- or Ctrl-click on a token. */
+/** A Cmd- or Ctrl-click on a token, or Go to Declaration's key at the caret. */
 export interface SbsTokenActivation {
   readonly side: SbsSide;
   /** File line number, 1-based. */
@@ -87,6 +89,8 @@ export interface SbsTokenActivation {
   };
   /** The content revision of the pane's text; null when it does not show a whole file. */
   readonly revision: string | null;
+  /** The token, or the caret's line, for a popup to point at. */
+  readonly anchor: Element;
 }
 
 /** Something attached to a line range of one pane: a comment, a draft, a note. */
@@ -151,6 +155,8 @@ const WINDOW_STEP_ROWS = 8;
 /** Pierre's own bound: a longer line gets no word-level tint. */
 const MAX_WORD_DIFF_LINE_LENGTH = 1_000;
 const CARD_MARGIN = 4;
+/** Below the find bar (`top-2`, a compact input and its padding), which shares the card's corner. */
+const FIND_BAR_CLEARANCE = 48;
 const MODIFIER_KEYS = new Set(["Shift", "Meta", "Control", "Alt"]);
 
 const IN_DIFF = { context: { diffFocus: true } };
@@ -162,6 +168,9 @@ function editorColorVariables(colors: ThemeEditorColors): CSSProperties {
     "--diff-block-deleted": colors.diff.deleted,
     "--diff-block-modified": colors.diff.modified,
     "--diff-block-modified-muted": colors.diff.modifiedMuted,
+    "--sbs-marker-inserted": colors.diff.insertedMarker,
+    "--sbs-marker-deleted": colors.diff.deletedMarker,
+    "--sbs-marker-modified": colors.diff.modifiedMarker,
     "--sbs-line-number": colors.lineNumber,
     "--sbs-find-match": colors.find.match,
     "--sbs-find-current": colors.find.currentMatch,
@@ -423,6 +432,9 @@ export function SideBySideDiffView<T = unknown>(props: SideBySideDiffViewProps<T
   const dragSide = useRef<SbsSide | null>(null);
   const reportedTextSelection = useRef(false);
   const selectionStart = useRef<SbsTextPoint | null>(null);
+  // Where the document's selection last ended in a pane's text: Go to Declaration's caret. It
+  // stays when its row leaves the window.
+  const caret = useRef<SbsTextPoint | null>(null);
   // Mod+A in a pane: its whole file, which is more rows than the window draws. Another file
   // drops it.
   const [selectedAll, setSelectedAll] = useState<{ side: SbsSide; model: SbsDocument } | null>(
@@ -434,6 +446,11 @@ export function SideBySideDiffView<T = unknown>(props: SideBySideDiffViewProps<T
     const note = () => {
       keepSelectionInOnePane();
       noteSelectionStart(selectionStart);
+      const selection = document.getSelection();
+      const focus = selection?.focusNode
+        ? textPointOf(selection.focusNode, selection.focusOffset)
+        : null;
+      if (focus) caret.current = focus;
     };
     document.addEventListener("selectionchange", note);
     return () => document.removeEventListener("selectionchange", note);
@@ -834,15 +851,22 @@ export function SideBySideDiffView<T = unknown>(props: SideBySideDiffViewProps<T
     });
   };
 
+  const revisionOf = (side: SbsSide) =>
+    model.partial
+      ? null
+      : fileContentRevision(
+          (side === "deletions" ? fileDiff.deletionLines : fileDiff.additionLines).join(""),
+        );
+
   const activateToken = (event: MouseEvent<HTMLDivElement>) => {
     const code = elementOf(event.target)?.closest(".sbs-code");
     const side = paneSideOf(event.target);
     const line = lineIndexOf(event.target);
-    const caret = caretAt(event.clientX, event.clientY);
-    if (!code || !side || line === null || !caret || !code.contains(caret.node)) return;
+    const point = caretAt(event.clientX, event.clientY);
+    if (!code || !side || line === null || !point || !code.contains(point.node)) return;
     const before = document.createRange();
     before.setStart(code, 0);
-    before.setEnd(caret.node, caret.offset);
+    before.setEnd(point.node, point.offset);
     const character = before.toString().length;
     const text = model.lines[side][line] ?? "";
     if (character >= text.length || /\s/u.test(text[character] ?? " ")) return;
@@ -856,13 +880,49 @@ export function SideBySideDiffView<T = unknown>(props: SideBySideDiffViewProps<T
         alt: event.altKey,
         shift: event.shiftKey,
       },
-      revision: model.partial
-        ? null
-        : fileContentRevision(
-            (side === "deletions" ? fileDiff.deletionLines : fileDiff.additionLines).join(""),
-          ),
+      revision: revisionOf(side),
+      anchor: elementOf(point.node) ?? code,
     });
   };
+
+  const activateAtCaret = useEffectEvent((event: globalThis.KeyboardEvent) => {
+    event.preventDefault();
+    const point = caret.current;
+    const text = point ? (model.lines[point.side][point.line] ?? "") : "";
+    if (!point || text === "") return;
+    const isToken = (index: number) => index >= 0 && /\S/u.test(text[index] ?? " ");
+    let character = Math.min(point.offset, text.length);
+    // A caret just past a name still means that name.
+    if (!isToken(character) && isToken(character - 1)) character -= 1;
+    const scroller = scrollers.current[point.side];
+    if (!isToken(character) || !scroller) return;
+    props.onTokenActivate?.({
+      side: point.side,
+      line: sbsLineNumber(model, point.side, point.line),
+      character,
+      modifiers: { meta: false, ctrl: false, alt: false, shift: false },
+      revision: revisionOf(point.side),
+      anchor: scroller.querySelector(`[data-sbs-index="${point.line}"] .sbs-code`) ?? scroller,
+    });
+  });
+
+  const navigable = props.onTokenActivate !== undefined;
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- registers Go to Declaration with the window's shortcut dispatcher, which resolves it as in a code viewer while a pane has focus
+  useEffect(() => {
+    if (!navigable) return;
+    const inPane = (event: globalThis.KeyboardEvent) => {
+      const target = event.target instanceof Node ? event.target : null;
+      return (
+        target !== null &&
+        !isEditableFocused(target) &&
+        SBS_SIDES.some((side) => scrollers.current[side]?.contains(target))
+      );
+    };
+    return registerCommands(
+      { "code.goToDeclaration": (event) => activateAtCaret(event) },
+      { capture: true, when: inPane, context: () => ({ codeFocus: true, codeNavigation: true }) },
+    );
+  }, [navigable]);
 
   const handleClick = (event: MouseEvent<HTMLDivElement>) => {
     const target = elementOf(event.target);
@@ -951,11 +1011,16 @@ export function SideBySideDiffView<T = unknown>(props: SideBySideDiffViewProps<T
     : undefined;
 
   /** Where an overlay under a range of rows sits in its pane, held inside the viewport. */
-  const overlayPlacement = (side: SbsSide, rows: SbsLineRange, height: number) => {
+  const overlayPlacement = (
+    side: SbsSide,
+    rows: SbsLineRange,
+    height: number,
+    minTop = CARD_MARGIN,
+  ) => {
     const below = rows.end * lineHeight - viewport[side] + CARD_MARGIN;
-    const limit = Math.max(CARD_MARGIN, viewport.height - height - CARD_MARGIN);
+    const limit = Math.max(minTop, viewport.height - height - CARD_MARGIN);
     return {
-      top: Math.min(Math.max(below, CARD_MARGIN), limit),
+      top: Math.min(Math.max(below, minTop), limit),
       // Out of view: the overlay rests against the edge its range left by.
       docked:
         rows.end * lineHeight <= viewport[side] ||
@@ -1000,10 +1065,6 @@ export function SideBySideDiffView<T = unknown>(props: SideBySideDiffViewProps<T
       : 0;
   const scrolls = (side: SbsSide) => rowCounts[side] * lineHeight + tailHeight > viewport.height;
   const renderOverlays = (side: SbsSide) => {
-    const card =
-      openAnnotation && openAnnotationRange && openAnnotation.side === side
-        ? overlayPlacement(side, sbsRangeRows(layout, side, openAnnotationRange), cardHeight)
-        : null;
     const hint =
       hintRows && side === lead ? overlayPlacement(side, hintRows, lineHeight + 8) : null;
     return (
@@ -1043,32 +1104,52 @@ export function SideBySideDiffView<T = unknown>(props: SideBySideDiffViewProps<T
               : "Press again to go to the previous file"}
           </div>
         ) : null}
-        {card && openAnnotation ? (
-          <div
-            ref={observeCard}
-            className="absolute z-10 w-[min(30rem,calc(100%-4rem))] rounded-md border border-border bg-popover font-sans text-popover-foreground shadow-lg"
-            style={{ top: card.top, left: overlayLeft }}
-            data-sbs-annotation-card={openAnnotation.id}
-            data-docked={card.docked ? "" : undefined}
-          >
-            {card.docked ? (
-              <Button
-                type="button"
-                size="micro"
-                variant="ghost-muted"
-                onClick={() => revealAnnotation(openAnnotation.id)}
-              >
-                {openAnnotation.startLine === openAnnotation.endLine
-                  ? `Show line ${openAnnotation.startLine}`
-                  : `Show lines ${openAnnotation.startLine} to ${openAnnotation.endLine}`}
-              </Button>
-            ) : null}
-            {props.renderAnnotation?.(openAnnotation)}
-          </div>
-        ) : null}
       </>
     );
   };
+
+  // The card sits over both panes, so a narrow pane does not squeeze it; it starts at its own
+  // pane's code and moves left only as far as it must to stay inside the view.
+  const cardPlacement =
+    openAnnotation && openAnnotationRange
+      ? overlayPlacement(
+          openAnnotation.side,
+          sbsRangeRows(layout, openAnnotation.side, openAnnotationRange),
+          cardHeight,
+          find === null ? CARD_MARGIN : FIND_BAR_CLEARANCE,
+        )
+      : null;
+  const cardPaneLeft =
+    openAnnotation?.side === "additions" && single === null
+      ? `50% + ${SBS_DIVIDER_WIDTH / 2}px`
+      : "0px";
+  const card =
+    cardPlacement && openAnnotation ? (
+      <div
+        ref={observeCard}
+        className="absolute z-10 w-[min(30rem,calc(100%-2rem))] rounded-md border border-border bg-popover font-sans text-popover-foreground shadow-lg"
+        style={{
+          top: cardPlacement.top,
+          left: `min(calc(${cardPaneLeft} + ${overlayLeft}), calc(100% - min(30rem, calc(100% - 2rem)) - 1rem))`,
+        }}
+        data-sbs-annotation-card={openAnnotation.id}
+        data-docked={cardPlacement.docked ? "" : undefined}
+      >
+        {cardPlacement.docked ? (
+          <Button
+            type="button"
+            size="micro"
+            variant="ghost-muted"
+            onClick={() => revealAnnotation(openAnnotation.id)}
+          >
+            {openAnnotation.startLine === openAnnotation.endLine
+              ? `Show line ${openAnnotation.startLine}`
+              : `Show lines ${openAnnotation.startLine} to ${openAnnotation.endLine}`}
+          </Button>
+        ) : null}
+        {props.renderAnnotation?.(openAnnotation)}
+      </div>
+    ) : null;
 
   const deletionsWindow = rowWindow(
     viewport.deletions,
@@ -1219,6 +1300,7 @@ export function SideBySideDiffView<T = unknown>(props: SideBySideDiffViewProps<T
           />
         ) : null}
         {additionsPane}
+        {card}
       </div>
     </div>
   );

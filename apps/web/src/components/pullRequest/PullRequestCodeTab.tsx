@@ -27,6 +27,7 @@ import {
   PilcrowIcon,
   Rows3Icon,
   Settings2Icon,
+  SquareSplitHorizontalIcon,
   TextWrapIcon,
   TriangleAlertIcon,
 } from "lucide-react";
@@ -41,9 +42,11 @@ import {
   useRef,
   useState,
   type ReactNode,
+  type SyntheticEvent,
 } from "react";
 
 import { observeIntersection } from "~/lib/observeIntersection";
+import { observeResize } from "~/lib/observeResize";
 import { useLocalStorage } from "~/hooks/useLocalStorage";
 import { useClientSettings, updateClientSettings } from "~/hooks/useSettings";
 import { useRenderedAppearance } from "~/hooks/useTheme";
@@ -90,6 +93,16 @@ import { useCodeViewFileReveal } from "../diffs/useCodeViewFileReveal";
 import { useHideTestFiles } from "../diffs/useHideTestFiles";
 import { diffFileTreeEntries, orderDiffFilesLikeTree } from "../diffs/diffFileTree.logic";
 import { StyledDiffCodeView } from "../diffs/StyledDiffCodeView";
+import {
+  SIDE_BY_SIDE_MIN_WIDTH,
+  type SbsFileEntry,
+  SideBySideDiffPanel,
+} from "../diffs/sbs/SideBySideDiffPanel";
+import {
+  type SbsAnnotation,
+  SideBySideDiffView,
+  type SideBySideDiffViewProps,
+} from "../diffs/sbs/SideBySideDiffView";
 import { Button } from "../ui/button";
 import { MorphIcon } from "~/components/MorphIcon";
 import { Checkbox } from "../ui/checkbox";
@@ -141,6 +154,11 @@ interface ReviewAnnotationGroup {
 type ReviewAnnotation = DiffLineAnnotation<ReviewAnnotationGroup>;
 
 const COMMIT_PAGE_SIZE = 10;
+
+// A pull request's patch arrives whole with its page; there is no per-file patch to ask for.
+const NO_PATCH_REQUEST = () => {};
+
+const stopPropagation = (event: SyntheticEvent) => event.stopPropagation();
 
 const PULL_REQUEST_FILE_TREE_STORAGE_KEY = "t3code.pullRequestFileTreeOpen";
 
@@ -374,6 +392,7 @@ function PullRequestCodeTab({
     diffFilesCollapsed: settings.diffFilesCollapsed,
     diffIgnoreWhitespace: settings.diffIgnoreWhitespace,
     diffLayout: settings.diffLayout,
+    diffSideBySide: settings.diffSideBySide,
     wordWrap: settings.wordWrap,
   }));
   const [toggledFiles, setToggledFiles] = useState<ReadonlySet<string>>(() => new Set());
@@ -383,6 +402,11 @@ function PullRequestCodeTab({
   const effectiveFoldOverride =
     foldOverride ?? (settings.diffFilesCollapsed ? "folded" : "expanded");
   const diffLayout = settings.diffLayout;
+  const [areaNarrow, setAreaNarrow] = useState(false);
+  const sideBySide = settings.diffSideBySide && !areaNarrow;
+  const layoutValue = settings.diffSideBySide ? "side-by-side" : diffLayout;
+  const [sbsFileKey, setSbsFileKey] = useState<string | null>(null);
+  const [openSbsAnnotationId, setOpenSbsAnnotationId] = useState<string | null>(null);
   const [wordWrap, setWordWrap] = useState(settings.wordWrap);
   const [ignoreWhitespace, setIgnoreWhitespace] = useState(settings.diffIgnoreWhitespace);
   const [fileTreeOpen, setFileTreeOpen] = useLocalStorage(
@@ -425,6 +449,8 @@ function PullRequestCodeTab({
     setFoldOverride(null);
     setVisibleCommitCount(COMMIT_PAGE_SIZE);
     setOrphansOpen(false);
+    setSbsFileKey(null);
+    setOpenSbsAnnotationId(null);
     setSliceState({ key: scopeKey, cursor: null, slices: NO_SLICES });
   }
 
@@ -760,6 +786,20 @@ function PullRequestCodeTab({
     );
   };
 
+  const observeArea = (node: HTMLDivElement | null) => {
+    if (node === null) return;
+    return observeResize(node, ([entry]) => {
+      if (entry) setAreaNarrow(entry.contentRect.width < SIDE_BY_SIDE_MIN_WIDTH);
+    });
+  };
+
+  const selectSbsFile = (fileKey: string) => {
+    setSbsFileKey(fileKey);
+    setOpenSbsAnnotationId(null);
+    // Side by side shows one file at a time: reaching the last one loaded asks for the next page.
+    if (fileKey === fileKeys.at(-1) && canLoadNextSlice) loadNextSlice();
+  };
+
   const toggleFile = (fileKey: string) =>
     setToggledFiles((current) => {
       const next = new Set(current);
@@ -794,6 +834,10 @@ function PullRequestCodeTab({
   const revealFile = (path: string) => {
     const item = items.find((candidate) => resolveFileDiffPath(candidate.fileDiff) === path);
     if (item === undefined) return;
+    if (sideBySide) {
+      selectSbsFile(item.id);
+      return;
+    }
     // Unfold only: a second reveal before the unfold renders must not fold the file again.
     if (item.collapsed === true) {
       setToggledFiles((current) =>
@@ -817,10 +861,12 @@ function PullRequestCodeTab({
     range: SelectedLineRange | null,
     context: { item: CodeViewItem<ReviewAnnotationGroup> },
   ) => {
-    if (!range || !canSelectLines) return;
-    const item = context.item;
-    if (item.type !== "diff") return;
-    const file = files.find((candidate) => buildFileDiffRenderKey(candidate) === item.id);
+    if (range && context.item.type === "diff") beginCommentIn(context.item.id, range);
+  };
+
+  const beginCommentIn = (fileKey: string, range: SelectedLineRange) => {
+    if (!canSelectLines) return;
+    const file = files.find((candidate) => buildFileDiffRenderKey(candidate) === fileKey);
     if (!file) return;
     // On a host without ranged comments a range collapses to its last line: one that silently
     // lost its first line there would be worse than one line.
@@ -834,7 +880,7 @@ function PullRequestCodeTab({
       resolveDiffReviewAnchor(file, range, rangeComments);
     if (anchor === null) return;
     setDraft({
-      fileKey: item.id,
+      fileKey,
       path,
       oldPath: previousPath === path ? null : previousPath,
       ...anchor,
@@ -1032,17 +1078,17 @@ function PullRequestCodeTab({
     />
   );
 
-  const renderAnnotation = (...[annotation]: CodeViewAnnotationArgs<ReviewAnnotationGroup>) => (
-    <div className="py-1 font-sans text-foreground">
-      {annotation.metadata.threads.map(renderThreadCard)}
-      {annotation.metadata.pending.map((comment) => (
+  const renderReviewGroup = (group: ReviewAnnotationGroup) => (
+    <>
+      {group.threads.map(renderThreadCard)}
+      {group.pending.map((comment) => (
         <PendingReviewCommentCard
           key={comment.id}
           comment={comment}
           onRemove={() => removeComment(reviewKey, comment.id)}
         />
       ))}
-      {annotation.metadata.draft && draft && canSelectLines ? (
+      {group.draft && draft && canSelectLines ? (
         <DiffCommentAnnotation
           environmentId={environmentId}
           projectId={reference.projectId}
@@ -1089,11 +1135,65 @@ function PullRequestCodeTab({
           }}
         />
       ) : null}
-    </div>
+    </>
   );
+
+  const renderAnnotation = (...[annotation]: CodeViewAnnotationArgs<ReviewAnnotationGroup>) => (
+    <div className="py-1 font-sans text-foreground">{renderReviewGroup(annotation.metadata)}</div>
+  );
+
+  const renderSbsView = (viewProps: SideBySideDiffViewProps, entry: SbsFileEntry) => {
+    const file = annotatedFiles.find((candidate) => candidate.fileKey === entry.fileKey);
+    const annotations: SbsAnnotation<ReviewAnnotationGroup>[] = (file?.annotations ?? []).map(
+      ({ side, lineNumber, metadata }) => ({
+        id: `${side}:${lineNumber}`,
+        side,
+        startLine: lineNumber,
+        endLine: lineNumber,
+        data: metadata,
+      }),
+    );
+    // The comment being written keeps its card open over its line.
+    const draftId = annotations.find((annotation) => annotation.data.draft)?.id;
+    return (
+      <SideBySideDiffView<ReviewAnnotationGroup>
+        {...viewProps}
+        annotations={annotations}
+        openAnnotationId={draftId ?? openSbsAnnotationId}
+        onOpenAnnotationChange={(id) => {
+          if (draftId === undefined) setOpenSbsAnnotationId(id);
+        }}
+        renderAnnotation={(annotation) => (
+          <div
+            className="max-h-96 overflow-auto px-2 py-1 font-sans text-foreground"
+            // The view reads these as a pick given up or a copy of its lines; in the card they are not.
+            onPointerDown={stopPropagation}
+            onMouseUp={stopPropagation}
+            onKeyUp={stopPropagation}
+            onCopy={stopPropagation}
+          >
+            {renderReviewGroup(annotation.data)}
+          </div>
+        )}
+        onSelectRange={(selection) => {
+          // Lines picked in the gutter start a comment; selected text is for copying.
+          if (selection === null || selection.selectedText !== "") return;
+          const { side, startLine, endLine } = selection;
+          beginCommentIn(entry.fileKey, { start: startLine, end: endLine, side, endSide: side });
+        }}
+      />
+    );
+  };
 
   const selectedCommit = orderedCommits.find((entry) => entry.oid === commit);
   const scopeLabel = selectedCommit ? selectedCommit.messageHeadline : "All commits";
+  const selectLayout = (value: unknown) => {
+    if (value === "stacked" || value === "split") {
+      updateClientSettings({ diffLayout: value, diffSideBySide: false });
+    } else if (value === "side-by-side") {
+      updateClientSettings({ diffSideBySide: true });
+    }
+  };
   const changeIgnoreWhitespace = (next: boolean) => {
     setIgnoreWhitespace(next);
     setDraft(null);
@@ -1263,26 +1363,24 @@ function PullRequestCodeTab({
             >
               Hide whitespace changes
             </DropdownMenuCheckboxItem>
-            <DropdownMenuCheckboxItem
-              checked={wordWrap}
-              onCheckedChange={(checked) => setWordWrap(checked)}
-            >
-              Wrap lines
-            </DropdownMenuCheckboxItem>
+            {sideBySide ? null : (
+              <DropdownMenuCheckboxItem
+                checked={wordWrap}
+                onCheckedChange={(checked) => setWordWrap(checked)}
+              >
+                Wrap lines
+              </DropdownMenuCheckboxItem>
+            )}
             <DropdownMenuSeparator />
-            <DropdownMenuRadioGroup
-              value={diffLayout}
-              onValueChange={(value) => {
-                if (value === "stacked" || value === "split") {
-                  updateClientSettings({ diffLayout: value });
-                }
-              }}
-            >
+            <DropdownMenuRadioGroup value={layoutValue} onValueChange={selectLayout}>
               <DropdownMenuRadioItem value="stacked" closeOnClick>
                 Stacked
               </DropdownMenuRadioItem>
               <DropdownMenuRadioItem value="split" closeOnClick>
                 Split
+              </DropdownMenuRadioItem>
+              <DropdownMenuRadioItem value="side-by-side" closeOnClick>
+                Side by side
               </DropdownMenuRadioItem>
             </DropdownMenuRadioGroup>
           </DropdownMenuContent>
@@ -1312,13 +1410,8 @@ function PullRequestCodeTab({
             aria-label="Diff layout"
             className="shrink-0"
             variant="segmented"
-            value={[diffLayout]}
-            onValueChange={(value) => {
-              const next = value[0];
-              if (next === "stacked" || next === "split") {
-                updateClientSettings({ diffLayout: next });
-              }
-            }}
+            value={[layoutValue]}
+            onValueChange={(value) => selectLayout(value[0])}
           >
             <Toggle aria-label="Stacked diff view" value="stacked">
               <Rows3Icon className="size-3.5" />
@@ -1326,29 +1419,42 @@ function PullRequestCodeTab({
             <Toggle aria-label="Split diff view" value="split">
               <Columns2Icon className="size-3.5" />
             </Toggle>
+            <Tooltip>
+              <TooltipTrigger
+                render={<Toggle aria-label="Side-by-side diff view" value="side-by-side" />}
+              >
+                <SquareSplitHorizontalIcon className="size-3.5" />
+              </TooltipTrigger>
+              <TooltipPopup side="top">Side by side: whole files, one at a time</TooltipPopup>
+            </Tooltip>
           </ToggleGroup>
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <Toggle
-                  aria-label={wordWrap ? "Disable diff line wrapping" : "Enable diff line wrapping"}
-                  variant="ghost"
-                  size="sm"
-                  pressed={wordWrap}
-                  onPressedChange={(pressed) => {
-                    setWordWrap(Boolean(pressed));
-                  }}
-                />
-              }
-            >
-              <TextWrapIcon className="size-3.5" />
-            </TooltipTrigger>
-            <TooltipPopup side="top">
-              {wordWrap ? "Disable line wrapping" : "Enable line wrapping"}
-            </TooltipPopup>
-          </Tooltip>
+          {/* Side by side never wraps: its two panes line up by line. */}
+          {sideBySide ? null : (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Toggle
+                    aria-label={
+                      wordWrap ? "Disable diff line wrapping" : "Enable diff line wrapping"
+                    }
+                    variant="ghost"
+                    size="sm"
+                    pressed={wordWrap}
+                    onPressedChange={(pressed) => {
+                      setWordWrap(Boolean(pressed));
+                    }}
+                  />
+                }
+              >
+                <TextWrapIcon className="size-3.5" />
+              </TooltipTrigger>
+              <TooltipPopup side="top">
+                {wordWrap ? "Disable line wrapping" : "Enable line wrapping"}
+              </TooltipPopup>
+            </Tooltip>
+          )}
         </div>
-        {fileKeys.length > 0 ? (
+        {fileKeys.length > 0 && !sideBySide ? (
           <Tooltip>
             <TooltipTrigger
               render={
@@ -1532,48 +1638,80 @@ function PullRequestCodeTab({
           </Collapsible>
         </div>
       ) : null}
+      {settings.diffSideBySide && !sideBySide ? (
+        <p className="flex shrink-0 items-center gap-2 border-b border-border/70 bg-muted/40 px-3 py-1.5 text-2xs text-muted-foreground">
+          Side by side needs a wider panel.
+        </p>
+      ) : null}
       <div className="flex min-h-0 flex-1 overflow-hidden">
-        <div
-          className="relative min-h-0 min-w-0 flex-1"
-          // Headers live in shadow DOM; composedPath crosses that boundary.
-          onClickCapture={(event) => {
-            const composedPath = event.nativeEvent.composedPath?.() ?? [];
-            for (const node of composedPath) {
-              if (!(node instanceof HTMLElement)) continue;
-              if (node instanceof HTMLButtonElement || node instanceof HTMLAnchorElement) {
-                return;
-              }
-              if (node.hasAttribute("data-viewed-toggle")) return;
-              if (node.hasAttribute("data-diffs-header")) {
-                const filePath = node.querySelector("[data-title]")?.textContent?.trim();
-                if (filePath === undefined || filePath === "") return;
-                const item = items.find(
-                  (candidate) => resolveFileDiffPath(candidate.fileDiff) === filePath,
-                );
-                if (item !== undefined) toggleFile(item.id);
-                return;
-              }
-            }
-          }}
-        >
-          {/* The viewer must own its scroll element to position virtual rows within it. */}
-          <FileViewedToggleContext value={fileViewedToggle}>
-            <StyledDiffCodeView<ReviewAnnotationGroup>
-              className="@container h-full overflow-auto [scrollbar-gutter:stable]"
-              containerRef={scrollerRef}
-              viewerRef={codeViewReveal.attach}
-              items={items}
-              selectedLines={selectedLines}
-              onSelectedLinesChange={setSelectedLines}
-              options={diffViewOptions}
-              renderCodeViewFooter={renderCodeViewFooter}
-              renderHeaderPrefix={renderHeaderPrefix}
-              renderHeaderMetadata={renderHeaderMetadata}
-              renderAnnotation={renderAnnotation}
-              unsafeCSSExtra={REPLACE_FILE_COUNTS_CSS}
+        {sideBySide ? (
+          <div ref={observeArea} className="flex min-h-0 min-w-0 flex-1">
+            <SideBySideDiffPanel
+              files={annotatedFiles.map(({ fileKey, path, fileDiff }) => ({
+                fileKey,
+                filePath: path,
+                fileDiff,
+              }))}
+              selectedFileKey={sbsFileKey}
+              onSelectFile={selectSbsFile}
+              loadFileContents={loadDiffFiles}
+              scopeKey={scopeKey}
+              contentsKey={detail.updatedAt}
+              ignoreWhitespace={ignoreWhitespace}
+              patchState={(filePath) => ({
+                pending: false,
+                error: false,
+                truncated: omittedFileStats.has(filePath),
+              })}
+              onRequestPatch={NO_PATCH_REQUEST}
+              onRetryPatch={NO_PATCH_REQUEST}
+              renderView={renderSbsView}
             />
-          </FileViewedToggleContext>
-        </div>
+          </div>
+        ) : (
+          <div
+            ref={observeArea}
+            className="relative min-h-0 min-w-0 flex-1"
+            // Headers live in shadow DOM; composedPath crosses that boundary.
+            onClickCapture={(event) => {
+              const composedPath = event.nativeEvent.composedPath?.() ?? [];
+              for (const node of composedPath) {
+                if (!(node instanceof HTMLElement)) continue;
+                if (node instanceof HTMLButtonElement || node instanceof HTMLAnchorElement) {
+                  return;
+                }
+                if (node.hasAttribute("data-viewed-toggle")) return;
+                if (node.hasAttribute("data-diffs-header")) {
+                  const filePath = node.querySelector("[data-title]")?.textContent?.trim();
+                  if (filePath === undefined || filePath === "") return;
+                  const item = items.find(
+                    (candidate) => resolveFileDiffPath(candidate.fileDiff) === filePath,
+                  );
+                  if (item !== undefined) toggleFile(item.id);
+                  return;
+                }
+              }
+            }}
+          >
+            {/* The viewer must own its scroll element to position virtual rows within it. */}
+            <FileViewedToggleContext value={fileViewedToggle}>
+              <StyledDiffCodeView<ReviewAnnotationGroup>
+                className="@container h-full overflow-auto [scrollbar-gutter:stable]"
+                containerRef={scrollerRef}
+                viewerRef={codeViewReveal.attach}
+                items={items}
+                selectedLines={selectedLines}
+                onSelectedLinesChange={setSelectedLines}
+                options={diffViewOptions}
+                renderCodeViewFooter={renderCodeViewFooter}
+                renderHeaderPrefix={renderHeaderPrefix}
+                renderHeaderMetadata={renderHeaderMetadata}
+                renderAnnotation={renderAnnotation}
+                unsafeCSSExtra={REPLACE_FILE_COUNTS_CSS}
+              />
+            </FileViewedToggleContext>
+          </div>
+        )}
         {fileTreeOpen ? (
           <FileExplorerPane
             resizable

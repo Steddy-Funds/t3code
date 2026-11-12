@@ -21,7 +21,7 @@ import { ReviewCommentBox } from "../../ReviewCommentBox";
 import { ReviewNoteAnnotation } from "../../ReviewNoteAnnotation";
 import { isAttachedReviewNote } from "../../reviewNoteAnchoring";
 import {
-  type ReviewCommentDrafts,
+  keepDraftWords,
   type SendReviewComments,
   useReviewCommentDrafts,
   withQuotedSelection,
@@ -81,12 +81,6 @@ export interface SbsReviewPanelProps extends Omit<SideBySideDiffPanelProps, "ren
 const SELECTION_ID = "sbs-review:selection";
 
 const stopPropagation = (event: SyntheticEvent) => event.stopPropagation();
-
-/** Settles a box whose lines are gone from view: its words go to the message, an empty one closes. */
-function keepDraftWords<TRange>(drafts: ReviewCommentDrafts<TRange>, text: string) {
-  if (text.trim() === "") drafts.cancel();
-  else drafts.addToMessage(text);
-}
 
 function pickLabel({ side, startLine, endLine }: SbsReviewLines): string {
   const lines = startLine === endLine ? `line ${startLine}` : `lines ${startLine} to ${endLine}`;

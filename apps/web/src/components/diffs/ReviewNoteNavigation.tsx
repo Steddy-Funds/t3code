@@ -17,6 +17,7 @@ import {
   cachedReviewNoteAnchor,
   type PlacedReviewNote,
   placeReviewNotes,
+  type ReviewNoteShownLines,
   stepReviewNote,
 } from "./reviewNoteAnchoring";
 import { useReviewNoteDismissals } from "./reviewNoteDismissals";
@@ -96,6 +97,7 @@ export function useDiffReviewNotes({
   requestFile,
   workspaceRoot,
   repositoryRoot,
+  shownLines,
   onShowNote,
 }: {
   threadRef: ScopedThreadRef | null;
@@ -106,6 +108,8 @@ export function useDiffReviewNotes({
   workspaceRoot: string | undefined;
   /** Set when the diff names files from a repository root above the workspace. */
   repositoryRoot: string | undefined;
+  /** Whole files where the shown view reads them whole, so a note on an unchanged line sits there. */
+  shownLines: ReviewNoteShownLines;
   /**
    * Hears each note shown on its lines, for another view than the code view. True when that view
    * shows the diff now and takes the note there.
@@ -126,6 +130,7 @@ export function useDiffReviewNotes({
       pending: isPendingFileDiff(fileDiff),
     })),
     { workspaceRoot, repositoryRoot },
+    shownLines,
   );
   const shown = placed.filter(({ note }) => !dismissedIds.has(note.id));
   const dismissed = placed.filter(({ note }) => dismissedIds.has(note.id));

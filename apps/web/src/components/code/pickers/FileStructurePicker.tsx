@@ -10,7 +10,7 @@ import { serverForPath } from "../codeLanguages";
 import { waitingMessage } from "../codeNavigationMessages";
 import { navigateToCodeLocation } from "../navigation";
 import { CodePicker } from "./CodePicker";
-import { fileStructureViewer, jumpWhenPaletteCloses } from "./codeSymbolCommands";
+import { fileStructureTarget, jumpWhenPaletteCloses } from "./codeSymbolCommands";
 import {
   fileName,
   isServerBusy,
@@ -46,13 +46,14 @@ function emptyMessage(
 
 /** The outline of the file the focused viewer shows: type to filter, Enter jumps. */
 export function FileStructurePicker(props: { readonly setOpen: (open: boolean) => void }) {
-  const [viewer] = useState(fileStructureViewer);
+  const [target] = useState(fileStructureTarget);
+  const viewer = target?.viewer ?? null;
+  const opened = target?.document ?? null;
   const [answer, setAnswer] = useState<DocumentSymbolsAnswer | null>(
     viewer === null ? { _tag: "none" } : null,
   );
   const [query, setQuery] = useState("");
   const [highlightedValue, setHighlightedValue] = useState<string | null>(null);
-  const [opened] = useState(() => viewer?.document() ?? null);
   const status = useEnvironmentQuery(
     opened === null
       ? null

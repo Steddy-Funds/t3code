@@ -14,17 +14,27 @@ import { codeIntelEnvironment } from "~/state/codeIntel";
 import { useEnvironmentQuery } from "~/state/query";
 
 import { toastManager } from "../../ui/toast";
-import { type CodeViewer, focusedCodeViewer, navigateToCodeLocation } from "../navigation";
+import {
+  type CodeViewer,
+  type CodeViewerDocument,
+  focusedCodeViewer,
+  navigateToCodeLocation,
+} from "../navigation";
 import { methodJumpTarget } from "./codePickers.logic";
 import { documentSymbolsFor } from "./documentSymbols";
 import { installDoubleShift, isDoubleShiftSearchOn } from "./doubleShift";
 
-let structureViewer: CodeViewer | null = null;
+interface FileStructureTarget {
+  readonly viewer: CodeViewer;
+  readonly document: CodeViewerDocument | null;
+}
+
+let structureTarget: FileStructureTarget | null = null;
 let jumpOnClose: (() => void) | null = null;
 
-/** The viewer the file structure popup was opened over. */
-export function fileStructureViewer(): CodeViewer | null {
-  return structureViewer;
+/** The viewer the file structure popup was opened over, and its document then. */
+export function fileStructureTarget(): FileStructureTarget | null {
+  return structureTarget;
 }
 
 /**
@@ -100,7 +110,8 @@ function installCodeSymbolCommands(): () => void {
       "code.goToSymbol": toggle("symbols"),
       "code.recentFiles": toggle("recentFiles"),
       "code.fileStructure": onViewer((viewer) => {
-        structureViewer = viewer;
+        // Read at the key, not while the popup renders: the viewer's document() is an effect event.
+        structureTarget = { viewer, document: viewer.document() };
         dispatchCommandPalette({ _tag: "ToggleMode", mode: "structure" });
       }),
       "code.nextMethod": onViewer((viewer) => void jumpToMethod(viewer, "next")),

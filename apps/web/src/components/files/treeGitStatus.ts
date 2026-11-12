@@ -1,9 +1,5 @@
 import type { GitStatus, GitStatusEntry } from "@pierre/trees";
-import type {
-  ProjectEntry,
-  VcsStatusResult,
-  VcsWorkingTreeFileChange,
-} from "@t3tools/contracts";
+import type { ProjectEntry, VcsStatusResult, VcsWorkingTreeFileChange } from "@t3tools/contracts";
 import { fileBasename, workspaceRelativeFilePath } from "@t3tools/shared/path";
 
 /** The server's change kind, or what older servers' line counts suggest (`linesRemoved`). */

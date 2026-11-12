@@ -232,7 +232,9 @@ describe("ExternalLibraries", () => {
     expect(treeRow("site-packages/six.py")).toBeNull();
     // Opening another folder doesn't ask for the failed one again.
     treeRow("typeshed/")!.click();
-    await vi.waitFor(() => expect(mocks.listings).toContainEqual({ cwd: TYPESHED, directoryPath: "" }));
+    await vi.waitFor(() =>
+      expect(mocks.listings).toContainEqual({ cwd: TYPESHED, directoryPath: "" }),
+    );
     expect(mocks.listings).toEqual([
       { cwd: SITE_PACKAGES, directoryPath: "" },
       { cwd: TYPESHED, directoryPath: "" },

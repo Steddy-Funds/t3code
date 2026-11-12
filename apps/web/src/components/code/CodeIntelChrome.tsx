@@ -56,7 +56,6 @@ function PythonEnvironmentField(props: {
         <span className="text-muted-foreground">Python environment</span>
         <Input
           size="compact"
-          className="font-mono"
           value={draft}
           placeholder={
             props.saved ? "Find one from the project's files" : (props.detected ?? "None found")

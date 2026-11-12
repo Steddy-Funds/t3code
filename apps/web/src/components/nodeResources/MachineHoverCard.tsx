@@ -17,6 +17,7 @@ import { useEnvironment } from "~/state/environments";
 import { machineIndicator, machineResources } from "~/state/machineResources";
 import { serverEnvironment } from "~/state/server";
 import { useEnvironmentScope } from "~/state/session";
+import { useEnvironmentBurnRate } from "~/state/tokenBurnRates";
 
 import { EnvironmentMachineIcon } from "../EnvironmentMachineIcon";
 import { MachineCardBody, type MachineLimits, type MachineProcessList } from "./MachineCardBody";
@@ -96,6 +97,7 @@ function LiveMachineCard({
       : NO_PROCESSES,
   );
   const runningThreadCount = useAtomValue(runningThreadCountAtom(environmentId));
+  const tokensPerMinute = useEnvironmentBurnRate(environmentId);
   const ownerNames = useAtomValue(ownerNamesAtom(environmentId));
   const totals = snapshot?.totals ?? null;
   const details = [
@@ -116,6 +118,7 @@ function LiveMachineCard({
         snapshot={snapshot}
         processes={canReadDiagnostics ? processList(processesResult) : { status: "needs-scope" }}
         runningThreadCount={runningThreadCount}
+        tokensPerMinute={tokensPerMinute}
         ownerNames={ownerNames}
         {...(limits ? { limits } : {})}
       />

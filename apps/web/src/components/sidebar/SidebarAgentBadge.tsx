@@ -3,12 +3,14 @@ import type { AgentLineageNode, AgentTreeSummary } from "@t3tools/client-runtime
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import type { ScopedThreadRef } from "@t3tools/contracts";
 import { BotIcon } from "lucide-react";
+import { useAtomValue } from "@effect/atom-react";
+import { threadKey } from "@t3tools/client-runtime/state/entities";
 import { useState, type MouseEvent } from "react";
 
 import { getClientSettings, updateClientSettings } from "../../hooks/useSettings";
 import { cn } from "~/lib/utils";
 import { useAgentTree } from "../../state/entities";
-import { useTreeBurnRate } from "../../state/tokenBurnRates";
+import { tokenBurnRates, useTreeBurnRate } from "../../state/tokenBurnRates";
 import { ToggleGroup, ToggleGroupItem } from "../ui/toggle-group";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { BurnRateValue } from "./SidebarBurnRate";
@@ -109,6 +111,7 @@ function AgentLineageTree(props: {
   onOpenThread: (threadRef: ScopedThreadRef) => void;
 }) {
   const tree = useAgentTree(props.threadRef);
+  const burnRates = useAtomValue(tokenBurnRates.treeRatesAtom);
   if (tree === null) return null;
   return (
     <ul className="flex flex-col gap-0.5">
@@ -116,6 +119,7 @@ function AgentLineageTree(props: {
         tree={tree}
         depth={0}
         fullLineage={props.fullLineage}
+        burnRates={burnRates}
         onOpenThread={props.onOpenThread}
       />
     </ul>
@@ -126,13 +130,22 @@ function AgentLineageRows(props: {
   tree: AgentTree<AgentLineageNode>;
   depth: number;
   fullLineage: boolean;
+  burnRates: ReadonlyMap<string, number>;
   onOpenThread: (threadRef: ScopedThreadRef) => void;
 }) {
   const { tree } = props;
   const { node } = tree;
+  // An agent that stopped stays listed while its five-minute rate winds down.
   const children = props.fullLineage
     ? tree.children
-    : tree.children.filter((child) => child.live > 0);
+    : tree.children.filter(
+        (child) =>
+          child.live > 0 ||
+          (child.node !== null &&
+            (props.burnRates.get(
+              threadKey(scopeThreadRef(child.node.environmentId, child.node.thread.id)),
+            ) ?? 0) > 0),
+      );
   const content = (
     <>
       <span
@@ -177,6 +190,7 @@ function AgentLineageRows(props: {
           tree={child}
           depth={props.depth + 1}
           fullLineage={props.fullLineage}
+          burnRates={props.burnRates}
           onOpenThread={props.onOpenThread}
         />
       ))}

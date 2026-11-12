@@ -26,7 +26,9 @@ import { cn } from "~/lib/utils";
 import { useEnvironmentMachines } from "~/state/environments";
 import { machineIndicator, machineResources } from "~/state/machineResources";
 import { useEnvironmentScope } from "~/state/session";
+import { useEnvironmentBurnRate } from "~/state/tokenBurnRates";
 
+import { BurnRateValue } from "../../sidebar/SidebarBurnRate";
 import { documentVisibleAtom } from "../documentVisible";
 import { ownerNamesAtom } from "../ownership/ownerNames";
 import { ownerBucketId, ownerThreadId } from "../ownership/processOwners";
@@ -63,8 +65,8 @@ export function crossMachineSnapshotAtom(
 }
 
 export const CROSS_MACHINE_GRID =
-  // Minimums sum to 934 px with gaps and padding, so the row fits beside the sidebar at 1280 px.
-  "grid grid-cols-[16px_minmax(96px,140px)_minmax(120px,1.2fr)_244px_minmax(120px,1fr)_minmax(100px,0.8fr)_minmax(110px,1fr)_48px] items-center gap-2";
+  // Minimums sum to 938 px with gaps and padding, so the row fits beside the sidebar at 1280 px.
+  "grid grid-cols-[16px_minmax(96px,140px)_minmax(100px,1.2fr)_244px_minmax(100px,1fr)_minmax(100px,0.8fr)_minmax(90px,1fr)_112px] items-center gap-2";
 
 /** One dense row: verdict first, the core grid, memory and VRAM pools, top process, threads. */
 export function CrossMachineRow({
@@ -135,10 +137,18 @@ export function CrossMachineRow({
           canRead={canReadDiagnostics}
           topBy={topBy}
         />
-        <span className="text-end tabular-nums">{threads}</span>
+        <span className="flex items-center justify-end gap-2 tabular-nums">
+          <MachineBurnRate environmentId={environmentId} />
+          {threads}
+        </span>
       </Link>
     </li>
   );
+}
+
+function MachineBurnRate({ environmentId }: { readonly environmentId: EnvironmentId }) {
+  const tokensPerMinute = useEnvironmentBurnRate(environmentId);
+  return tokensPerMinute > 0 ? <BurnRateValue tokensPerMinute={tokensPerMinute} /> : null;
 }
 
 function VerdictCell({

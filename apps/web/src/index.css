@@ -237,6 +237,7 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   --color-flame-base: var(--color-red-600);
   --color-flame-body: var(--color-orange-500);
   --color-flame-tip: var(--color-amber-400);
+  --color-flame-core: var(--color-yellow-200);
   --color-warning-foreground: var(--warning-foreground);
   --color-warning: var(--warning);
   --color-warning-surface: var(--warning-surface);
@@ -3131,4 +3132,46 @@ code {
 [data-workspace-keyboard-focus]:focus {
   outline: 2px solid var(--ring);
   outline-offset: -2px;
+}
+
+/* The burn-rate flame's hot copy. Opacity and scale only, stepped like the
+   indicator pulses, so it composites without repainting every vsync. */
+.burn-flame-flicker {
+  opacity: 0;
+  transform-origin: 50% 100%;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .burn-flame-flicker {
+    animation: burn-flame-flicker var(--burn-flame-period, 2.4s) infinite;
+  }
+  .burn-flame-flicker[data-heat="2"] {
+    --burn-flame-period: 1.6s;
+    --burn-flame-peak: 0.75;
+  }
+  .burn-flame-flicker[data-heat="3"] {
+    --burn-flame-period: 1s;
+    --burn-flame-peak: 0.9;
+  }
+  .burn-flame-flicker[data-heat="4"] {
+    --burn-flame-period: 0.6s;
+    --burn-flame-peak: 1;
+    --burn-flame-lick: 1.15;
+  }
+}
+@keyframes burn-flame-flicker {
+  0%,
+  100% {
+    opacity: 0;
+    scale: 1;
+    animation-timing-function: steps(5);
+  }
+  45% {
+    opacity: var(--burn-flame-peak, 0.55);
+    scale: 1 var(--burn-flame-lick, 1.06);
+    animation-timing-function: steps(5);
+  }
+  70% {
+    opacity: calc(var(--burn-flame-peak, 0.55) * 0.5);
+    scale: 1;
+  }
 }

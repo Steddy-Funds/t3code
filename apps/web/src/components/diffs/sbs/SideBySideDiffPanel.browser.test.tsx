@@ -23,10 +23,6 @@ import { SideBySideDiffView } from "./SideBySideDiffView";
 const COLLAPSE_KEY = "t3code.sbsDiff.collapseUnchanged";
 const HIGHLIGHT_KEY = "t3code.sbsDiff.highlightMode";
 
-// ---------------------------------------------------------------------------
-// Fixtures
-// ---------------------------------------------------------------------------
-
 const pad = (n: number) => String(n).padStart(3, "0");
 const base = (count = 40) =>
   Array.from({ length: count }, (_, index) => `const value${pad(index + 1)} = ${index + 1};`);
@@ -109,10 +105,6 @@ const loaderOf = (byName: Readonly<Record<string, Texts>>) =>
 const tooLarge = { _tag: "OrchestrationGetTurnDiffFileContentsError", reason: "too_large" };
 const binary = { _tag: "OrchestrationGetTurnDiffFileContentsError", reason: "binary" };
 
-// ---------------------------------------------------------------------------
-// Mounting
-// ---------------------------------------------------------------------------
-
 type PanelOverrides = Partial<SideBySideDiffPanelProps> & {
   readonly files: ReadonlyArray<SbsFileEntry>;
 };
@@ -164,10 +156,6 @@ function mount(
   return render(<Harness {...props} />, { container: container(), router: false });
 }
 
-// ---------------------------------------------------------------------------
-// DOM helpers
-// ---------------------------------------------------------------------------
-
 const all = (root: ParentNode, selector: string) =>
   Array.from(root.querySelectorAll<HTMLElement>(selector));
 const one = (root: ParentNode, selector: string) => root.querySelector<HTMLElement>(selector);
@@ -194,10 +182,6 @@ async function focusPane(screen: Screen, side: Side = "additions") {
 async function showsFile(screen: Screen, tag: string) {
   await vi.waitFor(() => expect(codeOf(screen, "additions")).toContain(`const ${tag} = 1;`));
 }
-
-// ---------------------------------------------------------------------------
-// Showing a file
-// ---------------------------------------------------------------------------
 
 describe("showing a file", () => {
   it("loads both sides whole and shows them", async () => {
@@ -335,10 +319,6 @@ describe("showing a file", () => {
     expect(scrollerOf(screen, "additions")).toBeNull();
   });
 });
-
-// ---------------------------------------------------------------------------
-// Picking files
-// ---------------------------------------------------------------------------
 
 describe("picking files", () => {
   const texts = {
@@ -486,10 +466,6 @@ describe("picking files", () => {
     expect(one(screen.container, "[data-sbs-edge-hint]")).toBeNull();
   });
 });
-
-// ---------------------------------------------------------------------------
-// h. Messages in place of a view
-// ---------------------------------------------------------------------------
 
 describe("what the loader says it cannot show", () => {
   const texts = textsOf({ 10: "alpha" });
@@ -745,10 +721,6 @@ describe("what the loader says it cannot show", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// f. Patch-only without a loader
-// ---------------------------------------------------------------------------
-
 describe("without a way to read whole files", () => {
   it("shows the patch's hunks with a notice, and never calls a loader", async () => {
     await using screen = await mount({ files: [twoHunkEntry()] });
@@ -806,10 +778,6 @@ describe("without a way to read whole files", () => {
     await expect.element(screen.getByRole("button", { name: "Retry" })).toBeVisible();
   });
 });
-
-// ---------------------------------------------------------------------------
-// A patch that has not arrived
-// ---------------------------------------------------------------------------
 
 describe("a pending patch", () => {
   const texts = textsOf({ 10: "alpha" });
@@ -886,10 +854,6 @@ describe("a pending patch", () => {
     await expect.element(loadingOf(screen)).toBeVisible();
   });
 });
-
-// ---------------------------------------------------------------------------
-// An answer for a file that is no longer shown
-// ---------------------------------------------------------------------------
 
 describe("answers that arrive late", () => {
   const texts = {
@@ -1029,10 +993,6 @@ describe("answers that arrive late", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// Settings the panel remembers
-// ---------------------------------------------------------------------------
-
 describe("remembered settings", () => {
   const texts = textsOf({ 10: "alpha", 30: "beta" });
   const props = () => ({
@@ -1111,10 +1071,6 @@ describe("remembered settings", () => {
     );
   });
 });
-
-// ---------------------------------------------------------------------------
-// renderView
-// ---------------------------------------------------------------------------
 
 describe("a caller's own view", () => {
   const texts = textsOf({ 10: "alpha" });

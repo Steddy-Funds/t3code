@@ -75,7 +75,11 @@ export function sbsVisibleConnectors(input: SbsConnectorInput): ReadonlyArray<Sb
     // A band whose two ends are off opposite edges still crosses the viewport.
     if (Math.max(left.bottom, right.bottom) <= 0) return;
     if (Math.min(left.top, right.top) >= viewportHeight) return;
-    connectors.push({ change: index, kind: change.kind, path: sbsConnectorPath(left, right, width) });
+    connectors.push({
+      change: index,
+      kind: change.kind,
+      path: sbsConnectorPath(left, right, width),
+    });
   });
   return connectors;
 }

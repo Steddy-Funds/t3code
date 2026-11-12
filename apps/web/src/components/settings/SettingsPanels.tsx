@@ -1358,7 +1358,11 @@ export function DiffsSettingsPanel() {
             >
               <SelectTrigger size="sm" className="w-full sm:w-40" aria-label="Diff layout">
                 <SelectValue>
-                  {DIFF_LAYOUT_LABELS[settings.diffSideBySide ? "side-by-side" : settings.diffLayout]}
+                  {
+                    DIFF_LAYOUT_LABELS[
+                      settings.diffSideBySide ? "side-by-side" : settings.diffLayout
+                    ]
+                  }
                 </SelectValue>
               </SelectTrigger>
               <SelectPopup align="end" alignItemWithTrigger={false}>

@@ -3,6 +3,7 @@ import { LineDiffRangeCache, type FileContents, type FileDiffMetadata } from "@p
 import type { KeybindingCommand } from "@t3tools/contracts";
 import type { ThemeEditorColors } from "@t3tools/shared/themePalettes";
 import {
+  useEffectEvent,
   useLayoutEffect,
   useRef,
   useState,
@@ -538,12 +539,15 @@ export function SideBySideDiffView<T = unknown>(props: SideBySideDiffViewProps<T
     setRevealRequest((request) => request + 1);
   };
 
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- scrolls the panes to a difference, a match or a note once the rows that hold it are in the DOM
-  useLayoutEffect(() => {
+  const revealPending = useEffectEvent(() => {
     const reveal = pendingReveal.current;
     pendingReveal.current = null;
     if (reveal?.kind === "group") stepTo(reveal.group);
     else if (reveal) revealLine(reveal);
+  });
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- scrolls the panes to a difference, a match or a note once the rows that hold it are in the DOM
+  useLayoutEffect(() => {
+    if (revealRequest > 0) revealPending();
   }, [revealRequest]);
 
   const toggleCollapse = (collapse: boolean) => {

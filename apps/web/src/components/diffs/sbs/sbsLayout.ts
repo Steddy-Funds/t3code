@@ -1,7 +1,7 @@
 import type { SbsDocument, SbsLineRange, SbsSide } from "./sbsModel";
 
 /** Unchanged lines kept beside a change when the rest of the run is folded. JetBrains' default. */
-export const SBS_FOLD_CONTEXT_LINES = 4;
+const SBS_FOLD_CONTEXT_LINES = 4;
 /** A fold that would hide fewer lines than this is not made. */
 const MIN_FOLDED_LINES = 2;
 
@@ -193,7 +193,7 @@ export function sbsRowCount(layout: SbsLayout, side: SbsSide): number {
 }
 
 /** The segment a row belongs to. A row past the end gives the last segment. */
-export function sbsSegmentAtRow(layout: SbsLayout, side: SbsSide, row: number): number {
+function sbsSegmentAtRow(layout: SbsLayout, side: SbsSide, row: number): number {
   const starts = layout.rows[side];
   let low = 0;
   let high = layout.segments.length - 1;
@@ -241,7 +241,11 @@ export function sbsLineRow(layout: SbsLayout, side: SbsSide, line: number): SbsL
   }
   const segment = segments[low];
   if (segment === undefined) {
-    return { segment: Math.max(0, segments.length - 1), row: sbsRowCount(layout, side), folded: false };
+    return {
+      segment: Math.max(0, segments.length - 1),
+      row: sbsRowCount(layout, side),
+      folded: false,
+    };
   }
   const firstRow = layout.rows[side][low]!;
   if (segment.kind === "fold") return { segment: low, row: firstRow, folded: true };
@@ -272,7 +276,10 @@ export function sbsFoldsCovering(
   const folds: number[] = [];
   for (const segment of layout.segments) {
     if (segment.kind !== "fold") continue;
-    if (segment[side].start < Math.max(range.end, range.start + 1) && segment[side].end > range.start) {
+    if (
+      segment[side].start < Math.max(range.end, range.start + 1) &&
+      segment[side].end > range.start
+    ) {
       folds.push(segment.fold);
     }
   }

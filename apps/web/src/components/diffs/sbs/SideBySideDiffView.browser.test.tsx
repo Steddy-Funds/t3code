@@ -19,10 +19,6 @@ import {
 type Side = "deletions" | "additions";
 const SIDES = ["deletions", "additions"] as const;
 
-// ---------------------------------------------------------------------------
-// Fixtures
-// ---------------------------------------------------------------------------
-
 const pad = (n: number) => String(n).padStart(3, "0");
 
 /** `count` lines, each unique: `const value007 = 7;`. */
@@ -85,10 +81,6 @@ function twoHunkPatch() {
   return patchOf([hunk(18, 21), hunk(78, 81)]);
 }
 
-// ---------------------------------------------------------------------------
-// Mounting
-// ---------------------------------------------------------------------------
-
 type HarnessProps = Partial<SideBySideDiffViewProps> & { readonly fileDiff: FileDiffMetadata };
 
 function Harness({
@@ -128,10 +120,6 @@ function mount(props: HarnessProps, size: { width?: number; height?: number } = 
   // The view needs no routes, only a box to fill.
   return render(<Harness {...props} />, { container, router: false });
 }
-
-// ---------------------------------------------------------------------------
-// DOM helpers
-// ---------------------------------------------------------------------------
 
 const all = (root: ParentNode, selector: string) =>
   Array.from(root.querySelectorAll<HTMLElement>(selector));
@@ -226,10 +214,6 @@ function textPointAt(code: HTMLElement, column: number) {
 }
 
 const SCROLL_TOLERANCE = 1.5;
-
-// ---------------------------------------------------------------------------
-// a. Stepping through differences
-// ---------------------------------------------------------------------------
 
 describe("stepping through differences", () => {
   it("draws one connector per change and counts them", async () => {
@@ -340,10 +324,6 @@ describe("stepping through differences", () => {
     await expect.element(screen.getByRole("button", { name: "Next difference" })).toBeEnabled();
   });
 });
-
-// ---------------------------------------------------------------------------
-// Stepping past the last difference
-// ---------------------------------------------------------------------------
 
 describe("stepping past the last difference", () => {
   const oneChange = () => diffOf(base(60), base(60).with(29, "const changed030 = 30;"));
@@ -489,10 +469,6 @@ describe("stepping past the last difference", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// Open the source
-// ---------------------------------------------------------------------------
-
 describe("opening the source", () => {
   it.each([
     ["F4", "{F4}"],
@@ -564,10 +540,6 @@ describe("opening the source", () => {
     expect(onOpenSource).toHaveBeenLastCalledWith({ side: "additions", line: 81 });
   });
 });
-
-// ---------------------------------------------------------------------------
-// b. Pure insertions and deletions
-// ---------------------------------------------------------------------------
 
 describe("insertions and deletions", () => {
   const inserted = ["const added1 = 1;", "const added2 = 2;", "const added3 = 3;"];
@@ -664,10 +636,6 @@ describe("insertions and deletions", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// Highlight modes and the collapse switch
-// ---------------------------------------------------------------------------
-
 describe("highlighting", () => {
   const modified = () => diffOf(base(40), base(40).with(19, "const changed020 = 20;"));
 
@@ -716,10 +684,6 @@ describe("highlighting", () => {
     }
   });
 });
-
-// ---------------------------------------------------------------------------
-// c. Scrolling the two panes together
-// ---------------------------------------------------------------------------
 
 describe("scrolling the panes together", () => {
   const block = Array.from({ length: 30 }, (_, index) => `const inserted${pad(index + 1)} = 0;`);
@@ -831,10 +795,6 @@ function pathEnds(path: string): [number, number] {
   return [left, right];
 }
 
-// ---------------------------------------------------------------------------
-// Windowing
-// ---------------------------------------------------------------------------
-
 describe("windowed rows", () => {
   it("renders only the rows near the viewport of a long file", async () => {
     const before = base(5000);
@@ -862,10 +822,6 @@ describe("windowed rows", () => {
     await vi.waitFor(() => expect(rowByNumber(screen, "deletions", 5000)).toBeDefined());
   });
 });
-
-// ---------------------------------------------------------------------------
-// New and deleted files
-// ---------------------------------------------------------------------------
 
 describe("new and deleted files", () => {
   it("shows a new file as one tinted pane with no divider", async () => {
@@ -901,10 +857,6 @@ describe("new and deleted files", () => {
     await vi.waitFor(() => expect(findBarOf(screen)?.textContent).toContain("1/1"));
   });
 });
-
-// ---------------------------------------------------------------------------
-// e. Ctrl/Cmd+click on a word
-// ---------------------------------------------------------------------------
 
 describe("activating a token", () => {
   const modified = () => diffOf(base(60), base(60).with(29, "const changed030 = 30;"));
@@ -1019,10 +971,6 @@ describe("activating a token", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// f. Patch-only mode
-// ---------------------------------------------------------------------------
-
 describe("patch-only mode", () => {
   it("shows the hunks with an omitted row between them and no fold to open it", async () => {
     await using screen = await mount({ fileDiff: twoHunkPatch(), collapseUnchanged: true });
@@ -1127,10 +1075,6 @@ describe("patch-only mode", () => {
     await vi.waitFor(() => expect(Math.abs(right.scrollTop - 30)).toBeLessThan(SCROLL_TOLERANCE));
   });
 });
-
-// ---------------------------------------------------------------------------
-// j. Folds and the collapse switch
-// ---------------------------------------------------------------------------
 
 describe("folds", () => {
   it("folds the unchanged runs between the changes", async () => {
@@ -1264,10 +1208,6 @@ describe("folds", () => {
     expect(rowsOf(screen, "additions")).toHaveLength(60);
   });
 });
-
-// ---------------------------------------------------------------------------
-// k. Find
-// ---------------------------------------------------------------------------
 
 describe("find", () => {
   const withNeedle = () => {
@@ -1439,10 +1379,6 @@ describe("find", () => {
     expect(onOpenAnnotationChange).toHaveBeenCalledExactlyOnceWith(null);
   });
 });
-
-// ---------------------------------------------------------------------------
-// d. Annotations
-// ---------------------------------------------------------------------------
 
 describe("annotations", () => {
   const near: SbsAnnotation<{ text: string }> = {
@@ -1742,10 +1678,6 @@ describe("annotations", () => {
     await vi.waitFor(() => expect(cardOf(screen)?.dataset.sbsAnnotationCard).toBe("near"));
   });
 });
-
-// ---------------------------------------------------------------------------
-// i. Selecting lines and text
-// ---------------------------------------------------------------------------
 
 describe("selecting a range", () => {
   const gutterOf = (screen: Screen, side: Side, line: number) =>

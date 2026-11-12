@@ -43,7 +43,8 @@ export function sbsTextPieces(
     cuts.add(Math.min(Math.max(start, 0), text.length));
     cuts.add(Math.min(Math.max(end, 0), text.length));
   };
-  for (const token of tokens ?? []) addRange([token.start, token.end]);
+  const lineTokens = tokens ?? [];
+  for (const token of lineTokens) addRange([token.start, token.end]);
   marks.changed.forEach(addRange);
   marks.matches.forEach(addRange);
   if (marks.currentMatch) addRange(marks.currentMatch);
@@ -54,9 +55,8 @@ export function sbsTextPieces(
   for (let index = 0; index + 1 < columns.length; index += 1) {
     const start = columns[index]!;
     const end = columns[index + 1]!;
-    while (tokens && tokenIndex < tokens.length && tokens[tokenIndex]!.end <= start)
-      tokenIndex += 1;
-    const token = tokens?.[tokenIndex];
+    while (tokenIndex < lineTokens.length && lineTokens[tokenIndex]!.end <= start) tokenIndex += 1;
+    const token = lineTokens[tokenIndex];
     pieces.push({
       start,
       text: text.slice(start, end),
@@ -87,12 +87,9 @@ function hastText(node: HastNode): string {
 }
 
 /**
- * The tokens of one highlighted line as Pierre's worker renders it: a row element whose
- * children are one span per token. Null when the row does not spell out `text`, so a line
- * the highlighter saw differently falls back to plain text instead of miscoloured columns.
- *
- * Whitespace joins the token before it and neighbours that look the same are one token: every
- * token is an element to style, and styling them is most of what a scroll costs.
+ * The tokens of one row Pierre's worker rendered, one span each; null when it does not spell
+ * `text`, so the line falls back to plain text. Whitespace and same-styled neighbours merge into
+ * one token: each token is an element to style, which is most of what a scroll costs.
  */
 export function sbsTokensFromHast(row: unknown, text: string): ReadonlyArray<SbsToken> | null {
   if (typeof row !== "object" || row === null) return null;

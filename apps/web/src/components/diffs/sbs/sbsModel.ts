@@ -51,7 +51,7 @@ export interface SbsDocument {
 }
 
 /** How wide a tab is drawn. */
-export const SBS_TAB_SIZE = 4;
+const SBS_TAB_SIZE = 4;
 
 function withoutLineEnding(line: string): string {
   if (!line.endsWith("\n")) return line;
@@ -191,8 +191,14 @@ export function sbsGroupRanges(document: SbsDocument): SbsGroupRanges {
   for (const change of document.changes) {
     const group = ranges[change.group];
     ranges[change.group] = {
-      deletions: { start: group?.deletions.start ?? change.deletions.start, end: change.deletions.end },
-      additions: { start: group?.additions.start ?? change.additions.start, end: change.additions.end },
+      deletions: {
+        start: group?.deletions.start ?? change.deletions.start,
+        end: change.deletions.end,
+      },
+      additions: {
+        start: group?.additions.start ?? change.additions.start,
+        end: change.additions.end,
+      },
     };
   }
   groupRanges.set(document, ranges);

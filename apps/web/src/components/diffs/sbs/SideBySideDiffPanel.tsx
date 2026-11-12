@@ -303,7 +303,13 @@ export function SideBySideDiffPanel(props: SideBySideDiffPanelProps) {
   const whole =
     outcome?.kind === "loaded" ? wholeFileDiffOf(outcome.files, patch, ignoreWhitespace) : null;
   const failure: DiffFileContentsFailure | null =
-    outcome === undefined ? null : outcome.kind === "failed" ? outcome.failure : whole ? null : "failed";
+    outcome === undefined
+      ? null
+      : outcome.kind === "failed"
+        ? outcome.failure
+        : whole
+          ? null
+          : "failed";
   const patchOnly = whole === null;
 
   if (patchOnly && failure === "binary") {

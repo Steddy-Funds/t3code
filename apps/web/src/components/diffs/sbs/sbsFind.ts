@@ -30,7 +30,10 @@ export function sbsFindMatches(lines: ReadonlyArray<string>, query: string): Sbs
   return result;
 }
 
-const matchesByLine = new WeakMap<SbsFindResult, ReadonlyMap<number, ReadonlyArray<SbsFindMatch>>>();
+const matchesByLine = new WeakMap<
+  SbsFindResult,
+  ReadonlyMap<number, ReadonlyArray<SbsFindMatch>>
+>();
 
 /** A result's matches under the line each is on. */
 export function sbsFindMatchesByLine(

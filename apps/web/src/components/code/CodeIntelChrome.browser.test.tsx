@@ -161,7 +161,8 @@ describe("the Python environment field in the code-intel chip", () => {
     await using _screen = screen;
     await expect.element(field()).toHaveValue("");
 
-    settings = Atom.make({ codeIntel: { pythonEnvironments: { [CWD]: VENV } } });
+    const loaded: Record<string, string> = { [CWD]: VENV };
+    settings = Atom.make({ codeIntel: { pythonEnvironments: loaded } });
     await screen.rerender(chip({}, onChanged));
 
     await expect.element(field()).toHaveValue(VENV);

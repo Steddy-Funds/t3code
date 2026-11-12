@@ -57,7 +57,8 @@ import ExternalLibraries from "./ExternalLibraries";
 const environmentId = EnvironmentId.make("env-libs");
 const threadRef = scopeThreadRef(environmentId, ThreadId.make("thread-libs"));
 
-const SITE_PACKAGES = "/work/.venv/lib/python3.13/site-packages";
+// Outside the workspace, so it lists from its own folder.
+const SITE_PACKAGES = "/venvs/shop/lib/python3.13/site-packages";
 const TYPESHED = "/cache/ty/typeshed/stdlib";
 
 function python(libraryRoots: CodeServerStatus["libraryRoots"]): CodeServerStatus {
@@ -164,6 +165,29 @@ describe("ExternalLibraries", () => {
     );
   });
 
+  it("opens a file in the thread on screen, as the Project pane keeps its tree across threads", async () => {
+    setup([python([{ path: SITE_PACKAGES, label: "site-packages", kind: "site-packages" }])]);
+    const nextThread = scopeThreadRef(environmentId, ThreadId.make("thread-libs-next"));
+    await using screen = await mount();
+    await expandSection();
+    treeRow("site-packages/")!.click();
+    await vi.waitFor(() => expect(treeRow("site-packages/six.py")).not.toBeNull());
+
+    await screen.rerender(
+      <ExternalLibraries environmentId={environmentId} cwd="/work" threadRef={nextThread} />,
+    );
+    treeRow("site-packages/six.py")!.click();
+
+    const surfaces = (ref: typeof threadRef) =>
+      selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, ref).surfaces;
+    await vi.waitFor(() =>
+      expect(surfaces(nextThread)).toEqual([
+        expect.objectContaining({ id: `file:${SITE_PACKAGES}/six.py` }),
+      ]),
+    );
+    expect(surfaces(threadRef)).toEqual([]);
+  });
+
   it("folds roots past the fourth behind a count, and unfolds them without closing open folders", async () => {
     setup([
       python([{ path: SITE_PACKAGES, label: "site-packages", kind: "site-packages" }]),
@@ -191,8 +215,13 @@ describe("ExternalLibraries", () => {
     expect(page.getByRole("button", { name: /more$/ }).elements()).toEqual([]);
   });
 
-  it("shows a retry line when a folder fails to list, keeps the tree, and lists again on retry", async () => {
-    setup([python([{ path: SITE_PACKAGES, label: "site-packages", kind: "site-packages" }])]);
+  it("shows a retry line when a folder fails to list, keeps the tree, and lists again on retry only", async () => {
+    setup([
+      python([
+        { path: SITE_PACKAGES, label: "site-packages", kind: "site-packages" },
+        { path: TYPESHED, label: "typeshed", kind: "stubs" },
+      ]),
+    ]);
     mocks.failing.add(`${SITE_PACKAGES}\n`);
     await using _screen = await mount();
     await expandSection();
@@ -201,6 +230,14 @@ describe("ExternalLibraries", () => {
     await expect.element(retry()).toBeVisible();
     expect(treeRow("site-packages/")).not.toBeNull();
     expect(treeRow("site-packages/six.py")).toBeNull();
+    // Opening another folder doesn't ask for the failed one again.
+    treeRow("typeshed/")!.click();
+    await vi.waitFor(() => expect(mocks.listings).toContainEqual({ cwd: TYPESHED, directoryPath: "" }));
+    expect(mocks.listings).toEqual([
+      { cwd: SITE_PACKAGES, directoryPath: "" },
+      { cwd: TYPESHED, directoryPath: "" },
+    ]);
+    await expect.element(retry()).toBeVisible();
 
     mocks.failing.clear();
     await retry().click();
@@ -208,7 +245,45 @@ describe("ExternalLibraries", () => {
     expect(retry().elements()).toEqual([]);
     expect(mocks.listings).toEqual([
       { cwd: SITE_PACKAGES, directoryPath: "" },
+      { cwd: TYPESHED, directoryPath: "" },
       { cwd: SITE_PACKAGES, directoryPath: "" },
     ]);
+  });
+
+  it("lists a root inside the workspace through it, so pnpm's links into the root node_modules stay", async () => {
+    const WEB_MODULES = "/work/apps/web/node_modules";
+    setup([
+      {
+        languageId: "typescript",
+        name: "tsgo",
+        state: "ready",
+        libraryRoots: [{ path: WEB_MODULES, label: "web", kind: "node_modules" }],
+      },
+    ]);
+    mocks.entries.set("/work\napps/web/node_modules", [
+      { path: "apps/web/node_modules/react", kind: "directory" },
+    ]);
+    mocks.entries.set("/work\napps/web/node_modules/react", [
+      { path: "apps/web/node_modules/react/index.js", kind: "file" },
+    ]);
+    await using _screen = await mount();
+    await header().click();
+    await vi.waitFor(() => expect(treeRow("web/")).not.toBeNull());
+
+    treeRow("web/")!.click();
+    await vi.waitFor(() => expect(treeRow("web/react/")).not.toBeNull());
+    treeRow("web/react/")!.click();
+    await vi.waitFor(() => expect(treeRow("web/react/index.js")).not.toBeNull());
+    expect(mocks.listings).toEqual([
+      { cwd: "/work", directoryPath: "apps/web/node_modules" },
+      { cwd: "/work", directoryPath: "apps/web/node_modules/react" },
+    ]);
+
+    treeRow("web/react/index.js")!.click();
+    await vi.waitFor(() =>
+      expect(
+        selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, threadRef).surfaces,
+      ).toEqual([expect.objectContaining({ id: `file:${WEB_MODULES}/react/index.js` })]),
+    );
   });
 });

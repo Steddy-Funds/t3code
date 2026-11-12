@@ -3,7 +3,12 @@ import { RunId, TurnItemId } from "@t3tools/contracts";
 import type { ReviewNote } from "@t3tools/shared/reviewNote";
 import { describe, expect, it } from "vite-plus/test";
 
-import { anchorReviewNote, placeReviewNotes } from "./reviewNoteAnchoring";
+import {
+  anchorReviewNote,
+  type PlacedReviewNote,
+  placeReviewNotes,
+  stepReviewNote,
+} from "./reviewNoteAnchoring";
 
 const REVISION = "3b18e512dba79e4c8300dd08aeb37f8e728b8dad";
 
@@ -147,6 +152,27 @@ describe("placeReviewNotes", () => {
       [earlier.id, "app", "exact"],
       [later.id, "app", "exact"],
       [pending.id, "later", "pending"],
+    ]);
+  });
+});
+
+describe("stepReviewNote", () => {
+  it("steps past a note that turned out unplaced instead of starting over", () => {
+    const at = (id: string, kind: "exact" | "unattached"): PlacedReviewNote => ({
+      note: note({ id: TurnItemId.make(`review-note:thread-1:${id}`) }),
+      fileKey: id,
+      anchor: kind === "exact" ? { kind, startLine: 2, endLine: 3 } : { kind },
+    });
+    const notes = [at("a", "exact"), at("b", "unattached"), at("c", "exact")];
+    const step = (from: string | null, direction: 1 | -1) =>
+      stepReviewNote(notes, from && `review-note:thread-1:${from}`, direction)?.fileKey;
+
+    expect([step("b", 1), step("b", -1), step("c", 1), step(null, 1), step(null, -1)]).toEqual([
+      "c",
+      "a",
+      "a",
+      "a",
+      "c",
     ]);
   });
 });

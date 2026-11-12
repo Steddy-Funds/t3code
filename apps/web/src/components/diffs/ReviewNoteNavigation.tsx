@@ -16,6 +16,7 @@ import {
   cachedReviewNoteAnchor,
   type PlacedReviewNote,
   placeReviewNotes,
+  stepReviewNote,
 } from "./reviewNoteAnchoring";
 import { useReviewNoteDismissals } from "./reviewNoteDismissals";
 import { ReviewNoteIconAction } from "./ReviewNoteAnnotation";
@@ -142,13 +143,7 @@ export function useDiffReviewNotes({
   }, [threadKey, revealRequest, placed, showNote]);
 
   const step = (direction: 1 | -1) => {
-    const index = steps.findIndex(({ note }) => note.id === currentNoteId);
-    const next =
-      index < 0
-        ? direction === 1
-          ? steps[0]
-          : steps.at(-1)
-        : steps[(index + direction + steps.length) % steps.length];
+    const next = stepReviewNote(shown, currentNoteId, direction);
     if (next) showNote(next);
   };
 

@@ -151,3 +151,22 @@ export function placeReviewNotes(
     )
     .map((entry) => entry.placed);
 }
+
+/**
+ * The nearest note in `direction` from the current one that may sit on a line, wrapping. The
+ * current note counts by its place in `notes`, so one that turned out unplaced is stepped past.
+ */
+export function stepReviewNote(
+  notes: ReadonlyArray<PlacedReviewNote>,
+  currentId: string | null,
+  direction: 1 | -1,
+): PlacedReviewNote | undefined {
+  const isStep = ({ anchor }: PlacedReviewNote) => anchor.kind !== "unattached";
+  const from = notes.findIndex(({ note }) => note.id === currentId);
+  if (from < 0) return direction === 1 ? notes.find(isStep) : notes.findLast(isStep);
+  for (let offset = 1; offset <= notes.length; offset += 1) {
+    const candidate = notes[(from + direction * offset + notes.length * offset) % notes.length];
+    if (candidate && isStep(candidate)) return candidate;
+  }
+  return undefined;
+}

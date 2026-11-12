@@ -54,6 +54,8 @@ export interface SettingsSearchItem {
   readonly to: SettingsPath;
   readonly targetId?: string;
   readonly searchTerms?: ReadonlyArray<string>;
+  /** Of `searchTerms`, the keys bound only in a scope: an exact match there ranks below others. */
+  readonly scopedSearchTerms?: ReadonlyArray<string>;
   readonly scope?: SettingsSearchScope;
   readonly desktopOnly?: boolean;
   readonly macOnly?: boolean;
@@ -172,14 +174,14 @@ const SHORTCUT_MODIFIER_NAME =
 const KEYBINDING_SEARCH_ITEMS = STATIC_KEYBINDING_COMMANDS.toSorted((left, right) =>
   commandLabel(left).localeCompare(commandLabel(right)),
 ).map((command) => {
-  const defaultKeys = DEFAULT_KEYBINDINGS.filter((binding) => binding.command === command).map(
-    (binding) => binding.key,
-  );
+  const defaults = DEFAULT_KEYBINDINGS.filter((binding) => binding.command === command);
+  const defaultKeys = defaults.map((binding) => binding.key);
   return {
     id: keybindingSearchAnchorId(command),
     title: commandLabel(command),
     to: "/settings/keybindings" as const,
     searchTerms: [command, ...defaultKeys],
+    scopedSearchTerms: defaults.flatMap(({ key, when }) => (when === undefined ? [] : [key])),
     secondary: true,
     ...(defaultKeys.length === 0 ? { targetId: "keybindings" } : {}),
   };
@@ -1630,7 +1632,10 @@ export function searchSettings(
       ];
       if (!queryTokens.every((token) => fields.some((field) => field.includes(token)))) return [];
 
-      const exactPhraseField = fields.findIndex((field) => field.includes(normalizedQuery));
+      const scopedTerms = (item.scopedSearchTerms ?? []).map(normalizeSearchText);
+      const exactPhraseField = fields.findIndex(
+        (field) => field.includes(normalizedQuery) && !scopedTerms.includes(field),
+      );
       const rank =
         title === normalizedQuery
           ? 5

@@ -191,6 +191,9 @@ describe("searchSettings", () => {
     expect(searchSettings("toggle sidebar")[0]?.id).toBe("keybinding-sidebar.toggle");
     expect(searchSettings("sidebar.toggle")[0]?.id).toBe("keybinding-sidebar.toggle");
     expect(searchSettings("mod+b")[0]?.id).toBe("keybinding-sidebar.toggle");
+    expect(searchSettings("mod+b").map((item) => item.id)).toContain(
+      "keybinding-code.goToDeclaration",
+    );
     expect(searchSettings("copy link")[0]).toMatchObject({
       id: "keybinding-thread.copyReference",
       to: "/settings/keybindings",

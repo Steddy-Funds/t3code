@@ -62,8 +62,9 @@ export interface SideBySideDiffPanelProps {
   /**
    * Renders the view. A caller that adds comments or navigation wraps `SideBySideDiffView`
    * here and passes its annotation and selection props; nothing else reaches inside the view.
+   * `entry` is the file shown; `props.fileDiff` is that file as the view has it.
    */
-  readonly renderView?: (props: SideBySideDiffViewProps) => ReactNode;
+  readonly renderView?: (props: SideBySideDiffViewProps, entry: SbsFileEntry) => ReactNode;
 }
 
 type LoadOutcome =
@@ -127,7 +128,7 @@ function wholeFileDiffOf(
   return result;
 }
 
-function Notice({ children }: { children: ReactNode }) {
+export function SbsNotice({ children }: { children: ReactNode }) {
   return (
     <p className="flex shrink-0 items-center gap-2 border-b border-border/70 bg-muted/40 px-3 py-1.5 text-2xs text-muted-foreground">
       {children}
@@ -343,7 +344,7 @@ export function SideBySideDiffPanel(props: SideBySideDiffPanelProps) {
   }
 
   const notice = patchOnly ? (
-    <Notice>
+    <SbsNotice>
       {failure === "failed"
         ? patchState.truncated
           ? "The whole file could not be loaded, and its patch is cut off. The changes shown are incomplete."
@@ -356,11 +357,11 @@ export function SideBySideDiffPanel(props: SideBySideDiffPanelProps) {
           Retry
         </Button>
       ) : null}
-    </Notice>
+    </SbsNotice>
   ) : whole.sameness === "identical" ? (
-    <Notice>Contents are identical</Notice>
+    <SbsNotice>Contents are identical</SbsNotice>
   ) : whole.sameness === "ignored" ? (
-    <Notice>Differences ignored: only whitespace changed</Notice>
+    <SbsNotice>Differences ignored: only whitespace changed</SbsNotice>
   ) : null;
 
   const viewProps: SideBySideDiffViewProps = {
@@ -387,7 +388,11 @@ export function SideBySideDiffPanel(props: SideBySideDiffPanelProps) {
       key={`${fileId}:${outcome?.kind === "loaded" ? outcome.revision : ""}:${patchOnly}:${ignoreWhitespace}`}
       className="flex min-h-0 min-w-0 flex-1 flex-col"
     >
-      {props.renderView ? props.renderView(viewProps) : <SideBySideDiffView {...viewProps} />}
+      {props.renderView ? (
+        props.renderView(viewProps, entry)
+      ) : (
+        <SideBySideDiffView {...viewProps} />
+      )}
     </div>
   );
 }

@@ -1933,6 +1933,51 @@ describe("copy", () => {
       `${threeChangesAfter().slice(11, 14).join("\n")}\n`,
     );
   });
+
+  it("leaves a copy in the find field to the field, with lines picked in the gutter", async () => {
+    await using screen = await mount({ fileDiff: threeChanges() });
+    await vi.waitFor(() => expect(rowByNumber(screen, "additions", 14)).toBeDefined());
+    const gutter = (line: number) => one(rowByNumber(screen, "additions", line)!, ".sbs-gutter")!;
+    await userEvent.click(gutter(12));
+    await userEvent.click(gutter(14), { modifiers: ["Shift"] });
+
+    await press(screen, "additions", MOD_F);
+    await vi.waitFor(() => expect(findBarOf(screen)).not.toBeNull());
+    await userEvent.keyboard("needle");
+    const field = one(findBarOf(screen)!, "input") as HTMLInputElement;
+    field.select();
+
+    expect(copyFrom(field)).toBe("");
+  });
+
+  it("keeps a selection dragged out of the panes in the pane it started in", async () => {
+    await using screen = await mount({ fileDiff: threeChanges() });
+    await vi.waitFor(() => expect(statusOf(screen)).toBe("1 of 3"));
+    scrollerOf(screen, "additions").scrollTop = 0;
+    await vi.waitFor(() => expect(rowByNumber(screen, "additions", 1)).toBeDefined());
+    const at = (line: number, column: number) =>
+      textPointAt(one(rowByNumber(screen, "additions", line)!, ".sbs-code")!, column);
+    const lines = threeChangesAfter();
+
+    // Up into the toolbar: to the start of the first line.
+    const from = at(10, 4);
+    const status = textPointAt(one(screen.container, "[data-sbs-status]")!, 0);
+    window.getSelection()!.setBaseAndExtent(from.node, from.offset, status.node, status.offset);
+    expect(copyFrom(scrollerOf(screen, "additions"))).toBe(
+      [...lines.slice(0, 9), lines[9]!.slice(0, 4)].join("\n"),
+    );
+
+    // Past the pane's end in the panes' row, as a drag over the divider can leave it: forwards,
+    // so to the end of a line.
+    const start = at(3, 4);
+    const body = one(screen.container, ".sbs-diff")!;
+    const pane = one(screen.container, '[data-sbs-pane="additions"]')!;
+    const past = [...body.childNodes].indexOf(pane) + 1;
+    window.getSelection()!.setBaseAndExtent(start.node, start.offset, body, past);
+    const copied = copyFrom(scrollerOf(screen, "additions")).split("\n");
+    expect(copied.length).toBeGreaterThan(1);
+    expect(copied).toEqual([lines[2]!.slice(4), ...lines.slice(3, 2 + copied.length)]);
+  });
 });
 
 describe("selecting a range", () => {

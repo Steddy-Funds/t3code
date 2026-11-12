@@ -290,15 +290,19 @@ function noteSelectionStart(start: { current: SbsTextPoint | null }) {
 }
 
 /**
- * A selection stays in the pane it started in, as in an editor: dragged into the other pane, it
- * ends at the end (or, leftwards, the start) of its own pane's line at that height.
+ * A selection stays in the pane it started in, as in an editor: dragged out of it, it ends at the
+ * end (or, backwards, the start) of its own pane's line at that height.
  */
 function keepSelectionInOnePane() {
   const selection = document.getSelection();
   if (!selection?.anchorNode || !selection.focusNode || selection.isCollapsed) return;
   const pane = elementOf(selection.anchorNode)?.closest("[data-sbs-pane]");
   const focus = elementOf(selection.focusNode);
-  if (!pane || !focus || pane.contains(focus) || !pane.parentElement?.contains(focus)) return;
+  if (!pane || !focus) return;
+  const inPane = document.createRange();
+  inPane.selectNodeContents(pane);
+  const place = inPane.comparePoint(selection.focusNode, selection.focusOffset);
+  if (place === 0) return;
   const caret = document.createRange();
   caret.setStart(selection.focusNode, selection.focusOffset);
   const box = caret.getClientRects()[0] ?? focus.getBoundingClientRect();
@@ -309,8 +313,7 @@ function keepSelectionInOnePane() {
     code = row.querySelector(".sbs-code") ?? code;
   }
   if (!code) return;
-  const after = (pane.compareDocumentPosition(focus) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
-  selection.extend(code, after ? code.childNodes.length : 0);
+  selection.extend(code, place > 0 ? code.childNodes.length : 0);
 }
 
 function caretAt(x: number, y: number): { node: Node; offset: number } | null {
@@ -761,6 +764,7 @@ export function SideBySideDiffView<T = unknown>(props: SideBySideDiffViewProps<T
   };
 
   const handleCopy = (event: ClipboardEvent<HTMLDivElement>) => {
+    if (isEditableFocused(event.target)) return;
     keepSelectionInOnePane();
     const selected = textSelection();
     if (selected) {

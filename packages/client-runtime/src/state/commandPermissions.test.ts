@@ -350,19 +350,26 @@ it.effect.each([
   { scopes: [AuthOrchestrationReadScope], allowed: false },
   { scopes: [AuthFilesystemReadScope], allowed: false },
   { scopes: [AuthOrchestrationReadScope, AuthFilesystemReadScope], allowed: true },
-])("whole files of a turn's diff with grants [$scopes] are allowed: $allowed", ({ scopes, allowed }) =>
-  Effect.scoped(
-    Effect.gen(function* () {
-      const registry = yield* setup;
-      registry.set(sessions(env), AsyncResult.success({ ...grant(false), scopes, permissions: scopes }));
-      const contents = createCommandPermissions(
-        runtime,
-        ORCHESTRATION_V2_WS_METHODS.getTurnDiffFileContents,
-      );
-      expect(registry.get(contents.permissionAtom(env))).toBe(allowed);
-      expect(Exit.isSuccess(yield* contents.authorize(registry, env).pipe(Effect.exit))).toBe(allowed);
-    }),
-  ),
+])(
+  "whole files of a turn's diff with grants [$scopes] are allowed: $allowed",
+  ({ scopes, allowed }) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const registry = yield* setup;
+        registry.set(
+          sessions(env),
+          AsyncResult.success({ ...grant(false), scopes, permissions: scopes }),
+        );
+        const contents = createCommandPermissions(
+          runtime,
+          ORCHESTRATION_V2_WS_METHODS.getTurnDiffFileContents,
+        );
+        expect(registry.get(contents.permissionAtom(env))).toBe(allowed);
+        expect(Exit.isSuccess(yield* contents.authorize(registry, env).pipe(Effect.exit))).toBe(
+          allowed,
+        );
+      }),
+    ),
 );
 
 it.effect.each(["commit", "push", "commit_push", "create_pr", "commit_push_pr"] as const)(

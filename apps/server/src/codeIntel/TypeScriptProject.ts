@@ -79,7 +79,7 @@ interface Candidate {
   readonly loads: ReadonlyArray<string>;
 }
 
-const isSource = (name: string, source: RegExp) => source.test(name) && !/\.d\.[cm]?ts$/.test(name);
+const DECLARATION = /\.d\.[cm]?ts$/;
 
 const ownSources = (directory: string, config: ProjectConfig): Sources | undefined =>
   config.files === undefined && config.include === undefined
@@ -141,18 +141,26 @@ export const make = Effect.gen(function* () {
     }
   });
 
+  /**
+   * The first implementation file under `directory`, else its first declaration file: an ambient
+   * one may be in no project.
+   */
   const firstSourceUnder = Effect.fnUntraced(function* (
     directory: string,
     source: RegExp,
     budget: Budget,
   ) {
     let found: string | undefined;
+    let declaration: string | undefined;
     yield* walk(directory, Number.POSITIVE_INFINITY, budget, (current, listing) => {
-      const name = listing.files.find((file) => isSource(file, source));
+      const sources = listing.files.filter((file) => source.test(file));
+      const name = sources.find((file) => !DECLARATION.test(file));
       if (name !== undefined) found = path.join(current, name);
+      const first = sources[0];
+      if (declaration === undefined && first !== undefined) declaration = path.join(current, first);
       return found !== undefined;
     });
-    return found;
+    return found ?? declaration;
   });
 
   const isFile = (file: string) =>
@@ -178,7 +186,7 @@ export const make = Effect.gen(function* () {
       ...segments.slice(0, wildcard < 0 ? undefined : wildcard),
     );
     if (!KnownWorkspaces.isWithinRoot(path, start, root)) return undefined;
-    if (wildcard < 0 && isSource(start, source) && (yield* isFile(start))) return start;
+    if (wildcard < 0 && source.test(start) && (yield* isFile(start))) return start;
     return yield* firstSourceUnder(start, source, budget);
   });
 
@@ -187,7 +195,8 @@ export const make = Effect.gen(function* () {
     file: string,
     decode: (contents: string) => Option.Option<A>,
   ): Effect.Effect<A | undefined> =>
-    workspaceFileSystem.readFile({ cwd: root, relativePath: file }).pipe(
+    // Relative, so the read rule refuses a file outside the root, through a link too.
+    workspaceFileSystem.readFile({ cwd: root, relativePath: path.relative(root, file) }).pipe(
       Effect.map((read) =>
         read.exists === false || read.truncated
           ? undefined
@@ -239,7 +248,7 @@ export const make = Effect.gen(function* () {
       const candidate = path.resolve(sources.directory, file);
       if (
         KnownWorkspaces.isWithinRoot(path, candidate, root) &&
-        isSource(candidate, source) &&
+        source.test(candidate) &&
         (yield* isFile(candidate))
       ) {
         return candidate;

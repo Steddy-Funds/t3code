@@ -53,7 +53,6 @@ export interface ServerSession {
     use: Effect.Effect<A, E>,
   ) => Effect.Effect<A, E | LspConnectionClosedError>;
   readonly watchState: Effect.Effect<WorkspaceWatcher.WatchState>;
-  readonly hasOpenDocument: Effect.Effect<boolean>;
   /**
    * Without a watcher an edit on disk is invisible to the server. Checks the files an answer
    * points at, tells the server about the changed ones, and says whether to ask again.
@@ -251,7 +250,5 @@ export const make = Effect.fn("ServerSession.make")(function* (
     },
   );
 
-  const hasOpenDocument = Effect.sync(() => documents.values().some((document) => document.open));
-
-  return { withDocument, watchState: tree.state, hasOpenDocument, refreshChangedFiles };
+  return { withDocument, watchState: tree.state, refreshChangedFiles };
 });

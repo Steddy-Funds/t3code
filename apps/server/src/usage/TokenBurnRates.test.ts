@@ -12,6 +12,7 @@ import { makeTokenBurnMeter, TOKEN_BURN_SAMPLE_INTERVAL_MS } from "./TokenBurnRa
 const MINUTE = TOKEN_BURN_SAMPLE_INTERVAL_MS;
 const threadA = ThreadId.make("thread-a");
 const threadB = ThreadId.make("thread-b");
+const subagent = ThreadId.make("subagent");
 
 const turn = (
   id: string,
@@ -40,7 +41,7 @@ const turn = (
 });
 
 describe("token burn meter", () => {
-  it("counts each request once as its output streams in", () => {
+  it("counts each request once as its output streams in, a subagent's too", () => {
     const meter = makeTokenBurnMeter();
     meter.sample(0);
     // Request 1 starts, streams, and is reported again unchanged.
@@ -54,8 +55,16 @@ describe("token burn meter", () => {
     meter.record(threadA, turn("t1", null, "completed"));
     // Another turn's requests count separately.
     meter.record(threadB, turn("t2", { input: 500, output: 50 }));
+    // A subagent's request snapshots fill its input in late, then repeat it.
+    const request = (requestId: string, inputTokens: number, outputTokens: number) =>
+      meter.recordSubagentRequest(subagent, { requestId, inputTokens, outputTokens });
+    request("m1", 0, 5);
+    request("m1", 2_000, 40);
+    request("m1", 2_000, 40);
+    request("m2", 2_100, 10);
 
     expect(meter.sample(MINUTE)).toEqual([
+      { threadId: subagent, tokensPerMinute: 2_040 + 2_110 },
       { threadId: threadA, tokensPerMinute: 1_200 + 1_400 },
       { threadId: threadB, tokensPerMinute: 550 },
     ]);

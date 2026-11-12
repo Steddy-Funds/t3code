@@ -8,8 +8,10 @@ import { useState, type MouseEvent } from "react";
 import { getClientSettings, updateClientSettings } from "../../hooks/useSettings";
 import { cn } from "~/lib/utils";
 import { useAgentTree } from "../../state/entities";
+import { useTreeBurnRate } from "../../state/tokenBurnRates";
 import { ToggleGroup, ToggleGroupItem } from "../ui/toggle-group";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { BurnRateValue } from "./SidebarBurnRate";
 import { setSidebarDetailsItem } from "./sidebarDetailsItems";
 
 const stopRowActivation = (event: MouseEvent<HTMLElement>) => event.stopPropagation();
@@ -149,6 +151,9 @@ function AgentLineageRows(props: {
         {node?.thread.title ?? "Starting agent"}
       </span>
       <span className="sr-only">{tree.working ? ", working" : ", idle"}</span>
+      {node === null ? null : (
+        <LineageBurnRate threadRef={scopeThreadRef(node.environmentId, node.thread.id)} />
+      )}
     </>
   );
   return (
@@ -177,4 +182,12 @@ function AgentLineageRows(props: {
       ))}
     </>
   );
+}
+
+/** The agent and everything below it, like the row's own number. */
+function LineageBurnRate(props: { threadRef: ScopedThreadRef }) {
+  const tokensPerMinute = useTreeBurnRate(props.threadRef);
+  return tokensPerMinute > 0 ? (
+    <BurnRateValue tokensPerMinute={tokensPerMinute} className="ml-auto pl-2" />
+  ) : null;
 }

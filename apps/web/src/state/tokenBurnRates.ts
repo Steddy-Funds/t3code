@@ -18,3 +18,8 @@ export const tokenBurnRates = createTokenBurnRateAtoms(connectionAtomRuntime, {
 export function useTreeBurnRate(ref: ScopedThreadRef): number {
   return useAtomValue(tokenBurnRates.treeRateAtom(threadKey(ref)));
 }
+
+/** Tokens per minute across every thread in every connected environment; 0 when idle. */
+export function useTotalBurnRate(): number {
+  return useAtomValue(tokenBurnRates.totalRateAtom);
+}

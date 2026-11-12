@@ -233,6 +233,10 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   --animate-stash-pulse-row: stash-pulse-row 1400ms;
   --animate-stash-pulse-row-alt: stash-pulse-row-alt 1400ms;
   --animate-stash-pulse-count: stash-pulse-count 1400ms step-start;
+  /* The burn-rate flame's gradient, base to tip; it reads on light and dark alike. */
+  --color-flame-base: var(--color-red-600);
+  --color-flame-body: var(--color-orange-500);
+  --color-flame-tip: var(--color-amber-400);
   --color-warning-foreground: var(--warning-foreground);
   --color-warning: var(--warning);
   --color-warning-surface: var(--warning-surface);

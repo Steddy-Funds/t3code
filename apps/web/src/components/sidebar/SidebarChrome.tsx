@@ -20,6 +20,7 @@ import {
 import { primaryServerKeybindingsAtom } from "../../state/server";
 import { cn } from "../../lib/utils";
 import { usePullRequestsSupported } from "../../state/environments";
+import { useTotalBurnRate } from "../../state/tokenBurnRates";
 import { T3Wordmark } from "../T3Wordmark";
 import {
   resolveEnvironmentIdentificationPillLabel,
@@ -40,6 +41,7 @@ import {
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { readPullRequestListPreferences } from "../pullRequest/pullRequestListPreferences";
 import { isSidebarUtilityPage, useNavigateToMainApp } from "./mainAppLocation";
+import { SidebarBurnRate } from "./SidebarBurnRate";
 import { SidebarThreadUndoNotice } from "./SidebarThreadUndoNotice";
 import { SidebarProviderUpdatePill } from "./SidebarProviderUpdatePill";
 import { SidebarUpdateArchitectureWarning, SidebarUpdatePill } from "./SidebarUpdatePill";
@@ -96,9 +98,23 @@ export const SidebarChromeHeader = memo(function SidebarChromeHeader({
           </div>
         ) : null}
       </div>
+      <SidebarTotalBurnRate />
     </div>
   );
 });
+
+// Its own component, so the minute's rate re-renders it alone.
+function SidebarTotalBurnRate() {
+  const tokensPerMinute = useTotalBurnRate();
+  if (tokensPerMinute <= 0) return null;
+  return (
+    <SidebarBurnRate
+      tokensPerMinute={tokensPerMinute}
+      description="Tokens per minute across every thread, last 5 minutes"
+      className="relative z-10 [-webkit-app-region:no-drag]"
+    />
+  );
+}
 
 export function SidebarBrandWidthProbe({
   isElectron,

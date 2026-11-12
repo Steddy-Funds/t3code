@@ -181,6 +181,58 @@ export const toWorkspaceSymbols = (result: unknown): ReadonlyArray<LspWorkspaceS
   return symbols;
 };
 
+const MAX_NAME_SEARCH_LINES = 64;
+const IDENTIFIER_CHARACTER = /[\p{L}\p{N}_$]/u;
+
+/** A range that is exactly as wide as the name, on one line, already is the name. */
+export const isNameRange = (range: CodeRange, name: string): boolean =>
+  range.start.line === range.end.line &&
+  range.end.character - range.start.character === name.length;
+
+/**
+ * Some servers (ty) place a workspace symbol at its whole declaration: decorators, keyword and
+ * body. This finds the name in it, past decorator lines, so a jump lands on the name. The range
+ * stays as it is when the name is not there.
+ */
+export const nameRange = (
+  lines: ReadonlyArray<string>,
+  range: CodeRange,
+  name: string,
+): CodeRange => {
+  if (name.length === 0 || isNameRange(range, name)) return range;
+  const lastLine = Math.min(range.end.line, range.start.line + MAX_NAME_SEARCH_LINES);
+  let openDecoratorParens = 0;
+  for (let line = range.start.line; line <= lastLine; line++) {
+    const text = lines[line];
+    if (text === undefined) break;
+    // A decorator's arguments may span lines and name the symbol, as in `@register("Ledger")`.
+    if (openDecoratorParens > 0 || text.trimStart().startsWith("@")) {
+      openDecoratorParens = Math.max(
+        0,
+        openDecoratorParens + text.split("(").length - text.split(")").length,
+      );
+      continue;
+    }
+    const end = line === range.end.line ? range.end.character : text.length;
+    let index = text.indexOf(name, line === range.start.line ? range.start.character : 0);
+    while (index >= 0 && index + name.length <= end) {
+      const before = text[index - 1];
+      const after = text[index + name.length];
+      if (
+        (before === undefined || !IDENTIFIER_CHARACTER.test(before)) &&
+        (after === undefined || !IDENTIFIER_CHARACTER.test(after))
+      ) {
+        return {
+          start: { line, character: index },
+          end: { line, character: index + name.length },
+        };
+      }
+      index = text.indexOf(name, index + 1);
+    }
+  }
+  return range;
+};
+
 /** Exact name first, then names that start with the query, then the rest, each in server order. */
 export const rankWorkspaceSymbols = <S extends { readonly name: string }>(
   symbols: ReadonlyArray<S>,

@@ -130,7 +130,11 @@ export type CodeServerStatus = typeof CodeServerStatus.Type;
 export const CodeIntelStatusInput = Schema.Struct({ cwd: TrimmedNonEmptyString });
 export type CodeIntelStatusInput = typeof CodeIntelStatusInput.Type;
 
-export const CodeIntelStatusResult = Schema.Struct({ servers: Schema.Array(CodeServerStatus) });
+export const CodeIntelStatusResult = Schema.Struct({
+  /** `false`: turned off in the server's settings. Absent from servers older than the switch. */
+  enabled: Schema.optional(Schema.Boolean),
+  servers: Schema.Array(CodeServerStatus),
+});
 export type CodeIntelStatusResult = typeof CodeIntelStatusResult.Type;
 
 export const CodeDefinitionKind = Schema.Literals([

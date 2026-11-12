@@ -770,7 +770,11 @@ export function SideBySideDiffView<T = unknown>(props: SideBySideDiffViewProps<T
     const hint = hintRows && side === lead ? overlayPlacement(side, hintRows, lineHeight + 8) : null;
     return (
       <>
-        {single === null && highlightMode !== "none" && viewport.height > 0 ? (
+        {/* Beside a scrollbar only: in a file that fits there is nothing for the marks to map to. */}
+        {single === null &&
+        highlightMode !== "none" &&
+        viewport.height > 0 &&
+        rowCounts[side] * lineHeight > viewport.height ? (
           <SbsScrollMarks
             side={side}
             document={model}

@@ -514,6 +514,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["beta folders project tree classic sidebar"],
   },
   {
+    id: "smart-diff",
+    title: "Smart Diff",
+    to: "/settings/labs",
+    searchTerms: ["beta moved code refactor move detection side by side diff purple"],
+  },
+  {
     id: "native-trackpad-dialogs",
     title: "Native trackpad dialogs (macOS, experimental)",
     to: "/settings/labs",

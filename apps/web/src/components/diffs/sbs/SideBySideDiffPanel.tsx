@@ -9,6 +9,7 @@ import * as Schema from "effect/Schema";
 import { useEffect, useState, type ReactNode } from "react";
 
 import { useLocalStorage } from "~/hooks/useLocalStorage";
+import { useClientSettings } from "~/hooks/useSettings";
 import {
   classifyDiffFileContentsFailure,
   type DiffFileContentsFailure,
@@ -27,6 +28,7 @@ import {
   SideBySideDiffView,
   type SideBySideDiffViewProps,
 } from "./SideBySideDiffView";
+import { sbsDiffMovesOf, sbsMovesForFile, type SbsMove } from "./sbsMoves";
 import type { SbsNavigationDirection } from "./sbsNavigation";
 
 const COLLAPSE_UNCHANGED_STORAGE_KEY = "t3code.sbsDiff.collapseUnchanged";
@@ -185,6 +187,13 @@ export function SideBySideDiffPanel(props: SideBySideDiffPanelProps) {
   const [arrival, setArrival] = useState<{ fileKey: string; from: SbsNavigationDirection } | null>(
     null,
   );
+  // Set when the file was reached by following a move: the view opens on the move's other end.
+  const [moveArrival, setMoveArrival] = useState<{
+    fileKey: string;
+    side: "deletions" | "additions";
+    line: number;
+  } | null>(null);
+  const smartDiff = useClientSettings((settings) => settings.smartDiffEnabled);
   // A file too large to compare whole, opened as its patch on request.
   const [patchOnlyKey, setPatchOnlyKey] = useState<string | null>(null);
 
@@ -237,8 +246,23 @@ export function SideBySideDiffPanel(props: SideBySideDiffPanelProps) {
     const target = files[direction === "next" ? index + 1 : index - 1];
     if (!target) return;
     setArrival({ fileKey: target.fileKey, from: direction });
+    setMoveArrival(null);
     props.onSelectFile(target.fileKey);
   };
+
+  const followMove = (move: SbsMove) => {
+    const target = files.find((file) => file.filePath === move.counterpart.filePath);
+    if (!target) return;
+    setMoveArrival({
+      fileKey: target.fileKey,
+      side: move.side === "deletions" ? "additions" : "deletions",
+      line: move.counterpart.startLine,
+    });
+    setArrival(null);
+    props.onSelectFile(target.fileKey);
+  };
+  const moves =
+    smartDiff && entry ? sbsMovesForFile(sbsDiffMovesOf(files), filePath, shownPath) : undefined;
 
   const title = (
     <>
@@ -416,7 +440,12 @@ export function SideBySideDiffPanel(props: SideBySideDiffPanelProps) {
     onHighlightModeChange: setHighlightMode,
     initialDifference:
       arrival?.fileKey === entry.fileKey && arrival.from === "previous" ? "last" : "first",
-    focusOnOpen: arrival?.fileKey === entry.fileKey,
+    focusOnOpen: arrival?.fileKey === entry.fileKey || moveArrival?.fileKey === entry.fileKey,
+    openAt:
+      moveArrival?.fileKey === entry.fileKey
+        ? { side: moveArrival.side, line: moveArrival.line }
+        : null,
+    ...(moves && moves.length > 0 ? { moves, onFollowMove: followMove } : {}),
     adjacentFiles: { next: index < files.length - 1, previous: index > 0 },
     onOpenAdjacentFile: selectFile,
     ...(onOpenFile

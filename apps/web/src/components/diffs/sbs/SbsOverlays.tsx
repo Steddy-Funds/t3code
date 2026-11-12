@@ -14,12 +14,14 @@ export function SbsScrollMarks({
   layout,
   rowCount: rows,
   viewportHeight,
+  movedChanges,
 }: {
   readonly side: SbsSide;
   readonly document: SbsDocument;
   readonly layout: SbsLayout;
   readonly rowCount: number;
   readonly viewportHeight: number;
+  readonly movedChanges: ReadonlySet<number> | undefined;
 }) {
   const rowCount = Math.max(1, rows);
   // Never thinner than two pixels of the strip, however long the file.
@@ -42,7 +44,7 @@ export function SbsScrollMarks({
           <rect
             // oxlint-disable-next-line react/no-array-index-key -- a change has no identity but its position in the diff
             key={index}
-            data-kind={change.kind}
+            data-kind={movedChanges?.has(index) ? "moved" : change.kind}
             x={0}
             width={1}
             y={changeRows.start}

@@ -1,5 +1,6 @@
-import { sbsChangeRows, type SbsLayout } from "./sbsLayout";
+import { sbsChangeRows, sbsRangeRows, type SbsLayout } from "./sbsLayout";
 import type { SbsChangeKind, SbsDocument, SbsLineRange, SbsSide } from "./sbsModel";
+import type { SbsMoveLayer } from "./sbsMoves";
 
 /** JetBrains' `diff.divider.width`. */
 export const SBS_DIVIDER_WIDTH = 24;
@@ -58,6 +59,8 @@ export interface SbsConnectorInput {
   readonly viewportHeight: number;
   readonly lineHeight: number;
   readonly width?: number;
+  /** Changes a move's own shape stands for. */
+  readonly movedChanges?: ReadonlySet<number>;
 }
 
 /** The connectors that cross the viewport, in the divider's coordinates. */
@@ -66,6 +69,7 @@ export function sbsVisibleConnectors(input: SbsConnectorInput): ReadonlyArray<Sb
   const width = input.width ?? SBS_DIVIDER_WIDTH;
   const connectors: SbsConnector[] = [];
   document.changes.forEach((change, index) => {
+    if (input.movedChanges?.has(index)) return;
     const span = (side: SbsSide): SbsSpan => {
       const rows = sbsRowsSpan(sbsChangeRows(layout, index, side), lineHeight);
       return { top: rows.top - scrollTop[side], bottom: rows.bottom - scrollTop[side] };
@@ -105,4 +109,56 @@ export function sbsVisibleFoldLinks(
     links.push({ fold: segment.fold, left, right });
   });
   return links;
+}
+
+export interface SbsMoveShape {
+  readonly id: string;
+  /** A band between both ends of a move in this file, or a wedge for one that leaves it. */
+  readonly kind: "band" | "wedge";
+  readonly path: string;
+}
+
+/** A wedge from a span at one edge to a point a little short of the other. */
+function wedgePath(span: SbsSpan, fromLeft: boolean, width: number): string {
+  const middle = coordinate((span.top + span.bottom) / 2);
+  const [top, bottom] = [span.top, span.bottom].map(coordinate);
+  const edge = fromLeft ? "0" : coordinate(width);
+  const near = coordinate(fromLeft ? width * 0.35 : width * 0.65);
+  const tip = coordinate(fromLeft ? width * 0.7 : width * 0.3);
+  return `M${edge},${top}C${near},${top} ${near},${middle} ${tip},${middle}C${near},${middle} ${near},${bottom} ${edge},${bottom}Z`;
+}
+
+/**
+ * The moves that cross the viewport. A band is drawn only while both its ends are in view: with
+ * one off screen it would be a near-vertical streak, and the chip already points the way.
+ */
+export function sbsVisibleMoveShapes(
+  input: Omit<SbsConnectorInput, "document"> & { readonly moves: SbsMoveLayer },
+): ReadonlyArray<SbsMoveShape> {
+  const { layout, scrollTop, viewportHeight, lineHeight, moves } = input;
+  const width = input.width ?? SBS_DIVIDER_WIDTH;
+  const span = (side: SbsSide, range: SbsLineRange): SbsSpan => {
+    const rows = sbsRowsSpan(sbsRangeRows(layout, side, range), lineHeight);
+    return { top: rows.top - scrollTop[side], bottom: rows.bottom - scrollTop[side] };
+  };
+  const inView = (value: SbsSpan) => value.bottom > 0 && value.top < viewportHeight;
+  const shapes: SbsMoveShape[] = [];
+  for (const side of ["deletions", "additions"] as const) {
+    moves.marks[side].forEach((mark, index) => {
+      const id = `${side}:${index}`;
+      const own = span(side, mark.range);
+      if (!mark.move.counterpart.sameFile) {
+        if (inView(own))
+          shapes.push({ id, kind: "wedge", path: wedgePath(own, side === "deletions", width) });
+        return;
+      }
+      // One band per move: the old side's mark draws it.
+      if (side !== "deletions" || mark.counterpartRange === null) return;
+      const other = span("additions", mark.counterpartRange);
+      if (inView(own) && inView(other)) {
+        shapes.push({ id, kind: "band", path: sbsConnectorPath(own, other, width) });
+      }
+    });
+  }
+  return shapes;
 }

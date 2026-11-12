@@ -31,6 +31,7 @@ export function LabsSettingsPanel() {
         <LinkedEnvironmentsRow />
         <PromptSuggestionsRow />
         <AgentReviewNotesRow />
+        <SmartDiffRow />
         <SimlockHostsRow />
         <FastWorktreeCheckoutRow />
         <NativeTrackpadDialogsRow />
@@ -270,6 +271,24 @@ function AgentReviewNotesRow() {
             updateSettings({ agentReviewNotesEnabled: Boolean(checked) })
           }
           aria-label="Agent review notes"
+        />
+      }
+    />
+  );
+}
+
+function SmartDiffRow() {
+  const settings = useScopedSettings();
+  const updateSettings = useUpdateScopedSettings();
+  return (
+    <SettingsRow
+      {...searchableSetting("smart-diff")}
+      description="In the side-by-side diff, show code that moved in purple, within a file or to another one, with a chip that jumps to where it went."
+      control={
+        <Switch
+          checked={settings.smartDiffEnabled}
+          onCheckedChange={(checked) => updateSettings({ smartDiffEnabled: Boolean(checked) })}
+          aria-label="Smart Diff"
         />
       }
     />

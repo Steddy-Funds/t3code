@@ -2453,9 +2453,15 @@ code {
   --diff-modified: light-dark(var(--color-blue-600), var(--color-blue-400));
 }
 
-/* That scheme's additions are already blue. */
+/* Moved code: purple, since blue is already a changed line and grey a deleted one. */
+:root {
+  --diff-moved: light-dark(var(--color-purple-600), var(--color-purple-400));
+}
+
+/* That scheme's additions are already blue, so changed lines take its violet and moves teal. */
 :root[data-diff-color-scheme="blue-orange"] {
   --diff-modified: light-dark(var(--color-violet-600), var(--color-violet-400));
+  --diff-moved: light-dark(var(--color-teal-600), var(--color-teal-400));
 }
 
 /* Declared here, not on :root, so they mix over the background this view paints on. */
@@ -2470,11 +2476,15 @@ code {
     var(--diff-block-modified) 40%,
     var(--code-background)
   );
+  --diff-block-moved: color-mix(in srgb, var(--diff-moved) 22%, var(--code-background));
+  /* Code that left for another file: nothing to review here, so it sits back. */
+  --diff-block-moved-out: color-mix(in srgb, var(--diff-block-moved) 45%, var(--code-background));
   --diff-fold-wave: color-mix(in srgb, var(--code-foreground) 32%, transparent);
   /* The scrollbar's marks and insertion lines: the diff colour itself, or the scheme's marker. */
   --sbs-marker-inserted: var(--diff-addition);
   --sbs-marker-deleted: var(--diff-deletion);
   --sbs-marker-modified: var(--diff-modified);
+  --sbs-marker-moved: var(--diff-moved);
   --sbs-gutter-width: calc(var(--sbs-gutter-digits, 3) * 1ch + 1.75rem);
   background: var(--code-background);
   color: var(--code-foreground);
@@ -2523,6 +2533,14 @@ code {
   --sbs-row-bg: var(--diff-block-modified-muted);
 }
 
+.sbs-row[data-tint="moved"] {
+  --sbs-row-bg: var(--diff-block-moved);
+}
+
+.sbs-row[data-tint="moved-out"] {
+  --sbs-row-bg: var(--diff-block-moved-out);
+}
+
 .sbs-row[data-selected],
 [data-sbs-all-selected] .sbs-row {
   background: color-mix(in srgb, var(--primary) 16%, var(--sbs-row-bg));
@@ -2539,6 +2557,14 @@ code {
 
 .sbs-row[data-insert-below="inserted"] {
   box-shadow: inset 0 -2px 0 var(--sbs-marker-inserted);
+}
+
+.sbs-row[data-insert-above="moved"] {
+  box-shadow: inset 0 2px 0 var(--sbs-marker-moved);
+}
+
+.sbs-row[data-insert-below="moved"] {
+  box-shadow: inset 0 -2px 0 var(--sbs-marker-moved);
 }
 
 .sbs-row[data-insert-below="deleted"] {
@@ -2707,6 +2733,41 @@ code {
   stroke: var(--diff-block-modified);
 }
 
+.sbs-move-shape {
+  fill: var(--diff-block-moved);
+  stroke: var(--sbs-marker-moved);
+  stroke-width: 1px;
+  stroke-opacity: 0.6;
+}
+
+.sbs-move-shape[data-kind="wedge"] {
+  fill: var(--diff-block-moved-out);
+}
+
+/* Rides the first line of a moved block, at the pane's edge by the scrollbar. */
+.sbs-move-chip {
+  position: absolute;
+  right: 0.75rem;
+  z-index: 3;
+  height: calc(var(--sbs-line-height) - 2px);
+  margin-top: 1px;
+  padding: 0 0.5rem;
+  border: 1px solid color-mix(in srgb, var(--sbs-marker-moved) 55%, transparent);
+  border-radius: 999px;
+  background: var(--code-background);
+  color: var(--diff-moved);
+  font-family: var(--font-sans);
+  font-size: 0.6875rem;
+  line-height: calc(var(--sbs-line-height) - 4px);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.sbs-move-chip:is(:hover, :focus-visible) {
+  background: var(--diff-block-moved);
+  outline: none;
+}
+
 .sbs-fold-link {
   cursor: pointer;
 }
@@ -2737,6 +2798,10 @@ code {
 
 .sbs-scroll-marks rect[data-kind="modified"] {
   fill: var(--sbs-marker-modified);
+}
+
+.sbs-scroll-marks rect[data-kind="moved"] {
+  fill: var(--sbs-marker-moved);
 }
 
 /* Chat width setting. Comfortable keeps the default --chat-content-max-width,

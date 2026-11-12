@@ -7,7 +7,11 @@ import { useStableCallback } from "~/hooks/useStableCallback";
 import { useTheme } from "~/hooks/useTheme";
 import { usePaintedThemeEditorColors } from "~/lib/paintedThemeEditorColors";
 import { cn } from "~/lib/utils";
-import { PIERRE_TREE_UNSAFE_CSS, pierreTreeStyle } from "~/pierre-tree-theme";
+import {
+  agentCommentsDecoration,
+  PIERRE_TREE_UNSAFE_CSS,
+  pierreTreeStyle,
+} from "~/pierre-tree-theme";
 
 import { areAllDirectoriesExpanded, setAllDirectoriesExpanded } from "../files/fileTreeExpansion";
 import { Button } from "../ui/button";
@@ -33,7 +37,11 @@ interface DiffFileTreeProps {
   readonly headerAccessory?: ReactNode;
   readonly footer?: ReactNode;
   readonly className?: string;
+  /** By entry path: the comments sent to the agent on that file. */
+  readonly agentCommentCounts?: ReadonlyMap<string, number> | undefined;
 }
+
+const NO_COUNTS: ReadonlyMap<string, number> = new Map();
 
 export function DiffFileTree({
   entries,
@@ -44,6 +52,7 @@ export function DiffFileTree({
   headerAccessory,
   footer,
   className,
+  agentCommentCounts = NO_COUNTS,
 }: DiffFileTreeProps) {
   const { resolvedTheme } = useTheme();
   const fileStatusColors = usePaintedThemeEditorColors()?.fileStatus;
@@ -67,6 +76,32 @@ export function DiffFileTree({
     status: entry.status,
   }));
   const syncingSelectionRef = useRef(false);
+  // The tree model keeps the first decoration renderer it was given; it reads these.
+  const [decorations] = useState(() => {
+    let counts = agentCommentCounts;
+    let shown = presented;
+    let shownKey = "";
+    return {
+      of: (modelPath: string) => {
+        const count = counts.get(shown.selectionPath(modelPath)) ?? 0;
+        return count > 0 ? agentCommentsDecoration(count) : null;
+      },
+      /** True when a count changed, so the rows need redrawing. */
+      update: (
+        nextCounts: ReadonlyMap<string, number>,
+        nextShown: typeof presented,
+        key: string,
+      ) => {
+        counts = nextCounts;
+        shown = nextShown;
+        const changed = key !== shownKey;
+        shownKey = key;
+        return changed;
+      },
+    };
+  });
+  // The panel builds a new map each render; only a changed count redraws the rows.
+  const countsKey = JSON.stringify(Array.from(agentCommentCounts));
   const handledRevealRef = useRef<{
     path: string;
     revealRequestId: number;
@@ -89,6 +124,8 @@ export function DiffFileTree({
     icons,
     onSelectionChange: handleSelectionChange,
     paths: [],
+    renderRowDecoration: ({ item, row }) =>
+      row.kind === "directory" ? null : decorations.of(item.path),
     search: false,
     sort: ordering.sort,
     unsafeCSS: PIERRE_TREE_UNSAFE_CSS,
@@ -97,6 +134,12 @@ export function DiffFileTree({
     areAllDirectoriesExpanded(currentModel, directoryPaths),
   );
 
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- makes the Pierre tree model re-render row decorations when the comment counts change
+  useEffect(() => {
+    if (decorations.update(agentCommentCounts, presented, countsKey)) {
+      model.setComposition(model.getComposition());
+    }
+  }, [agentCommentCounts, countsKey, decorations, model, presented]);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- pushes the icon set into the imperative Pierre file tree model
   useEffect(() => {
     model.setIcons(icons);

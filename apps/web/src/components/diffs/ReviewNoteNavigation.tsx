@@ -1,14 +1,14 @@
 import type { FileDiffMetadata } from "@pierre/diffs";
 import { scopedThreadKey } from "@t3tools/client-runtime/environment";
 import type { ScopedThreadRef } from "@t3tools/contracts";
-import { type ReviewNote, reviewNoteRangeLabel } from "@t3tools/shared/reviewNote";
+import { type ReviewItem, reviewNoteRangeLabel } from "@t3tools/shared/reviewNote";
 import { ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon, EyeOffIcon } from "lucide-react";
 import { type ReactNode, useEffect, useState } from "react";
 
 import { diffPathForWorkspaceFile } from "~/diffFileActions";
 import { useReviewNoteRevealStore, useThreadReviewNotes } from "~/reviewNotes";
 
-import { ReviewNoteExcerpt, ReviewNoteText } from "../chat/ReviewNoteCard";
+import { ReviewNoteExcerpt } from "../chat/ReviewNoteCard";
 import { Button } from "../ui/button";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
@@ -17,11 +17,12 @@ import {
   cachedReviewNoteAnchor,
   type PlacedReviewNote,
   placeReviewNotes,
+  reviewItemDiffPath,
   type ReviewNoteShownLines,
   stepReviewNote,
 } from "./reviewNoteAnchoring";
 import { useReviewNoteDismissals } from "./reviewNoteDismissals";
-import { ReviewNoteIconAction } from "./ReviewNoteAnnotation";
+import { ReviewItemText, ReviewNoteIconAction } from "./ReviewNoteAnnotation";
 
 type NoteRevealViewer = Pick<AnnotatableCodeViewHandle, "getInstance" | "getItem" | "scrollTo">;
 
@@ -37,7 +38,7 @@ function createReviewNoteReveal(onUnplaced: () => void) {
   let viewer: NoteRevealViewer | null = null;
   let pending: {
     readonly fileKey: string;
-    readonly note: ReviewNote;
+    readonly note: ReviewItem;
     readonly diffPath: string;
   } | null = null;
   const flush = () => {
@@ -67,7 +68,7 @@ function createReviewNoteReveal(onUnplaced: () => void) {
       viewer = next;
       flush();
     },
-    request(fileKey: string, note: ReviewNote, diffPath: string) {
+    request(fileKey: string, note: ReviewItem, diffPath: string) {
       pending = { fileKey, note, diffPath };
       flush();
     },
@@ -116,7 +117,8 @@ export function useDiffReviewNotes({
    */
   onShowNote?: ((placed: PlacedReviewNote) => boolean) | undefined;
 }) {
-  const { notes, answeredIds } = useThreadReviewNotes(threadRef);
+  const { notes, threads, answeredIds, conversations, sentComments } =
+    useThreadReviewNotes(threadRef);
   const { dismissedIds, dismiss, restore } = useReviewNoteDismissals(threadRef);
   const [listOpen, setListOpen] = useState(false);
   const [currentNoteId, setCurrentNoteId] = useState<string | null>(null);
@@ -126,7 +128,7 @@ export function useDiffReviewNotes({
   const [reveal] = useState(() => createReviewNoteReveal(() => setListOpen(true)));
 
   const placed = placeReviewNotes(
-    notes,
+    [...notes, ...threads],
     files.map(({ fileDiff, fileKey }) => ({
       fileDiff,
       fileKey,
@@ -154,11 +156,7 @@ export function useDiffReviewNotes({
     unfoldFile(fileKey);
     const file = files.find((candidate) => candidate.fileKey === fileKey);
     if (file && anchor.kind === "pending") requestFile(file.filePath);
-    reveal.request(
-      fileKey,
-      note,
-      diffPathForWorkspaceFile({ filePath: note.path, workspaceRoot, repositoryRoot }),
-    );
+    reveal.request(fileKey, note, reviewItemDiffPath(note, { workspaceRoot, repositoryRoot }));
   };
 
   const threadKey = threadRef ? scopedThreadKey(threadRef) : null;
@@ -181,10 +179,25 @@ export function useDiffReviewNotes({
     if (next) showNote(next);
   };
 
-  const codeView: DiffReviewNotes = { placed: shown, answeredIds, onDismiss: dismiss };
+  const codeView: DiffReviewNotes = {
+    placed: shown,
+    answeredIds,
+    conversations,
+    onDismiss: dismiss,
+  };
+  const sentCommentCounts = new Map<string, number>();
+  for (const comment of sentComments) {
+    const diffPath =
+      comment.pathBase === "diff"
+        ? comment.path
+        : diffPathForWorkspaceFile({ filePath: comment.path, workspaceRoot, repositoryRoot });
+    sentCommentCounts.set(diffPath, (sentCommentCounts.get(diffPath) ?? 0) + 1);
+  }
   return {
     reveal,
     codeView,
+    /** By diff path: the comments the user sent the agent on the file. */
+    sentCommentCounts,
     /** The view asked to show the current note lacks its lines: the list shows it instead. */
     onNoteUnplaced: () => {
       setUnplacedNoteId(currentNoteId);
@@ -195,6 +208,7 @@ export function useDiffReviewNotes({
         ? null
         : {
             count: shown.length,
+            threadCount: shown.filter(({ note }) => note.kind === "review_comment_thread").length,
             canStep: steps.length > 0,
             onPrevious: () => step(-1),
             onNext: () => step(1),
@@ -225,7 +239,7 @@ function ReviewNoteListRow({ placed, action }: { placed: PlacedReviewNote; actio
           <span className="shrink-0 text-muted-foreground">{reviewNoteRangeLabel(note)}</span>
         </div>
         <ReviewNoteExcerpt note={note} className="my-1" />
-        <ReviewNoteText note={note} className="text-xs" />
+        <ReviewItemText item={note} className="text-xs" />
       </div>
       {action}
     </li>
@@ -244,6 +258,7 @@ function ReviewNoteListSection({ title, children }: { title: string; children: R
 /** "N notes" with previous and next, and the notes the diff cannot place or that were dismissed. */
 export function ReviewNotesToolbar({
   count,
+  threadCount,
   canStep,
   onPrevious,
   onNext,
@@ -254,8 +269,16 @@ export function ReviewNotesToolbar({
   listOpen,
   onListOpenChange,
 }: ReviewNotesToolbarProps) {
+  const noteCount = count - threadCount;
   const label =
-    count === 0 ? `${dismissed.length} dismissed` : `${count} ${count === 1 ? "note" : "notes"}`;
+    count === 0
+      ? `${dismissed.length} dismissed`
+      : [
+          noteCount > 0 ? `${noteCount} ${noteCount === 1 ? "note" : "notes"}` : null,
+          threadCount > 0 ? `${threadCount} ${threadCount === 1 ? "comment" : "comments"}` : null,
+        ]
+          .filter((part) => part !== null)
+          .join(" · ");
   const hasList = unattached.length > 0 || dismissed.length > 0;
   const stepButton = (direction: "Previous" | "Next") => (
     <Tooltip>
@@ -265,7 +288,7 @@ export function ReviewNotesToolbar({
             type="button"
             size="icon-xs"
             variant="ghost"
-            aria-label={`${direction} review note`}
+            aria-label={`${direction} review item`}
             disabled={!canStep}
             onClick={direction === "Previous" ? onPrevious : onNext}
           />
@@ -273,7 +296,7 @@ export function ReviewNotesToolbar({
       >
         {direction === "Previous" ? <ChevronLeftIcon /> : <ChevronRightIcon />}
       </TooltipTrigger>
-      <TooltipPopup side="top">{`${direction} note`}</TooltipPopup>
+      <TooltipPopup side="top">{direction}</TooltipPopup>
     </Tooltip>
   );
   return (

@@ -135,7 +135,7 @@ import {
   McpAppTimelineRow,
 } from "./TimelineAssistantRows";
 import { V2EventTimelineRow } from "./TimelineV2EventRow";
-import { ReviewNoteCard } from "./ReviewNoteCard";
+import { ReviewNoteCard, ReviewReplyCard } from "./ReviewNoteCard";
 import { startTimelinePositionRestore } from "./useTimelinePositionRestore";
 import {
   attachTimelineViewport,
@@ -1511,7 +1511,8 @@ const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: Time
                   row.kind === "html-render" ||
                   row.kind === "machine-card" ||
                   row.kind === "mcp-app" ||
-                  row.kind === "review-note"
+                  row.kind === "review-note" ||
+                  row.kind === "review-reply"
                 ? "pb-2"
                 : "pb-4",
         (row.kind === "message" && row.message.role === "assistant") ||
@@ -1563,6 +1564,7 @@ const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: Time
       {row.kind === "machine-card" ? <MachineCardTimelineRow row={row} /> : null}
       {row.kind === "mcp-app" ? <McpAppTimelineRow row={row} /> : null}
       {row.kind === "review-note" ? <ReviewNoteCard note={row.note} /> : null}
+      {row.kind === "review-reply" ? <ReviewReplyCard reply={row.reply} /> : null}
       {row.kind === "working" ? <WorkingTimelineRow row={row} /> : null}
       {row.kind === "worktree-setup" ? <WorktreeSetupTimelineRow row={row} /> : null}
       {row.kind === "event" ? <V2EventTimelineRow row={row} /> : null}

@@ -209,7 +209,7 @@ file changed since, the note moves with its lines when they can still be found, 
 in the diff's notes list. On mobile, notes show in the conversation; reply from web or desktop.
 
 Notes are on by default. Turn off **Agent review notes** in Settings > Labs to stop agents leaving
-them.
+them, or answering your review comments on their lines.
 
 ## Edit an earlier prompt
 

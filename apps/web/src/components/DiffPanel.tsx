@@ -1755,6 +1755,7 @@ export default function DiffPanel({
                     <DiffFileTree
                       ariaLabel={`${reviewSectionTitle} files`}
                       entries={fileTreeEntries}
+                      agentCommentCounts={reviewNotes.sentCommentCounts}
                       selectedPath={treeSelectedPath}
                       revealRequestId={selectedFileRevealRequestId}
                       onSelectFile={revealDiffFile}

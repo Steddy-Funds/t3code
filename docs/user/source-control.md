@@ -53,11 +53,19 @@ to your next message instead, and it shows on its lines until then. **Send N** i
 toolbar sends every comment waiting in the message at once. If a send can't go through, for
 example while an approval waits, the comment stays in your message and a notice says why.
 
+A sent comment stays on its lines as a thread. The agent answers each one there, and its reply
+shows under your comment and in the conversation, so you can review file by file and come back to
+the answers. **Reply** under a thread sends a follow-up the same way. The Diff pane's file list
+counts the comments you sent on each file. A thread follows its lines when the file changes and
+they can still be found; otherwise it waits in the toolbar's list. **Dismiss** hides one, as it
+does a note.
+
 ### Agent review notes in the diff
 
 An agent's [review notes](./composer.md#review-notes-from-the-agent) show on their lines in the
-Diff pane, on the new file in the side-by-side layout. **N notes** in the toolbar steps through
-them and lists the ones the diff can't place. **Reply** sends your answer to the agent with the
+Diff pane, on the new file in the side-by-side layout, with your replies and the agent's answers
+under them. **N notes** in the toolbar steps through them, and your comment threads, and lists the
+ones the diff can't place. **Reply** sends your answer to the agent with the
 lines quoted. **Dismiss** hides a note in this browser or app; the notes list keeps it under
 **Dismissed**, with **Restore**.
 

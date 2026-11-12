@@ -1,6 +1,6 @@
 import type { ScopedThreadRef } from "@t3tools/contracts";
-import { type ReviewNote, reviewNoteSectionId } from "@t3tools/shared/reviewNote";
-import { FileDiffIcon, ReplyIcon } from "lucide-react";
+import { type ReviewNote, type ReviewReply, reviewNoteSectionId } from "@t3tools/shared/reviewNote";
+import { BotMessageSquareIcon, FileDiffIcon, ReplyIcon } from "lucide-react";
 import { type ReactNode, use } from "react";
 
 import type { DraftId } from "~/composerDraftStore";
@@ -26,7 +26,13 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { TimelineRowCtx } from "./timelineRowContext";
 
 /** The agent's note and question, always as plain text: an agent's markup is never rendered. */
-export function ReviewNoteText({ note, className }: { note: ReviewNote; className?: string }) {
+export function ReviewNoteText({
+  note,
+  className,
+}: {
+  note: ReviewNote;
+  className?: string | undefined;
+}) {
   return (
     <div className={cn("min-w-0 space-y-1 text-sm", className)}>
       <p className="whitespace-pre-wrap break-words">{note.note}</p>
@@ -40,7 +46,13 @@ export function ReviewNoteText({ note, className }: { note: ReviewNote; classNam
 const EXCERPT_LINES = 6;
 
 /** The lines the agent flagged as it saw them, so a note reads without its diff. */
-export function ReviewNoteExcerpt({ note, className }: { note: ReviewNote; className?: string }) {
+export function ReviewNoteExcerpt({
+  note,
+  className,
+}: {
+  note: Pick<ReviewNote, "excerpt" | "excerptTruncated">;
+  className?: string;
+}) {
   if (note.excerpt.trim().length === 0) return null;
   const lines = note.excerpt.split(/\r?\n/u);
   const clipped = lines.length > EXCERPT_LINES || note.excerptTruncated;
@@ -223,6 +235,78 @@ export function ReviewNoteCard({ note }: { note: ReviewNote }) {
       ) : (
         <ReviewNoteFrame note={note} actions={null} />
       )}
+    </div>
+  );
+}
+
+/**
+ * The agent's answer to a review comment, as the timeline shows it: the comment it answers and
+ * the reply, with a way to the thread in the diff, where the conversation goes on.
+ */
+export function ReviewReplyCard({ reply }: { reply: ReviewReply }) {
+  const ctx = use(TimelineRowCtx);
+  const { threads, conversations } = useThreadReviewNotes(ctx.threadRef);
+  const threadRef = ctx.threadRef;
+  const thread = useQuietThreadShell(threadRef);
+  const project = useProject(
+    thread?.projectId ? { environmentId: thread.environmentId, projectId: thread.projectId } : null,
+  );
+  const reviewThread = threads.find(
+    (candidate) =>
+      candidate.id === reply.commentId ||
+      conversations.get(candidate.id)?.some((entry) => entry.id === reply.id),
+  );
+  const showInDiff = ctx.onOpenTurnDiff;
+  const { comment } = reply;
+  return (
+    <div className="min-w-0 px-1">
+      <div
+        className="@container/review-note min-w-0 rounded-lg bg-secondary dark:bg-input/20"
+        data-review-reply-id={reply.id}
+      >
+        <div className="flex items-center justify-between gap-2 px-3 pt-2">
+          <div className="flex min-w-0 items-center gap-2 text-xs">
+            <BotMessageSquareIcon aria-hidden className="size-3.5 shrink-0 text-primary" />
+            <Tooltip>
+              <TooltipTrigger render={<span className="truncate font-mono text-foreground" />}>
+                {comment.filePath}
+              </TooltipTrigger>
+              <TooltipPopup side="top">{comment.filePath}</TooltipPopup>
+            </Tooltip>
+            <span className="shrink-0 text-muted-foreground">{comment.rangeLabel}</span>
+          </div>
+          {showInDiff && threadRef && reviewThread ? (
+            <IconAction
+              label="Show in diff"
+              wideLabel
+              onClick={() => {
+                showInDiff(
+                  reply.runId,
+                  reviewThread.pathBase === "diff"
+                    ? reviewThread.path
+                    : diffPathForWorkspaceFile({
+                        filePath: reviewThread.path,
+                        workspaceRoot: ctx.workspaceRoot,
+                        repositoryRoot:
+                          thread?.worktreePath == null
+                            ? project?.repositoryIdentity?.rootPath
+                            : undefined,
+                      }),
+                );
+                useReviewNoteRevealStore.getState().request(threadRef, reviewThread.id);
+              }}
+            >
+              <FileDiffIcon className="size-3" />
+            </IconAction>
+          ) : null}
+        </div>
+        {comment.text.trim().length > 0 ? (
+          <p className="mx-3 mt-1.5 line-clamp-2 whitespace-pre-wrap break-words border-border border-s-2 ps-2 text-muted-foreground text-xs">
+            {comment.text}
+          </p>
+        ) : null}
+        <p className="whitespace-pre-wrap break-words px-3 pt-1.5 pb-3 text-sm">{reply.reply}</p>
+      </div>
     </div>
   );
 }

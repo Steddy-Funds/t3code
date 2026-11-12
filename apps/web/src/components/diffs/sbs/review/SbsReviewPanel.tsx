@@ -1,6 +1,12 @@
 import type { FileDiffMetadata } from "@pierre/diffs";
-import type { EnvironmentId, ProjectId, ScopedThreadRef, TurnItemId } from "@t3tools/contracts";
-import { type ReviewNote, reviewNoteSectionId } from "@t3tools/shared/reviewNote";
+import type { EnvironmentId, ProjectId, ScopedThreadRef } from "@t3tools/contracts";
+import {
+  type ReviewItem,
+  reviewItemSectionId,
+  type ReviewThreadEntry,
+} from "@t3tools/shared/reviewNote";
+
+const NO_CONVERSATION: ReadonlyArray<ReviewThreadEntry> = [];
 import { MessageSquarePlusIcon } from "lucide-react";
 import {
   type ReactNode,
@@ -13,7 +19,7 @@ import {
 
 import type { DraftId } from "~/composerDraftStore";
 import { buildDiffReviewComment, type ReviewCommentContext } from "~/reviewCommentContext";
-import { buildReviewNoteReply } from "~/reviewNotes";
+import { buildReviewItemReply } from "~/reviewNotes";
 
 import { Button } from "../../../ui/button";
 import type { DiffReviewNotes } from "../../AnnotatableCodeView";
@@ -58,7 +64,7 @@ interface SbsPick extends SbsCommentRange {
 
 /** A review note to bring into view: the toolbar stepped to it, or the timeline asked. */
 export interface SbsNoteReveal {
-  readonly noteId: TurnItemId;
+  readonly noteId: string;
 }
 
 export interface SbsReviewPanelProps extends Omit<SideBySideDiffPanelProps, "renderView"> {
@@ -142,13 +148,13 @@ export function SbsReviewPanel({
 
   const attachedNotes = reviewNotes.placed.filter(isAttachedReviewNote);
   const notesBySection = new Map(
-    attachedNotes.map(({ note }) => [reviewNoteSectionId(note.id), note]),
+    attachedNotes.map(({ note }) => [reviewItemSectionId(note), note]),
   );
-  const noteReplies = useReviewCommentDrafts<ReviewNote>({
+  const noteReplies = useReviewCommentDrafts<ReviewItem>({
     composerDraftTarget,
     onSend: onSendComments,
     buildComment: ({ id, range, text, selectedText }) =>
-      withQuotedSelection(buildReviewNoteReply({ id, note: range, text }), selectedText),
+      withQuotedSelection(buildReviewItemReply({ id, item: range, text }), selectedText),
     ownsComment: (comment) => notesBySection.has(comment.sectionId),
   });
 
@@ -264,6 +270,7 @@ export function SbsReviewPanel({
         <ReviewNoteAnnotation
           key={entry.id}
           note={note}
+          conversation={reviewNotes.conversations.get(note.id) ?? NO_CONVERSATION}
           moved={placed.anchor.kind === "moved"}
           answered={reviewNotes.answeredIds.has(note.id)}
           // One box at a time: an open comment box sharing this card hides Reply too.

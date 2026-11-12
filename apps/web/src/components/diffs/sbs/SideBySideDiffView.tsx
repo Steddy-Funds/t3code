@@ -18,7 +18,11 @@ import {
 
 import { useClientSettings } from "~/hooks/useSettings";
 import { useStableCallback } from "~/hooks/useStableCallback";
-import { resolveShortcutCommand, shortcutLabelForCommand } from "~/keybindings";
+import {
+  provideShortcutCapability,
+  resolveShortcutCommand,
+  shortcutLabelForCommand,
+} from "~/keybindings";
 import { isEditableFocused } from "~/lib/editableFocus";
 import { focusScopeProps } from "~/lib/focusScopes";
 import { observeResize } from "~/lib/observeResize";
@@ -909,21 +913,24 @@ export function SideBySideDiffView<T = unknown>(props: SideBySideDiffViewProps<T
   });
 
   const navigable = props.onTokenActivate !== undefined;
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- registers Go to Declaration with the window's shortcut dispatcher, which resolves it as in a code viewer while a pane has focus
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- registers Go to Declaration and code navigation with the window's shortcut dispatcher while a pane has focus
   useEffect(() => {
     if (!navigable) return;
-    const inPane = (event: globalThis.KeyboardEvent) => {
-      const target = event.target instanceof Node ? event.target : null;
-      return (
-        target !== null &&
-        !isEditableFocused(target) &&
-        SBS_SIDES.some((side) => scrollers.current[side]?.contains(target))
-      );
-    };
-    return registerCommands(
-      { "code.goToDeclaration": (event) => activateAtCaret(event) },
-      { capture: true, when: inPane, context: () => ({ codeFocus: true, codeNavigation: true }) },
+    const inPane = (target: EventTarget | null) =>
+      target instanceof Node &&
+      !isEditableFocused(target) &&
+      SBS_SIDES.some((side) => scrollers.current[side]?.contains(target));
+    const withdrawCapability = provideShortcutCapability("codeNavigation", () =>
+      inPane(document.activeElement),
     );
+    const releaseCommands = registerCommands(
+      { "code.goToDeclaration": (event) => activateAtCaret(event) },
+      { capture: true, when: (event) => inPane(event.target) },
+    );
+    return () => {
+      releaseCommands();
+      withdrawCapability();
+    };
   }, [navigable, activateAtCaret, scrollers]);
 
   const handleClick = (event: MouseEvent<HTMLDivElement>) => {

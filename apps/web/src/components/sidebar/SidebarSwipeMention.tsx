@@ -2,6 +2,7 @@ import { parseScopedThreadKey } from "@t3tools/client-runtime/environment";
 import { QuoteIcon } from "lucide-react";
 import { useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
+import { isGlintDialogOpen } from "~/lib/glint";
 import { isMomentumTail, MOMENTUM_SAMPLE_SIZE } from "~/lib/trackpadMomentum";
 import { isMacPlatform } from "~/lib/utils";
 import {
@@ -104,7 +105,7 @@ export function SidebarSwipeMention({ list }: { list: HTMLElement | null }) {
       release();
     };
     const onWheel = (event: WheelEvent) => {
-      if (event.shiftKey) return;
+      if (event.shiftKey || isGlintDialogOpen()) return;
       const travel = swipeReplyTravel(event);
       window.clearTimeout(quietTimer);
       quietTimer = window.setTimeout(release, quietMs);

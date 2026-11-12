@@ -3,6 +3,7 @@ import { ReplyIcon } from "lucide-react";
 import { useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import { useClientSettings } from "~/hooks/useSettings";
+import { isGlintDialogOpen } from "~/lib/glint";
 import { isMomentumTail, MOMENTUM_SAMPLE_SIZE } from "~/lib/trackpadMomentum";
 import { isMacPlatform } from "~/lib/utils";
 import {
@@ -222,7 +223,7 @@ export function MessageSwipeReply({
     };
     const onWheel = (event: WheelEvent) => {
       // Shift turns a mouse wheel sideways. A pinch carries Control but never moves sideways.
-      if (event.shiftKey) return;
+      if (event.shiftKey || isGlintDialogOpen()) return;
       const travel = swipeReplyTravel(event);
       window.clearTimeout(quietTimer);
       quietTimer = window.setTimeout(release, quietMs);

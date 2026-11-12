@@ -23,7 +23,12 @@ import { cn } from "~/lib/utils";
 import { useEffect, useEffectEvent, useRef, useState } from "react";
 import { useClientSettings } from "../../hooks/useSettings";
 import { useComposerDraftStore } from "../../composerDraftStore";
-import { isGlintAvailable, presentGlint, type GlintModelSelection } from "../../lib/glint";
+import {
+  glintTriggerAction,
+  isGlintAvailable,
+  presentGlint,
+  type GlintModelSelection,
+} from "../../lib/glint";
 import { buildGlintModelParams, resolveGlintModelOptions } from "./glintModelPicker";
 import { getTraitsSectionVisibility, writeTraitsModelOptions } from "./TraitsPicker";
 import { resolveComposerTraitsInput } from "./composerProviderState";
@@ -240,6 +245,11 @@ export function ComposerControlsBar(props: {
       onModelPickerOpenChange(true);
     });
   });
+  // The trigger toggles: a click while the native picker is up, or just closed by it, closes it.
+  const handleModelPickerOpenChange = (open: boolean) => {
+    if (open && glintEnabled && glintTriggerAction(modelTriggerRef.current) === "close") return;
+    onModelPickerOpenChange(open);
+  };
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- shows the native picker, a window outside React, for every way the picker opens (trigger, keybinding, /model)
   useEffect(() => {
     if (nativePickerOwnsOpen) presentNativeModelPicker();
@@ -321,7 +331,7 @@ export function ComposerControlsBar(props: {
       {...(modelPickerIconClassName
         ? { activeProviderIconClassName: modelPickerIconClassName }
         : {})}
-      onOpenChange={onModelPickerOpenChange}
+      onOpenChange={handleModelPickerOpenChange}
       getModelDisabledReason={getModelDisabledReason}
       onOpenProviderSetup={onOpenProviderSetup}
       triggerRef={modelTriggerRef}

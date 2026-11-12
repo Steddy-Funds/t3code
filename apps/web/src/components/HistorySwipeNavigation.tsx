@@ -2,6 +2,7 @@ import { ArrowLeftIcon, ArrowRightIcon } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { cn, isMacPlatform } from "../lib/utils";
+import { isGlintDialogOpen } from "../lib/glint";
 import { canNavigateHistory, navigateHistory, type HistoryDirection } from "../navigationHistory";
 import { isMomentumTail, MOMENTUM_SAMPLE_SIZE } from "../lib/trackpadMomentum";
 import { SWIPE_REPLY_ROW_SELECTOR } from "./chat/messageSwipeReply.logic";
@@ -123,6 +124,8 @@ export function HistorySwipeNavigation() {
       gesture = null;
     });
     const onWheel = (event: WheelEvent) => {
+      // Registered before the Glint wheel guard on the same window phase, so it checks for itself.
+      if (isGlintDialogOpen()) return;
       if (gesture === null) {
         gesture =
           event.ctrlKey || event.deltaMode !== WheelEvent.DOM_DELTA_PIXEL

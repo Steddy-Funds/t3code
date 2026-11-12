@@ -5,6 +5,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import { useStableCallback } from "~/hooks/useStableCallback";
 import { useTheme } from "~/hooks/useTheme";
+import { usePaintedThemeEditorColors } from "~/lib/paintedThemeEditorColors";
 import { cn } from "~/lib/utils";
 import { PIERRE_TREE_UNSAFE_CSS, pierreTreeStyle } from "~/pierre-tree-theme";
 
@@ -45,6 +46,7 @@ export function DiffFileTree({
   className,
 }: DiffFileTreeProps) {
   const { resolvedTheme } = useTheme();
+  const fileStatusColors = usePaintedThemeEditorColors()?.fileStatus;
   const paths = entries.map((entry) => entry.path);
   const presented = diffFileTreeModel(paths);
   const modelPaths = presented.paths;
@@ -243,7 +245,7 @@ export function DiffFileTree({
           if (clickedSelectedRow) onSelectFile(presented.selectionPath(path));
         }}
         className="min-h-0 flex-1 overflow-hidden"
-        style={pierreTreeStyle(resolvedTheme)}
+        style={pierreTreeStyle(resolvedTheme, fileStatusColors)}
       />
       {footer}
     </div>

@@ -101,6 +101,7 @@ import { useDesktopLocalBootstraps } from "../connection/useDesktopLocalBootstra
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { useOpenPanelPullRequestUrl } from "../hooks/useOpenPanelPullRequestUrl";
 import { copyThreadReference } from "../lib/copyThreadReference";
+import { readFocusScopes } from "../lib/focusScopes";
 import {
   queueWorkspaceFocusFromPalette,
   restoreWorkspaceFocusFromPalette,
@@ -252,7 +253,11 @@ import {
 import { EnvironmentMachineIcon } from "./EnvironmentMachineIcon";
 import { Checkbox } from "./ui/checkbox";
 import { ProjectFilePicker } from "./files/ProjectFilePicker";
-import { useCodeSymbolCommands, useCodeSymbolsAvailable } from "./code/pickers/codeSymbolCommands";
+import {
+  runJumpFromPalette,
+  useCodeSymbolCommands,
+  useCodeSymbolsAvailable,
+} from "./code/pickers/codeSymbolCommands";
 import { FileStructurePicker } from "./code/pickers/FileStructurePicker";
 import { RecentFilesPicker } from "./code/pickers/RecentFilesPicker";
 import { WorkspaceSymbolPicker } from "./code/pickers/WorkspaceSymbolPicker";
@@ -385,6 +390,12 @@ function CommandPaletteDialog(props: {
       finalFocus={() => {
         if (restoreWorkspaceFocusFromPalette()) return false;
         const returnFocus = getCommandPaletteReturnFocus();
+        if (runJumpFromPalette()) {
+          // The code it was opened from holds focus until the reveal moves it into the editor.
+          return returnFocus instanceof HTMLElement && readFocusScopes(returnFocus).codeFocus
+            ? returnFocus
+            : false;
+        }
         if (returnFocus === false) return false;
         const composer = composerHandleRef?.current;
         // Behind the Settings modal the composer is inert and cannot take focus.

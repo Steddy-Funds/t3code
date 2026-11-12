@@ -144,7 +144,17 @@ export function CommandPaletteVirtualizedResults(props: CommandPaletteVirtualize
         drawDistance={400}
         onLayout={updateScrollFade}
         onScroll={updateScrollFade}
-        onReady={updateScrollFade}
+        onReady={() => {
+          // The first placement used estimated row heights; centre again on the measured ones.
+          if (props.initialRowIndex !== undefined) {
+            void props.listRef.current?.scrollToIndex({
+              index: props.initialRowIndex,
+              viewPosition: 0.5,
+              animated: false,
+            });
+          }
+          updateScrollFade();
+        }}
         // Legend counts style padding (not class padding) in its size, end state and row positions.
         style={{ paddingTop: 8, paddingBottom: 8 }}
         contentContainerClassName="px-2"

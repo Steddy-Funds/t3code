@@ -59,17 +59,13 @@ const KIND_LABELS: Record<CodeSymbolKind, string> = {
   other: "Symbol",
 };
 
-export function symbolKindLabel(kind: CodeSymbolKind): string {
-  return KIND_LABELS[kind];
-}
-
+/** The kind shows on hover: the icon already tells them apart at a glance. */
 export function SymbolKindIcon(props: { readonly kind: CodeSymbolKind }) {
   const Icon = KIND_ICONS[props.kind];
+  const label = KIND_LABELS[props.kind];
   return (
-    <Icon
-      aria-label={KIND_LABELS[props.kind]}
-      className={ITEM_ICON_CLASS}
-      data-symbol-kind={props.kind}
-    />
+    <Icon aria-label={label} className={ITEM_ICON_CLASS} data-symbol-kind={props.kind}>
+      <title>{label}</title>
+    </Icon>
   );
 }

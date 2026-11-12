@@ -20,10 +20,27 @@ import { documentSymbolsFor } from "./documentSymbols";
 import { installDoubleShift, isDoubleShiftSearchOn } from "./doubleShift";
 
 let structureViewer: CodeViewer | null = null;
+let jumpOnClose: (() => void) | null = null;
 
 /** The viewer the file structure popup was opened over. */
 export function fileStructureViewer(): CodeViewer | null {
   return structureViewer;
+}
+
+/**
+ * A picker's jump waits for the palette to close: the workspace is inert while it is open, so
+ * the reveal could not focus the editor.
+ */
+export function jumpWhenPaletteCloses(jump: () => void): void {
+  jumpOnClose = jump;
+}
+
+/** Runs at the palette's focus restoration, after its focus trap closes. */
+export function runJumpFromPalette(): boolean {
+  const jump = jumpOnClose;
+  jumpOnClose = null;
+  jump?.();
+  return jump !== null;
 }
 
 /** The project's server answers code intelligence; false while unknown and on older servers. */

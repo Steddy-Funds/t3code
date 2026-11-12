@@ -16,6 +16,7 @@ import type { CommandPaletteActionItem } from "../../CommandPalette.logic";
 import { codeIntelFailureMessage, waitingMessage } from "../codeNavigationMessages";
 import { navigateToCodeLocation } from "../navigation";
 import { CodePicker } from "./CodePicker";
+import { jumpWhenPaletteCloses } from "./codeSymbolCommands";
 import {
   CLASS_SYMBOL_KINDS,
   isServerBusy,
@@ -24,7 +25,7 @@ import {
   WORKSPACE_SYMBOL_LIMIT,
 } from "./codePickers.logic";
 import { HighlightedName } from "./HighlightedName";
-import { symbolKindLabel, SymbolKindIcon } from "./SymbolKindIcon";
+import { SymbolKindIcon } from "./SymbolKindIcon";
 
 export type WorkspaceSymbolScope = "classes" | "symbols";
 
@@ -126,13 +127,8 @@ function SymbolSearch(props: {
     ),
     description: locationLabel(symbol),
     icon: <SymbolKindIcon kind={symbol.kind} />,
-    titleTrailingContent: (
-      <span className="shrink-0 text-muted-foreground/70 text-xs">
-        {symbolKindLabel(symbol.kind)}
-      </span>
-    ),
     run: async () => {
-      navigateToCodeLocation(target.threadRef, symbol.location);
+      jumpWhenPaletteCloses(() => navigateToCodeLocation(target.threadRef, symbol.location));
     },
   }));
 

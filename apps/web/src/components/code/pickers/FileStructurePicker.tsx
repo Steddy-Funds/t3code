@@ -10,7 +10,7 @@ import { serverForPath } from "../codeLanguages";
 import { waitingMessage } from "../codeNavigationMessages";
 import { navigateToCodeLocation } from "../navigation";
 import { CodePicker } from "./CodePicker";
-import { fileStructureViewer } from "./codeSymbolCommands";
+import { fileStructureViewer, jumpWhenPaletteCloses } from "./codeSymbolCommands";
 import {
   fileName,
   isServerBusy,
@@ -99,11 +99,13 @@ export function FileStructurePicker(props: { readonly setOpen: (open: boolean) =
     disabled: row.matches === null,
     run: async () => {
       if (viewer === null || document === null) return;
-      navigateToCodeLocation(viewer.threadRef, {
-        path: document.path,
-        external: false,
-        range: row.symbol.selectionRange,
-      });
+      jumpWhenPaletteCloses(() =>
+        navigateToCodeLocation(viewer.threadRef, {
+          path: document.path,
+          external: false,
+          range: row.symbol.selectionRange,
+        }),
+      );
     },
   }));
 

@@ -51,6 +51,7 @@ upstream; a feature can, from its own branch, when Akiva decides.
 | Hold Cmd on a thread for a quick reference of the shortcuts that work where focus is (Settings → Keybindings to turn off)                     | #79 | 613681d |
 | Code intelligence server: ty and `tsc --lsp` answer typed, read-only `codeIntel.*` RPCs (hover, definition, symbols); no UI yet               | #80 | 401fbc8 |
 | Agent review notes: the agent flags lines for your review (`flag_for_review`); a timeline card and an in-diff note with Reply (Labs)          | #83 | 64d7d75 |
+| JetBrains side-by-side diff: two whole files with connectors, word highlights, F7/F4 and per-pane find, select and copy                       | #82 | 02d6762 |
 
 Held: #38 (pods notes in the t3-orchestration skill). It edits
 `.agents/skills/t3-orchestration/`, which exists only on
@@ -78,6 +79,7 @@ The Mac runs this tip, which already has them all.
 - #77 JetBrains keymap (new default keys, `keybindings.json` migration, Reset to default placement): the whole branch, which starts from `main`
 - #80 Code intelligence (`codeIntel.*` RPCs, ty and `tsc --lsp` by the `typescript-lsp` alias, `codeIntel.enabled` off switch): the whole branch, which starts from `main`
 - #83 Agent review notes (`flag_for_review` MCP tool, `review_note.record`, `agentReviewNotesEnabled`): server half only (`fbdb8e8`, 4 picks), since the branch also carries #78
+- #82 Side-by-side diff (`orchestration.getTurnDiffFileContents` behind the thread and file read grants, `diff.find` in the default keys): server half only (`a73408b`, 5 picks), since the branch carries #81 and the tip
 
 A feature that changes `apps/server`, or a contract the server reads, is
 merged there too: its branch head with `--no-ff`, never this tip.

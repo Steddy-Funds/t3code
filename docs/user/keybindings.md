@@ -120,6 +120,11 @@ and `mod+alt+arrowleft` / `mod+alt+arrowright` stay with the browser. To keep on
 keys for its other command everywhere, give the command in this table another shortcut in
 **Settings → Keybindings**.
 
+Go to Declaration has two rows there, one for code and one for the side-by-side diff, so give a
+new shortcut to both. If you had already moved it off `mod+b` before the side-by-side diff had
+its own row, you have only the code row: add your shortcut with the conditions `diffFocus` and
+`codeNavigation`.
+
 Shortcuts come from your primary environment. If its server is older than this app,
 `mod+shift+o`, `mod+alt+arrowleft` / `mod+alt+arrowright`, and `mod+b` in a side-by-side diff
 are missing until you update it; the rest of the table works.

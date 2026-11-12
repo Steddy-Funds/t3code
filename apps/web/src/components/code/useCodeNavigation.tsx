@@ -143,6 +143,18 @@ function isInsideCodePopup(element: Element | null): boolean {
   return element?.closest(`[${CODE_NAVIGATION_POPUP_ATTRIBUTE}]`) != null;
 }
 
+interface LookupRequest {
+  seq: number;
+  controller: AbortController | null;
+}
+
+/** A lookup the user dismissed or moved past never lands: its answer was for another view. */
+function cancelLookup(request: LookupRequest): void {
+  request.seq += 1;
+  request.controller?.abort();
+  request.controller = null;
+}
+
 interface PaintedRanges {
   /** The text the ranges were computed for; an edit makes them stale. */
   readonly text: string;
@@ -174,7 +186,8 @@ export function useCodeNavigation(options: CodeNavigationOptions) {
   const surfaceRef = useRef<HTMLDivElement | null>(null);
   const containerRef = useRef<HTMLElement | null>(null);
   const editorRef = useRef<CodeEditorHandle | null>(null);
-  const cursorRef = useRef<CodePosition | null>(null);
+  // A read-only caret belongs to the file it was placed in.
+  const cursorRef = useRef<{ readonly path: string; readonly position: CodePosition } | null>(null);
   const hoverRef = useRef<CodePointerTarget | null>(null);
   const linkRef = useRef<CodeWordHit | null>(null);
   const modifierRef = useRef(false);
@@ -183,10 +196,7 @@ export function useCodeNavigation(options: CodeNavigationOptions) {
   const shownPathRef = useRef(path);
   const targetRef = useRef<PaintedRanges | null>(null);
   const usagesRef = useRef<PaintedRanges | null>(null);
-  const requestRef = useRef<{ seq: number; controller: AbortController | null }>({
-    seq: 0,
-    controller: null,
-  });
+  const requestRef = useRef<LookupRequest>({ seq: 0, controller: null });
   const [owner] = useState(() => ({}));
   const [popup, setPopup] = useState<CodePopup | null>(null);
   const [hasEditor, setHasEditor] = useState(false);
@@ -233,7 +243,9 @@ export function useCodeNavigation(options: CodeNavigationOptions) {
   const currentPosition = (): CodePosition | null => {
     const selection = editorRef.current?.getViewState().selections?.[0];
     if (selection) return selection.direction < 0 ? selection.start : selection.end;
-    if (cursorRef.current) return cursorRef.current;
+    if (cursorRef.current !== null && cursorRef.current.path === path) {
+      return cursorRef.current.position;
+    }
     const hovered = hoverRef.current === null ? null : wordAtTarget(hoverRef.current);
     return hovered?.range.start ?? null;
   };
@@ -279,7 +291,7 @@ export function useCodeNavigation(options: CodeNavigationOptions) {
     if (editable && editorRef.current === null) return;
     useCodeNavigationStore.getState().consumeReveal(threadKey, reveal.id);
     const { start } = reveal.range;
-    cursorRef.current = start;
+    cursorRef.current = { path, position: start };
     // Opening a result with Cmd+Enter keeps the list, and the keyboard, where they are.
     if (keepPopupFocusRef.current && isInsideCodePopup(document.activeElement)) return;
     if (editorRef.current) {
@@ -308,9 +320,9 @@ export function useCodeNavigation(options: CodeNavigationOptions) {
   ): Promise<A | null> => {
     if (path === null) return null;
     const request = requestRef.current;
-    request.controller?.abort();
+    cancelLookup(request);
+    const seq = request.seq;
     const controller = new AbortController();
-    const seq = ++request.seq;
     request.controller = controller;
     const anchor = anchorAt(position);
     const server = intel.server;
@@ -518,6 +530,7 @@ export function useCodeNavigation(options: CodeNavigationOptions) {
 
   const runCommand = useEffectEvent((command: CodeCommand, event: KeyboardEvent) => {
     event.preventDefault();
+    cancelLookup(requestRef.current);
     keepPopupFocusRef.current = false;
     const position = currentPosition();
     if (command === "goToLine") {
@@ -534,6 +547,8 @@ export function useCodeNavigation(options: CodeNavigationOptions) {
 
   const onViewerKeyDown = useEffectEvent((event: KeyboardEvent): boolean => {
     if (MODIFIER_KEYS.has(event.key)) return false;
+    // Escape, or any other key: the user moved on from a lookup still in flight.
+    cancelLookup(requestRef.current);
     clearTarget();
     if (popup?.kind === "hint") setPopup(null);
     if (event.key !== "Escape") return false;
@@ -603,7 +618,9 @@ export function useCodeNavigation(options: CodeNavigationOptions) {
     }
     if (event.type !== "pointerdown") return;
     pressRef.current = null;
-    if (!editable && target !== null) cursorRef.current = positionAtTarget(target);
+    if (editable || target === null || path === null) return;
+    const position = positionAtTarget(target);
+    cursorRef.current = position === null ? null : { path, position };
   });
 
   const onClick = useEffectEvent((event: MouseEvent) => {
@@ -615,7 +632,7 @@ export function useCodeNavigation(options: CodeNavigationOptions) {
     if (!isNavigationModifier(event)) return;
     const { start } = hit.range;
     // The clicked word is where Back returns to.
-    cursorRef.current = start;
+    if (path !== null) cursorRef.current = { path, position: start };
     keepPopupFocusRef.current = false;
     editorRef.current?.focus({ lineNumber: start.line + 1, character: start.character });
     void goTo("declaration", "definition", start);
@@ -691,7 +708,7 @@ export function useCodeNavigation(options: CodeNavigationOptions) {
       withdrawCapability();
       releaseCommands();
       releaseViewer();
-      requestRef.current.controller?.abort();
+      cancelLookup(requestRef.current);
       releaseHighlights();
     };
   }, [active, threadKey, threadRef]);
@@ -700,10 +717,9 @@ export function useCodeNavigation(options: CodeNavigationOptions) {
   useEffect(() => {
     if (shownPathRef.current === path) return;
     shownPathRef.current = path;
-    const request = requestRef.current;
-    request.seq += 1;
-    request.controller?.abort();
-    request.controller = null;
+    cancelLookup(requestRef.current);
+    hoverRef.current = null;
+    pressRef.current = null;
     // Cmd+Enter in a result list opens another file and keeps the list.
     if (!keepPopupFocusRef.current) setPopup(null);
   }, [path]);
@@ -724,6 +740,7 @@ export function useCodeNavigation(options: CodeNavigationOptions) {
   }, [hasEditor]);
 
   const closePopup = (restoreFocus: boolean) => {
+    cancelLookup(requestRef.current);
     keepPopupFocusRef.current = false;
     setPopup(null);
     if (restoreFocus) focusViewer();

@@ -31,6 +31,7 @@ import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
@@ -232,10 +233,13 @@ const make = Effect.gen(function* () {
             waitingOn = live;
             return live.server.request(method, params);
           }).pipe(
-            Effect.ensuring(
-              Effect.sync(() => {
-                waitingOn = undefined;
-              }),
+            // The deadline interrupts the request: `expire` still needs to see who never answered.
+            Effect.onExit((exit) =>
+              Exit.hasInterrupts(exit)
+                ? Effect.void
+                : Effect.sync(() => {
+                    waitingOn = undefined;
+                  }),
             ),
             Effect.tap(() => pool.reportOutcome(live, "answered")),
           );

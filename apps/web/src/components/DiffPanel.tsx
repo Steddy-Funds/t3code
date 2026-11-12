@@ -625,6 +625,8 @@ export default function DiffPanel({
     return currentLoadWholeFiles(fileDiff);
   });
   const sideBySide = settings.diffSideBySide && !diffAreaNarrow;
+  // A reveal left over when side by side went away must not jump the view when it comes back.
+  if (!sideBySide && sideBySideNoteReveal) setSideBySideNoteReveal(null);
   const observeDiffArea = useStableCallback((element: HTMLDivElement | null) => {
     if (!element) return;
     return observeResize(element, ([entry]) => {
@@ -1256,9 +1258,7 @@ export default function DiffPanel({
             <TooltipPopup side="top">{sendCommentsLabel} to the agent</TooltipPopup>
           </Tooltip>
         ) : null}
-        {reviewNotes.toolbar ? (
-          <ReviewNotesToolbar {...reviewNotes.toolbar} />
-        ) : null}
+        {reviewNotes.toolbar ? <ReviewNotesToolbar {...reviewNotes.toolbar} /> : null}
         {codeViewFiles.length > 0 || (isGitSelection && selectedGitSource?.files?.length) ? (
           <DiffStatLabel
             additions={diffLineStat.additions}

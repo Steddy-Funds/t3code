@@ -106,7 +106,8 @@ const HUNK_HEADER = /^@@ -(\d+),(\d+) \+(\d+),(\d+) @@/u;
 
 /**
  * Where a comment from the message draft sits in this layout. A range across both sides, as
- * stacked makes one, goes on the side it ends on, over the lines of that side it covers.
+ * stacked makes one, goes on a side whose lines it covers: the one whose end of the selection
+ * is the range's last row, from that side's first line in the header.
  */
 export function sbsCommentLines(comment: ReviewCommentContext): SbsReviewLines | null {
   const selection = comment.selection;
@@ -123,12 +124,35 @@ export function sbsCommentLines(comment: ReviewCommentContext): SbsReviewLines |
     deletions: { start: Number(header[1]), count: Number(header[2]) },
     additions: { start: Number(header[3]), count: Number(header[4]) },
   };
+  if (selection) {
+    // A count from the header's start is wrong once the range skips the lines between hunks.
+    const lines =
+      linesEndingAt(selection.endSide, selection.end, ranges[selection.endSide]) ??
+      linesEndingAt(selection.side, selection.start, ranges[selection.side]);
+    if (lines) return lines;
+  }
   const preferred: SbsSide = selection?.endSide ?? "additions";
   const side: SbsSide =
     ranges[preferred].count > 0 ? preferred : preferred === "additions" ? "deletions" : "additions";
   const range = ranges[side];
   if (range.count <= 0) return null;
   return { side, startLine: range.start, endLine: range.start + range.count - 1 };
+}
+
+/**
+ * The lines on `side` when the selection's end there, `line`, is the range's last row. An end
+ * on the range's first row is the side's first line, and leaves its last line unknown.
+ */
+function linesEndingAt(
+  side: SbsSide,
+  line: number,
+  range: { readonly start: number; readonly count: number },
+): SbsReviewLines | null {
+  if (range.count <= 0) return null;
+  if (line > range.start || (line === range.start && range.count === 1)) {
+    return { side, startLine: range.start, endLine: line };
+  }
+  return null;
 }
 
 /** Whether both ends of `lines` are lines the view of `fileDiff` has. */

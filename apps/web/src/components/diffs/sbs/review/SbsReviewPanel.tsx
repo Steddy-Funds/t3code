@@ -163,16 +163,29 @@ export function SbsReviewPanel({
   const replyNote = replyDraft
     ? reviewNotes.placed.find(({ note }) => note.id === replyDraft.range.id)
     : undefined;
-  // Another file is shown, or the note lost its lines. A reloading file holds its notes as
-  // pending, and the reply waits for it.
+  const revealPlaced = noteReveal
+    ? reviewNotes.placed.find(({ note }) => note.id === noteReveal.noteId)
+    : undefined;
+  const revealNoteId =
+    revealPlaced && isAttachedReviewNote(revealPlaced) && revealPlaced.fileKey === shownFileKey
+      ? revealPlaced.note.id
+      : null;
+  // A note stepped to closes an open box, as showing another file does, unless the box is a
+  // reply to that note.
+  const revealClosesBox = revealNoteId !== null && revealNoteId !== replyDraft?.range.id;
+  // Another file is shown, a note was stepped to, or the note lost its lines. A reloading file
+  // holds its notes as pending, and the reply waits for it.
   const strandedDraft =
-    draft && !draft.sending && draft.range.fileKey !== shownFileKey ? draft : null;
+    draft && !draft.sending && (draft.range.fileKey !== shownFileKey || revealClosesBox)
+      ? draft
+      : null;
   const strandedReply =
     replyDraft &&
     !replyDraft.sending &&
     (replyNote === undefined ||
       replyNote.anchor.kind === "unattached" ||
-      replyNote.fileKey !== shownFileKey)
+      replyNote.fileKey !== shownFileKey ||
+      revealClosesBox)
       ? replyDraft
       : null;
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- a box whose file was left, or a reply whose note lost its lines, keeps its words in the composer's draft store
@@ -187,13 +200,6 @@ export function SbsReviewPanel({
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- the view goes with a box open (side by side turned off, the panel narrowed, another section shown); its words go to the composer's draft store
   useEffect(() => () => keepOpenBoxWords(), []);
 
-  const revealPlaced = noteReveal
-    ? reviewNotes.placed.find(({ note }) => note.id === noteReveal.noteId)
-    : undefined;
-  const revealNoteId =
-    revealPlaced && isAttachedReviewNote(revealPlaced) && revealPlaced.fileKey === shownFileKey
-      ? revealPlaced.note.id
-      : null;
   const revealUnplaced =
     noteReveal !== null &&
     (revealPlaced === undefined || revealPlaced.anchor.kind === "unattached");
@@ -348,7 +354,8 @@ export function SbsReviewPanel({
           if (!boxOpen) setOpenEntryId(id);
         }}
         onSelectRange={(selection, fileDiff) => selectLines(selection, entry, fileDiff)}
-        revealId={revealNoteId}
+        // The box it closes goes first; one still sending holds the note until it is done.
+        revealId={boxOpen && revealClosesBox ? null : revealNoteId}
         onRevealed={() => {
           if (revealNoteId) setOpenEntryId(revealNoteId);
           onNoteRevealed();

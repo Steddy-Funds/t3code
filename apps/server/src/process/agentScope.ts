@@ -391,6 +391,7 @@ export const make = Effect.gen(function* () {
       env,
       survivesRestart,
       shared,
+      memoryMaxBytes,
     }) {
       const resolved = yield* resolve(command, env ?? hostEnvironment);
       if (resolved === null) return { command, args };
@@ -416,6 +417,10 @@ export const make = Effect.gen(function* () {
             ? [`--property=OOMPolicy=${continuing ? "continue" : "stop"}`]
             : []),
           ...(owned ? [] : ["--collect"]),
+          // Swap would let the scope outgrow its ceiling instead of being killed at it.
+          ...(memoryMaxBytes === undefined
+            ? []
+            : [`--property=MemoryMax=${memoryMaxBytes}`, "--property=MemorySwapMax=0"]),
         ],
       };
       return { ...agentScopeCommand({ command: resolved, args, scope: systemdScope }), unit };

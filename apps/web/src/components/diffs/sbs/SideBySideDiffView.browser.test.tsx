@@ -8,6 +8,7 @@ import { page, userEvent } from "vite-plus/test/browser";
 
 import { render, type Screen } from "../../../../test/render";
 import { isMacPlatform } from "~/lib/utils";
+import { registerCommands } from "~/shortcuts/dispatcher";
 
 import { fileContentRevision } from "@t3tools/shared/fileContentRevision";
 import {
@@ -975,6 +976,7 @@ describe("activating a token", () => {
       character: 8,
       modifiers: { meta: false, ctrl: true, alt: false, shift: false },
       revision: fileContentRevision(fileDiff.additionLines.join("")),
+      anchor: expect.any(Element),
     });
     expect(typeof onTokenActivate.mock.calls[0]![0].revision).toBe("string");
   });
@@ -993,6 +995,7 @@ describe("activating a token", () => {
       character: 10,
       modifiers: { meta: true, ctrl: false, alt: false, shift: false },
       revision: fileContentRevision(fileDiff.deletionLines.join("")),
+      anchor: expect.any(Element),
     });
     expect(fileContentRevision(fileDiff.deletionLines.join(""))).not.toBe(
       fileContentRevision(fileDiff.additionLines.join("")),
@@ -1067,7 +1070,214 @@ describe("activating a token", () => {
       character: 8,
       modifiers: { meta: false, ctrl: true, alt: false, shift: false },
       revision: null,
+      anchor: expect.any(Element),
     });
+  });
+});
+
+describe("Go to Declaration at the caret", () => {
+  const modified = () => diffOf(base(60), base(60).with(29, "const changed030 = 30;"));
+  const MOD = isMacPlatform(navigator.platform) ? "Meta" : "Control";
+  const GO_TO_DECLARATION = `{${MOD}>}b{/${MOD}}`;
+  const NOBODY = { meta: false, ctrl: false, alt: false, shift: false };
+
+  /** Puts the document's caret at a column of a row and waits for the view to have heard it. */
+  async function placeCaret(screen: Screen, side: Side, line: number, column: number) {
+    const code = one(rowByNumber(screen, side, line)!, ".sbs-code")!;
+    focusPane(screen, side);
+    const heard = new Promise<void>((resolve) =>
+      document.addEventListener("selectionchange", () => resolve(), { once: true }),
+    );
+    // An empty line has no text node to put the caret in.
+    const { node, offset } = code.textContent
+      ? textPointAt(code, column)
+      : { node: code, offset: 0 };
+    document.getSelection()!.collapse(node, offset);
+    await heard;
+  }
+
+  /** The sidebar's key is bound to the same chord outside code. */
+  function sidebarToggle() {
+    const toggled = vi.fn();
+    const unregister = registerCommands({ "sidebar.toggle": toggled });
+    return { toggled, [Symbol.dispose]: unregister };
+  }
+
+  it("activates the token at the caret in either pane, and keeps the key from the sidebar", async () => {
+    const onTokenActivate = vi.fn();
+    const fileDiff = modified();
+    await using screen = await mount({ fileDiff, onTokenActivate });
+    // After the view, so the sidebar is the newest scope and wins unless the view goes first.
+    using sidebar = sidebarToggle();
+    await vi.waitFor(() => expect(rowByNumber(screen, "additions", 12)).toBeDefined());
+
+    // `const value012 = 12;`: column 8 is inside `value012`.
+    await placeCaret(screen, "additions", 12, 8);
+    await userEvent.keyboard(GO_TO_DECLARATION);
+
+    expect(onTokenActivate).toHaveBeenCalledExactlyOnceWith({
+      side: "additions",
+      line: 12,
+      character: 8,
+      modifiers: NOBODY,
+      revision: fileContentRevision(fileDiff.additionLines.join("")),
+      anchor: expect.any(Element),
+    });
+
+    await placeCaret(screen, "deletions", 13, 10);
+    await userEvent.keyboard(GO_TO_DECLARATION);
+
+    expect(onTokenActivate).toHaveBeenCalledTimes(2);
+    expect(onTokenActivate).toHaveBeenLastCalledWith({
+      side: "deletions",
+      line: 13,
+      character: 10,
+      modifiers: NOBODY,
+      revision: fileContentRevision(fileDiff.deletionLines.join("")),
+      anchor: expect.any(Element),
+    });
+    expect(sidebar.toggled).not.toHaveBeenCalled();
+  });
+
+  it("anchors the activation on an element of the caret's own line", async () => {
+    const onTokenActivate = vi.fn();
+    await using screen = await mount({ fileDiff: modified(), onTokenActivate });
+    await vi.waitFor(() => expect(rowByNumber(screen, "additions", 12)).toBeDefined());
+
+    await placeCaret(screen, "additions", 12, 8);
+    await userEvent.keyboard(GO_TO_DECLARATION);
+
+    const anchor = onTokenActivate.mock.calls[0]![0].anchor as Element;
+    expect(anchor.closest(".sbs-row")).toBe(rowByNumber(screen, "additions", 12));
+  });
+
+  it("counts a caret just past a name as that name, and the characters of a changed line", async () => {
+    const onTokenActivate = vi.fn();
+    await using screen = await mount({ fileDiff: modified(), onTokenActivate });
+    await vi.waitFor(() => expect(rowByNumber(screen, "additions", 12)).toBeDefined());
+
+    // Column 14 is the space after `value012`.
+    await placeCaret(screen, "additions", 12, 14);
+    await userEvent.keyboard(GO_TO_DECLARATION);
+    await vi.waitFor(() => expect(visibleTinted(screen, "additions")).toEqual(["30"]));
+    // `const changed030 = 30;`: the word-level tint splits the line into nodes.
+    expect(
+      one(rowByNumber(screen, "additions", 30)!, ".sbs-code")!.childNodes.length,
+    ).toBeGreaterThan(1);
+    await placeCaret(screen, "additions", 30, 15);
+    await userEvent.keyboard(GO_TO_DECLARATION);
+
+    expect(
+      onTokenActivate.mock.calls.map(([activation]) => [activation.line, activation.character]),
+    ).toEqual([
+      [12, 13],
+      [30, 15],
+    ]);
+  });
+
+  it("emits nothing on whitespace or an empty line, whatever the caret was on before", async () => {
+    const onTokenActivate = vi.fn();
+    const before = ["const a = 1;", "", "const  b = 2;", ...base(40).slice(3)];
+    await using screen = await mount({
+      fileDiff: diffOf(before, before.with(30, "const changed031 = 31;")),
+      onTokenActivate,
+    });
+    using sidebar = sidebarToggle();
+    await vi.waitFor(() => expect(rowByNumber(screen, "additions", 3)).toBeDefined());
+
+    // Between the two spaces of `const  b`, then in the empty second line.
+    await placeCaret(screen, "additions", 3, 6);
+    await userEvent.keyboard(GO_TO_DECLARATION);
+    await placeCaret(screen, "additions", 1, 8);
+    await placeCaret(screen, "additions", 2, 0);
+    await userEvent.keyboard(GO_TO_DECLARATION);
+
+    expect(onTokenActivate).not.toHaveBeenCalled();
+    // The key is still the pane's: it does not fall through to the sidebar.
+    expect(sidebar.toggled).not.toHaveBeenCalled();
+  });
+
+  it("reports no revision in patch-only mode, and the hunk's own line number", async () => {
+    const onTokenActivate = vi.fn();
+    await using screen = await mount({ fileDiff: twoHunkPatch(), onTokenActivate });
+    await vi.waitFor(() => expect(rowByNumber(screen, "additions", 78)).toBeDefined());
+
+    await placeCaret(screen, "additions", 78, 8);
+    await userEvent.keyboard(GO_TO_DECLARATION);
+
+    expect(onTokenActivate).toHaveBeenCalledExactlyOnceWith({
+      side: "additions",
+      line: 78,
+      character: 8,
+      modifiers: NOBODY,
+      revision: null,
+      anchor: expect.any(Element),
+    });
+  });
+
+  it("leaves the key to the sidebar without onTokenActivate", async () => {
+    await using screen = await mount({ fileDiff: modified() });
+    using sidebar = sidebarToggle();
+    await vi.waitFor(() => expect(rowByNumber(screen, "additions", 12)).toBeDefined());
+
+    await placeCaret(screen, "additions", 12, 8);
+    await userEvent.keyboard(GO_TO_DECLARATION);
+
+    expect(sidebar.toggled).toHaveBeenCalledOnce();
+  });
+
+  it("leaves the key alone in the find field and outside the panes", async () => {
+    const onTokenActivate = vi.fn();
+    await using screen = await mount({ fileDiff: modified(), onTokenActivate });
+    using sidebar = sidebarToggle();
+    await vi.waitFor(() => expect(rowByNumber(screen, "additions", 12)).toBeDefined());
+    await placeCaret(screen, "additions", 12, 8);
+
+    await userEvent.keyboard(MOD_F);
+    await vi.waitFor(() => expect(findBarOf(screen)).not.toBeNull());
+    expect(findBarOf(screen)!.contains(document.activeElement)).toBe(true);
+    await userEvent.keyboard(GO_TO_DECLARATION);
+    expect(onTokenActivate).not.toHaveBeenCalled();
+    const afterFind = sidebar.toggled.mock.calls.length;
+
+    // Any text field inside a pane, whatever it is for.
+    const field = document.createElement("input");
+    scrollerOf(screen, "additions").append(field);
+    field.focus();
+    await userEvent.keyboard(GO_TO_DECLARATION);
+    field.remove();
+    expect(onTokenActivate).not.toHaveBeenCalled();
+    const afterField = sidebar.toggled.mock.calls.length;
+
+    await userEvent.click(screen.getByRole("button", { name: "Next difference" }));
+    await userEvent.keyboard(GO_TO_DECLARATION);
+
+    expect(onTokenActivate).not.toHaveBeenCalled();
+    expect(afterField).toBeGreaterThan(afterFind);
+    expect(sidebar.toggled.mock.calls.length).toBe(afterField + 1);
+  });
+
+  it("lets the keys that only resolve in code focus reach their own handlers", async () => {
+    const onTokenActivate = vi.fn();
+    const implementation = vi.fn();
+    const usages = vi.fn();
+    // Older than the view's own scope, so the view tries the key first and passes it on.
+    using _others = {
+      [Symbol.dispose]: registerCommands(
+        { "code.goToImplementation": implementation, "code.findUsages": usages },
+        { capture: true, context: () => ({ codeFocus: true, codeNavigation: true }) },
+      ),
+    };
+    await using screen = await mount({ fileDiff: modified(), onTokenActivate });
+    await vi.waitFor(() => expect(rowByNumber(screen, "additions", 12)).toBeDefined());
+    await placeCaret(screen, "additions", 12, 8);
+
+    await userEvent.keyboard(`{${MOD}>}{Alt>}b{/Alt}{/${MOD}}`);
+    expect(implementation).toHaveBeenCalledOnce();
+    await userEvent.keyboard("{Alt>}{F7}{/Alt}");
+
+    expect(usages).toHaveBeenCalledOnce();
+    expect(onTokenActivate).not.toHaveBeenCalled();
   });
 });
 
@@ -1192,6 +1402,37 @@ describe("folds", () => {
       "Show 71 unchanged lines",
     );
     expect(all(screen.container, "g.sbs-fold-link")).toHaveLength(4);
+  });
+
+  it("marks the fold that hides a note on its own pane, and says so", async () => {
+    const notes: SbsAnnotation[] = [
+      { id: "right", side: "additions", startLine: 10, endLine: 10, data: null },
+      { id: "left", side: "deletions", startLine: 50, endLine: 52, data: null },
+    ];
+    await using screen = await mount({
+      fileDiff: threeChanges(),
+      collapseUnchanged: true,
+      annotations: notes,
+    });
+    await vi.waitFor(() => expect(connectorsOf(screen)).toHaveLength(3));
+
+    const marks = (side: Side) =>
+      foldsOf(screen, side).map((fold) => [
+        fold.hasAttribute("data-annotated"),
+        fold.getAttribute("aria-label"),
+      ]);
+    expect(marks("additions")).toEqual([
+      [true, "Show 15 unchanged lines, with a note among them"],
+      [false, "Show 71 unchanged lines"],
+      [false, "Show 71 unchanged lines"],
+      [false, "Show 16 unchanged lines"],
+    ]);
+    expect(marks("deletions")).toEqual([
+      [false, "Show 15 unchanged lines"],
+      [true, "Show 71 unchanged lines, with a note among them"],
+      [false, "Show 71 unchanged lines"],
+      [false, "Show 16 unchanged lines"],
+    ]);
   });
 
   it("opens a fold clicked in either pane and both panes gain the same rows", async () => {
@@ -1836,6 +2077,114 @@ describe("annotations", () => {
       markersOf(screen).find((marker) => marker.dataset.sbsAnnotation === "near")!,
     );
     await vi.waitFor(() => expect(cardOf(screen)?.dataset.sbsAnnotationCard).toBe("near"));
+  });
+  describe("the card over the panes", () => {
+    const onOld: SbsAnnotation<{ text: string }> = {
+      id: "old",
+      side: "deletions",
+      startLine: 22,
+      endLine: 23,
+      data: { text: "Old note" },
+    };
+    const remPx = () => parseFloat(getComputedStyle(document.documentElement).fontSize);
+
+    it("is one element of the body, outside both panes, with the width of 30rem", async () => {
+      await using screen = await mount(
+        {
+          fileDiff: threeChanges(),
+          annotations: [near],
+          openAnnotationId: "near",
+          renderAnnotation,
+        },
+        { width: 1400 },
+      );
+      await vi.waitFor(() => expect(cardOf(screen)).not.toBeNull());
+      const card = cardOf(screen)!;
+
+      expect(all(screen.container, "[data-sbs-annotation-card]")).toHaveLength(1);
+      expect(card.closest(".sbs-diff")).not.toBeNull();
+      expect(card.closest("[data-sbs-pane]")).toBeNull();
+      expect(card.getBoundingClientRect().width).toBeCloseTo(30 * remPx(), 0);
+    });
+
+    it("stays inside a narrow body, 2rem narrower than it", async () => {
+      await using screen = await mount(
+        {
+          fileDiff: threeChanges(),
+          annotations: [near],
+          openAnnotationId: "near",
+          renderAnnotation,
+        },
+        { width: 400 },
+      );
+      await vi.waitFor(() => expect(cardOf(screen)).not.toBeNull());
+      const card = cardOf(screen)!.getBoundingClientRect();
+      const body = one(screen.container, ".sbs-diff")!.getBoundingClientRect();
+
+      expect(body.width).toBeLessThan(30 * remPx());
+      expect(card.width).toBeCloseTo(body.width - 2 * remPx(), 0);
+      expect(card.left).toBeGreaterThanOrEqual(body.left - 0.5);
+      expect(card.right).toBeLessThanOrEqual(body.right + 0.5);
+    });
+
+    it.each([
+      { side: "deletions" as const, annotation: onOld },
+      { side: "additions" as const, annotation: near },
+    ])("starts at the code of the $side pane", async ({ side, annotation }) => {
+      await using screen = await mount(
+        {
+          fileDiff: threeChanges(),
+          annotations: [annotation],
+          openAnnotationId: annotation.id,
+          renderAnnotation,
+        },
+        { width: 2000 },
+      );
+      await vi.waitFor(() => expect(cardOf(screen)).not.toBeNull());
+      const pane = scrollerOf(screen, side).parentElement!.getBoundingClientRect();
+      const card = cardOf(screen)!.getBoundingClientRect();
+      const body = one(screen.container, ".sbs-diff")!.getBoundingClientRect();
+
+      // Past the gutter of its own pane, and nowhere else: not from the left of the body
+      // for the right pane, nor from the middle for the left.
+      expect(card.left - pane.left).toBeGreaterThan(0);
+      expect(card.left - pane.left).toBeLessThan(120);
+      expect(card.left > body.left + body.width / 2).toBe(side === "additions");
+    });
+
+    it("keeps clear of the find bar while it is open, and uses the old margin once it closes", async () => {
+      const firstLine: SbsAnnotation<{ text: string }> = {
+        id: "first",
+        side: "additions",
+        startLine: 1,
+        endLine: 1,
+        data: { text: "First note" },
+      };
+      await using screen = await mount({
+        fileDiff: diffOf(base(60), base(60).with(0, "const changed001 = 1;")),
+        annotations: [firstLine],
+        openAnnotationId: "first",
+        renderAnnotation,
+      });
+      await vi.waitFor(() => expect(cardOf(screen)).not.toBeNull());
+      const paneTop = () =>
+        scrollerOf(screen, "additions").parentElement!.getBoundingClientRect().top;
+      const topOf = () => cardOf(screen)!.getBoundingClientRect().top - paneTop();
+      await vi.waitFor(() => expect(scrollerOf(screen, "additions").scrollTop).toBe(0));
+      // Under line 1, 4px below it: well above where the find bar ends.
+      expect(topOf()).toBeCloseTo(lineHeightOf(screen) + 4, 0);
+      expect(topOf()).toBeLessThan(48);
+
+      await press(screen, "additions", MOD_F);
+      await vi.waitFor(() => expect(findBarOf(screen)).not.toBeNull());
+      await vi.waitFor(() => expect(topOf()).toBeGreaterThanOrEqual(48 - SCROLL_TOLERANCE));
+      const findBar = findBarOf(screen)!.getBoundingClientRect();
+      expect(cardOf(screen)!.getBoundingClientRect().top).toBeGreaterThanOrEqual(findBar.bottom);
+
+      await userEvent.keyboard("{Escape}");
+      await vi.waitFor(() => expect(findBarOf(screen)).toBeNull());
+      await vi.waitFor(() => expect(topOf()).toBeCloseTo(lineHeightOf(screen) + 4, 0));
+    });
   });
 });
 

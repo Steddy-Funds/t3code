@@ -228,27 +228,42 @@ describe("diff comment drafts", () => {
   });
 });
 
+const reviewNote: ReviewNote = {
+  id: TurnItemId.make("turn-item:review-note:thread-1:0123456789abcdef0123456789abcdef"),
+  kind: "review_note",
+  path: "shared.ts",
+  startLine: 1,
+  endLine: 1,
+  note: "Shared by every caller.",
+  excerpt: "new",
+  excerptTruncated: false,
+  contentRevision: "3b18e512dba79e4c8300dd08aeb37f8e728b8dad",
+  runId: RunId.make("run-1"),
+};
+
+const notesOn = (
+  shown: ReturnType<typeof file>,
+  anchor: DiffReviewNotes["placed"][number]["anchor"] = { kind: "exact", startLine: 1, endLine: 1 },
+): DiffReviewNotes => ({
+  placed: [{ note: reviewNote, fileKey: shown.fileKey, anchor }],
+  answeredIds: new Set(),
+  onDismiss: () => {},
+});
+
+const savedComments = () =>
+  useComposerDraftStore.getState().getComposerDraft(target)?.reviewComments;
+const gutterButton = () =>
+  Array.from(container.querySelectorAll("button")).find((node) =>
+    node.textContent?.startsWith("Comment on "),
+  );
+const replyButton = () => container.querySelector('button[aria-label="Reply"]');
+
 describe("review note replies", () => {
   it("keeps an open reply while its file reloads, and its words when its note leaves", async () => {
     using _drafts = setup();
     const shown = file("shared.ts");
-    const note: ReviewNote = {
-      id: TurnItemId.make("turn-item:review-note:thread-1:0123456789abcdef0123456789abcdef"),
-      kind: "review_note",
-      path: "shared.ts",
-      startLine: 1,
-      endLine: 1,
-      note: "Shared by every caller.",
-      excerpt: "new",
-      excerptTruncated: false,
-      contentRevision: "3b18e512dba79e4c8300dd08aeb37f8e728b8dad",
-      runId: RunId.make("run-1"),
-    };
-    const notes = (anchor: DiffReviewNotes["placed"][number]["anchor"]): DiffReviewNotes => ({
-      placed: [{ note, fileKey: shown.fileKey, anchor }],
-      answeredIds: new Set(),
-      onDismiss: () => {},
-    });
+    const note = reviewNote;
+    const notes = (anchor: DiffReviewNotes["placed"][number]["anchor"]) => notesOn(shown, anchor);
     await using screen = await render(
       view([shown], "initial", [], undefined, notes({ kind: "exact", startLine: 1, endLine: 1 })),
       { container },
@@ -261,18 +276,158 @@ describe("review note replies", () => {
       view([shown], "initial", [], undefined, notes({ kind: "exact", startLine: 1, endLine: 1 })),
     );
     await expect.element(screen.getByRole("textbox")).toHaveValue("Only search should retry.");
-    expect(
-      useComposerDraftStore.getState().getComposerDraft(target)?.reviewComments,
-    ).toBeUndefined();
+    expect(savedComments()).toBeUndefined();
 
     await screen.rerender(view([shown], "initial", [], undefined, notes({ kind: "unattached" })));
 
     expect(container.querySelector("textarea")).toBeNull();
-    expect(useComposerDraftStore.getState().getComposerDraft(target)?.reviewComments).toEqual([
+    expect(savedComments()).toEqual([
       expect.objectContaining({
         sectionId: reviewNoteSectionId(note.id),
         text: "Only search should retry.",
       }),
     ]);
+  });
+
+  it("closes an empty reply whose note left, saving nothing", async () => {
+    using _drafts = setup();
+    const shown = file("shared.ts");
+    await using screen = await render(view([shown], "initial", [], undefined, notesOn(shown)), {
+      container,
+    });
+    await click("Reply");
+    expect(editor().value).toBe("");
+
+    await screen.rerender(
+      view([shown], "initial", [], undefined, notesOn(shown, { kind: "unattached" })),
+    );
+
+    expect(container.querySelector("textarea")).toBeNull();
+    expect(savedComments()).toBeUndefined();
+  });
+});
+
+describe("one box at a time", () => {
+  it("shuts the gutter and the note's Reply while a comment box is open, and keeps the box", async () => {
+    using _drafts = setup();
+    const shown = file("shared.ts");
+    const notes = notesOn(shown);
+    await using screen = await render(view([shown], "initial", [], undefined, notes), {
+      container,
+    });
+    expect(gutterButton()?.disabled).toBe(false);
+    expect(replyButton()).not.toBeNull();
+
+    await click("Comment on shared.ts");
+    await typeComment("First thought");
+
+    expect(gutterButton()?.disabled).toBe(true);
+    expect(replyButton()).toBeNull();
+    await screen.rerender(view([shown], "initial", [], undefined, notes));
+    expect(editor().value).toBe("First thought");
+
+    await click("Cancel");
+
+    expect(container.querySelector("textarea")).toBeNull();
+    expect(gutterButton()?.disabled).toBe(false);
+    expect(replyButton()).not.toBeNull();
+  });
+
+  it("shuts the gutter and every Reply while a reply box is open, until it is saved", async () => {
+    using _drafts = setup();
+    const shown = file("shared.ts");
+    const notes = notesOn(shown);
+    await using screen = await render(view([shown], "initial", [], undefined, notes), {
+      container,
+    });
+
+    await click("Reply");
+    await typeComment("Answering");
+
+    expect(gutterButton()?.disabled).toBe(true);
+    expect(replyButton()).toBeNull();
+    await screen.rerender(view([shown], "initial", [], undefined, notes));
+    expect(editor().value).toBe("Answering");
+
+    await click("Comment");
+
+    expect(container.querySelector("textarea")).toBeNull();
+    expect(gutterButton()?.disabled).toBe(false);
+    expect(savedComments()).toEqual([
+      expect.objectContaining({ sectionId: reviewNoteSectionId(reviewNote.id), text: "Answering" }),
+    ]);
+  });
+});
+
+describe("a box open when the view goes", () => {
+  it("hands a comment box's words to the message", async () => {
+    using _drafts = setup();
+    const screen = await render(view([file("shared.ts")]), { container });
+    await using _screen = screen;
+    await click("Comment on shared.ts");
+    await typeComment("Left half done");
+    expect(savedComments()).toBeUndefined();
+
+    await screen.unmount();
+
+    expect(savedComments()).toEqual([
+      expect.objectContaining({ filePath: "shared.ts", text: "Left half done" }),
+    ]);
+  });
+
+  it("hands a reply box's words to the message under its note", async () => {
+    using _drafts = setup();
+    const shown = file("shared.ts");
+    const screen = await render(view([shown], "initial", [], undefined, notesOn(shown)), {
+      container,
+    });
+    await using _screen = screen;
+    await click("Reply");
+    await typeComment("Left half done");
+
+    await screen.unmount();
+
+    expect(savedComments()).toEqual([
+      expect.objectContaining({
+        sectionId: reviewNoteSectionId(reviewNote.id),
+        text: "Left half done",
+      }),
+    ]);
+  });
+
+  it("just closes empty boxes", async () => {
+    using _drafts = setup();
+    const shown = file("shared.ts");
+    const screen = await render(view([shown], "initial", [], undefined, notesOn(shown)), {
+      container,
+    });
+    await using _screen = screen;
+    await click("Comment on shared.ts");
+    await typeComment("   ");
+
+    await screen.unmount();
+
+    expect(savedComments()).toBeUndefined();
+  });
+
+  it("leaves a box that is sending to its send", async () => {
+    using _drafts = setup();
+    let settle!: (outcome: Awaited<ReturnType<SendReviewComments>>) => void;
+    const onSend = vi.fn<SendReviewComments>(
+      () => new Promise((resolve) => void (settle = resolve)),
+    );
+    const screen = await render(view([file("shared.ts")], "initial", [], onSend), { container });
+    await using _screen = screen;
+    await click("Comment on shared.ts");
+    await typeComment("On its way");
+    await click("Send");
+    expect(onSend).toHaveBeenCalledOnce();
+
+    await screen.unmount();
+    // Neither saved nor lost: the send decides.
+    expect(savedComments()).toBeUndefined();
+
+    await act(() => settle({ status: "failed", reason: "Offline" }));
+    expect(savedComments()).toEqual([expect.objectContaining({ text: "On its way" })]);
   });
 });

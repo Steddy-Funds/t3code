@@ -69,7 +69,26 @@ export function browseInputEndPaddingClass(input: {
   return "*:data-[slot=autocomplete-input]:pe-24!";
 }
 
-export type SearchOverlayMode = "command" | "files" | "content";
+export type SearchOverlayMode =
+  | "command"
+  | "files"
+  | "content"
+  | "classes"
+  | "symbols"
+  | "structure"
+  | "recentFiles";
+
+/** The modes the palette's own rows open, with the palette's search to come back to. */
+export type ChildSearchMode = Exclude<SearchOverlayMode, "command" | "structure">;
+
+// Popups over the code close on Escape, unless the palette opened them.
+const POPUP_MODES: ReadonlySet<SearchOverlayMode> = new Set(["structure", "recentFiles"]);
+
+/** Escape in this state goes back to the command palette rather than closing it. */
+export function escapeGoesBack(state: CommandPaletteUiState): boolean {
+  if (!state.open || state.mode === "command") return false;
+  return !POPUP_MODES.has(state.mode) || state.parentSearch !== undefined;
+}
 
 export type CommandPaletteOpenIntent =
   | { readonly kind: "add-project" | "new-thread-in" | "change-theme" }
@@ -103,7 +122,7 @@ export type CommandPaletteUiAction =
   | { readonly _tag: "OpenChangeTheme" }
   | {
       readonly _tag: "OpenChildSearch";
-      readonly mode: "files" | "content";
+      readonly mode: ChildSearchMode;
       readonly context: CommandPaletteReturnContext;
     }
   | { readonly _tag: "BackToCommand" };

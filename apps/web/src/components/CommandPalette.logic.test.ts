@@ -14,6 +14,7 @@ import {
   resolveAddProjectEntry,
   createCommandPaletteSearchState,
   reduceCommandPaletteSearchState,
+  escapeGoesBack,
   type CommandPaletteUiState,
 } from "./CommandPalette.logic";
 
@@ -901,16 +902,36 @@ describe("returning from file and content search", () => {
     },
   };
 
-  it.each(["files", "content"] as const)(
+  it.each(["files", "content", "classes", "symbols", "recentFiles"] as const)(
     "Escape from %s restores the query and linked-thread results",
     (mode) => {
       const child = reduceCommandPaletteUiState(root, { _tag: "OpenChildSearch", mode, context });
       expect(child.mode).toBe(mode);
+      expect(escapeGoesBack(child)).toBe(true);
       const returned = reduceCommandPaletteUiState(child, { _tag: "BackToCommand" });
       expect(returned).toEqual({ ...root, restoredSearch: context });
       expect(reduceCommandPaletteUiState(returned, { _tag: "BackToCommand" })).toEqual(returned);
     },
   );
+
+  it("Escape closes a popup over the code that its own key opened", () => {
+    for (const mode of ["structure", "recentFiles"] as const) {
+      const popup = reduceCommandPaletteUiState(
+        { ...root, open: false },
+        { _tag: "ToggleMode", mode },
+      );
+      expect(popup).toMatchObject({ open: true, mode });
+      expect(escapeGoesBack(popup)).toBe(false);
+    }
+    for (const mode of ["classes", "symbols"] as const) {
+      const search = reduceCommandPaletteUiState(
+        { ...root, open: false },
+        { _tag: "ToggleMode", mode },
+      );
+      expect(escapeGoesBack(search)).toBe(true);
+    }
+    expect(escapeGoesBack(root)).toBe(false);
+  });
 
   it("closing a child search discards its return context before reopening", () => {
     const child: CommandPaletteUiState = { ...root, mode: "files", parentSearch: context };

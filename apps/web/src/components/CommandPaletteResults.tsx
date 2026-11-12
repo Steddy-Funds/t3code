@@ -88,6 +88,8 @@ export function scrollCommandPaletteRowIntoView(list: LegendListRef | null, rowI
 interface CommandPaletteVirtualizedResultsProps extends Omit<CommandPaletteResultsProps, "groups"> {
   rows: ReadonlyArray<CommandPaletteRow>;
   listRef: RefObject<LegendListRef | null>;
+  /** The row the list opens centred on; read when the list first has rows. */
+  initialRowIndex?: number;
 }
 
 /** Pass flat items with virtualized to Command, scroll highlights via listRef, and handle Enter for
@@ -115,7 +117,9 @@ export function CommandPaletteVirtualizedResults(props: CommandPaletteVirtualize
       <LegendList<CommandPaletteRow>
         ref={scrollRef}
         data={props.rows}
-        initialScrollOffset={0}
+        {...(props.initialRowIndex === undefined
+          ? { initialScrollOffset: 0 }
+          : { initialScrollIndex: { index: props.initialRowIndex, viewPosition: 0.5 } })}
         keyExtractor={(row) => row.key}
         getItemType={(row) => row.kind}
         extraData={props.highlightedItemValue}
@@ -140,7 +144,17 @@ export function CommandPaletteVirtualizedResults(props: CommandPaletteVirtualize
         drawDistance={400}
         onLayout={updateScrollFade}
         onScroll={updateScrollFade}
-        onReady={updateScrollFade}
+        onReady={() => {
+          // The first placement used estimated row heights; centre again on the measured ones.
+          if (props.initialRowIndex !== undefined) {
+            void props.listRef.current?.scrollToIndex({
+              index: props.initialRowIndex,
+              viewPosition: 0.5,
+              animated: false,
+            });
+          }
+          updateScrollFade();
+        }}
         // Legend counts style padding (not class padding) in its size, end state and row positions.
         style={{ paddingTop: 8, paddingBottom: 8 }}
         contentContainerClassName="px-2"

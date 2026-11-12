@@ -101,7 +101,14 @@ function mountViewer(
   document.body.append(element);
   stack.defer(() => element.remove());
   const state = { location: initial };
-  stack.defer(registerCodeViewer({ element, threadRef, location: () => state.location }));
+  stack.defer(
+    registerCodeViewer({
+      element,
+      threadRef,
+      location: () => state.location,
+      document: () => null,
+    }),
+  );
   return { element, input, state };
 }
 

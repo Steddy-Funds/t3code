@@ -52,15 +52,10 @@ export function placeReviewThreadInFile(
 
 const NO_CONVERSATION: ReadonlyArray<ReviewThreadEntry> = [];
 
-/** The thread's review threads on one workspace file, placed in its current text. */
-export function useFileReviewThreads(input: {
-  readonly threadRef: ScopedThreadRef | null;
-  readonly relativePath: string;
-  readonly contents: string;
-}) {
-  const { threads, conversations } = useThreadReviewNotes(input.threadRef);
-  const { dismissedIds, dismiss } = useReviewNoteDismissals(input.threadRef);
-  const thread = useQuietThreadShell(input.threadRef);
+/** The thread's review threads that name one workspace file, wherever they now sit in it. */
+function useReviewThreadsOnFile(threadRef: ScopedThreadRef | null, relativePath: string) {
+  const { threads, conversations } = useThreadReviewNotes(threadRef);
+  const thread = useQuietThreadShell(threadRef);
   const project = useProject(
     thread?.projectId ? { environmentId: thread.environmentId, projectId: thread.projectId } : null,
   );
@@ -68,13 +63,25 @@ export function useFileReviewThreads(input: {
     workspaceRoot: thread?.worktreePath ?? project?.workspaceRoot,
     repositoryRoot: thread?.worktreePath ? undefined : project?.repositoryIdentity?.rootPath,
   };
-  const placed = threads.flatMap((candidate) => {
-    if (dismissedIds.has(candidate.id)) return [];
-    const path =
-      candidate.pathBase === "workspace"
+  const onFile = threads.filter(
+    (candidate) =>
+      (candidate.pathBase === "workspace"
         ? candidate.path
-        : resolveDiffPathForWorkspace({ filePath: candidate.path, ...roots });
-    if (path !== input.relativePath) return [];
+        : resolveDiffPathForWorkspace({ filePath: candidate.path, ...roots })) === relativePath,
+  );
+  return { onFile, conversations };
+}
+
+/** The thread's review threads on one workspace file, placed in its current text. */
+export function useFileReviewThreads(input: {
+  readonly threadRef: ScopedThreadRef | null;
+  readonly relativePath: string;
+  readonly contents: string;
+}) {
+  const { onFile, conversations } = useReviewThreadsOnFile(input.threadRef, input.relativePath);
+  const { dismissedIds, dismiss } = useReviewNoteDismissals(input.threadRef);
+  const placed = onFile.flatMap((candidate) => {
+    if (dismissedIds.has(candidate.id)) return [];
     const placement = placeReviewThreadInFile(candidate, input.contents);
     return placement ? [{ thread: candidate, ...placement }] : [];
   });
@@ -82,5 +89,21 @@ export function useFileReviewThreads(input: {
     placed,
     conversationOf: (threadId: string) => conversations.get(threadId) ?? NO_CONVERSATION,
     dismiss,
+  };
+}
+
+/** The threads on this file the user dismissed. The Diff toolbar lists only what its diff shows. */
+export function useDismissedFileReviewThreads(
+  threadRef: ScopedThreadRef | null,
+  relativePath: string,
+) {
+  const { onFile } = useReviewThreadsOnFile(threadRef, relativePath);
+  const { dismissedIds, restore } = useReviewNoteDismissals(threadRef);
+  const ids = onFile.flatMap((candidate) => (dismissedIds.has(candidate.id) ? [candidate.id] : []));
+  return {
+    count: ids.length,
+    restoreAll: () => {
+      for (const id of ids) restore(id);
+    },
   };
 }

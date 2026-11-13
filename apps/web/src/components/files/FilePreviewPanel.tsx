@@ -46,7 +46,7 @@ import {
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 import { mediaFileReference } from "@t3tools/client-runtime/media-reference";
-import { FolderTree, Globe2, WrapTextIcon } from "lucide-react";
+import { FolderTree, Globe2, MessageSquareReply, WrapTextIcon } from "lucide-react";
 import { Code2, Eye, Table2 } from "lucide";
 import * as Schema from "effect/Schema";
 import { lazy, Suspense, useContext, useEffect, useEffectEvent, useRef, useState } from "react";
@@ -101,7 +101,7 @@ import {
   remapFileCommentAnnotations,
   sameFileCommentAnnotations,
 } from "./fileCommentAnnotations";
-import { useFileReviewThreads } from "./fileReviewThreads";
+import { useDismissedFileReviewThreads, useFileReviewThreads } from "./fileReviewThreads";
 import { installFileEditorDismissal } from "./fileEditorDismissal";
 import {
   FILE_LINK_REVEAL_ATTRIBUTE,
@@ -1101,6 +1101,7 @@ export default function FilePreviewPanel({
   const relativePath =
     attachment === undefined ? resolveFilePreviewPath(requestedPath, cwd) : requestedPath;
   const draft = typeof composerDraftTarget === "string";
+  const dismissedThreads = useDismissedFileReviewThreads(threadRef, relativePath ?? "");
   const { resolvedTheme } = useTheme();
   const defaultWordWrap = useClientSettings((settings) => settings.wordWrap);
   const [wordWrapOverride, setWordWrapOverride] = useState<boolean | null>(null);
@@ -1439,6 +1440,16 @@ export default function FilePreviewPanel({
               onPress={() => setWordWrapOverride(!wordWrap)}
             >
               <WrapTextIcon className="size-3.5" />
+            </FileSurfaceAction>
+          ) : null}
+          {dismissedThreads.count > 0 ? (
+            <FileSurfaceAction
+              label={`Restore ${dismissedThreads.count} dismissed comment ${
+                dismissedThreads.count === 1 ? "thread" : "threads"
+              }`}
+              onPress={dismissedThreads.restoreAll}
+            >
+              <MessageSquareReply className="size-3.5" />
             </FileSurfaceAction>
           ) : null}
           {canOpenInBrowser ? (

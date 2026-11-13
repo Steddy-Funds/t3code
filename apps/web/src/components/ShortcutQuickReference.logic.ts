@@ -16,6 +16,7 @@ import {
   type ShortcutMatchContext,
 } from "../keybindings";
 import { projectScriptIdFromCommand } from "../projectScripts";
+import { CODE_LINKS_ATTRIBUTE } from "./code/codeNavigationDom";
 import {
   buildKeybindingRows,
   commandLabel,
@@ -109,11 +110,15 @@ export function trackPointerPressed(target: Window): {
 const FOCUS_SCOPE_ATTRIBUTE = "data-focus-scope";
 
 /**
- * Whether the pointer rests on a `code` focus scope, where a held modifier is
- * the start of a Cmd+click. Hover reaches a scope through open shadow roots.
+ * Whether the pointer rests on a `code` focus scope or a diff with code links, where a held
+ * modifier is the start of a Cmd+click. Hover reaches a scope through open shadow roots.
  */
 export function isPointerOverCodeScope(root: Document | ShadowRoot = document): boolean {
-  if (root.querySelector(`[${FOCUS_SCOPE_ATTRIBUTE}~="code"]:hover`) !== null) return true;
+  if (
+    root.querySelector(`[${FOCUS_SCOPE_ATTRIBUTE}~="code"]:hover, [${CODE_LINKS_ATTRIBUTE}]:hover`)
+  ) {
+    return true;
+  }
   for (const hovered of root.querySelectorAll(":hover")) {
     if (hovered.shadowRoot && isPointerOverCodeScope(hovered.shadowRoot)) return true;
   }

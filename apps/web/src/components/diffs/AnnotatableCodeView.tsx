@@ -24,6 +24,7 @@ import { ReviewCommentBox } from "./ReviewCommentBox";
 import { ReviewNoteAnnotation } from "./ReviewNoteAnnotation";
 import { isAttachedReviewNote, type PlacedReviewNote } from "./reviewNoteAnchoring";
 import { StyledDiffCodeView, type StyledDiffCodeViewOptions } from "./StyledDiffCodeView";
+import type { DiffCodeViewTokenActivate } from "./useCodeViewTokenNavigation";
 import {
   keepDraftWords,
   type SendReviewComments,
@@ -138,6 +139,7 @@ interface AnnotatableCodeViewProps {
     collapsed: boolean,
   ) => ReactNode;
   onRevealSearchMatch: (fileKey: string) => void;
+  onTokenActivate?: DiffCodeViewTokenActivate | undefined;
 }
 
 interface DiffSelectionContext {
@@ -164,6 +166,7 @@ export function AnnotatableCodeView({
   renderHeaderFilenameSuffix,
   renderHeaderPrefix,
   onRevealSearchMatch,
+  onTokenActivate,
 }: AnnotatableCodeViewProps) {
   const [selectedLines, setSelectedLines] = useState<{
     id: string;
@@ -343,6 +346,7 @@ export function AnnotatableCodeView({
             }
           : {})}
         {...(renderCodeViewFooter ? { renderCodeViewFooter } : {})}
+        onTokenActivate={onTokenActivate}
         items={items}
         selectedLines={selectedLines}
         onSelectedLinesChange={setSelectedLines}

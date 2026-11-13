@@ -1,5 +1,7 @@
 import { executeAtomQuery } from "@t3tools/client-runtime/state/runtime";
 import type { CodeLocation, EnvironmentId, ScopedThreadRef } from "@t3tools/contracts";
+import { fileContentRevision } from "@t3tools/shared/fileContentRevision";
+import type { FileDiffContentsLoader, FileDiffMetadata } from "@pierre/diffs";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 
 import { fileExtension } from "~/components/code/codeLanguages";
@@ -19,17 +21,18 @@ import { Button } from "~/components/ui/button";
 import { Popover, PopoverPopup } from "~/components/ui/popover";
 import { resolveDiffPathForWorkspace } from "~/diffFileActions";
 import { useStableCallback } from "~/hooks/useStableCallback";
+import { resolveFileDiffPath } from "~/lib/diffRendering";
 import { appAtomRegistry } from "~/rpc/atomRegistry";
 import { codeIntelEnvironment } from "~/state/codeIntel";
 
-import type { SbsTokenActivation } from "./SideBySideDiffView";
+import type { DiffCodeViewTokenActivate } from "./useCodeViewTokenNavigation";
 
 const WAITING_HINT_DELAY_MS = 500;
 
 export const NOT_CURRENT_VERSION = "Navigation works on the current version of this file";
 export const OUTSIDE_PROJECT = "Navigation works on files in this project";
 
-export interface SbsCodeNavigationContext {
+export interface DiffCodeNavigationContext {
   readonly environmentId: EnvironmentId;
   /** The workspace the language servers run in. */
   readonly cwd: string;
@@ -37,7 +40,23 @@ export interface SbsCodeNavigationContext {
   readonly threadRef: ScopedThreadRef;
 }
 
-type SbsNavigationPopup =
+/** A Cmd- or Ctrl-click on a token of a diff, or Go to Declaration's key at its caret. */
+export interface DiffTokenActivation {
+  readonly side: "deletions" | "additions";
+  /** File line number, 1-based. */
+  readonly line: number;
+  /** Zero-based UTF-16 column in that line. */
+  readonly character: number;
+  /**
+   * The content revision of the side's text; null when it is not a whole file. A promise while
+   * the whole file is still being read.
+   */
+  readonly revision: string | null | Promise<string | null>;
+  /** The token, or the caret's line, for a popup to point at. */
+  readonly anchor: Element;
+}
+
+type DiffNavigationPopup =
   | CodePopup
   | {
       readonly kind: "notCurrent";
@@ -46,7 +65,7 @@ type SbsNavigationPopup =
       readonly line: number | undefined;
     };
 
-/** Rows leave the DOM as the panes scroll; the popup stays where the token was. */
+/** Rows leave the DOM as the view scrolls; the popup stays where the token was. */
 function anchorOf(element: Element): CodePopupAnchor {
   let last: DOMRect | null = null;
   return {
@@ -57,18 +76,52 @@ function anchorOf(element: Element): CodePopupAnchor {
   };
 }
 
+const wholeFileRevisions = new WeakMap<
+  FileDiffMetadata,
+  Promise<{ readonly deletions: string; readonly additions: string } | null>
+>();
+
 /**
- * Go to Declaration from a side-by-side pane, through the file viewer's navigation. A pane's text
- * is asked about only when it is the file on disk now: an older version, or a patch's hunks, says
- * so and offers the file instead. A lookup lasts as long as `shownFile`, the file the panes show
- * (null when they are gone).
+ * The revision of a diff side's text as a whole file, for the server to compare with the file on
+ * disk. A patch's hunks have one once the whole files are read, which is done once per diff.
  */
-export function useSbsCodeNavigation(
-  context: SbsCodeNavigationContext | null,
-  shownFile: string | null,
+export function diffSideRevision(
+  fileDiff: FileDiffMetadata,
+  side: DiffTokenActivation["side"],
+  loadWholeFiles: FileDiffContentsLoader | undefined,
+): string | null | Promise<string | null> {
+  if (!fileDiff.isPartial) {
+    return fileContentRevision(
+      (side === "deletions" ? fileDiff.deletionLines : fileDiff.additionLines).join(""),
+    );
+  }
+  if (loadWholeFiles === undefined) return null;
+  let revisions = wholeFileRevisions.get(fileDiff);
+  if (revisions === undefined) {
+    revisions = loadWholeFiles(fileDiff).then(
+      (files) => ({
+        deletions: fileContentRevision((files.oldFile ?? files.newFile).contents),
+        additions: fileContentRevision(files.newFile.contents),
+      }),
+      () => null,
+    );
+    wholeFileRevisions.set(fileDiff, revisions);
+  }
+  return revisions.then((revision) => revision?.[side] ?? null);
+}
+
+/**
+ * Go to Declaration from a diff, through the file viewer's navigation. Only a side whose text is
+ * the file on disk now is asked about; any other offers the file instead. A lookup lasts as long
+ * as `scope`, what the view shows (null when it is gone).
+ */
+export function useDiffCodeNavigation(
+  context: DiffCodeNavigationContext | null,
+  scope: string | null,
   onOpenFile: (filePath: string, line?: number) => void,
+  loadWholeFiles?: FileDiffContentsLoader,
 ) {
-  const [popup, setPopup] = useState<SbsNavigationPopup | null>(null);
+  const [popup, setPopup] = useState<DiffNavigationPopup | null>(null);
   const request = useRef<{ seq: number; controller: AbortController | null }>({
     seq: 0,
     controller: null,
@@ -87,19 +140,20 @@ export function useSbsCodeNavigation(
       setPopup(null);
     },
     [
-      // oxlint-disable-next-line react/exhaustive-effect-dependencies -- Another file in the panes ends the lookup asked from the one before.
-      shownFile,
+      // oxlint-disable-next-line react/exhaustive-effect-dependencies -- Another file or diff in the view ends the lookup asked from the one before.
+      scope,
       cancel,
     ],
   );
 
   const activate = async (
-    { environmentId, cwd, repositoryRoot, threadRef }: SbsCodeNavigationContext,
-    activation: SbsTokenActivation,
+    { environmentId, cwd, repositoryRoot, threadRef }: DiffCodeNavigationContext,
+    activation: DiffTokenActivation,
     filePath: string,
   ) => {
     cancel();
     const seq = request.current.seq;
+    const isCurrent = () => request.current.seq === seq;
     const anchor = anchorOf(activation.anchor);
     const hint = (message: string) => setPopup({ kind: "hint", anchor, message });
     const notCurrent = () =>
@@ -112,18 +166,23 @@ export function useSbsCodeNavigation(
       });
     const path = resolveDiffPathForWorkspace({ filePath, workspaceRoot: cwd, repositoryRoot });
     if (path === null) return hint(OUTSIDE_PROJECT);
-    if (activation.revision === null) return notCurrent();
+    const waiting = window.setTimeout(() => {
+      if (isCurrent()) hint(waitingMessage(null));
+    }, WAITING_HINT_DELAY_MS);
+    const revision = await activation.revision;
+    if (!isCurrent()) return window.clearTimeout(waiting);
+    if (revision === null) {
+      window.clearTimeout(waiting);
+      return notCurrent();
+    }
     const controller = new AbortController();
     request.current.controller = controller;
-    const waiting = window.setTimeout(() => {
-      if (request.current.seq === seq) hint(waitingMessage(null));
-    }, WAITING_HINT_DELAY_MS);
     const result = await executeAtomQuery(
       appAtomRegistry,
       codeIntelEnvironment.definition({
         environmentId,
         input: {
-          document: { cwd, path, ifRevision: activation.revision },
+          document: { cwd, path, ifRevision: revision },
           position: { line: activation.line - 1, character: activation.character },
           kind: "definition",
         },
@@ -131,7 +190,7 @@ export function useSbsCodeNavigation(
       { refresh: true, reportFailure: false, reportDefect: false, signal: controller.signal },
     );
     window.clearTimeout(waiting);
-    if (request.current.seq !== seq) return;
+    if (!isCurrent()) return;
     request.current.controller = null;
     const outcome = codeIntelOutcome(result);
     switch (outcome._tag) {
@@ -150,8 +209,8 @@ export function useSbsCodeNavigation(
           }),
         );
       case "answer": {
-        const { locations, revision } = outcome.value;
-        if (revision !== activation.revision) return notCurrent();
+        const { locations } = outcome.value;
+        if (outcome.value.revision !== revision) return notCurrent();
         if (locations.length === 0) return hint(noResultMessage("declaration"));
         if (locations.length === 1) {
           setPopup(null);
@@ -220,12 +279,19 @@ export function useSbsCodeNavigation(
       />
     );
 
+  const onCodeViewTokenActivate: DiffCodeViewTokenActivate = (target, fileDiff) => {
+    if (context === null) return;
+    const revision = diffSideRevision(fileDiff, target.side, loadWholeFiles);
+    void activate(context, { ...target, revision }, resolveFileDiffPath(fileDiff));
+  };
+
   return {
     onTokenActivate:
       context === null
         ? undefined
-        : (activation: SbsTokenActivation, filePath: string) =>
+        : (activation: DiffTokenActivation, filePath: string) =>
             void activate(context, activation, filePath),
+    onCodeViewTokenActivate: context === null ? undefined : onCodeViewTokenActivate,
     popup: popupNode,
   };
 }

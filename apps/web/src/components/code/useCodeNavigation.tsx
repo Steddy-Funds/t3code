@@ -17,9 +17,9 @@ import type { AsyncResult, Atom } from "effect/reactivity";
 import { createContext, type ReactNode, useEffect, useEffectEvent, useRef, useState } from "react";
 
 import { useCodeNavigationStore } from "~/codeNavigationStore";
+import { useStableCallback } from "~/hooks/useStableCallback";
 import { provideShortcutCapability } from "~/keybindings";
 import { focusScopeProps } from "~/lib/focusScopes";
-import { isMacPlatform } from "~/lib/utils";
 import { appAtomRegistry } from "~/rpc/atomRegistry";
 import { registerCommands } from "~/shortcuts/dispatcher";
 import { codeIntelEnvironment } from "~/state/codeIntel";
@@ -31,9 +31,9 @@ import {
   getUnsavedProjectFileQueryData,
 } from "../files/projectFilesQueryState";
 import { fileExtension } from "./codeLanguages";
+import { createCodeLinkHover, isNavigationModifier } from "./codeLinkHover";
 import {
   type CodeHighlightName,
-  type CodePointerTarget,
   type CodeWordHit,
   domRangeFor,
   pointerTarget,
@@ -134,11 +134,6 @@ const DEFINITION_KIND: Partial<Record<CodeCommand, CodeDefinitionKind>> = {
 
 const MODIFIER_KEYS = new Set(["Meta", "Control", "Shift", "Alt"]);
 
-function isNavigationModifier(event: MouseEvent | KeyboardEvent): boolean {
-  const mod = isMacPlatform(navigator.platform) ? event.metaKey : event.ctrlKey;
-  return mod && !event.altKey && !event.shiftKey;
-}
-
 function isInsideCodePopup(element: Element | null): boolean {
   return element?.closest(`[${CODE_NAVIGATION_POPUP_ATTRIBUTE}]`) != null;
 }
@@ -188,9 +183,6 @@ export function useCodeNavigation(options: CodeNavigationOptions) {
   const editorRef = useRef<CodeEditorHandle | null>(null);
   // A read-only caret belongs to the file it was placed in.
   const cursorRef = useRef<{ readonly path: string; readonly position: CodePosition } | null>(null);
-  const hoverRef = useRef<CodePointerTarget | null>(null);
-  const linkRef = useRef<CodeWordHit | null>(null);
-  const modifierRef = useRef(false);
   const pressRef = useRef<CodeWordHit | null>(null);
   const keepPopupFocusRef = useRef(false);
   const shownPathRef = useRef(path);
@@ -198,6 +190,8 @@ export function useCodeNavigation(options: CodeNavigationOptions) {
   const usagesRef = useRef<PaintedRanges | null>(null);
   const requestRef = useRef<LookupRequest>({ seq: 0, controller: null });
   const [owner] = useState(() => ({}));
+  const linksEnabled = useStableCallback(() => canFollowLinks);
+  const [linkHover] = useState(() => createCodeLinkHover(linksEnabled));
   const [popup, setPopup] = useState<CodePopup | null>(null);
   const [hasEditor, setHasEditor] = useState(false);
   // Stable, so the editor options that hand it the editor never change and never re-attach it.
@@ -246,7 +240,8 @@ export function useCodeNavigation(options: CodeNavigationOptions) {
     if (cursorRef.current !== null && cursorRef.current.path === path) {
       return cursorRef.current.position;
     }
-    const hovered = hoverRef.current === null ? null : wordAtTarget(hoverRef.current);
+    const target = linkHover.hovered();
+    const hovered = target === null ? null : wordAtTarget(target);
     return hovered?.range.start ?? null;
   };
 
@@ -566,42 +561,6 @@ export function useCodeNavigation(options: CodeNavigationOptions) {
     return true;
   });
 
-  const updateLink = useEffectEvent(() => {
-    const target = canFollowLinks && modifierRef.current ? hoverRef.current : null;
-    const hit = target === null ? null : wordAtTarget(target);
-    const previous = linkRef.current;
-    if (previous && previous.token !== hit?.token) {
-      previous.token.removeAttribute("data-code-nav-link");
-    }
-    linkRef.current = hit;
-    if (hit === null) {
-      if (previous) setCodeHighlight("t3-code-link", []);
-      return;
-    }
-    hit.token.setAttribute("data-code-nav-link", "");
-    const root = hit.token.getRootNode();
-    const range = root instanceof ShadowRoot ? domRangeFor(root, hit.range) : null;
-    setCodeHighlight("t3-code-link", range === null ? [] : [range]);
-  });
-
-  const onPointerMove = useEffectEvent((event: PointerEvent) => {
-    hoverRef.current = pointerTarget(event);
-    modifierRef.current = isNavigationModifier(event);
-    if (modifierRef.current || linkRef.current) updateLink();
-  });
-
-  const onPointerLeave = useEffectEvent(() => {
-    hoverRef.current = null;
-    updateLink();
-  });
-
-  const onModifierChange = useEffectEvent((event: Event) => {
-    const pressed = event instanceof KeyboardEvent && isNavigationModifier(event);
-    if (pressed === modifierRef.current) return;
-    modifierRef.current = pressed;
-    updateLink();
-  });
-
   // Cmd+click must not reach the editor: it would move the caret or add one.
   const onPointerDown = useEffectEvent((event: MouseEvent) => {
     if (event.button !== 0) return;
@@ -662,9 +621,7 @@ export function useCodeNavigation(options: CodeNavigationOptions) {
   );
 
   const releaseHighlights = useEffectEvent(() => {
-    linkRef.current?.token.removeAttribute("data-code-nav-link");
-    linkRef.current = null;
-    setCodeHighlight("t3-code-link", []);
+    linkHover.release();
     targetRef.current = null;
     usagesRef.current = null;
     if (highlightOwner !== owner) return;
@@ -701,10 +658,10 @@ export function useCodeNavigation(options: CodeNavigationOptions) {
       }
     });
     const pointerDown = (event: MouseEvent) => onPointerDown(event);
-    const pointerMove = (event: PointerEvent) => onPointerMove(event);
-    const pointerLeave = () => onPointerLeave();
+    const pointerMove = (event: PointerEvent) => linkHover.pointerMove(event);
+    const pointerLeave = () => linkHover.pointerLeave();
     const click = (event: MouseEvent) => onClick(event);
-    const modifierChange = (event: Event) => onModifierChange(event);
+    const modifierChange = (event: Event) => linkHover.modifierChange(event);
     element.addEventListener("pointermove", pointerMove);
     element.addEventListener("pointerleave", pointerLeave);
     element.addEventListener("pointerdown", pointerDown, true);
@@ -730,18 +687,18 @@ export function useCodeNavigation(options: CodeNavigationOptions) {
       cancelLookup(requestRef.current);
       releaseHighlights();
     };
-  }, [active, threadKey, threadRef]);
+  }, [active, threadKey, threadRef, linkHover]);
 
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- one viewer serves every file tab, so a file switch drops what was asked or shown over the last file
   useEffect(() => {
     if (shownPathRef.current === path) return;
     shownPathRef.current = path;
     cancelLookup(requestRef.current);
-    hoverRef.current = null;
+    linkHover.forget();
     pressRef.current = null;
     // Cmd+Enter in a result list opens another file and keeps the list.
     if (!keepPopupFocusRef.current) setPopup(null);
-  }, [path]);
+  }, [path, linkHover]);
 
   const onPostRender = (fileContainer: HTMLElement, phase: PostRenderPhase) => {
     if (phase === "unmount") {

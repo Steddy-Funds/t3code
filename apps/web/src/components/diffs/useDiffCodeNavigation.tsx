@@ -84,9 +84,12 @@ type DiffNavigationPopup =
       readonly line: number | undefined;
     };
 
-/** Rows leave the DOM as the view scrolls; the popup stays where the token was. */
+/**
+ * Rows leave the DOM as the view scrolls or redraws a line under the pointer, even before the
+ * answer comes; the popup stays where the token was.
+ */
 function anchorOf(element: Element): CodePopupAnchor {
-  let last: DOMRect | null = null;
+  let last: DOMRect | null = element.isConnected ? element.getBoundingClientRect() : null;
   return {
     getBoundingClientRect: () => {
       if (element.isConnected) last = element.getBoundingClientRect();

@@ -1130,6 +1130,59 @@ describe("remembered settings", () => {
   });
 });
 
+describe("code that moved", () => {
+  const amount = [
+    "function parseAmount(raw) {",
+    "  const cleaned = raw.replace(',', '');",
+    "  return Number(cleaned);",
+    "}",
+  ];
+  const dates = [
+    "function parseDate(raw) {",
+    "  const [day, month, year] = raw.split('/');",
+    "  return new Date(year, month - 1, day);",
+    "}",
+  ];
+  // The amounts function left for b.ts and the dates function went further down a.ts.
+  const parser = entryOf("a.ts", {
+    before: join(["import x;", ...amount, ...dates, ...base(10)]),
+    after: join(["import x;", ...base(10), ...dates]),
+  });
+  const amounts = entryOf("b.ts", { before: "", after: join(["// amounts", ...amount]) });
+  const split = (screen: Screen) => one(screen.container, "[data-sbs-split]");
+  const openSplit = async (screen: Screen) => {
+    await vi.waitFor(() =>
+      expect(one(screen.container, '.sbs-row[data-tint="moved-out"] .sbs-code')).not.toBeNull(),
+    );
+    await userEvent.click(one(screen.container, '.sbs-row[data-tint="moved-out"] .sbs-code')!);
+    await vi.waitFor(() => expect(split(screen)).not.toBeNull());
+  };
+
+  it("opens a moved block's places on a click, goes to one from its card, and closes on Escape", async () => {
+    await using screen = await mount({ files: [parser, amounts], selectedFileKey: "a.ts" });
+    await openSplit(screen);
+    const cards = all(split(screen)!, "[data-sbs-split-card]");
+    expect(cards.map((card) => card.querySelector("button")?.textContent)).toEqual([
+      "b.ts:2-54 lines",
+      "L12-154 lines",
+    ]);
+    // Each card holds its piece in the moved colour, with the code around it.
+    expect(
+      all(cards[0]!, '.sbs-row[data-tint="moved"] .sbs-code').map((code) => code.textContent),
+    ).toEqual(amount);
+    expect(cards[1]!.textContent).toContain("const value010 = 10;");
+
+    await userEvent.keyboard("{Escape}");
+    await vi.waitFor(() => expect(split(screen)).toBeNull());
+    expect(document.activeElement).toBe(scrollerOf(screen, "deletions"));
+
+    await openSplit(screen);
+    await userEvent.click(all(split(screen)!, "[data-sbs-split-card] button")[0]!);
+    await vi.waitFor(() => expect(codeOf(screen, "additions")).toContain("// amounts"));
+    expect(split(screen)).toBeNull();
+  });
+});
+
 describe("a caller's own view", () => {
   const texts = textsOf({ 10: "alpha" });
 

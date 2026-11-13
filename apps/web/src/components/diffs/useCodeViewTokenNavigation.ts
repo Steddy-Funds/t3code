@@ -127,5 +127,5 @@ export function useCodeViewTokenNavigation(onActivate: DiffCodeViewTokenActivate
     caret.current = { target, fileDiff };
   };
 
-  return { ref: setRoot, onTokenClick: enabled ? onTokenClick : undefined };
+  return { setRoot, onTokenClick: enabled ? onTokenClick : undefined };
 }

@@ -245,15 +245,14 @@ export function StyledDiffCodeView<LAnnotation = undefined>({
   ...props
 }: StyledDiffCodeViewProps<LAnnotation>) {
   const themeCss = useThemeEditorSurfaceCss();
-  const navigation = useCodeViewTokenNavigation(onTokenActivate);
-  const onTokenClick = navigation.onTokenClick;
+  const { setRoot, onTokenClick } = useCodeViewTokenNavigation(onTokenActivate);
   // A theme with its own editor colours keeps the diff on its code surface; the others blend
   // the diff into the panel it sits in.
   const surfaceClass = themeCss
     ? "diff-render-surface bg-(--code-background) outline-none"
     : "diff-render-surface [--code-background:var(--background)] outline-none";
   return (
-    <div ref={navigation.ref} className="contents">
+    <div ref={setRoot} className="contents">
       <DiffWorkerPoolProvider>
         <CodeView<LAnnotation>
           {...props}

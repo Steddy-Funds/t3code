@@ -102,7 +102,10 @@ import { useCodeViewFileReveal } from "../diffs/useCodeViewFileReveal";
 import { useHideTestFiles } from "../diffs/useHideTestFiles";
 import { diffFileTreeEntries, orderDiffFilesLikeTree } from "../diffs/diffFileTree.logic";
 import { StyledDiffCodeView } from "../diffs/StyledDiffCodeView";
-import { useDiffCodeNavigation } from "../diffs/useDiffCodeNavigation";
+import {
+  useDiffCodeNavigation,
+  useThreadCodeNavigationContext,
+} from "../diffs/useDiffCodeNavigation";
 import {
   SIDE_BY_SIDE_MIN_WIDTH,
   type SbsFileEntry,
@@ -818,24 +821,19 @@ function PullRequestCodeTab({
   };
   const sbsShownFileKey =
     sbsFileKey !== null && fileKeys.includes(sbsFileKey) ? sbsFileKey : fileKeys[0];
+  // The thread's checkout, not the project's: that is where its files open.
+  const codeNavigationContext = useThreadCodeNavigationContext(threadRef);
   const codeNavigation = useDiffCodeNavigation(
-    threadRef
-      ? {
-          environmentId,
-          cwd: detail.workspaceRoot,
-          repositoryRoot: undefined,
-          threadRef,
-        }
-      : null,
+    codeNavigationContext,
     sideBySide ? (sbsShownFileKey ? `${scopeKey}:${sbsShownFileKey}` : null) : scopeKey,
     (filePath, line) => {
-      if (!threadRef) return;
+      if (!codeNavigationContext) return;
       const path = resolveDiffPathForWorkspace({
         filePath,
-        workspaceRoot: detail.workspaceRoot,
-        repositoryRoot: undefined,
+        workspaceRoot: codeNavigationContext.cwd,
+        repositoryRoot: codeNavigationContext.repositoryRoot,
       });
-      if (path) useRightPanelStore.getState().openFile(threadRef, path, line);
+      if (path) useRightPanelStore.getState().openFile(codeNavigationContext.threadRef, path, line);
     },
     loadDiffFiles,
   );

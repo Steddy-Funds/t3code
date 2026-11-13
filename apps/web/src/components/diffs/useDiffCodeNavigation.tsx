@@ -24,6 +24,7 @@ import { useStableCallback } from "~/hooks/useStableCallback";
 import { resolveFileDiffPath } from "~/lib/diffRendering";
 import { appAtomRegistry } from "~/rpc/atomRegistry";
 import { codeIntelEnvironment } from "~/state/codeIntel";
+import { useProject, useQuietThreadShell } from "~/state/entities";
 
 import type { DiffCodeViewTokenActivate } from "./useCodeViewTokenNavigation";
 
@@ -38,6 +39,24 @@ export interface DiffCodeNavigationContext {
   readonly cwd: string;
   readonly repositoryRoot: string | undefined;
   readonly threadRef: ScopedThreadRef;
+}
+
+/** Where a thread's files are: its worktree, else its project's folder. Null until both load. */
+export function useThreadCodeNavigationContext(
+  threadRef: ScopedThreadRef | null,
+): DiffCodeNavigationContext | null {
+  const thread = useQuietThreadShell(threadRef);
+  const project = useProject(
+    thread ? { environmentId: thread.environmentId, projectId: thread.projectId } : null,
+  );
+  const cwd = thread?.worktreePath ?? project?.workspaceRoot;
+  if (!threadRef || !cwd) return null;
+  return {
+    environmentId: threadRef.environmentId,
+    cwd,
+    repositoryRoot: thread?.worktreePath ? undefined : project?.repositoryIdentity?.rootPath,
+    threadRef,
+  };
 }
 
 /** A Cmd- or Ctrl-click on a token of a diff, or Go to Declaration's key at its caret. */
@@ -78,7 +97,7 @@ function anchorOf(element: Element): CodePopupAnchor {
 
 const wholeFileRevisions = new WeakMap<
   FileDiffMetadata,
-  Promise<{ readonly deletions: string; readonly additions: string } | null>
+  Promise<{ readonly deletions: string | null; readonly additions: string } | null>
 >();
 
 /**
@@ -100,10 +119,14 @@ export function diffSideRevision(
   if (revisions === undefined) {
     revisions = loadWholeFiles(fileDiff).then(
       (files) => ({
-        deletions: fileContentRevision((files.oldFile ?? files.newFile).contents),
+        deletions: files.oldFile ? fileContentRevision(files.oldFile.contents) : null,
         additions: fileContentRevision(files.newFile.contents),
       }),
-      () => null,
+      () => {
+        // A failed read is tried again on the next click.
+        wholeFileRevisions.delete(fileDiff);
+        return null;
+      },
     );
     wholeFileRevisions.set(fileDiff, revisions);
   }

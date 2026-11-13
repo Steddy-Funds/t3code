@@ -71,6 +71,7 @@ upstream; a feature can, from its own branch, when Akiva decides.
 | Inline review: sent comments stay on their lines as threads; the agent answers each inline (`reply_to_review_comment`, Labs); per-file counts     | #102 | 308d8a4 |
 | Review file tree sits left of the diff (Changes, side-by-side and PR Code); the resize handle and arrow keys mirror                               | #104 | 1adb9ce |
 | Go to Declaration in stacked and split diffs and the PR Code tab: Cmd+B, Cmd+click, the Cmd-hover link                                            | #105 | b667785 |
+| Smart Diff: moved code in purple in the split diff, chips that jump to where it went; Settings > Labs (on by default)                             | #101 | 2b86d60 |
 
 Held: #38 (pods notes in the t3-orchestration skill). It edits
 `.agents/skills/t3-orchestration/`, which exists only on

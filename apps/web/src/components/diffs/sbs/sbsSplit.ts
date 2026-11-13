@@ -200,7 +200,7 @@ export interface SbsSplitGeometry {
 }
 
 /** Room between two cards. */
-export const SBS_SPLIT_CARD_GAP = 8;
+const SBS_SPLIT_CARD_GAP = 8;
 
 /** Where the block, the cards and the shapes between them go. A card's header takes one row. */
 export function sbsSplitGeometry(input: SbsSplitGeometryInput): SbsSplitGeometry {

@@ -1,6 +1,5 @@
 import { ArrowLeftIcon } from "lucide-react";
 import {
-  useCallback,
   useRef,
   type CSSProperties,
   type KeyboardEvent,
@@ -8,6 +7,7 @@ import {
   type ReactNode,
 } from "react";
 
+import { useStableCallback } from "~/hooks/useStableCallback";
 import { cn } from "~/lib/utils";
 
 import { Button } from "../../ui/button";
@@ -89,9 +89,10 @@ export function SbsSplitView(props: SbsSplitViewProps) {
   const { document, split, cards, lineHeight } = props;
   const root = useRef<HTMLDivElement | null>(null);
   const activePiece = useRef<string | null>(null);
-  const focusOnMount = useCallback((element: HTMLDivElement | null) => {
+  // One identity, so the layer takes focus once, when it opens.
+  const focusOnMount = useStableCallback((element: HTMLDivElement | null) => {
     element?.focus({ preventScroll: true });
-  }, []);
+  });
 
   const blockRows = split.block.end - split.block.start;
   const geometry = sbsSplitGeometry({
@@ -252,7 +253,7 @@ export function SbsSplitView(props: SbsSplitViewProps) {
       ref={root}
       role="dialog"
       aria-label="Where this block moved"
-      className={cn("sbs-diff sbs-split absolute inset-0 z-30 flex flex-col", props.className)}
+      className={cn("sbs-diff absolute inset-0 z-30 flex flex-col", props.className)}
       style={props.style}
       data-sbs-split={split.side}
       onKeyDown={handleKeyDown}

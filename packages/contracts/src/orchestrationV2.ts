@@ -1679,6 +1679,35 @@ export const OrchestrationV2ReviewNote = Schema.Struct({
 });
 export type OrchestrationV2ReviewNote = typeof OrchestrationV2ReviewNote.Type;
 
+/** The MCP tool an agent answers a user's review comment with, and its record's `toolName`. */
+export const REVIEW_REPLY_TOOL_NAME = "reply_to_review_comment";
+
+/** Only the server's `review_reply.record` writes turn item ids under this prefix. */
+export const REVIEW_REPLY_TURN_ITEM_PREFIX = "turn-item:review-reply:";
+
+/**
+ * An agent's answer to a review comment the user sent, shown under the comment at its lines.
+ * `comment` copies the comment as sent, so the reply still shows where its message is not loaded.
+ */
+export const OrchestrationV2ReviewReply = Schema.Struct({
+  kind: Schema.Literal("review_reply"),
+  /** The comment's `contextId`. */
+  commentId: TrimmedNonEmptyString,
+  reply: Schema.String,
+  comment: Schema.Struct({
+    sectionId: Schema.String,
+    filePath: TrimmedNonEmptyString,
+    rangeLabel: Schema.String,
+    startIndex: NonNegativeInt,
+    endIndex: NonNegativeInt,
+    text: Schema.String,
+    diff: Schema.String,
+    fenceLanguage: Schema.optional(Schema.String),
+  }),
+  runId: RunId,
+});
+export type OrchestrationV2ReviewReply = typeof OrchestrationV2ReviewReply.Type;
+
 export const OrchestrationV2TurnItem = Schema.Union([
   Schema.Struct({
     ...OrchestrationV2TurnItemBaseFields,
@@ -3700,6 +3729,16 @@ const OrchestrationV2InternalCommand = Schema.Union([
     nodeId: NodeId,
     turnItemId: TurnItemId,
     note: OrchestrationV2ReviewNote.mapFields(Struct.omit(["kind", "runId"])),
+  }),
+  /** Records an agent's reply to a review comment; internal for the same reason. */
+  Schema.Struct({
+    type: Schema.Literal("review_reply.record"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    runId: RunId,
+    nodeId: NodeId,
+    turnItemId: TurnItemId,
+    reply: OrchestrationV2ReviewReply.mapFields(Struct.omit(["kind", "runId"])),
   }),
 ]);
 export type OrchestrationV2InternalCommand = typeof OrchestrationV2InternalCommand.Type;

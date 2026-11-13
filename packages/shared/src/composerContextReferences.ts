@@ -287,7 +287,15 @@ function formatElementDetails(element: ElementContextDetails): string[] {
   return lines;
 }
 
-function formatComposerContextProviderPayload(record: KnownComposerContextRecord): string {
+interface ProviderProjectionOptions {
+  /** The agent can answer review comments inline (Agent review notes on). */
+  readonly reviewReplies?: boolean | undefined;
+}
+
+function formatComposerContextProviderPayload(
+  record: KnownComposerContextRecord,
+  options: ProviderProjectionOptions,
+): string {
   switch (record.kind) {
     case "image":
     case "file":
@@ -336,6 +344,9 @@ function formatComposerContextProviderPayload(record: KnownComposerContextRecord
       if (record.diff.trim()) {
         lines.push(`${record.fenceLanguage ?? "diff"}:`, indent(record.diff.replace(/\n+$/, "")));
       }
+      if (options.reviewReplies) {
+        lines.push("Answer it inline: reply_to_review_comment with this entry's id.");
+      }
       return lines.join("\n");
     }
     case "mention":
@@ -362,20 +373,24 @@ function formatEnvelopeEntry(
   kind: ComposerContextKind,
   contextId: ComposerContextId,
   record: ComposerContextRecord | undefined,
+  options: ProviderProjectionOptions,
 ): string {
   const open = `<${CONTEXT_ENTRY_TAG} kind="${escapeAttribute(kind)}" id="${escapeAttribute(contextId)}"`;
   if (!record) return `${open} unavailable="true"/>`;
   const body =
     "payload" in record
       ? JSON.stringify(record.payload)
-      : formatComposerContextProviderPayload(record);
+      : formatComposerContextProviderPayload(record, options);
   return `${open}>\n${escapeComposerContextPayloadText(body)}\n</${CONTEXT_ENTRY_TAG}>`;
 }
 
-export function projectComposerContextForProvider(input: {
-  text: string;
-  records: ReadonlyArray<ComposerContextRecord>;
-}): string {
+export function projectComposerContextForProvider(
+  input: {
+    text: string;
+    records: ReadonlyArray<ComposerContextRecord>;
+  },
+  options: ProviderProjectionOptions = {},
+): string {
   const occurrences = collectComposerContextReferences(input.text);
   if (occurrences.length === 0) return input.text;
   const recordsById = new Map<ComposerContextId, ComposerContextRecord | undefined>();
@@ -399,6 +414,7 @@ export function projectComposerContextForProvider(input: {
       record?.kind ?? occurrence.kind,
       occurrence.contextId,
       record,
+      options,
     );
     entries.push(entry);
   }

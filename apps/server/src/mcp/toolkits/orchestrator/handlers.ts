@@ -146,6 +146,13 @@ const handlers = {
       return yield* notes.flag(scope, input);
     }),
   ),
+  reply_to_review_comment: McpToolAccess.actsAsCaller((input) =>
+    Effect.gen(function* () {
+      const scope = yield* McpInvocationContext.McpInvocationContext;
+      const notes = yield* ReviewNotes.ReviewNotes;
+      return yield* notes.reply(scope, input);
+    }),
+  ),
   create_threads: McpToolAccess.actsAsCaller((input) =>
     Effect.gen(function* () {
       const scope = yield* McpInvocationContext.McpInvocationContext;

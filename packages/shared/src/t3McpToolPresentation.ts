@@ -42,6 +42,7 @@ export type T3McpToolSummaryAction =
   | "question-respond"
   | "secret-request"
   | "review-note"
+  | "review-reply"
   | "worktree-handoff"
   | "worktree-list"
   | "worktree-status"
@@ -167,6 +168,10 @@ const T3_MCP_TOOLS: Readonly<Record<string, T3McpToolDefinition>> = {
   ),
   request_secret: tool(["Ask for", "Asking for", "Asked for", "a secret"], "secret-request"),
   flag_for_review: tool(["Flag", "Flagging", "Flagged", "a change for review"], "review-note"),
+  reply_to_review_comment: tool(
+    ["Reply to", "Replying to", "Replied to", "a review comment"],
+    "review-reply",
+  ),
   create_threads: tool(["Create", "Creating", "Created", "T3 threads"], "thread-create"),
   t3_thread_start: tool(["Start", "Starting", "Started", "a T3 thread"], "thread-create"),
   t3_thread_list: tool(["List", "Listing", "Listed", "T3 threads"], "thread-list"),

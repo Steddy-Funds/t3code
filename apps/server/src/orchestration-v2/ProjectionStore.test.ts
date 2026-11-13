@@ -20,6 +20,7 @@ import {
   ProjectId,
   REVIEW_NOTE_TOOL_NAME,
   REVIEW_NOTE_TURN_ITEM_PREFIX,
+  REVIEW_REPLY_TURN_ITEM_PREFIX,
   ProviderDriverKind,
   ProviderInstanceId,
   ProviderSessionId,
@@ -3387,13 +3388,14 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
         );
         assert.isUndefined(page.items.find((row) => row.item.ordinal === 2)?.item.deferredWork);
       }
-      // The server's review note stays out; a provider row with its name and input folds in.
+      // The server's review note or reply stays out; a provider row with its name and input folds in.
       const [before] = yield* sql<{ readonly turn_item_id: string; readonly payload_json: string }>`
         SELECT turn_item_id, payload_json FROM orchestration_v2_projection_turn_items
         WHERE thread_id = ${threadId} AND ordinal = 2`;
       const providerItemId = before!.turn_item_id;
       for (const [itemId, firstDeferred] of [
         [`${REVIEW_NOTE_TURN_ITEM_PREFIX}bounded-sql-history`, 3],
+        [`${REVIEW_REPLY_TURN_ITEM_PREFIX}bounded-sql-history`, 3],
         [providerItemId, 2],
       ] as const) {
         yield* sql`UPDATE orchestration_v2_projection_turn_items

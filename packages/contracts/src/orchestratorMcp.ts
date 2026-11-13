@@ -853,6 +853,24 @@ export const OrchestratorMcpFlagForReviewResult = Schema.Struct({
 });
 export type OrchestratorMcpFlagForReviewResult = typeof OrchestratorMcpFlagForReviewResult.Type;
 
+export const OrchestratorMcpReplyToReviewCommentInput = Schema.Struct({
+  commentId: TrimmedNonEmptyString.check(Schema.isMaxLength(255)).annotate({
+    description: 'The id of its `<context kind="review-comment">` entry.',
+  }),
+  reply: TrimmedNonEmptyString.check(Schema.isMaxLength(2_000)).annotate({
+    description: "Your answer: what you changed, or why not. Stands alone.",
+  }),
+});
+export type OrchestratorMcpReplyToReviewCommentInput =
+  typeof OrchestratorMcpReplyToReviewCommentInput.Type;
+
+export const OrchestratorMcpReplyToReviewCommentResult = Schema.Struct({
+  status: Schema.Literal("recorded"),
+  replyId: TurnItemId,
+});
+export type OrchestratorMcpReplyToReviewCommentResult =
+  typeof OrchestratorMcpReplyToReviewCommentResult.Type;
+
 export const OrchestratorMcpEnvironmentLinkInput = Schema.Struct({
   environmentId: Schema.optional(EnvironmentId).annotate({
     description:

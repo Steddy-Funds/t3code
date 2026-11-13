@@ -240,7 +240,11 @@ describe("buildReviewThreads", () => {
   });
 
   it("keeps a file-viewer thread's follow-up on workspace paths, loaded or not", () => {
-    const fileComment = { filePath: "server/src/app.ts", diff: "const a = 1;\n", fenceLanguage: "ts" };
+    const fileComment = {
+      filePath: "server/src/app.ts",
+      diff: "const a = 1;\n",
+      fenceLanguage: "ts",
+    };
     const root = comment("ctx_root", { ...fileComment, sectionId: "file:server/src/app.ts" });
     const [rootThread] = buildReviewThreads([], [root]).threads;
     const followUp = comment("ctx_follow", { ...fileComment, sectionId: rootThread!.sectionId });

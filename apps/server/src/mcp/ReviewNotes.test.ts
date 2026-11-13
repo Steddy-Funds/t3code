@@ -734,45 +734,50 @@ describe("reply_to_review_comment", () => {
     ).pipe(Effect.provide(NodeServices.layer)),
   );
 
-  it.effect("refuses a comment it cannot find, an inactive caller, and while review notes are off", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const a = yield* makeHarness();
-        yield* a.sendComments([record("ctx_1")]);
-        expect(errorOf(yield* a.reply({ commentId: "ctx_9", reply: "Done." }))).toMatchObject({
-          code: "invalid_request",
-          message: expect.stringMatching(/No review comment ctx_9/),
-        });
-        expect(yield* a.replies).toEqual([]);
+  it.effect(
+    "refuses a comment it cannot find, an inactive caller, and while review notes are off",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const a = yield* makeHarness();
+          yield* a.sendComments([record("ctx_1")]);
+          expect(errorOf(yield* a.reply({ commentId: "ctx_9", reply: "Done." }))).toMatchObject({
+            code: "invalid_request",
+            message: expect.stringMatching(/No review comment ctx_9/),
+          });
+          expect(yield* a.replies).toEqual([]);
 
-        // Escaped, this reply and path pass the wire's bound with no code at all.
-        yield* a.sendComments([
-          record("ctx_1"),
-          record("ctx_wide", { filePath: "é".repeat(2_000) }),
-        ]);
-        expect(
-          errorOf(yield* a.reply({ commentId: "ctx_wide", reply: "\u0001".repeat(2_000) })),
-        ).toMatchObject({ code: "invalid_request", message: expect.stringMatching(/too long/) });
-        expect(yield* a.replies).toEqual([]);
+          // Escaped, this reply and path pass the wire's bound with no code at all.
+          yield* a.sendComments([
+            record("ctx_1"),
+            record("ctx_wide", { filePath: "é".repeat(2_000) }),
+          ]);
+          expect(
+            errorOf(yield* a.reply({ commentId: "ctx_wide", reply: "\u0001".repeat(2_000) })),
+          ).toMatchObject({ code: "invalid_request", message: expect.stringMatching(/too long/) });
+          expect(yield* a.replies).toEqual([]);
 
-        const otherAgent = { ...scope, thread: { ...caller, providerInstanceId: ProviderInstanceId.make("claude") } };
-        expect(
-          errorOf(yield* a.replyAs(otherAgent)({ commentId: "ctx_1", reply: "Done." })),
-        ).toMatchObject({ code: "parent_not_active" });
-        yield* a.seedRun({ threadId, runId, rootNode }, "completed");
-        expect(errorOf(yield* a.reply({ commentId: "ctx_1", reply: "Done." }))).toMatchObject({
-          code: "parent_not_active",
-        });
-        expect(yield* a.replies).toEqual([]);
+          const otherAgent = {
+            ...scope,
+            thread: { ...caller, providerInstanceId: ProviderInstanceId.make("claude") },
+          };
+          expect(
+            errorOf(yield* a.replyAs(otherAgent)({ commentId: "ctx_1", reply: "Done." })),
+          ).toMatchObject({ code: "parent_not_active" });
+          yield* a.seedRun({ threadId, runId, rootNode }, "completed");
+          expect(errorOf(yield* a.reply({ commentId: "ctx_1", reply: "Done." }))).toMatchObject({
+            code: "parent_not_active",
+          });
+          expect(yield* a.replies).toEqual([]);
 
-        const off = yield* makeHarness({ agentReviewNotesEnabled: false });
-        yield* off.sendComments([record("ctx_1")]);
-        expect(errorOf(yield* off.reply({ commentId: "ctx_1", reply: "Done." }))).toMatchObject({
-          code: "capability_denied",
-          message: ReviewNotes.REVIEW_NOTES_OFF,
-        });
-        expect(yield* off.replies).toEqual([]);
-      }),
-    ).pipe(Effect.provide(NodeServices.layer)),
+          const off = yield* makeHarness({ agentReviewNotesEnabled: false });
+          yield* off.sendComments([record("ctx_1")]);
+          expect(errorOf(yield* off.reply({ commentId: "ctx_1", reply: "Done." }))).toMatchObject({
+            code: "capability_denied",
+            message: ReviewNotes.REVIEW_NOTES_OFF,
+          });
+          expect(yield* off.replies).toEqual([]);
+        }),
+      ).pipe(Effect.provide(NodeServices.layer)),
   );
 });

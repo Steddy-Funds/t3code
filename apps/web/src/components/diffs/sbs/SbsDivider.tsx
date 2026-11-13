@@ -2,20 +2,32 @@ import {
   SBS_DIVIDER_WIDTH,
   sbsVisibleConnectors,
   sbsVisibleFoldLinks,
+  sbsVisibleMoveShapes,
   type SbsConnectorInput,
 } from "./sbsConnectors";
+import type { SbsMoveLayer } from "./sbsMoves";
 
 function foldLinkPath(left: number, right: number): string {
   const third = SBS_DIVIDER_WIDTH / 3;
   return `M0,${left}C${third},${left - 3} ${2 * third},${right + 3} ${SBS_DIVIDER_WIDTH},${right}`;
 }
 
-/** The centre strip: one filled band per change, and each fold's wave carried across. */
+/**
+ * The centre strip: one filled band per change, each fold's wave carried across, and on top the
+ * moves: a band between a block's two places in this file, or a wedge where it leaves it.
+ */
 export function SbsDivider({
   showConnectors,
+  moves,
   ...geometry
-}: SbsConnectorInput & { readonly showConnectors: boolean }) {
-  const connectors = showConnectors ? sbsVisibleConnectors(geometry) : [];
+}: SbsConnectorInput & {
+  readonly showConnectors: boolean;
+  readonly moves: SbsMoveLayer | null;
+}) {
+  const connectors = showConnectors
+    ? sbsVisibleConnectors(moves ? { ...geometry, movedChanges: moves.movedChanges } : geometry)
+    : [];
+  const moveShapes = showConnectors && moves ? sbsVisibleMoveShapes({ ...geometry, moves }) : [];
   const foldLinks = sbsVisibleFoldLinks(geometry);
   return (
     <svg
@@ -32,6 +44,16 @@ export function SbsDivider({
           className="sbs-connector"
           data-kind={connector.kind}
           data-sbs-connector={connector.change}
+        />
+      ))}
+      {moveShapes.map((shape) => (
+        <path
+          key={shape.id}
+          d={shape.path}
+          className="sbs-move-shape"
+          data-kind={shape.kind}
+          data-side={shape.side}
+          data-sbs-move-shape={shape.id}
         />
       ))}
       {foldLinks.map((link) => (

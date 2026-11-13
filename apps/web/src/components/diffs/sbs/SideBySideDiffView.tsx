@@ -33,6 +33,7 @@ import { primaryServerKeybindingsAtom } from "~/state/server";
 
 import { fileContentRevision } from "@t3tools/shared/fileContentRevision";
 import { Button } from "../../ui/button";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../../ui/tooltip";
 import { SBS_DIVIDER_WIDTH } from "./sbsConnectors";
 import { SbsDivider } from "./SbsDivider";
 import { SbsFindBar, SbsScrollMarks } from "./SbsOverlays";
@@ -65,6 +66,7 @@ import {
   sbsStepTarget,
   type SbsNavigationDirection,
 } from "./sbsNavigation";
+import { sbsMoveLayerOf, type SbsMove, type SbsMoveMark } from "./sbsMoves";
 import { changeScrollTargets, sbsScrollAnchors, syncedScrollTop } from "./sbsScroll";
 import { useSbsHighlight } from "./useSbsHighlight";
 
@@ -127,6 +129,13 @@ export interface SideBySideDiffViewProps<T = unknown> {
   readonly onOpenSource?: (target: { readonly side: SbsSide; readonly line: number }) => void;
   /** Takes focus on opening: the file was reached from the keyboard, which goes on here. */
   readonly focusOnOpen?: boolean;
+  /** A line to open on instead of the first difference: the end of a move followed here. */
+  readonly openAt?: { readonly side: SbsSide; readonly line: number } | null;
+
+  /** Code this diff moved, with a chip on each block that jumps to its other end. */
+  readonly moves?: ReadonlyArray<SbsMove>;
+  /** Follows a move to another file. One within this file scrolls here. */
+  readonly onFollowMove?: (move: SbsMove) => void;
 
   /**
    * Line ranges that carry something. Each gets a marker in its pane's gutter and never takes
@@ -175,6 +184,9 @@ function editorColorVariables(colors: ThemeEditorColors): CSSProperties {
     "--sbs-marker-inserted": colors.diff.insertedMarker,
     "--sbs-marker-deleted": colors.diff.deletedMarker,
     "--sbs-marker-modified": colors.diff.modifiedMarker,
+    "--diff-block-moved": colors.diff.moved,
+    "--diff-block-moved-out": colors.diff.movedOut,
+    "--sbs-marker-moved": colors.diff.movedMarker,
     "--sbs-line-number": colors.lineNumber,
     "--sbs-find-match": colors.find.match,
     "--sbs-find-current": colors.find.currentMatch,
@@ -603,39 +615,6 @@ export function SideBySideDiffView<T = unknown>(props: SideBySideDiffViewProps<T
     },
   };
 
-  const attachScroller = (side: SbsSide, element: HTMLDivElement | null) => {
-    scrollers.current[side] = element;
-    if (element === null || opened.current) return;
-    if (sides.some((candidate) => scrollers.current[candidate] === null)) return;
-    opened.current = true;
-    if (props.focusOnOpen) scrollers.current[lead]?.focus({ preventScroll: true });
-    if (groupRanges.length > 0) {
-      stepTo(props.initialDifference === "last" ? groupRanges.length - 1 : 0);
-    }
-  };
-  const attachDeletions = useStableCallback((element: HTMLDivElement | null) =>
-    attachScroller("deletions", element),
-  );
-  const attachAdditions = useStableCallback((element: HTMLDivElement | null) =>
-    attachScroller("additions", element),
-  );
-  const observeBody = useStableCallback((element: HTMLDivElement | null) => {
-    if (!element) return;
-    const stop = observeResize(element, readViewport);
-    return () => {
-      stop();
-      if (frame.current !== null) cancelAnimationFrame(frame.current);
-      frame.current = null;
-    };
-  });
-  const observeCard = useStableCallback((element: HTMLDivElement | null) => {
-    if (!element) return;
-    return observeResize(element, ([entry]) => {
-      // The border box: docking places the card's outer edge, borders included.
-      if (entry) setCardHeight(entry.borderBoxSize[0]?.blockSize ?? entry.contentRect.height);
-    });
-  });
-
   const expandFolds = (folds: ReadonlyArray<number>) => {
     if (folds.length === 0) return;
     const next = new Set(expandedFolds);
@@ -670,6 +649,59 @@ export function SideBySideDiffView<T = unknown>(props: SideBySideDiffViewProps<T
   const revealAfterRender = (reveal: PendingReveal | null) => {
     pendingReveal.current = reveal;
     setRevealRequest((request) => request + 1);
+  };
+
+  const revealLineRange = (side: SbsSide, range: SbsLineRange) => {
+    expandFolds(sbsFoldsCovering(layout, side, range));
+    revealAfterRender({ kind: "line", side, line: range.start });
+  };
+
+  const attachScroller = (side: SbsSide, element: HTMLDivElement | null) => {
+    scrollers.current[side] = element;
+    if (element === null || opened.current) return;
+    if (sides.some((candidate) => scrollers.current[candidate] === null)) return;
+    opened.current = true;
+    if (props.focusOnOpen) scrollers.current[lead]?.focus({ preventScroll: true });
+    const openLine = props.openAt ? sbsLineIndex(model, props.openAt.side, props.openAt.line) : -1;
+    if (props.openAt && openLine >= 0) {
+      revealLineRange(props.openAt.side, { start: openLine, end: openLine + 1 });
+    } else if (groupRanges.length > 0) {
+      stepTo(props.initialDifference === "last" ? groupRanges.length - 1 : 0);
+    }
+  };
+  const attachDeletions = useStableCallback((element: HTMLDivElement | null) =>
+    attachScroller("deletions", element),
+  );
+  const attachAdditions = useStableCallback((element: HTMLDivElement | null) =>
+    attachScroller("additions", element),
+  );
+  const observeBody = useStableCallback((element: HTMLDivElement | null) => {
+    if (!element) return;
+    const stop = observeResize(element, readViewport);
+    return () => {
+      stop();
+      if (frame.current !== null) cancelAnimationFrame(frame.current);
+      frame.current = null;
+    };
+  });
+  const observeCard = useStableCallback((element: HTMLDivElement | null) => {
+    if (!element) return;
+    return observeResize(element, ([entry]) => {
+      // The border box: docking places the card's outer edge, borders included.
+      if (entry) setCardHeight(entry.borderBoxSize[0]?.blockSize ?? entry.contentRect.height);
+    });
+  });
+
+  const followMove = (mark: SbsMoveMark) => {
+    if (!mark.move.counterpart.sameFile) {
+      props.onFollowMove?.(mark.move);
+      return;
+    }
+    if (!mark.counterpartRange) return;
+    const side = otherSide(mark.move.side);
+    // The chip unmounts once it scrolls away, which would drop focus out of the diff's keys.
+    scrollers.current[side]?.focus({ preventScroll: true });
+    revealLineRange(side, mark.counterpartRange);
   };
 
   const revealPending = useEffectEvent(() => {
@@ -1005,6 +1037,8 @@ export function SideBySideDiffView<T = unknown>(props: SideBySideDiffViewProps<T
 
   const annotations: ReadonlyArray<SbsAnnotation> = props.annotations ?? NO_ANNOTATIONS;
   const annotationRanges = paneAnnotationsOf(annotations, model);
+  const moveLayer =
+    props.moves && props.moves.length > 0 ? sbsMoveLayerOf(model, props.moves) : null;
   const selectedStart = gutterSelection
     ? Math.min(gutterSelection.anchor, gutterSelection.head)
     : -1;
@@ -1073,6 +1107,31 @@ export function SideBySideDiffView<T = unknown>(props: SideBySideDiffViewProps<T
       ? viewport.height - Math.floor(viewport.height / 3) + lineHeight
       : 0;
   const scrolls = (side: SbsSide) => rowCounts[side] * lineHeight + tailHeight > viewport.height;
+  // On the first line of each moved block, at the pane's right edge, for the blocks in view.
+  const moveChips = (side: SbsSide) =>
+    moveLayer?.marks[side].map((mark) => {
+      const top = sbsLineRow(layout, side, mark.range.start).row * lineHeight - viewport[side];
+      if (top < -lineHeight || top > viewport.height) return null;
+      return (
+        <Tooltip key={mark.range.start}>
+          <TooltipTrigger
+            render={
+              <button
+                type="button"
+                className="sbs-move-chip"
+                style={{ top }}
+                data-sbs-move-chip={mark.move.counterpart.sameFile ? "same-file" : "other-file"}
+                onClick={() => followMove(mark)}
+              />
+            }
+          >
+            {mark.move.label}
+          </TooltipTrigger>
+          <TooltipPopup side="top">{mark.move.description}</TooltipPopup>
+        </Tooltip>
+      );
+    });
+
   const renderOverlays = (side: SbsSide) => {
     const hint =
       hintRows && side === lead ? overlayPlacement(side, hintRows, lineHeight + 8) : null;
@@ -1087,8 +1146,10 @@ export function SideBySideDiffView<T = unknown>(props: SideBySideDiffViewProps<T
             // The marks span the scrollbar's track, which runs on through the room past the end.
             rowCount={rowCounts[side] + tailHeight / lineHeight}
             viewportHeight={viewport.height}
+            movedChanges={moveLayer?.movedChanges}
           />
         ) : null}
+        {highlightMode === "none" ? null : moveChips(side)}
         {find?.side === side ? (
           <SbsFindBar
             label={`Find in ${PANE_LABELS[side].toLowerCase()}`}
@@ -1188,6 +1249,7 @@ export function SideBySideDiffView<T = unknown>(props: SideBySideDiffViewProps<T
     highlightMode,
     wordRanges,
     openAnnotationId: props.openAnnotationId ?? null,
+    moves: moveLayer,
     onScroll: handleScroll,
   };
   const deletionsPane =
@@ -1312,6 +1374,7 @@ export function SideBySideDiffView<T = unknown>(props: SideBySideDiffViewProps<T
             viewportHeight={viewport.height}
             lineHeight={lineHeight}
             showConnectors={highlightMode !== "none"}
+            moves={moveLayer}
           />
         ) : null}
         {additionsPane}

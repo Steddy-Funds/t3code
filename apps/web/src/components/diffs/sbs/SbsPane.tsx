@@ -15,6 +15,7 @@ import {
   type SbsLineMarks,
 } from "./sbsLineContent";
 import { sbsLineNumber, type SbsChangeKind, type SbsDocument, type SbsSide } from "./sbsModel";
+import { SBS_MOVED, SBS_MOVED_OUT, type SbsMoveLayer } from "./sbsMoves";
 
 /** An annotated range of this pane, in line indices. `end` is exclusive. */
 export interface SbsPaneAnnotation {
@@ -43,6 +44,8 @@ export interface SbsPaneProps {
   readonly findCurrent: SbsFindMatch | null;
   readonly annotations: ReadonlyArray<SbsPaneAnnotation>;
   readonly openAnnotationId: string | null;
+  /** Moved code, which paints over the change it sits in. */
+  readonly moves: SbsMoveLayer | null;
   /** The lines picked in the gutter, as line indices; `selectedEnd` is exclusive. */
   readonly selectedStart: number;
   readonly selectedEnd: number;
@@ -74,38 +77,51 @@ function tokensOfRow(rows: ArrayLike<unknown> | null, line: number, text: string
   return tokens;
 }
 
+type InsertionKind = SbsChangeKind | "moved";
+
+function insertionKind(
+  document: SbsDocument,
+  moves: SbsMoveLayer | null,
+  change: number,
+): InsertionKind | null {
+  if (moves?.movedChanges.has(change)) return "moved";
+  return document.changes[change]?.kind ?? null;
+}
+
 /**
  * The colour of the change that has no lines on this side and sits just above a row, so the
  * row can draw the line that marks where the other side's lines belong.
  */
 function insertionPointAbove(
   document: SbsDocument,
+  moves: SbsMoveLayer | null,
   layout: SbsLayout,
   side: SbsSide,
   segmentIndex: number,
   row: number,
-): SbsChangeKind | null {
+): InsertionKind | null {
   if (row !== layout.rows[side][segmentIndex]) return null;
   for (let index = segmentIndex - 1; index >= 0; index -= 1) {
     if (layout.rows[side][index] !== row) return null;
     const segment = layout.segments[index]!;
-    if (segment.kind === "change") return document.changes[segment.change]?.kind ?? null;
+    if (segment.kind === "change") return insertionKind(document, moves, segment.change);
   }
   return null;
 }
 
 function insertionPointBelowLastRow(
   document: SbsDocument,
+  moves: SbsMoveLayer | null,
   layout: SbsLayout,
   side: SbsSide,
   row: number,
-): SbsChangeKind | null {
+): InsertionKind | null {
   const rowCount = layout.rows[side].at(-1) ?? 0;
   if (row !== rowCount - 1) return null;
   for (let index = layout.segments.length - 1; index >= 0; index -= 1) {
     if (layout.rows[side][index] !== rowCount) return null;
     const segment = layout.segments[index]!;
-    if (segment.kind === "change") return document.changes[segment.change]?.kind ?? null;
+    if (segment.kind === "change") return insertionKind(document, moves, segment.change);
   }
   return null;
 }
@@ -167,6 +183,7 @@ type RowContext = Pick<
   | "findCurrent"
   | "annotations"
   | "openAnnotationId"
+  | "moves"
   | "selectedStart"
   | "selectedEnd"
 >;
@@ -182,6 +199,7 @@ const ROW_CONTEXT_KEYS = [
   "findCurrent",
   "annotations",
   "openAnnotationId",
+  "moves",
   "selectedStart",
   "selectedEnd",
 ] as const satisfies ReadonlyArray<keyof RowContext>;
@@ -277,19 +295,24 @@ function renderRow(context: RowContext, row: number): ReactNode {
           document.changes[segment.change]!,
         )
       : null;
+  const moveTint = change?.tint ? (context.moves?.tints[side][line] ?? 0) : 0;
+  const tint =
+    moveTint === SBS_MOVED ? "moved" : moveTint === SBS_MOVED_OUT ? "moved-out" : change?.tint;
   const annotation = context.annotations.find((item) => item.start <= line && line < item.end);
   const marksInsertions = context.highlightMode !== "none";
   const above = marksInsertions
-    ? insertionPointAbove(document, layout, side, target.segment, row)
+    ? insertionPointAbove(document, context.moves, layout, side, target.segment, row)
     : null;
-  const below = marksInsertions ? insertionPointBelowLastRow(document, layout, side, row) : null;
+  const below = marksInsertions
+    ? insertionPointBelowLastRow(document, context.moves, layout, side, row)
+    : null;
   const selected = context.selectedStart <= line && line < context.selectedEnd;
   return (
     <div
       key={line}
       className="sbs-row"
       data-sbs-index={line}
-      data-tint={change?.tint ?? undefined}
+      data-tint={tint ?? undefined}
       data-selected={selected ? "" : undefined}
       data-insert-above={above ?? undefined}
       data-insert-below={below ?? undefined}
@@ -315,7 +338,8 @@ function renderRow(context: RowContext, row: number): ReactNode {
           text={text}
           tokens={tokensOfRow(context.highlightedRows, line, text)}
           marks={lineMarks(
-            change?.changed ?? [],
+            // A moved line's partner across the divider is unrelated code: no words to compare.
+            moveTint === 0 ? (change?.changed ?? []) : [],
             context.findMatches?.get(line),
             context.findCurrent,
             line,
@@ -344,6 +368,7 @@ export function SbsPane({
   findCurrent,
   annotations,
   openAnnotationId,
+  moves,
   selectedStart,
   selectedEnd,
   tailHeight,
@@ -364,6 +389,7 @@ export function SbsPane({
       findCurrent,
       annotations,
       openAnnotationId,
+      moves,
       selectedStart,
       selectedEnd,
     }),

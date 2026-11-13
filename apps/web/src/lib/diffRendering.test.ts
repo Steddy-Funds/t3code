@@ -482,6 +482,9 @@ describe("themeEditorSurfaceCss", () => {
       insertedMarker: "#050505",
       deletedMarker: "#080808",
       modifiedMarker: "#0b0b0b",
+      moved: "#121212",
+      movedOut: "#131313",
+      movedMarker: "#141414",
     },
     find: { match: "#0f0f0f", currentMatch: "#101010", foreground: "#111111" },
   };

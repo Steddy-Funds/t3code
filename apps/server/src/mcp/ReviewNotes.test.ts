@@ -212,6 +212,7 @@ const makeHarness = (settings: Parameters<typeof ServerSettings.layerTest>[0] = 
     const seedRun = (
       on: { readonly threadId: ThreadId; readonly runId: RunId; readonly rootNode: NodeId },
       status: "running" | "completed",
+      ordinal = 1,
     ) =>
       Effect.gen(function* () {
         const providerThreadId = ProviderThreadId.make(`provider-thread:${on.threadId}`);
@@ -257,7 +258,7 @@ const makeHarness = (settings: Parameters<typeof ServerSettings.layerTest>[0] = 
               payload: {
                 id: on.runId,
                 threadId: on.threadId,
-                ordinal: 1,
+                ordinal,
                 providerInstanceId: instanceId,
                 modelSelection,
                 providerThreadId,
@@ -314,21 +315,24 @@ const makeHarness = (settings: Parameters<typeof ServerSettings.layerTest>[0] = 
           );
     const flagAs = callAs(REVIEW_NOTE_TOOL_NAME);
     // The user's message on the run, carrying review comments as the composer sends them.
-    const sendComments = (records: ReadonlyArray<ReviewCommentContextRecord>) =>
+    const sendComments = (
+      records: ReadonlyArray<ReviewCommentContextRecord>,
+      on: { readonly runId: RunId; readonly rootNode: NodeId } = { runId, rootNode },
+    ) =>
       sink.write({
-        commandId: CommandId.make(`command:seed:comments:${records.length}`),
+        commandId: CommandId.make(`command:seed:comments:${on.runId}:${records.length}`),
         events: [
           {
-            id: EventId.make(`event:seed-comments:${records.length}`),
+            id: EventId.make(`event:seed-comments:${on.runId}:${records.length}`),
             type: "message.updated",
             threadId,
-            runId,
+            runId: on.runId,
             occurredAt: now,
             payload: {
-              id: MessageId.make(`message:seed-user:${runId}`),
+              id: MessageId.make(`message:seed-user:${on.runId}`),
               threadId,
-              runId,
-              nodeId: rootNode,
+              runId: on.runId,
+              nodeId: on.rootNode,
               role: "user",
               text: "Review comments",
               context: { version: 1, records },
@@ -360,6 +364,7 @@ const makeHarness = (settings: Parameters<typeof ServerSettings.layerTest>[0] = 
       flagAs,
       sendComments,
       replies,
+      replyAs: callAs(REVIEW_REPLY_TOOL_NAME),
       reply: callAs(REVIEW_REPLY_TOOL_NAME)(scope),
       write,
       symlink: (target: string, link: string) =>
@@ -688,14 +693,16 @@ describe("reply_to_review_comment", () => {
     Effect.scoped(
       Effect.gen(function* () {
         const a = yield* makeHarness();
-        const diff = ["@@ -1,400 +1,400 @@", ...Array(400).fill(`+${'"é'.repeat(20)}`)].join("\n");
+        const diff = ["@@ -1,60 +1,60 @@", ...Array(60).fill(`+${'"é'.repeat(100)}`)].join("\n");
         // Long enough that the comment as sent would not fit beside any of its code.
         yield* a.sendComments([record("ctx_long", { text: "x".repeat(12_000), diff })]);
         replyIdOf(yield* a.reply({ commentId: "ctx_long", reply: '"'.repeat(2_000) }));
         const [reply] = yield* a.replies;
         expect(reply!.comment.text.length).toBeLessThanOrEqual(600);
-        expect(reply!.comment.diff.length).toBeGreaterThan(0);
-        expect(reply!.comment.diff.length).toBeLessThan(diff.length);
+        // Fewer lines than the excerpt cap: the bytes cut it, not the line count.
+        const kept = reply!.comment.diff.split("\n").length;
+        expect(kept).toBeGreaterThan(1);
+        expect(kept).toBeLessThan(40);
         expect(diff.startsWith(reply!.comment.diff)).toBe(true);
         expect(diff.split("\n")).toContain(reply!.comment.diff.split("\n").at(-1));
         const { id: _id, ...input } = reply!;
@@ -706,7 +713,28 @@ describe("reply_to_review_comment", () => {
     ).pipe(Effect.provide(NodeServices.layer)),
   );
 
-  it.effect("refuses a comment it cannot find, and while review notes are off", () =>
+  it.effect("finds the active run's comment when 20 later runs exist", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const a = yield* makeHarness();
+        yield* a.sendComments([record("ctx_1")]);
+        for (let ordinal = 2; ordinal <= 21; ordinal++) {
+          yield* a.seedRun(
+            {
+              threadId,
+              runId: RunId.make(`run:later:${ordinal}`),
+              rootNode: NodeId.make(`node:later:${ordinal}`),
+            },
+            "completed",
+            ordinal,
+          );
+        }
+        replyIdOf(yield* a.reply({ commentId: "ctx_1", reply: "Done." }));
+      }),
+    ).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("refuses a comment it cannot find, an inactive caller, and while review notes are off", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const a = yield* makeHarness();
@@ -725,6 +753,16 @@ describe("reply_to_review_comment", () => {
         expect(
           errorOf(yield* a.reply({ commentId: "ctx_wide", reply: "\u0001".repeat(2_000) })),
         ).toMatchObject({ code: "invalid_request", message: expect.stringMatching(/too long/) });
+        expect(yield* a.replies).toEqual([]);
+
+        const otherAgent = { ...scope, thread: { ...caller, providerInstanceId: ProviderInstanceId.make("claude") } };
+        expect(
+          errorOf(yield* a.replyAs(otherAgent)({ commentId: "ctx_1", reply: "Done." })),
+        ).toMatchObject({ code: "parent_not_active" });
+        yield* a.seedRun({ threadId, runId, rootNode }, "completed");
+        expect(errorOf(yield* a.reply({ commentId: "ctx_1", reply: "Done." }))).toMatchObject({
+          code: "parent_not_active",
+        });
         expect(yield* a.replies).toEqual([]);
 
         const off = yield* makeHarness({ agentReviewNotesEnabled: false });

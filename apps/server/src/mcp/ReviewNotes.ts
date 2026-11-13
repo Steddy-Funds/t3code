@@ -334,7 +334,7 @@ const make = Effect.gen(function* () {
       const { messages } = yield* threadManagement
         .getThreadRecords(threadId, ["messages"], {
           messageRoles: ["user"],
-          messageRunIds: recentRuns.map((candidate) => candidate.id),
+          messageRunIds: [run.id, ...recentRuns.flatMap((candidate) => candidate.id === run.id ? [] : [candidate.id])],
         })
         .pipe(Effect.mapError(unreadable));
       const comment = messages

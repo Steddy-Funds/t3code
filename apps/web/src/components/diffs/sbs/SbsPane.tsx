@@ -57,7 +57,7 @@ export interface SbsPaneProps {
   readonly onScroll: (side: SbsSide) => void;
 }
 
-type LineTokens = ReturnType<typeof sbsTokensFromHast>;
+export type LineTokens = ReturnType<typeof sbsTokensFromHast>;
 
 const tokenCache = new WeakMap<object, Map<number, LineTokens>>();
 
@@ -66,7 +66,11 @@ const tokenCache = new WeakMap<object, Map<number, LineTokens>>();
  * back a new object each time, so reading them in render would redo that work every frame
  * and give every row new tokens to draw.
  */
-function tokensOfRow(rows: ArrayLike<unknown> | null, line: number, text: string): LineTokens {
+export function tokensOfRow(
+  rows: ArrayLike<unknown> | null,
+  line: number,
+  text: string,
+): LineTokens {
   if (rows === null) return null;
   let lines = tokenCache.get(rows);
   if (!lines) tokenCache.set(rows, (lines = new Map()));
@@ -133,7 +137,7 @@ function pieceClassName(piece: { changed: boolean; match: 0 | 1 | 2 }): string |
   return match ? `sbs-word ${match}` : "sbs-word";
 }
 
-function LineText({
+export function LineText({
   text,
   tokens,
   marks,

@@ -28,6 +28,7 @@ import {
   SideBySideDiffView,
   type SideBySideDiffViewProps,
 } from "./SideBySideDiffView";
+import { sbsDocumentOf } from "./sbsModel";
 import { sbsDiffMovesOf, sbsMovesForFile, type SbsMove } from "./sbsMoves";
 import type { SbsNavigationDirection } from "./sbsNavigation";
 
@@ -272,6 +273,10 @@ export function SideBySideDiffPanel(props: SideBySideDiffPanelProps) {
   };
   const moves =
     smartDiff && entry ? sbsMovesForFile(sbsDiffMovesOf(files), filePath, shownPath) : undefined;
+  const moveDocument = (path: string) => {
+    const file = files.find((candidate) => candidate.filePath === path);
+    return file ? sbsDocumentOf(file.fileDiff) : null;
+  };
 
   const title = (
     <>
@@ -454,7 +459,7 @@ export function SideBySideDiffPanel(props: SideBySideDiffPanelProps) {
       moveArrival?.fileKey === entry.fileKey
         ? { side: moveArrival.side, line: moveArrival.line }
         : null,
-    ...(moves && moves.length > 0 ? { moves, onFollowMove: followMove } : {}),
+    ...(moves && moves.length > 0 ? { moves, onFollowMove: followMove, moveDocument } : {}),
     adjacentFiles: { next: index < files.length - 1, previous: index > 0 },
     onOpenAdjacentFile: selectFile,
     ...(onOpenFile

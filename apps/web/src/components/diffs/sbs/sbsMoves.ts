@@ -18,6 +18,8 @@ export interface SbsMove {
   };
   /** The chip's text: `→ L40`, `← from parsers/dates.py:9`. */
   readonly label: string;
+  /** The other end's lines: `L40-44`, `parsers/dates.py:9-13`. */
+  readonly place: string;
   readonly description: string;
 }
 
@@ -118,6 +120,7 @@ export function sbsMovesForFile(
         endLine: from.endLine,
         counterpart: { filePath: to.path, sameFile, ...lineEnds(to) },
         label: `→ ${target}`,
+        place: placeOf(to, sameFile, shownPath),
         description: sameFile
           ? `${size} moved to ${lineSpan(to.startLine, to.endLine)}, unchanged apart from indentation`
           : `${size} moved to ${shownPath(to.path)} ${lineSpan(to.startLine, to.endLine)}, unchanged apart from indentation`,
@@ -131,6 +134,7 @@ export function sbsMovesForFile(
         endLine: to.endLine,
         counterpart: { filePath: from.path, sameFile, ...lineEnds(from) },
         label: `← from ${source}`,
+        place: placeOf(from, sameFile, shownPath),
         description: sameFile
           ? `${size} moved here from ${lineSpan(from.startLine, from.endLine)}, unchanged apart from indentation`
           : `${size} moved here from ${shownPath(from.path)} ${lineSpan(from.startLine, from.endLine)}, unchanged apart from indentation`,
@@ -139,6 +143,23 @@ export function sbsMovesForFile(
   }
   byFile.set(filePath, result);
   return result;
+}
+
+function placeOf(
+  end: { path: string; startLine: number; endLine: number },
+  sameFile: boolean,
+  shownPath: (path: string) => string,
+): string {
+  const span = lineSpan(end.startLine, end.endLine);
+  return sameFile ? span : `${shownPath(end.path)}:${span.slice(1)}`;
+}
+
+/** A move's place narrowed to some of its other end's lines: `b.ts:10-14` → `b.ts:10-12`. */
+export function sbsMovePlaceOf(move: SbsMove, startLine: number, endLine: number): string {
+  const { counterpart } = move;
+  const whole = lineSpan(counterpart.startLine, counterpart.endLine).slice(1);
+  const part = lineSpan(startLine, endLine).slice(1);
+  return move.place.slice(0, move.place.length - whole.length) + part;
 }
 
 function lineEnds(end: { startLine: number; endLine: number }) {

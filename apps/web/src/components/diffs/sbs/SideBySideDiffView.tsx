@@ -15,6 +15,7 @@ import {
   type PointerEvent,
   type ReactNode,
 } from "react";
+import { flushSync } from "react-dom";
 
 import { useClientSettings } from "~/hooks/useSettings";
 import { useStableCallback } from "~/hooks/useStableCallback";
@@ -66,7 +67,9 @@ import {
   sbsStepTarget,
   type SbsNavigationDirection,
 } from "./sbsNavigation";
-import { sbsMoveLayerOf, type SbsMove, type SbsMoveMark } from "./sbsMoves";
+import { SBS_MOVE_NONE, sbsMoveLayerOf, type SbsMove, type SbsMoveMark } from "./sbsMoves";
+import { sbsSplitCardOf, sbsSplitOf } from "./sbsSplit";
+import { SbsSplitView } from "./SbsSplitView";
 import { changeScrollTargets, sbsScrollAnchors, syncedScrollTop } from "./sbsScroll";
 import { useSbsHighlight } from "./useSbsHighlight";
 
@@ -136,6 +139,8 @@ export interface SideBySideDiffViewProps<T = unknown> {
   readonly moves?: ReadonlyArray<SbsMove>;
   /** Follows a move to another file. One within this file scrolls here. */
   readonly onFollowMove?: (move: SbsMove) => void;
+  /** Another file of the diff, for the code a move took there or brought from there. */
+  readonly moveDocument?: (filePath: string) => SbsDocument | null;
 
   /**
    * Line ranges that carry something. Each gets a marker in its pane's gutter and never takes
@@ -406,6 +411,18 @@ export function SideBySideDiffView<T = unknown>(props: SideBySideDiffViewProps<T
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const editorColors = usePaintedThemeEditorColors();
   const model = sbsDocumentOf(fileDiff);
+  const moveLayer =
+    props.moves && props.moves.length > 0 ? sbsMoveLayerOf(model, props.moves) : null;
+  // The moved block opened over the panes. Another file closes it.
+  const [splitAt, setSplitAt] = useState<{
+    side: SbsSide;
+    line: number;
+    model: SbsDocument;
+  } | null>(null);
+  const split =
+    splitAt?.model === model && moveLayer
+      ? sbsSplitOf(model, moveLayer, splitAt.side, splitAt.line)
+      : null;
   const [expandedFolds, setExpandedFolds] = useState(EMPTY_FOLDS);
   const layout = sbsLayoutOf(model, { collapseUnchanged, expandedFolds });
   const anchors = sbsScrollAnchors(layout);
@@ -965,6 +982,31 @@ export function SideBySideDiffView<T = unknown>(props: SideBySideDiffViewProps<T
     };
   }, [navigable, activateAtCaret, scrollers]);
 
+  /** A click on a moved line, not one that ended a selection, opens where its block went. */
+  const openSplitFrom = (target: Element | null) => {
+    if (!moveLayer || highlightMode === "none" || !target?.closest(".sbs-code")) return;
+    if (window.getSelection()?.isCollapsed === false) return;
+    const side = paneSideOf(target);
+    const line = lineIndexOf(target);
+    if (side === null || line === null || moveLayer.tints[side][line] === SBS_MOVE_NONE) return;
+    setSplitAt({ side, line, model });
+  };
+
+  const closeSplit = () => {
+    const side = split?.side;
+    // The panes stop being inert in this commit, so they can take focus right after it.
+    flushSync(() => setSplitAt(null));
+    if (side) scrollers.current[side]?.focus({ preventScroll: true });
+  };
+
+  const openSplitPiece = (mark: SbsMoveMark) => {
+    const side = split?.side;
+    flushSync(() => setSplitAt(null));
+    // The card's button is gone; a move with nowhere to go would leave focus on nothing.
+    if (side) scrollers.current[side]?.focus({ preventScroll: true });
+    followMove(mark);
+  };
+
   const handleClick = (event: MouseEvent<HTMLDivElement>) => {
     const target = elementOf(event.target);
     const fold = target?.closest("[data-sbs-fold]")?.getAttribute("data-sbs-fold");
@@ -980,10 +1022,12 @@ export function SideBySideDiffView<T = unknown>(props: SideBySideDiffViewProps<T
       return;
     }
     if ((event.metaKey || event.ctrlKey) && props.onTokenActivate) activateToken(event);
+    else if (!event.shiftKey && !event.altKey) openSplitFrom(target);
   };
 
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (event.defaultPrevented || MODIFIER_KEYS.has(event.key)) return;
+    // The panes are inert under the split view: the keys here are its own.
+    if (split || event.defaultPrevented || MODIFIER_KEYS.has(event.key)) return;
     const mod = event.metaKey || event.ctrlKey;
     const plainMod = mod && !event.altKey && !event.shiftKey;
     const key = event.key.toLowerCase();
@@ -1037,8 +1081,6 @@ export function SideBySideDiffView<T = unknown>(props: SideBySideDiffViewProps<T
 
   const annotations: ReadonlyArray<SbsAnnotation> = props.annotations ?? NO_ANNOTATIONS;
   const annotationRanges = paneAnnotationsOf(annotations, model);
-  const moveLayer =
-    props.moves && props.moves.length > 0 ? sbsMoveLayerOf(model, props.moves) : null;
   const selectedStart = gutterSelection
     ? Math.min(gutterSelection.anchor, gutterSelection.head)
     : -1;
@@ -1304,82 +1346,114 @@ export function SideBySideDiffView<T = unknown>(props: SideBySideDiffViewProps<T
       </div>
     );
 
+  const diffStyle = {
+    ...(editorColors ? editorColorVariables(editorColors) : null),
+    "--sbs-line-height": `${lineHeight}px`,
+    fontSize: `${fontSize}px`,
+  } as CSSProperties;
+  // Like the other layouts: a theme with editor colours keeps its code surface, the others
+  // blend the diff into the panel.
+  const blendBackground = !editorColors && "[--code-background:var(--background)]";
+  const splitOverlay = split ? (
+    <SbsSplitView
+      document={model}
+      split={split}
+      cards={split.pieces.map((piece) => {
+        const { counterpart } = piece.mark.move;
+        const cardSide = otherSide(split.side);
+        const source = counterpart.sameFile
+          ? model
+          : (props.moveDocument?.(counterpart.filePath) ?? null);
+        return {
+          document: source,
+          card: source
+            ? sbsSplitCardOf(
+                source,
+                cardSide,
+                piece.counterpart.startLine,
+                piece.counterpart.endLine,
+              )
+            : null,
+          highlightedRows: counterpart.sameFile ? highlightedRows[cardSide] : null,
+        };
+      })}
+      highlightedRows={highlightedRows[split.side]}
+      lineHeight={lineHeight}
+      className={blendBackground || undefined}
+      style={diffStyle}
+      onClose={closeSplit}
+      onOpenPiece={openSplitPiece}
+    />
+  ) : null;
+
   return (
     <div
-      className="flex min-h-0 min-w-0 flex-1 flex-col"
+      className="relative flex min-h-0 min-w-0 flex-1 flex-col"
       data-sbs-view=""
       // The whole view, so the diff keys also work from its toolbar.
       {...focusScopeProps("diff")}
       onKeyDown={handleKeyDown}
     >
-      <SbsBar leading={props.leading}>
-        <SbsToolbar
-          statusLabel={
-            highlightMode === "none"
-              ? "Highlighting is off"
-              : sbsDifferenceLabel(currentGroup, model.groupCount)
-          }
-          canStep={
-            model.groupCount > 0 ||
-            props.adjacentFiles?.next === true ||
-            props.adjacentFiles?.previous === true
-          }
-          onStep={stepFromToolbar}
-          nextShortcut={shortcutLabelForCommand(keybindings, "diff.nextChange", IN_DIFF)}
-          previousShortcut={shortcutLabelForCommand(keybindings, "diff.previousChange", IN_DIFF)}
-          collapseUnchanged={collapseUnchanged}
-          onCollapseUnchangedChange={toggleCollapseFromToolbar}
-          highlightMode={highlightMode}
-          onHighlightModeChange={props.onHighlightModeChange}
-        />
-      </SbsBar>
-      {props.notice}
-      <div
-        ref={observeBody}
-        className={cn(
-          "sbs-diff relative flex min-h-0 flex-1",
-          // Like the other layouts: a theme with editor colours keeps its code surface, the
-          // others blend the diff into the panel.
-          !editorColors && "[--code-background:var(--background)]",
-        )}
-        style={
-          {
-            ...(editorColors ? editorColorVariables(editorColors) : null),
-            "--sbs-line-height": `${lineHeight}px`,
-            fontSize: `${fontSize}px`,
-          } as CSSProperties
-        }
-        onClick={handleClick}
-        onKeyUp={(event) => {
-          if (event.shiftKey || event.key === "Shift") reportTextSelection();
-        }}
-        onMouseUp={reportTextSelection}
-        onCopy={handleCopy}
-        onPointerDown={handlePointerDown}
-        onPointerMove={handlePointerMove}
-        onPointerUp={handlePointerUp}
-      >
-        {/* Measures a line's text as drawn, tabs and wide glyphs included, to scroll to a match. */}
-        <span
-          ref={columnProbe}
-          className="pointer-events-none invisible absolute whitespace-pre"
-          aria-hidden="true"
-        />
-        {deletionsPane}
-        {single === null ? (
-          <SbsDivider
-            document={model}
-            layout={layout}
-            scrollTop={viewport}
-            viewportHeight={viewport.height}
-            lineHeight={lineHeight}
-            showConnectors={highlightMode !== "none"}
-            moves={moveLayer}
+      <div className="contents" inert={split !== null}>
+        <SbsBar leading={props.leading}>
+          <SbsToolbar
+            statusLabel={
+              highlightMode === "none"
+                ? "Highlighting is off"
+                : sbsDifferenceLabel(currentGroup, model.groupCount)
+            }
+            canStep={
+              model.groupCount > 0 ||
+              props.adjacentFiles?.next === true ||
+              props.adjacentFiles?.previous === true
+            }
+            onStep={stepFromToolbar}
+            nextShortcut={shortcutLabelForCommand(keybindings, "diff.nextChange", IN_DIFF)}
+            previousShortcut={shortcutLabelForCommand(keybindings, "diff.previousChange", IN_DIFF)}
+            collapseUnchanged={collapseUnchanged}
+            onCollapseUnchangedChange={toggleCollapseFromToolbar}
+            highlightMode={highlightMode}
+            onHighlightModeChange={props.onHighlightModeChange}
           />
-        ) : null}
-        {additionsPane}
-        {card}
+        </SbsBar>
+        {props.notice}
+        <div
+          ref={observeBody}
+          className={cn("sbs-diff relative flex min-h-0 flex-1", blendBackground)}
+          style={diffStyle}
+          onClick={handleClick}
+          onKeyUp={(event) => {
+            if (event.shiftKey || event.key === "Shift") reportTextSelection();
+          }}
+          onMouseUp={reportTextSelection}
+          onCopy={handleCopy}
+          onPointerDown={handlePointerDown}
+          onPointerMove={handlePointerMove}
+          onPointerUp={handlePointerUp}
+        >
+          {/* Measures a line's text as drawn, tabs and wide glyphs included, to scroll to a match. */}
+          <span
+            ref={columnProbe}
+            className="pointer-events-none invisible absolute whitespace-pre"
+            aria-hidden="true"
+          />
+          {deletionsPane}
+          {single === null ? (
+            <SbsDivider
+              document={model}
+              layout={layout}
+              scrollTop={viewport}
+              viewportHeight={viewport.height}
+              lineHeight={lineHeight}
+              showConnectors={highlightMode !== "none"}
+              moves={moveLayer}
+            />
+          ) : null}
+          {additionsPane}
+          {card}
+        </div>
       </div>
+      {splitOverlay}
     </div>
   );
 }

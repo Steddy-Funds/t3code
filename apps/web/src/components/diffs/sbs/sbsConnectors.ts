@@ -121,7 +121,7 @@ export interface SbsMoveShape {
 }
 
 /** A wedge from a span at one edge to a point a little short of the other. */
-function wedgePath(span: SbsSpan, fromLeft: boolean, width: number): string {
+export function sbsWedgePath(span: SbsSpan, fromLeft: boolean, width: number): string {
   const middle = coordinate((span.top + span.bottom) / 2);
   const [top, bottom] = [span.top, span.bottom].map(coordinate);
   const edge = fromLeft ? "0" : coordinate(width);
@@ -155,7 +155,7 @@ export function sbsVisibleMoveShapes(
             id,
             kind: "wedge",
             side,
-            path: wedgePath(own, side === "deletions", width),
+            path: sbsWedgePath(own, side === "deletions", width),
           });
         return;
       }

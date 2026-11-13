@@ -139,6 +139,8 @@ describe("buildReviewThreads", () => {
         }),
         // A comment only on removed lines quotes nothing it can sit on.
         comment("ctx_removed", { diff: "@@ -4,1 +3,0 @@\n-gone" }),
+        comment("ctx_pr", { sectionId: "pull-request:12" }),
+        reply("r_pr", comment("ctx_pr_2", { sectionId: "pull-request:12" })),
       ],
     );
     expect(
@@ -170,7 +172,7 @@ describe("buildReviewThreads", () => {
         startLine: 3,
         endLine: 4,
         excerpt: "const a = 1;\nconst b = 2;",
-        sectionId: reviewThreadSectionId("ctx_file"),
+        sectionId: reviewThreadSectionId("ctx_file", "workspace"),
         runId: null,
       },
       expect.objectContaining({ id: "ctx_removed", excerpt: "" }),
@@ -235,6 +237,22 @@ describe("buildReviewThreads", () => {
       "Reply r2",
     ]);
     expect(sentComments).toHaveLength(2);
+  });
+
+  it("keeps a file-viewer thread's follow-up on workspace paths, loaded or not", () => {
+    const fileComment = { filePath: "server/src/app.ts", diff: "const a = 1;\n", fenceLanguage: "ts" };
+    const root = comment("ctx_root", { ...fileComment, sectionId: "file:server/src/app.ts" });
+    const [rootThread] = buildReviewThreads([], [root]).threads;
+    const followUp = comment("ctx_follow", { ...fileComment, sectionId: rootThread!.sectionId });
+
+    const loaded = buildReviewThreads([], [root, followUp]);
+    expect(loaded.threads.map((thread) => thread.id)).toEqual(["ctx_root"]);
+    expect(loaded.sentComments.map((sent) => sent.pathBase)).toEqual(["workspace", "workspace"]);
+
+    const alone = buildReviewThreads([], [reply("r1", followUp)]);
+    expect(alone.threads.map(({ id, pathBase }) => [id, pathBase])).toEqual([
+      ["ctx_follow", "workspace"],
+    ]);
   });
 });
 

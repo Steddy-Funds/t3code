@@ -97,10 +97,22 @@ export function answeredReviewNoteIds(
 }
 
 const THREAD_SECTION_PREFIX = "review-thread:";
+// A thread whose path is from the workspace root, so a follow-up read alone keeps it.
+const FILE_THREAD_SECTION_PREFIX = "review-file-thread:";
 
 /** The section a follow-up to a review thread carries, naming the comment that opened it. */
-export const reviewThreadSectionId = (rootCommentId: string) =>
-  `${THREAD_SECTION_PREFIX}${rootCommentId}`;
+export const reviewThreadSectionId = (
+  rootCommentId: string,
+  pathBase: "diff" | "workspace" = "diff",
+) =>
+  `${pathBase === "workspace" ? FILE_THREAD_SECTION_PREFIX : THREAD_SECTION_PREFIX}${rootCommentId}`;
+
+const threadRootOf = (sectionId: string) =>
+  sectionId.startsWith(THREAD_SECTION_PREFIX)
+    ? sectionId.slice(THREAD_SECTION_PREFIX.length)
+    : sectionId.startsWith(FILE_THREAD_SECTION_PREFIX)
+      ? sectionId.slice(FILE_THREAD_SECTION_PREFIX.length)
+      : undefined;
 
 /**
  * A review comment the user sent, as a thread: where it sits, for the views that place it.
@@ -144,6 +156,7 @@ type SentComment = Pick<
 > & { readonly fenceLanguage?: string | undefined };
 
 const TURN_SECTION_PREFIX = "turn:";
+const PULL_REQUEST_SECTION_PREFIX = "pull-request:";
 
 const DIFF_HEADER = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/u;
 
@@ -166,7 +179,9 @@ function commentLines(comment: SentComment) {
   }
   return {
     pathBase:
-      comment.sectionId.startsWith("file:") || comment.sectionId.startsWith(SECTION_PREFIX)
+      comment.sectionId.startsWith("file:") ||
+      comment.sectionId.startsWith(SECTION_PREFIX) ||
+      comment.sectionId.startsWith(FILE_THREAD_SECTION_PREFIX)
         ? ("workspace" as const)
         : ("diff" as const),
     startLine: comment.startIndex + 1,
@@ -177,12 +192,13 @@ function commentLines(comment: SentComment) {
 }
 
 function threadOf(id: string, comment: SentComment): ReviewCommentThread {
+  const lines = commentLines(comment);
   return {
     kind: "review_comment_thread",
     id,
-    sectionId: reviewThreadSectionId(id),
+    sectionId: reviewThreadSectionId(id, lines.pathBase),
     path: comment.filePath,
-    ...commentLines(comment),
+    ...lines,
     excerptTruncated: false,
     contentRevision: null,
     comment: comment.text,
@@ -238,8 +254,9 @@ export function buildReviewThreads(
   const answered = (sectionId: string) => {
     const noteId = noteBySection.get(sectionId);
     if (noteId !== undefined) return { id: noteId, thread: undefined };
-    if (!sectionId.startsWith(THREAD_SECTION_PREFIX)) return undefined;
-    const thread = threadById.get(sectionId.slice(THREAD_SECTION_PREFIX.length));
+    const root = threadRootOf(sectionId);
+    if (root === undefined) return undefined;
+    const thread = threadById.get(threadOfComment.get(root) ?? root);
     return thread ? { id: thread.id, thread } : undefined;
   };
   const send = (contextId: string, comment: SentComment) => {
@@ -260,6 +277,9 @@ export function buildReviewThreads(
   };
 
   for (const entry of timeline) {
+    // A pull request's Code tab keeps its own comments; they are not local review threads.
+    const comment = entry.kind === "comment" ? entry.record : entry.reply.comment;
+    if (comment.sectionId.startsWith(PULL_REQUEST_SECTION_PREFIX)) continue;
     if (entry.kind === "comment") {
       if (!threadOfComment.has(entry.contextId)) send(entry.contextId, entry.record);
       continue;

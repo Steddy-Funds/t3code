@@ -277,7 +277,7 @@ describe("a review thread in the file", () => {
     const thread: ReviewCommentThread = {
       kind: "review_comment_thread",
       id: "ctx_root",
-      sectionId: reviewThreadSectionId("ctx_root"),
+      sectionId: reviewThreadSectionId("ctx_root", "workspace"),
       path: "server.ts",
       pathBase: "workspace",
       startLine: 1,
@@ -302,7 +302,7 @@ describe("a review thread in the file", () => {
 
     expect(useComposerDraftStore.getState().getComposerDraft(threadRef)?.reviewComments).toEqual([
       expect.objectContaining({
-        sectionId: reviewThreadSectionId("ctx_root"),
+        sectionId: reviewThreadSectionId("ctx_root", "workspace"),
         text: "Name it after its unit.",
       }),
     ]);

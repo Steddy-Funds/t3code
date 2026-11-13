@@ -7,8 +7,10 @@ import {
 import type { ReactNode } from "react";
 import { DEFAULT_RESOLVED_KEYBINDINGS, isMacPlatform } from "@t3tools/shared/keybindings";
 import { describe, expect, it, vi } from "vite-plus/test";
+import { userEvent } from "vite-plus/test/browser";
 
 import { act, render } from "../../../test/render";
+import { isPointerOverCodeScope } from "../ShortcutQuickReference.logic";
 
 vi.mock(import("../../state/server"), async (original) => {
   const { Atom } = await import("effect/reactivity");
@@ -31,6 +33,17 @@ const fileDiff = parseDiffFromFile(
 );
 const items: CodeViewDiffItem<undefined>[] = [{ id: "a", type: "diff", fileDiff }];
 const NAVIGATION = isMacPlatform(navigator.platform) ? { metaKey: true } : { ctrlKey: true };
+const MOD_B = isMacPlatform(navigator.platform) ? "{Meta>}b{/Meta}" : "{Control>}b{/Control}";
+
+/** Whether each B keydown reached the window already taken by a handler. */
+function keydownsSeen() {
+  const prevented: boolean[] = [];
+  const onKeyDown = (event: KeyboardEvent) => {
+    if (event.code === "KeyB") prevented.push(event.defaultPrevented);
+  };
+  window.addEventListener("keydown", onKeyDown);
+  return { prevented, [Symbol.dispose]: () => window.removeEventListener("keydown", onKeyDown) };
+}
 
 function viewer(diffStyle: "unified" | "split", onTokenActivate = vi.fn()) {
   return (
@@ -104,22 +117,18 @@ describe("Go to Declaration in a stacked or split diff", () => {
 
   it("a plain click asks nothing, and Go to Declaration's key then asks about that word", async () => {
     const onTokenActivate = vi.fn();
-    await using screen = await render(viewer("unified", onTokenActivate));
-    await rendered(screen.container, "gamma");
+    await using screen = await render(
+      <>
+        <button type="button">outside</button>
+        {viewer("unified", onTokenActivate)}
+      </>,
+    );
+    const { token } = await rendered(screen.container, "gamma");
+    using keys = keydownsSeen();
 
-    await clickWord(screen.container, "gamma", {});
+    await userEvent.click(token);
     expect(onTokenActivate).not.toHaveBeenCalled();
-    const surface = screen.container.querySelector<HTMLElement>(".diff-render-surface")!;
-    surface.focus();
-    const key = new KeyboardEvent("keydown", {
-      key: "b",
-      code: "KeyB",
-      bubbles: true,
-      composed: true,
-      cancelable: true,
-      ...NAVIGATION,
-    });
-    await act(() => surface.dispatchEvent(key));
+    await userEvent.keyboard(MOD_B);
 
     expect(onTokenActivate).toHaveBeenCalledOnce();
     expect(onTokenActivate.mock.calls[0]![0]).toMatchObject({
@@ -128,7 +137,12 @@ describe("Go to Declaration in a stacked or split diff", () => {
       character: 14,
     });
     // The key is the diff's here, not the sidebar's.
-    expect(key.defaultPrevented).toBe(true);
+    expect(keys.prevented).toEqual([true]);
+
+    await userEvent.click(screen.getByRole("button", { name: "outside" }));
+    await userEvent.keyboard(MOD_B);
+    expect(onTokenActivate).toHaveBeenCalledOnce();
+    expect(keys.prevented).toEqual([true, false]);
   });
 
   it("a held Cmd underlines the hovered word on its own row, where both sides share a line number", async () => {
@@ -151,5 +165,14 @@ describe("Go to Declaration in a stacked or split diff", () => {
 
     expect(Array.from(CSS.highlights.get("t3-code-link") ?? [], String)).toEqual(["gamma"]);
     expect(token.hasAttribute("data-code-nav-link")).toBe(true);
+  });
+
+  it("is a code scope to the shortcut reference while the pointer is over it", async () => {
+    await using screen = await render(viewer("unified"));
+    const { token } = await rendered(screen.container, "gamma");
+
+    await userEvent.hover(token);
+
+    expect(isPointerOverCodeScope()).toBe(true);
   });
 });

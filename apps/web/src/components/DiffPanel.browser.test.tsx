@@ -119,6 +119,7 @@ vi.mock("./diffs/useDiffCodeNavigation", () => ({
     onCodeViewTokenActivate: undefined,
     popup: null,
   }),
+  useThreadCodeNavigationContext: () => null,
 }));
 
 import DiffPanel from "./DiffPanel";

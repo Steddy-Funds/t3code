@@ -25,6 +25,11 @@ const mocks = vi.hoisted(() => ({
     settle: (result: unknown) => void;
   }>,
   navigateToCodeLocation: vi.fn(),
+  thread: null as { worktreePath: string | null } | null,
+  project: null as {
+    workspaceRoot: string;
+    repositoryIdentity: { rootPath: string } | null;
+  } | null,
 }));
 
 vi.mock(import("@t3tools/client-runtime/state/runtime"), async (original) => ({
@@ -36,6 +41,14 @@ vi.mock(import("@t3tools/client-runtime/state/runtime"), async (original) => ({
 }));
 vi.mock(import("~/state/codeIntel"), () => ({
   codeIntelEnvironment: { definition: (request: unknown) => request } as never,
+}));
+vi.mock(import("~/state/entities"), async (original) => ({
+  ...(await original()),
+  useQuietThreadShell: ((ref: unknown) =>
+    ref === null || mocks.thread === null
+      ? null
+      : { environmentId: "env-sbs", projectId: "project-1", ...mocks.thread }) as never,
+  useProject: ((ref: unknown) => (ref === null ? null : mocks.project)) as never,
 }));
 vi.mock(import("~/components/code/navigation"), () => ({
   codeNavigationThreadKey: () => "thread",
@@ -50,6 +63,7 @@ import {
   NOT_CURRENT_VERSION,
   OUTSIDE_PROJECT,
   useDiffCodeNavigation,
+  useThreadCodeNavigationContext,
 } from "./useDiffCodeNavigation";
 
 const REVISION = "rev-current";
@@ -72,6 +86,8 @@ type ActivationOverrides = Partial<Omit<DiffTokenActivation, "anchor">>;
 function setup() {
   mocks.queries.length = 0;
   mocks.navigateToCodeLocation.mockReset();
+  mocks.thread = null;
+  mocks.project = null;
   for (const token of document.querySelectorAll("[data-test-token]")) token.remove();
 }
 
@@ -164,6 +180,39 @@ async function settle(index: number, result: unknown) {
 const click = (name: string) =>
   act(() => (page.getByRole("button", { name }).element() as HTMLElement).click());
 const status = () => page.getByRole("status");
+
+function ThreadContext() {
+  return <output>{JSON.stringify(useThreadCodeNavigationContext(threadRef))}</output>;
+}
+
+describe("useThreadCodeNavigationContext", () => {
+  it.each([
+    {
+      name: "a worktree thread asks in its worktree, whatever the project's folder",
+      thread: { worktreePath: "/worktrees/feature" },
+      expected: { cwd: "/worktrees/feature", repositoryRoot: undefined },
+    },
+    {
+      name: "a local thread asks in its project's folder, under the repository's root",
+      thread: { worktreePath: null },
+      expected: { cwd: "/repo/app", repositoryRoot: "/repo" },
+    },
+  ])("$name", async ({ thread, expected }) => {
+    setup();
+    mocks.thread = thread;
+    mocks.project = { workspaceRoot: "/repo/app", repositoryIdentity: { rootPath: "/repo" } };
+    await using screen = await render(<ThreadContext />);
+
+    const shown = JSON.parse(screen.container.querySelector("output")!.textContent!);
+    expect(shown).toEqual({ environmentId: threadRef.environmentId, ...expected, threadRef });
+  });
+
+  it("is null until the thread loads", async () => {
+    setup();
+    await using screen = await render(<ThreadContext />);
+    expect(screen.container.querySelector("output")!.textContent).toBe("null");
+  });
+});
 
 describe("useDiffCodeNavigation", () => {
   it("has no handler and renders nothing without a context", async () => {
@@ -708,11 +757,22 @@ describe("diffSideRevision", () => {
     expect(load).toHaveBeenCalledOnce();
   });
 
-  it("has none when reading the whole files fails", async () => {
-    const load = vi.fn(async () => {
-      throw new Error("gone");
-    });
+  it("has none when reading the whole files fails, and reads them again on the next ask", async () => {
+    const hunks = patch();
+    const load = vi
+      .fn<() => Promise<typeof wholeFiles>>()
+      .mockRejectedValueOnce(new Error("gone"))
+      .mockResolvedValueOnce(wholeFiles);
 
-    await expect(diffSideRevision(patch(), "additions", load)).resolves.toBeNull();
+    await expect(diffSideRevision(hunks, "additions", load)).resolves.toBeNull();
+    await expect(diffSideRevision(hunks, "additions", load)).resolves.toBe(
+      fileContentRevision(NEW),
+    );
+  });
+
+  it("has no old side for an added file", async () => {
+    const load = vi.fn(async () => ({ oldFile: undefined, newFile: wholeFiles.newFile }));
+
+    await expect(diffSideRevision(patch(), "deletions", load)).resolves.toBeNull();
   });
 });

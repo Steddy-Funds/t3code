@@ -175,6 +175,26 @@ describe("presentGlint", () => {
     expect(glintTriggerAction(trigger as unknown as Element, 0)).toBe("native");
   });
 
+  it("stays open through the click of the press that opened it", async () => {
+    using helper = stubOpenableHelper();
+    const icon = {};
+    const trigger = fakeElement([icon]);
+    // A menu trigger presents on pointerdown, before the shield is up; the rest of the press lands.
+    const shown = presentGlint("timeFromNow", trigger as unknown as Element, {
+      title: "Snooze until",
+    });
+    expect(helper.dispatch("mousedown", { target: icon })).toBe(false);
+    expect(helper.dispatch("pointerup", { target: icon })).toBe(false);
+    expect(helper.dispatch("click", { target: icon })).toBe(false);
+    expect(helper.sent).toEqual([]);
+    expect(isGlintDialogOpen()).toBe(true);
+    // The next press on the trigger closes it.
+    helper.dispatch("pointerdown", { target: icon });
+    helper.dispatch("click", { target: icon });
+    expect(helper.sent.map((message) => message.type)).toEqual(["dismiss"]);
+    expect(await shown).toEqual({ type: "cancelled" });
+  });
+
   it("takes focus from the trigger and gives it back after", async () => {
     const trigger = fakeElement();
     using helper = stubOpenableHelper({ focused: trigger });

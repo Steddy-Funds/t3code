@@ -120,7 +120,7 @@ const make = Effect.gen(function* () {
     lock.open(input.id);
     yield* Ref.set(glintDialogId, input.id);
     return yield* Effect.promise(() =>
-      helper.present(input.id, input.kind, anchor, input.params),
+      helper.present(input.id, input.kind, anchor, input.params, input.appearance),
     ).pipe(
       Effect.ensuring(
         Effect.andThen(

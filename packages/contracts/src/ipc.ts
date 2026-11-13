@@ -363,6 +363,8 @@ export const DesktopGlintPresentInputSchema = Schema.Struct({
   kind: DesktopGlintKindSchema,
   anchor: DesktopGlintAnchorSchema,
   params: Schema.Unknown,
+  /** T3's own light or dark theme, so the dialog's glass matches it whatever macOS is in. */
+  appearance: Schema.optional(Schema.Literals(["light", "dark"])),
 });
 export type DesktopGlintPresentInput = typeof DesktopGlintPresentInputSchema.Type;
 

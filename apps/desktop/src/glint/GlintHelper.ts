@@ -33,6 +33,8 @@ export interface GlintHelper {
     kind: DesktopGlintKind,
     anchor: DesktopGlintAnchor,
     params: unknown,
+    /** Leaves the helper on macOS's appearance when absent. */
+    appearance?: "light" | "dark",
   ) => Promise<DesktopGlintOutcome>;
   /** Sends a message such as `update`, `input`, `key` or `dismiss` to the open dialog `id`. */
   readonly send: (message: DesktopGlintMessage) => boolean;
@@ -229,7 +231,7 @@ export function makeGlintHelper(
 
   return {
     path,
-    present: (id, kind, anchor, params) => {
+    present: (id, kind, anchor, params, appearance) => {
       if (disposed) {
         return Promise.resolve({ type: "unavailable", message: "The Glint helper was stopped." });
       }
@@ -244,7 +246,7 @@ export function makeGlintHelper(
           settle(id, { type: "unavailable", message: failure });
           return;
         }
-        if (!write({ type: "present", id, kind, anchor, params })) {
+        if (!write({ type: "present", id, kind, anchor, params, ...(appearance ? { appearance } : {}) })) {
           settle(id, { type: "unavailable", message: "The Glint helper is not running." });
           return;
         }

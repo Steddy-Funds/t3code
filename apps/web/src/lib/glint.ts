@@ -106,6 +106,11 @@ interface OpenDialog {
   /** Tells the helper about a primary click T3 kept from the page. */
   readonly click: () => void;
   dismissed: boolean;
+  /**
+   * Whether a press began while the dialog was up. A trigger that opens on press (a menu's
+   * pointerdown) presents before its own click lands, and that click is not a second one.
+   */
+  pressed: boolean;
   /** Where focus was before the dialog took it, given back when it closes. */
   readonly focused: Element | null;
 }
@@ -142,7 +147,11 @@ const shield = (event: Event) => {
   event.preventDefault();
   event.stopImmediatePropagation();
   const dialog = openDialog;
-  if (!dialog || event.type !== "click" || (event as MouseEvent).button !== 0) return;
+  if (!dialog) return;
+  if (event.type === "pointerdown") dialog.pressed = true;
+  if (event.type !== "click" || (event as MouseEvent).button !== 0) return;
+  // The click that ends the press which opened the dialog is that press, not a new one.
+  if (!dialog.pressed) return;
   // The trigger's own click closes its dialog; any other goes to the helper.
   const { anchor } = dialog;
   if ("contains" in anchor && anchor.contains(event.target as Node | null)) dialog.dismiss();
@@ -214,6 +223,13 @@ function trackClosed(dialog: OpenDialog, outcome: GlintOutcome<GlintKind>["type"
   }
 }
 
+/** T3's theme as the helper should draw it: the root's `dark` class, set by the theme palette. */
+function appearance(): "light" | "dark" | undefined {
+  const root = typeof document === "undefined" ? undefined : document.documentElement;
+  if (!root?.classList) return undefined;
+  return root.classList.contains("dark") ? "dark" : "light";
+}
+
 /** Opens a dialog that can be fed and heard while it is up. Anchors at an element, point or rect. */
 function openGlint<K extends GlintKind>(
   kind: K,
@@ -231,7 +247,7 @@ function openGlint<K extends GlintKind>(
   const outcome = (async (): Promise<GlintOutcome<K>> => {
     if (!glint) return { type: "unavailable" };
     try {
-      const outcome = await glint.present({ id, kind, anchor: rect, params });
+      const outcome = await glint.present({ id, kind, anchor: rect, params, appearance: appearance() });
       if (outcome.type !== "result") return { type: outcome.type };
       const value = GLINT_DECODERS[kind](outcome.value);
       return Option.isSome(value)
@@ -245,6 +261,7 @@ function openGlint<K extends GlintKind>(
     const dialog: OpenDialog = {
       anchor,
       dismissed: false,
+      pressed: false,
       focused: typeof document === "undefined" ? null : document.activeElement,
       dismiss: () => {
         dialog.dismissed = true;

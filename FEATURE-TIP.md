@@ -69,6 +69,7 @@ upstream; a feature can, from its own branch, when Akiva decides.
 | Sidebar branch names are plain text again (no click to copy); Copy branch stays in the thread menu                                                | #97  | 74c14e8 |
 | Burn rate flame flickers faster toward 500K/m; Machines page and machine card show burn; lineage keeps agents winding down                        | #99  | 022ce5e |
 | Inline review: sent comments stay on their lines as threads; the agent answers each inline (`reply_to_review_comment`, Labs); per-file counts     | #102 | 308d8a4 |
+| Review file tree sits left of the diff (Changes, side-by-side and PR Code); the resize handle and arrow keys mirror                               | #104 | 1adb9ce |
 
 Held: #38 (pods notes in the t3-orchestration skill). It edits
 `.agents/skills/t3-orchestration/`, which exists only on

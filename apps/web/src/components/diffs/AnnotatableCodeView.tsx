@@ -7,14 +7,18 @@ import type {
   SelectedLineRange,
 } from "@pierre/diffs";
 import type { CodeViewHandle } from "@pierre/diffs/react";
-import type { EnvironmentId, ProjectId, ScopedThreadRef, TurnItemId } from "@t3tools/contracts";
-import { type ReviewNote, reviewNoteSectionId } from "@t3tools/shared/reviewNote";
+import type { EnvironmentId, ProjectId, ScopedThreadRef } from "@t3tools/contracts";
+import {
+  type ReviewItem,
+  reviewItemSectionId,
+  type ReviewThreadEntry,
+} from "@t3tools/shared/reviewNote";
 import { useEffect, useEffectEvent, useRef, useState, type ReactNode, type Ref } from "react";
 
 import type { DraftId } from "~/composerDraftStore";
 import { fnv1a32, resolveFileDiffPath, resolveFileDiffPreviousPath } from "~/lib/diffRendering";
 import { buildDiffReviewComment, restoreDiffReviewCommentRange } from "~/reviewCommentContext";
-import { buildReviewNoteReply } from "~/reviewNotes";
+import { buildReviewItemReply } from "~/reviewNotes";
 
 import { ReviewCommentBox } from "./ReviewCommentBox";
 import { ReviewNoteAnnotation } from "./ReviewNoteAnnotation";
@@ -35,13 +39,17 @@ interface DiffCommentAnnotationEntry {
   text: string;
 }
 
-/** The agent's review notes on the shown diff. */
+/** The agent's review notes and the user's sent comments on the shown diff. */
 export interface DiffReviewNotes {
-  /** Only the notes with lines in the diff are shown; the rest belong to the panel's list. */
+  /** Only the items with lines in the diff are shown; the rest belong to the panel's list. */
   readonly placed: ReadonlyArray<PlacedReviewNote>;
-  readonly answeredIds: ReadonlySet<TurnItemId>;
-  readonly onDismiss: (noteId: TurnItemId) => void;
+  readonly answeredIds: ReadonlySet<string>;
+  /** By item id: what was said under it. */
+  readonly conversations: ReadonlyMap<string, ReadonlyArray<ReviewThreadEntry>>;
+  readonly onDismiss: (noteId: string) => void;
 }
+
+const NO_CONVERSATION: ReadonlyArray<ReviewThreadEntry> = [];
 
 const NO_REVIEW_NOTES: ReadonlyArray<PlacedReviewNote> = [];
 
@@ -202,16 +210,16 @@ export function AnnotatableCodeView({
 
   const attachedNotes = (reviewNotes?.placed ?? NO_REVIEW_NOTES).filter(isAttachedReviewNote);
   const notesBySection = new Map(
-    attachedNotes.map(({ note }) => [reviewNoteSectionId(note.id), note]),
+    attachedNotes.map(({ note }) => [reviewItemSectionId(note), note]),
   );
-  const noteReplies = useReviewCommentDrafts<ReviewNote>({
+  const noteReplies = useReviewCommentDrafts<ReviewItem>({
     composerDraftTarget,
     onSend: onSendComments,
     buildComment: ({ id, range, text, selectedText }) =>
-      withQuotedSelection(buildReviewNoteReply({ id, note: range, text }), selectedText),
+      withQuotedSelection(buildReviewItemReply({ id, item: range, text }), selectedText),
     ownsComment: (comment) => notesBySection.has(comment.sectionId),
   });
-  const repliesTo = (noteId: TurnItemId) =>
+  const repliesTo = (noteId: string) =>
     noteReplies.annotations.filter((annotation) =>
       annotation.kind === "draft"
         ? annotation.range.id === noteId
@@ -252,6 +260,7 @@ export function AnnotatableCodeView({
             text: JSON.stringify([
               reviewNotes?.answeredIds.has(note.id) ?? false,
               repliesTo(note.id).map((reply) => reply.id),
+              (reviewNotes?.conversations.get(note.id) ?? NO_CONVERSATION).map((said) => said.id),
             ]),
           },
         );
@@ -368,6 +377,7 @@ export function AnnotatableCodeView({
                     <ReviewNoteAnnotation
                       key={entry.id}
                       note={note}
+                      conversation={reviewNotes.conversations.get(note.id) ?? NO_CONVERSATION}
                       moved={placed.anchor.kind === "moved"}
                       answered={reviewNotes.answeredIds.has(note.id)}
                       replying={boxOpen}

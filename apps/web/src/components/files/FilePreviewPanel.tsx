@@ -46,10 +46,10 @@ import {
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 import { mediaFileReference } from "@t3tools/client-runtime/media-reference";
-import { FolderTree, Globe2, WrapTextIcon } from "lucide-react";
+import { FolderTree, Globe2, MessageSquareReply, WrapTextIcon } from "lucide-react";
 import { Code2, Eye, Table2 } from "lucide";
 import * as Schema from "effect/Schema";
-import { lazy, Suspense, useContext, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useContext, useEffect, useEffectEvent, useRef, useState } from "react";
 
 import { isBrowserPreviewFile, openFileInPreview } from "~/browser/openFileInPreview";
 import { useAssetUrlRefresh, useAssetUrlState } from "~/assets/assetUrls";
@@ -70,6 +70,8 @@ import { ScrollArea } from "~/components/ui/scroll-area";
 import { stackedThreadToast, toastManager } from "~/components/ui/toast";
 import { type DraftId, useComposerDraftStore } from "~/composerDraftStore";
 import { buildFileReviewComment, fileReviewSectionId } from "~/reviewCommentContext";
+import type { ReviewCommentThread } from "@t3tools/shared/reviewNote";
+import { buildReviewThreadReply } from "~/reviewNotes";
 import { assetEnvironment } from "~/state/assets";
 import { usePreviewAvailable } from "~/browser/previewRuntime";
 import { useEnvironmentHttpBaseUrl, usePrimaryEnvironmentId } from "~/state/environments";
@@ -99,6 +101,7 @@ import {
   remapFileCommentAnnotations,
   sameFileCommentAnnotations,
 } from "./fileCommentAnnotations";
+import { useDismissedFileReviewThreads, useFileReviewThreads } from "./fileReviewThreads";
 import { installFileEditorDismissal } from "./fileEditorDismissal";
 import {
   FILE_LINK_REVEAL_ATTRIBUTE,
@@ -111,7 +114,9 @@ import {
 import SourceFilePreview from "./ReadOnlySourcePreview";
 import { resolveCenteredFileLineScrollTop } from "./fileLineReveal";
 import { ReviewCommentBox } from "../diffs/ReviewCommentBox";
+import { ReviewNoteAnnotation } from "../diffs/ReviewNoteAnnotation";
 import {
+  keepDraftWords,
   type SendReviewComments,
   useReviewCommentDrafts,
   withQuotedSelection,
@@ -664,6 +669,8 @@ function useEditableAfterHighlight(file: FileContents) {
 
 interface EditableFileSurfaceProps {
   environmentId: EnvironmentId;
+  /** The thread whose sent comments and their replies show on the file. */
+  threadRef: ScopedThreadRef | null;
   projectId?: ProjectId | undefined;
   cwd: string;
   relativePath: string;
@@ -684,6 +691,7 @@ interface FileSelectionOverride {
 
 function EditableFileSurface({
   environmentId,
+  threadRef,
   projectId,
   cwd,
   relativePath,
@@ -711,8 +719,51 @@ function EditableFileSurface({
       comment.sectionId === fileReviewSectionId(relativePath) &&
       fileCommentStillFits(contents, comment),
   });
+  const reviewThreads = useFileReviewThreads({ threadRef, relativePath, contents });
+  const threadSections = new Map(
+    reviewThreads.placed.map(({ thread }) => [thread.sectionId, thread]),
+  );
+  const threadReplies = useReviewCommentDrafts<ReviewCommentThread>({
+    composerDraftTarget,
+    onSend: onSendReviewComments,
+    buildComment: ({ id, range, text, selectedText }) =>
+      withQuotedSelection(buildReviewThreadReply({ id, thread: range, text }), selectedText),
+    ownsComment: (comment) => threadSections.has(comment.sectionId),
+  });
+  const replyDraft = threadReplies.annotations.find((annotation) => annotation.kind === "draft");
+  const strandedReply =
+    replyDraft && !reviewThreads.placed.some(({ thread }) => thread.id === replyDraft.range.id)
+      ? replyDraft
+      : null;
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- a reply whose thread left the file (its lines changed) keeps its words in the composer's draft store
+  useEffect(() => {
+    if (strandedReply) keepDraftWords(threadReplies, strandedReply.text);
+  }, [strandedReply, threadReplies]);
+  const keepOpenReplyWords = useEffectEvent(() => {
+    if (replyDraft && !replyDraft.sending) keepDraftWords(threadReplies, replyDraft.text);
+  });
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- the file closes or another opens with a reply open; its words go to the composer's draft store
+  useEffect(() => () => keepOpenReplyWords(), []);
+  const repliesIn = (threadId: string) =>
+    threadReplies.annotations.filter((annotation) =>
+      annotation.kind === "draft"
+        ? annotation.range.id === threadId
+        : threadSections.get(annotation.comment.sectionId)?.id === threadId,
+    );
   // The viewer re-renders its rows for a new array, so it gets one only when a comment changed.
-  const nextLineAnnotations = fileCommentLineAnnotations(comments.annotations);
+  const nextLineAnnotations = fileCommentLineAnnotations(
+    comments.annotations,
+    reviewThreads.placed.map(({ thread, startLine, endLine, moved }) => ({
+      id: thread.id,
+      startLine,
+      endLine,
+      text: JSON.stringify([
+        moved,
+        reviewThreads.conversationOf(thread.id).map((entry) => entry.id),
+        repliesIn(thread.id).map((reply) => reply.id),
+      ]),
+    })),
+  );
   const [lineAnnotations, setLineAnnotations] = useState(nextLineAnnotations);
   if (!sameFileCommentAnnotations(lineAnnotations, nextLineAnnotations)) {
     setLineAnnotations(nextLineAnnotations);
@@ -777,6 +828,8 @@ function EditableFileSurface({
     if (!movedLineAnnotations) return;
     for (const annotation of remapFileCommentAnnotations(movedLineAnnotations)) {
       for (const entry of annotation.metadata.entries) {
+        // A thread places itself from the text each render; it has nothing to save.
+        if (entry.kind === "thread") continue;
         if (entry.kind === "draft") {
           const draft = comments.annotations.find((candidate) => candidate.id === entry.id);
           if (
@@ -812,7 +865,9 @@ function EditableFileSurface({
     editor?.blur();
     comments.beginComment(normalizeFileCommentRange(range), selectedText);
   };
-  const hasOpenCommentForm = comments.annotations.some((annotation) => annotation.kind === "draft");
+  const hasOpenCommentForm =
+    comments.annotations.some((annotation) => annotation.kind === "draft") ||
+    threadReplies.annotations.some((annotation) => annotation.kind === "draft");
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- installs selection dismissal listeners on the editor surface DOM node
   useEffect(() => {
     const root = surfaceRef.current;
@@ -882,6 +937,47 @@ function EditableFileSurface({
             renderAnnotation={(annotation) => (
               <div className="py-1">
                 {annotation.metadata.entries.map((entry) => {
+                  if (entry.kind === "thread") {
+                    const placed = reviewThreads.placed.find(
+                      ({ thread }) => thread.id === entry.id,
+                    );
+                    if (!placed) return null;
+                    const replies = repliesIn(placed.thread.id);
+                    return (
+                      <ReviewNoteAnnotation
+                        key={entry.id}
+                        note={placed.thread}
+                        conversation={reviewThreads.conversationOf(placed.thread.id)}
+                        moved={placed.moved}
+                        answered={false}
+                        replying={hasOpenCommentForm}
+                        onReply={() => threadReplies.beginComment(placed.thread)}
+                        onDismiss={() => reviewThreads.dismiss(placed.thread.id)}
+                        replies={
+                          replies.length > 0 ? (
+                            <div className="divide-y divide-border/30 border-t border-border/30">
+                              {replies.map((reply) => (
+                                <ReviewCommentBox
+                                  key={reply.id}
+                                  environmentId={environmentId}
+                                  projectId={projectId}
+                                  ownerKey={JSON.stringify([
+                                    environmentId,
+                                    composerDraftTarget,
+                                    relativePath,
+                                    placed.thread.id,
+                                    reply.id,
+                                  ])}
+                                  annotation={reply}
+                                  drafts={threadReplies}
+                                />
+                              ))}
+                            </div>
+                          ) : null
+                        }
+                      />
+                    );
+                  }
                   const live = comments.annotations.find((candidate) => candidate.id === entry.id);
                   return live ? (
                     <ReviewCommentBox
@@ -1005,6 +1101,7 @@ export default function FilePreviewPanel({
   const relativePath =
     attachment === undefined ? resolveFilePreviewPath(requestedPath, cwd) : requestedPath;
   const draft = typeof composerDraftTarget === "string";
+  const dismissedThreads = useDismissedFileReviewThreads(threadRef, relativePath ?? "");
   const { resolvedTheme } = useTheme();
   const defaultWordWrap = useClientSettings((settings) => settings.wordWrap);
   const [wordWrapOverride, setWordWrapOverride] = useState<boolean | null>(null);
@@ -1345,6 +1442,16 @@ export default function FilePreviewPanel({
               <WrapTextIcon className="size-3.5" />
             </FileSurfaceAction>
           ) : null}
+          {dismissedThreads.count > 0 ? (
+            <FileSurfaceAction
+              label={`Restore ${dismissedThreads.count} dismissed comment ${
+                dismissedThreads.count === 1 ? "thread" : "threads"
+              }`}
+              onPress={dismissedThreads.restoreAll}
+            >
+              <MessageSquareReply className="size-3.5" />
+            </FileSurfaceAction>
+          ) : null}
           {canOpenInBrowser ? (
             <FileSurfaceAction label="Open file in preview browser" onPress={handleOpenInBrowser}>
               <Globe2 className="size-3.5" />
@@ -1561,6 +1668,7 @@ export default function FilePreviewPanel({
                 <EditableFileSurface
                   key={`${relativePath}:${resolvedTheme}`}
                   environmentId={environmentId}
+                  threadRef={threadRef}
                   projectId={projectId}
                   cwd={cwd}
                   relativePath={relativePath}

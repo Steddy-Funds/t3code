@@ -6,9 +6,15 @@ import {
   OrchestratorMcpFailure,
   REVIEW_NOTE_MAX_LINES,
   REVIEW_NOTE_TURN_ITEM_PREFIX,
+  REVIEW_REPLY_TURN_ITEM_PREFIX,
   TurnItemId,
+  type OrchestrationV2ReviewReply,
+  type OrchestrationV2Run,
   type OrchestratorMcpFlagForReviewInput,
   type OrchestratorMcpFlagForReviewResult,
+  type OrchestratorMcpReplyToReviewCommentInput,
+  type OrchestratorMcpReplyToReviewCommentResult,
+  type ReviewCommentContextRecord,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -36,6 +42,10 @@ export class ReviewNotes extends Context.Service<
       scope: McpInvocationContext.McpInvocationScope,
       input: OrchestratorMcpFlagForReviewInput,
     ) => Effect.Effect<OrchestratorMcpFlagForReviewResult, OrchestratorMcpFailure>;
+    readonly reply: (
+      scope: McpInvocationContext.McpInvocationScope,
+      input: OrchestratorMcpReplyToReviewCommentInput,
+    ) => Effect.Effect<OrchestratorMcpReplyToReviewCommentResult, OrchestratorMcpFailure>;
   }
 >()("t3/mcp/ReviewNotes") {}
 
@@ -73,11 +83,13 @@ const excerptOf = (lines: ReadonlyArray<string>, fits: (excerpt: string) => bool
   return { excerpt, excerptTruncated: excerpt !== lines.join("\n") };
 };
 
-const noteIdOf = (threadId: string, key: ReadonlyArray<unknown>) =>
+const noteIdOf = (
+  threadId: string,
+  key: ReadonlyArray<unknown>,
+  prefix = REVIEW_NOTE_TURN_ITEM_PREFIX,
+) =>
   TurnItemId.make(
-    `${REVIEW_NOTE_TURN_ITEM_PREFIX}${encodeURIComponent(threadId)}:${NodeCrypto.createHash(
-      "sha256",
-    )
+    `${prefix}${encodeURIComponent(threadId)}:${NodeCrypto.createHash("sha256")
       .update(JSON.stringify(key))
       .digest("hex")
       .slice(0, 32)}`,
@@ -96,6 +108,42 @@ const noteIdsFor = (
 ) => {
   const key = [relativePath, input.startLine, input.endLine, input.note, input.question ?? null];
   return { noteId: noteIdOf(threadId, [threadId, ...key]), legacyId: noteIdOf(threadId, key) };
+};
+
+/** How many of the thread's latest runs a reply looks through for the comment it answers. */
+const REPLY_RUN_WINDOW = 20;
+const MAX_REPLY_COMMENT_CHARS = 600;
+
+type ReplyComment = OrchestrationV2ReviewReply["comment"];
+
+/**
+ * The comment as the reply copies it, its code cut to whole lines so the record fits the wire.
+ * Undefined when it would not fit even without code.
+ */
+const replyCommentOf = (
+  record: ReviewCommentContextRecord,
+  fits: (comment: ReplyComment) => boolean,
+): ReplyComment | undefined => {
+  const text = Array.from(record.text.trim());
+  const lines = record.diff.split("\n");
+  const copyOf = (count: number): ReplyComment => ({
+    sectionId: record.sectionId,
+    filePath: record.filePath,
+    rangeLabel: record.rangeLabel,
+    startIndex: record.startIndex,
+    endIndex: record.endIndex,
+    text:
+      text.length > MAX_REPLY_COMMENT_CHARS
+        ? `${text.slice(0, MAX_REPLY_COMMENT_CHARS - 1).join("")}…`
+        : text.join(""),
+    diff: lines.slice(0, count).join("\n"),
+    ...(record.fenceLanguage === undefined ? {} : { fenceLanguage: record.fenceLanguage }),
+  });
+  for (let count = Math.min(lines.length, MAX_EXCERPT_LINES); count >= 0; count -= 1) {
+    const copy = copyOf(count);
+    if (fits(copy)) return copy;
+  }
+  return undefined;
 };
 
 const make = Effect.gen(function* () {
@@ -249,7 +297,106 @@ const make = Effect.gen(function* () {
     },
   );
 
-  return ReviewNotes.of({ flag });
+  const reply: ReviewNotes["Service"]["reply"] = Effect.fn("ReviewNotes.reply")(
+    function* (scope, input) {
+      const caller = yield* McpInvocationContext.requireThreadScope(
+        scope,
+        "reply_to_review_comment",
+      );
+      const enabled = yield* serverSettings.getSettings.pipe(
+        Effect.map((settings) => settings.agentReviewNotesEnabled),
+        Effect.orElseSucceed(() => true),
+      );
+      if (!enabled) return yield* failure("capability_denied", REVIEW_NOTES_OFF);
+      const threadId = caller.thread.threadId;
+      const unreadable = (error: { readonly message: string }) =>
+        failure("orchestration_error", `Unable to read this thread: ${error.message}`);
+      const parent = yield* threadManagement
+        .getThreadRecords(threadId, ["runs"], { messageRoles: [] })
+        .pipe(Effect.mapError(unreadable));
+      const run = ThreadManagementService.latestActiveRun(parent);
+      if (
+        run === undefined ||
+        run.rootNodeId === null ||
+        run.providerInstanceId !== caller.thread.providerInstanceId
+      ) {
+        return yield* failure(
+          "parent_not_active",
+          "Replying to a review comment needs an active run owned by this MCP provider session.",
+        );
+      }
+      // The comment came in this turn's messages, or a recent one: never the whole history.
+      const recentRuns = parent.runs
+        .toSorted(
+          (left: OrchestrationV2Run, right: OrchestrationV2Run) => right.ordinal - left.ordinal,
+        )
+        .slice(0, REPLY_RUN_WINDOW);
+      const { messages } = yield* threadManagement
+        .getThreadRecords(threadId, ["messages"], {
+          messageRoles: ["user"],
+          messageRunIds: [
+            run.id,
+            ...recentRuns.flatMap((candidate) => (candidate.id === run.id ? [] : [candidate.id])),
+          ],
+        })
+        .pipe(Effect.mapError(unreadable));
+      const comment = messages
+        .flatMap((message) => message.context?.records ?? [])
+        .findLast(
+          (record): record is ReviewCommentContextRecord =>
+            record.kind === "review-comment" && record.contextId === input.commentId,
+        );
+      if (comment === undefined) {
+        return yield* failure(
+          "invalid_request",
+          `No review comment ${input.commentId} in this thread's recent messages. Pass the id of its <context kind="review-comment"> entry.`,
+        );
+      }
+      const replyComment = replyCommentOf(
+        comment,
+        (copy) =>
+          Buffer.byteLength(
+            JSON.stringify({
+              kind: "review_reply",
+              commentId: input.commentId,
+              reply: input.reply,
+              comment: copy,
+              runId: run.id,
+            } satisfies OrchestrationV2ReviewReply),
+            "utf8",
+          ) <= REVIEW_NOTE_MAX_INPUT_BYTES,
+      );
+      if (replyComment === undefined) {
+        return yield* failure(
+          "invalid_request",
+          "The reply is too long to record beside its comment. Shorten it.",
+        );
+      }
+      const replyId = noteIdOf(
+        threadId,
+        [threadId, input.commentId, input.reply],
+        REVIEW_REPLY_TURN_ITEM_PREFIX,
+      );
+      yield* threadManagement
+        .dispatch({
+          type: "review_reply.record",
+          commandId: CommandId.make(`command:review-reply:${replyId}`),
+          threadId,
+          runId: run.id,
+          nodeId: run.rootNodeId,
+          turnItemId: replyId,
+          reply: { commentId: input.commentId, reply: input.reply, comment: replyComment },
+        })
+        .pipe(
+          Effect.mapError((error) =>
+            failure("orchestration_error", `Could not record the reply: ${error.message}`),
+          ),
+        );
+      return { status: "recorded" as const, replyId };
+    },
+  );
+
+  return ReviewNotes.of({ flag, reply });
 });
 
 export const layer = Layer.effect(ReviewNotes, make);

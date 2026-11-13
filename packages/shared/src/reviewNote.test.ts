@@ -1,11 +1,21 @@
-import { ComposerContextId, REVIEW_NOTE_TOOL_NAME, TurnItemId } from "@t3tools/contracts";
+import {
+  ComposerContextId,
+  REVIEW_NOTE_TOOL_NAME,
+  REVIEW_REPLY_TOOL_NAME,
+  RunId,
+  TurnItemId,
+} from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
   answeredReviewNoteIds,
+  buildReviewThreads,
   type ReviewNote,
   reviewNoteFromToolItem,
   reviewNoteSectionId,
+  reviewReplyFromToolItem,
+  reviewThreadSectionId,
+  type ReviewTimelineEntry,
 } from "./reviewNote.ts";
 
 type AnsweringMessage =
@@ -52,6 +62,201 @@ describe("reviewNoteFromToolItem", () => {
     ]) {
       expect(reviewNoteFromToolItem(lookalike)).toBeUndefined();
     }
+  });
+});
+
+describe("reviewReplyFromToolItem", () => {
+  it("reads only the row the server recorded", () => {
+    const replyInput = {
+      kind: "review_reply",
+      commentId: "ctx_1",
+      reply: "Kept the filter in checkout only.",
+      comment: {
+        sectionId: "turn:1",
+        filePath: "server/src/orders/repository.ts",
+        rangeLabel: "L8",
+        startIndex: 7,
+        endIndex: 7,
+        text: "Export needs deleted items.",
+        diff: "@@ -8,1 +8,1 @@\n+    SELECT * FROM order_items WHERE deleted_at IS NULL",
+      },
+      runId: "run-2",
+    };
+    const id = TurnItemId.make("turn-item:review-reply:thread-1:9a8b7c6d");
+    const row = { id, type: "dynamic_tool", toolName: REVIEW_REPLY_TOOL_NAME, input: replyInput };
+    expect(reviewReplyFromToolItem(row)).toEqual({ ...replyInput, id });
+    for (const lookalike of [
+      { ...row, nativeItemRef: { driver: "claude", itemId: "toolu_1" } },
+      { ...row, id: noteId },
+      { ...row, toolName: REVIEW_NOTE_TOOL_NAME },
+      { ...row, input: { ...replyInput, commentId: " " } },
+    ]) {
+      expect(reviewReplyFromToolItem(lookalike)).toBeUndefined();
+    }
+  });
+});
+
+describe("buildReviewThreads", () => {
+  type CommentEntry = Extract<ReviewTimelineEntry, { kind: "comment" }>;
+  const comment = (contextId: string, record: Partial<CommentEntry["record"]>): CommentEntry => ({
+    kind: "comment",
+    contextId,
+    record: {
+      sectionId: "turn:1",
+      filePath: "server/src/orders/repository.ts",
+      rangeLabel: "L7 to L9",
+      startIndex: 6,
+      endIndex: 8,
+      text: `Comment ${contextId}`,
+      diff: "@@ -7,3 +7,3 @@\n context\n-old\n+new\n tail",
+      ...record,
+    },
+  });
+  const reply = (id: string, copy: CommentEntry): ReviewTimelineEntry => ({
+    kind: "reply",
+    reply: {
+      id: TurnItemId.make(`turn-item:review-reply:thread-1:${id}`),
+      kind: "review_reply",
+      commentId: copy.contextId,
+      reply: `Reply ${id}`,
+      comment: copy.record,
+      runId: RunId.make("run-2"),
+    },
+  });
+
+  it("opens a thread per comment on the lines the diff's new side quoted", () => {
+    const { threads, sentComments } = buildReviewThreads(
+      [],
+      [
+        comment("ctx_diff", {}),
+        comment("ctx_file", {
+          sectionId: "file:server/src/app.ts",
+          filePath: "server/src/app.ts",
+          startIndex: 2,
+          endIndex: 3,
+          diff: "const a = 1;\r\nconst b = 2;\r\n",
+          fenceLanguage: "ts",
+        }),
+        // A comment only on removed lines quotes nothing it can sit on.
+        comment("ctx_removed", { diff: "@@ -4,1 +3,0 @@\n-gone" }),
+        comment("ctx_pr", { sectionId: "pull-request:12" }),
+        reply("r_pr", comment("ctx_pr_2", { sectionId: "pull-request:12" })),
+      ],
+    );
+    expect(
+      threads.map(({ id, path, pathBase, startLine, endLine, excerpt, sectionId, runId }) => ({
+        id,
+        path,
+        pathBase,
+        startLine,
+        endLine,
+        excerpt,
+        sectionId,
+        runId,
+      })),
+    ).toEqual([
+      {
+        id: "ctx_diff",
+        path: "server/src/orders/repository.ts",
+        pathBase: "diff",
+        startLine: 7,
+        endLine: 9,
+        excerpt: "context\nnew\ntail",
+        sectionId: reviewThreadSectionId("ctx_diff"),
+        runId: "1",
+      },
+      {
+        id: "ctx_file",
+        path: "server/src/app.ts",
+        pathBase: "workspace",
+        startLine: 3,
+        endLine: 4,
+        excerpt: "const a = 1;\nconst b = 2;",
+        sectionId: reviewThreadSectionId("ctx_file", "workspace"),
+        runId: null,
+      },
+      expect.objectContaining({ id: "ctx_removed", excerpt: "" }),
+    ]);
+    expect(sentComments).toEqual([
+      { path: "server/src/orders/repository.ts", pathBase: "diff" },
+      { path: "server/src/app.ts", pathBase: "workspace" },
+      { path: "server/src/orders/repository.ts", pathBase: "diff" },
+    ]);
+  });
+
+  it("threads follow-ups and agent replies under the note or comment they answer", () => {
+    const note = { ...input, id: noteId } as ReviewNote;
+    const root = comment("ctx_root", {});
+    const followUp = comment("ctx_follow", { sectionId: reviewThreadSectionId("ctx_root") });
+    const onNote = comment("ctx_note", {
+      sectionId: reviewNoteSectionId(noteId),
+      filePath: input.path,
+    });
+    const { threads, conversations, sentComments } = buildReviewThreads(
+      [note],
+      [
+        root,
+        reply("r1", root),
+        followUp,
+        followUp,
+        reply("r2", followUp),
+        onNote,
+        reply("r3", onNote),
+      ],
+    );
+    expect(threads.map((thread) => thread.id)).toEqual(["ctx_root"]);
+    expect(conversations.get("ctx_root")?.map((entry) => [entry.kind, entry.text])).toEqual([
+      ["reply", "Reply r1"],
+      ["comment", "Comment ctx_follow"],
+      ["reply", "Reply r2"],
+    ]);
+    expect(conversations.get(noteId)?.map((entry) => [entry.kind, entry.text])).toEqual([
+      ["comment", "Comment ctx_note"],
+      ["reply", "Reply r3"],
+    ]);
+    expect(sentComments).toEqual([
+      { path: "server/src/orders/repository.ts", pathBase: "diff" },
+      { path: "server/src/orders/repository.ts", pathBase: "diff" },
+      { path: input.path, pathBase: "workspace" },
+    ]);
+  });
+
+  it("opens a thread from a reply's own copy when its comment's message is not loaded", () => {
+    const root = comment("ctx_root", {});
+    const followUp = comment("ctx_follow", { sectionId: reviewThreadSectionId("ctx_root") });
+    const { threads, conversations, sentComments } = buildReviewThreads(
+      [],
+      [reply("r1", root), reply("r2", followUp)],
+    );
+    expect(threads.map((thread) => [thread.id, thread.comment])).toEqual([
+      ["ctx_root", "Comment ctx_root"],
+    ]);
+    expect(conversations.get("ctx_root")?.map((entry) => entry.text)).toEqual([
+      "Reply r1",
+      "Comment ctx_follow",
+      "Reply r2",
+    ]);
+    expect(sentComments).toHaveLength(2);
+  });
+
+  it("keeps a file-viewer thread's follow-up on workspace paths, loaded or not", () => {
+    const fileComment = {
+      filePath: "server/src/app.ts",
+      diff: "const a = 1;\n",
+      fenceLanguage: "ts",
+    };
+    const root = comment("ctx_root", { ...fileComment, sectionId: "file:server/src/app.ts" });
+    const [rootThread] = buildReviewThreads([], [root]).threads;
+    const followUp = comment("ctx_follow", { ...fileComment, sectionId: rootThread!.sectionId });
+
+    const loaded = buildReviewThreads([], [root, followUp]);
+    expect(loaded.threads.map((thread) => thread.id)).toEqual(["ctx_root"]);
+    expect(loaded.sentComments.map((sent) => sent.pathBase)).toEqual(["workspace", "workspace"]);
+
+    const alone = buildReviewThreads([], [reply("r1", followUp)]);
+    expect(alone.threads.map(({ id, pathBase }) => [id, pathBase])).toEqual([
+      ["ctx_follow", "workspace"],
+    ]);
   });
 });
 

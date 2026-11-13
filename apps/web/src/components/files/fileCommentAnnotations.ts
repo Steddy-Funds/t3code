@@ -4,7 +4,8 @@ import type { ReviewCommentAnnotation } from "../diffs/useReviewCommentDrafts";
 
 export interface FileCommentAnnotationEntry {
   id: string;
-  kind: "draft" | "comment";
+  /** A thread is a sent comment and what was said under it; `text` keys what it shows. */
+  kind: "draft" | "comment" | "thread";
   startLine: number;
   endLine: number;
   text: string;
@@ -68,11 +69,18 @@ export function fileCommentStillFits(
   );
 }
 
-/** The file's comments as the viewer takes them: grouped on the last line of each range. */
+/** The file's comments and threads as the viewer takes them: grouped on the last line of each range. */
 export function fileCommentLineAnnotations(
   annotations: ReadonlyArray<ReviewCommentAnnotation<FileCommentRange>>,
+  threads: ReadonlyArray<Omit<FileCommentAnnotationEntry, "kind">> = [],
 ): FileCommentLineAnnotation[] {
   const byLine = new Map<number, FileCommentAnnotationEntry[]>();
+  for (const thread of threads) {
+    byLine.set(thread.endLine, [
+      ...(byLine.get(thread.endLine) ?? []),
+      { ...thread, kind: "thread" },
+    ]);
+  }
   for (const annotation of annotations) {
     const entry: FileCommentAnnotationEntry =
       annotation.kind === "draft"

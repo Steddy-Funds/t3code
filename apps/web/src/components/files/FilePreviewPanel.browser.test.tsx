@@ -1,4 +1,5 @@
 import { EnvironmentId, ThreadId, type ProjectReadFileResult } from "@t3tools/contracts";
+import { type ReviewCommentThread, reviewThreadSectionId } from "@t3tools/shared/reviewNote";
 import { AsyncResult } from "effect/reactivity";
 import { describe, expect, it, vi } from "vite-plus/test";
 import { DEFAULT_THEMES, preloadHighlighter } from "@pierre/diffs";
@@ -6,6 +7,7 @@ import { page } from "vite-plus/test/browser";
 import { act, fakeTimers, render } from "../../../test/render";
 
 const state = vi.hoisted(() => ({
+  reviewThreads: null as unknown,
   file: null as ProjectReadFileResult | null,
   optimistic: null as ProjectReadFileResult | null,
   writeFile: vi.fn(),
@@ -75,6 +77,16 @@ vi.mock(import("./projectFilesQueryState"), async (original) => ({
   confirmProjectFileQueryData: () => true,
 }));
 
+vi.mock(import("./fileReviewThreads"), async (original) => {
+  const actual = await original();
+  return {
+    ...actual,
+    useFileReviewThreads: ((input: Parameters<typeof actual.useFileReviewThreads>[0]) =>
+      state.reviewThreads ?? actual.useFileReviewThreads(input)) as never,
+  };
+});
+
+import { useComposerDraftStore } from "~/composerDraftStore";
 import FilePreviewPanel from "./FilePreviewPanel";
 
 const environmentId = EnvironmentId.make("markdown-preview-test");
@@ -86,6 +98,8 @@ function setup() {
   localStorage.setItem(keys[1]!, "true");
   localStorage.setItem(keys[2]!, "dark");
   state.optimistic = null;
+  state.reviewThreads = null;
+  useComposerDraftStore.setState(useComposerDraftStore.getInitialState(), true);
   state.writeFile.mockReset().mockResolvedValue(AsyncResult.success(undefined));
   return {
     [Symbol.dispose]() {
@@ -254,5 +268,43 @@ describe("an open file that reloads from disk", () => {
     await vi.waitFor(() => expect(editorShows("const a = 2;")).toBe(true), highlighted);
 
     expect(document.activeElement).toBe(document.body);
+  });
+});
+
+describe("a review thread in the file", () => {
+  it("hands an open reply's words to the message when the file closes", async () => {
+    using _setup = setup();
+    const thread: ReviewCommentThread = {
+      kind: "review_comment_thread",
+      id: "ctx_root",
+      sectionId: reviewThreadSectionId("ctx_root", "workspace"),
+      path: "server.ts",
+      pathBase: "workspace",
+      startLine: 1,
+      endLine: 1,
+      excerpt: "const a = 1;",
+      excerptTruncated: false,
+      contentRevision: null,
+      comment: "Why a constant?",
+      rangeLabel: "L1",
+      runId: null,
+    };
+    state.reviewThreads = {
+      placed: [{ thread, startLine: 1, endLine: 1, moved: false }],
+      conversationOf: () => [],
+      dismiss: vi.fn(),
+    };
+    await using screen = await render(sourcePreview("const a = 1;\n"));
+    await page.getByRole("button", { name: "Reply" }).click();
+    await page.getByPlaceholder(/comment/i).fill("Name it after its unit.");
+
+    await screen.rerender(<input aria-label="Composer" />);
+
+    expect(useComposerDraftStore.getState().getComposerDraft(threadRef)?.reviewComments).toEqual([
+      expect.objectContaining({
+        sectionId: reviewThreadSectionId("ctx_root", "workspace"),
+        text: "Name it after its unit.",
+      }),
+    ]);
   });
 });

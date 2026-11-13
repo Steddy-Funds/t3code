@@ -1,10 +1,12 @@
+import type { FileDiffMetadata } from "@pierre/diffs";
 import { parsePatchFiles } from "@pierre/diffs/utils/parsePatchFiles";
 import { RunId, TurnItemId } from "@t3tools/contracts";
-import type { ReviewNote } from "@t3tools/shared/reviewNote";
+import type { ReviewCommentThread, ReviewNote } from "@t3tools/shared/reviewNote";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
   anchorReviewNote,
+  cachedReviewNoteAnchor,
   type PlacedReviewNote,
   placeReviewNotes,
   stepReviewNote,
@@ -37,6 +39,13 @@ const changed = (index: string, body: ReadonlyArray<string>) =>
     "+++ b/src/app.ts",
     ...body,
   ]);
+
+/** A loaded file whose only hunk is its last two lines. */
+const wholeFile = (lines: ReadonlyArray<string>): FileDiffMetadata => ({
+  ...changed("2222222", ["@@ -4,1 +4,2 @@", ` ${lines[3]}`, `+${lines[4]}`]),
+  isPartial: false,
+  additionLines: lines.map((line) => `${line}\n`),
+});
 
 describe("anchorReviewNote", () => {
   it.each([
@@ -218,6 +227,55 @@ describe("anchorReviewNote", () => {
   ])("is $state", ({ fileDiff, expected, overrides, shownLines }) => {
     expect(anchorReviewNote(note(overrides), fileDiff, undefined, shownLines)).toEqual(expected);
   });
+
+  it.each([
+    {
+      state: "exact on its own lines while they still read what it quoted",
+      fileDiff: changed("2222222", ["@@ -1,4 +1,5 @@", " start", " retry()", " return", "+end"]),
+      expected: { kind: "exact", startLine: 2, endLine: 3 },
+    },
+    {
+      state: "moved where its quoted lines now occur once",
+      fileDiff: changed("2222222", ["@@ -1,3 +1,5 @@", " start", "+added", " retry()", " return"]),
+      expected: { kind: "moved", startLine: 3, endLine: 4 },
+    },
+    {
+      state: "unattached when it quoted only removed lines",
+      overrides: { excerpt: "" },
+      fileDiff: changed("2222222", ["@@ -1,3 +1,3 @@", " start", " retry()", " return"]),
+      expected: { kind: "unattached" },
+    },
+    {
+      state: "exact on its own lines outside the hunks when the whole file is shown",
+      shownLines: "whole-file" as const,
+      fileDiff: wholeFile(["start", "retry()", "return", "x", "new"]),
+      expected: { kind: "exact", startLine: 2, endLine: 3 },
+    },
+    {
+      state: "moved outside the hunks when the whole file is shown",
+      shownLines: "whole-file" as const,
+      fileDiff: wholeFile(["retry()", "return", "start", "x", "new"]),
+      expected: { kind: "moved", startLine: 1, endLine: 2 },
+    },
+  ])("places a comment thread $state", ({ fileDiff, expected, overrides, shownLines }) => {
+    const thread: ReviewCommentThread = {
+      kind: "review_comment_thread",
+      id: "ctx_1",
+      sectionId: "review-thread:ctx_1",
+      path: "src/app.ts",
+      pathBase: "diff",
+      startLine: 2,
+      endLine: 3,
+      excerpt: "retry()\nreturn",
+      excerptTruncated: false,
+      contentRevision: null,
+      comment: "Why retry?",
+      rangeLabel: "L2 to L3",
+      runId: null,
+      ...overrides,
+    };
+    expect(anchorReviewNote(thread, fileDiff, undefined, shownLines)).toEqual(expected);
+  });
 });
 
 describe("placeReviewNotes", () => {
@@ -305,6 +363,30 @@ describe("placeReviewNotes with the lines the viewer shows", () => {
       ["unattached"],
       ["exact"],
     ]);
+  });
+});
+
+describe("cachedReviewNoteAnchor", () => {
+  it("places a thread again when its full comment replaces a reply's shorter copy", () => {
+    const fileDiff = changed("2222222", ["@@ -1,3 +1,3 @@", " start", " retry()", " return"]);
+    const thread = (excerpt: string): ReviewCommentThread => ({
+      kind: "review_comment_thread",
+      id: "ctx_1",
+      sectionId: "review-thread:ctx_1",
+      path: "src/app.ts",
+      pathBase: "diff",
+      startLine: 2,
+      endLine: 3,
+      excerpt,
+      excerptTruncated: false,
+      contentRevision: null,
+      comment: "Why retry?",
+      rangeLabel: "L2 to L3",
+      runId: null,
+    });
+    const anchor = (excerpt: string) =>
+      cachedReviewNoteAnchor(thread(excerpt), fileDiff, "src/app.ts").kind;
+    expect([anchor("retry()"), anchor("retry()\nreturn early")]).toEqual(["exact", "unattached"]);
   });
 });
 

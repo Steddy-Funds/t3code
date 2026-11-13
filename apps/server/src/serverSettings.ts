@@ -1494,3 +1494,17 @@ const make = Effect.gen(function* () {
 });
 
 export const layer = Layer.effect(ServerSettingsService, make);
+
+/**
+ * Whether agents may answer review comments inline. Off when settings are absent or unreadable.
+ * Callers take the service when their layer is built, so a request's context cannot drop it.
+ */
+export const reviewRepliesEnabled = (settings: Option.Option<ServerSettingsService["Service"]>) =>
+  Option.match(settings, {
+    onNone: () => Effect.succeed(false),
+    onSome: (service) =>
+      service.getSettings.pipe(
+        Effect.map((current) => current.agentReviewNotesEnabled),
+        Effect.orElseSucceed(() => false),
+      ),
+  });

@@ -164,6 +164,7 @@ export const layer: Layer.Layer<
     const providerSessions = yield* ProviderSessionManager.ProviderSessionManagerV2;
     const runExecution = yield* RunExecutionService.RunExecutionServiceV2;
     const runtimePolicy = yield* RuntimePolicy.RuntimePolicyV2;
+    const serverSettings = yield* Effect.serviceOption(ServerSettings.ServerSettingsService);
     const isManagedWorktreePath = yield* makeIsManagedWorktreePath;
 
     const resolveRecreateBase = Effect.fn("ProviderTurnStartService.resolveRecreateBase")(
@@ -858,12 +859,13 @@ export const layer: Layer.Layer<
             .filter((item) => mergedMessageIds.has(item.messageId))
             .toSorted((left, right) => left.ordinal - right.ordinal)
         : [];
+      const reviewReplies = yield* ServerSettings.reviewRepliesEnabled(serverSettings);
       const userText = mergedTurnText(
         [message, ...mergedItems].map((part) =>
-          projectComposerContextForProvider({
-            text: part.text,
-            records: part.context?.records ?? [],
-          }),
+          projectComposerContextForProvider(
+            { text: part.text, records: part.context?.records ?? [] },
+            { reviewReplies },
+          ),
         ),
       );
       // Codex and Claude parse /goal from the prompt, so it goes verbatim and history waits a turn.

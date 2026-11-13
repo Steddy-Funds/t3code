@@ -1,5 +1,5 @@
 import type { FileDiffMetadata } from "@pierre/diffs";
-import type { ReviewNote } from "@t3tools/shared/reviewNote";
+import type { ReviewItem } from "@t3tools/shared/reviewNote";
 
 import { diffPathForWorkspaceFile } from "~/diffFileActions";
 
@@ -9,7 +9,7 @@ export type ReviewNoteAnchor =
 
 /** A note on one file of the shown diff; `pending` while that file's patch loads. */
 export interface PlacedReviewNote {
-  readonly note: ReviewNote;
+  readonly note: ReviewItem;
   readonly fileKey: string;
   readonly anchor: ReviewNoteAnchor | { readonly kind: "pending" };
 }
@@ -25,7 +25,8 @@ export const isAttachedReviewNote = (placed: PlacedReviewNote): placed is Attach
 const MIN_OBJECT_ID_LENGTH = 7;
 const UNATTACHED: ReviewNoteAnchor = { kind: "unattached" };
 
-function isRevisionOf(objectId: string | undefined, contentRevision: string): boolean {
+function isRevisionOf(objectId: string | undefined, contentRevision: string | null): boolean {
+  if (contentRevision === null) return false;
   if (objectId === undefined || objectId.length < MIN_OBJECT_ID_LENGTH) return false;
   const id = objectId.toLowerCase();
   return /^[0-9a-f]+$/u.test(id) && contentRevision.toLowerCase().startsWith(id);
@@ -57,10 +58,23 @@ function newSideRuns(fileDiff: FileDiffMetadata) {
   }));
 }
 
-const excerptLines = (note: ReviewNote) => note.excerpt.split("\n");
+const excerptLines = (note: ReviewItem) => note.excerpt.split("\n");
+
+/** Whether the new side reads the item's excerpt at its own lines. */
+function excerptAtOwnLines(fileDiff: FileDiffMetadata, note: ReviewItem): boolean {
+  const excerpt = excerptLines(note);
+  return newSideRuns(fileDiff).some(
+    (run) =>
+      note.startLine >= run.firstLine &&
+      note.startLine - run.firstLine + excerpt.length <= run.lines.length &&
+      excerpt.every(
+        (line, offset) => lineText(run.lines[note.startLine - run.firstLine + offset]) === line,
+      ),
+  );
+}
 
 /** Where the excerpt starts on the new side, stopping at a second occurrence. */
-function findExcerpt(fileDiff: FileDiffMetadata, note: ReviewNote): number[] {
+function findExcerpt(fileDiff: FileDiffMetadata, note: ReviewItem): number[] {
   const excerpt = excerptLines(note);
   // The server drops whole lines first, so only a one-line note's shortened excerpt is surely cut
   // inside its line; a longer note's may be its whole first line.
@@ -92,7 +106,7 @@ export type ReviewNoteShownLines = "hunks" | "whole-file";
  * else stays unattached rather than sit on lines the note may not be about.
  */
 export function anchorReviewNote(
-  note: ReviewNote,
+  note: ReviewItem,
   fileDiff: FileDiffMetadata,
   diffPath = note.path,
   shownLines: ReviewNoteShownLines = "hunks",
@@ -104,14 +118,27 @@ export function anchorReviewNote(
       ? { kind: "exact", startLine: note.startLine, endLine: note.endLine }
       : UNATTACHED;
   }
+  if (note.excerpt.length === 0) return UNATTACHED;
+  const shown = (startLine: number, endLine: number) =>
+    shownLines === "whole-file" || showsLines(fileDiff, startLine, endLine);
+  // A comment has no revision to match; its quoted lines still where it left them stay put.
+  if (
+    note.contentRevision === null &&
+    excerptAtOwnLines(fileDiff, note) &&
+    shown(note.startLine, note.startLine + excerptLines(note).length - 1)
+  ) {
+    return {
+      kind: "exact",
+      startLine: note.startLine,
+      endLine: note.startLine + excerptLines(note).length - 1,
+    };
+  }
   const starts = findExcerpt(fileDiff, note);
   const [startLine] = starts;
   if (startLine === undefined || starts.length > 1) return UNATTACHED;
   // Only the excerpt was matched; a shortened one covers fewer lines than the note did.
   const endLine = startLine + excerptLines(note).length - 1;
-  return showsLines(fileDiff, startLine, endLine)
-    ? { kind: "moved", startLine, endLine }
-    : UNATTACHED;
+  return shown(startLine, endLine) ? { kind: "moved", startLine, endLine } : UNATTACHED;
 }
 
 // A moved note scans its whole file, and a shown file keeps its object across renders. Hydrating
@@ -119,7 +146,7 @@ export function anchorReviewNote(
 const anchorCache = new WeakMap<FileDiffMetadata, Map<string, ReviewNoteAnchor>>();
 
 export function cachedReviewNoteAnchor(
-  note: ReviewNote,
+  note: ReviewItem,
   fileDiff: FileDiffMetadata,
   diffPath: string,
   shownLines: ReviewNoteShownLines = "hunks",
@@ -129,9 +156,11 @@ export function cachedReviewNoteAnchor(
     byNote = new Map();
     anchorCache.set(fileDiff, byNote);
   }
+  // A thread's quote can grow once its comment's message loads after a reply's shorter copy.
   const key = JSON.stringify([
     note.id,
     note.contentRevision,
+    note.kind === "review_comment_thread" ? note.excerpt : null,
     fileDiff.isPartial,
     diffPath,
     shownLines,
@@ -147,12 +176,25 @@ export function cachedReviewNoteAnchor(
 const placedLine = ({ note, anchor }: PlacedReviewNote) =>
   anchor.kind === "exact" || anchor.kind === "moved" ? anchor.startLine : note.startLine;
 
+/** The item's file as the diff names it, from the repository root. */
+export function reviewItemDiffPath(
+  note: ReviewItem,
+  roots: {
+    readonly workspaceRoot: string | undefined;
+    readonly repositoryRoot: string | undefined;
+  },
+): string {
+  return note.kind === "review_comment_thread" && note.pathBase === "diff"
+    ? note.path
+    : diffPathForWorkspaceFile({ filePath: note.path, ...roots });
+}
+
 /**
  * The notes on the shown files, in the order the viewer shows them. A note names its file from the
  * workspace root, as the agent did; the diff names it from the repository root.
  */
 export function placeReviewNotes(
-  notes: ReadonlyArray<ReviewNote>,
+  notes: ReadonlyArray<ReviewItem>,
   files: ReadonlyArray<{
     readonly fileDiff: FileDiffMetadata;
     readonly fileKey: string;
@@ -166,7 +208,7 @@ export function placeReviewNotes(
 ): PlacedReviewNote[] {
   const placed: Array<{ readonly order: number; readonly placed: PlacedReviewNote }> = [];
   for (const note of notes) {
-    const diffPath = diffPathForWorkspaceFile({ filePath: note.path, ...roots });
+    const diffPath = reviewItemDiffPath(note, roots);
     const named = files.findIndex(({ fileDiff }) => fileDiff.name === diffPath);
     const order =
       named >= 0 ? named : files.findIndex(({ fileDiff }) => fileDiff.prevName === diffPath);

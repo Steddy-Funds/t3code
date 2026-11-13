@@ -9,6 +9,8 @@ import {
   OrchestratorMcpEnvironmentUnlinkResult,
   OrchestratorMcpFlagForReviewInput,
   OrchestratorMcpFlagForReviewResult,
+  OrchestratorMcpReplyToReviewCommentInput,
+  OrchestratorMcpReplyToReviewCommentResult,
   OrchestratorMcpCreateThreadsInput,
   OrchestratorMcpCreateThreadsResult,
   OrchestratorMcpDelegateTaskInput,
@@ -227,6 +229,20 @@ const FlagForReviewTool = Tool.make("flag_for_review", {
   .annotate(Tool.Idempotent, true)
   .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenWhileReviewNotesOff);
 
+const ReplyToReviewCommentTool = Tool.make("reply_to_review_comment", {
+  description:
+    "Answers a review comment the user left on lines, shown under it in their diff. Use it for every comment a message carries, after you act on it: what you changed, or why not. Never blocks.",
+  parameters: OrchestratorMcpReplyToReviewCommentInput,
+  success: OrchestratorMcpReplyToReviewCommentResult,
+  failure: OrchestratorMcpFailure,
+  failureMode: "return",
+  dependencies: reviewNoteDependencies,
+})
+  .annotate(Tool.Title, "Reply to a review comment")
+  .annotate(Tool.Destructive, false)
+  .annotate(Tool.Idempotent, true)
+  .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenWhileReviewNotesOff);
+
 const CreateThreadsTool = Tool.make("create_threads", {
   description:
     "Create new top-level threads in this checkout. Not delegation. One thread or its own worktree: `t3_thread_launch`. Project, branch, and worktree inherit.",
@@ -379,6 +395,7 @@ export const OrchestratorToolkit = Toolkit.make(
   DeleteScheduledTaskTool,
   RequestSecretTool,
   FlagForReviewTool,
+  ReplyToReviewCommentTool,
   CreateThreadsTool,
   ThreadListTool,
   ThreadReadTool,

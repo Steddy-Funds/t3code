@@ -321,6 +321,9 @@ export function summarizeT3ToolCalls(
         quantity(selected.length, "change for review", "changes for review"),
       );
       break;
+    case "review-reply":
+      label = phrase("Replied to", "reply to", quantity(selected.length, "review comment"));
+      break;
     case "worktree-handoff":
       label = phrase(
         "Handed off to",

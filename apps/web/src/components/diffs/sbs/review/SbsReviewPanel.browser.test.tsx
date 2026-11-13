@@ -136,7 +136,12 @@ const notesOf = (
   placed: ReadonlyArray<PlacedReviewNote>,
   onDismiss: DiffReviewNotes["onDismiss"] = () => undefined,
   answered: ReadonlyArray<TurnItemId> = [],
-): DiffReviewNotes => ({ placed, answeredIds: new Set(answered), onDismiss });
+): DiffReviewNotes => ({
+  placed,
+  answeredIds: new Set(answered),
+  conversations: new Map(),
+  onDismiss,
+});
 
 const NO_NOTES = notesOf([]);
 

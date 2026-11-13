@@ -73,7 +73,7 @@ import {
 } from "@t3tools/shared/toolOutput";
 import { htmlRenderReferencesEqual, type HtmlRenderReference } from "@t3tools/shared/htmlRender";
 import { mcpAppReferencesEqual, type McpAppReference } from "@t3tools/shared/mcpApp";
-import type { ReviewNote } from "@t3tools/shared/reviewNote";
+import type { ReviewNote, ReviewReply } from "@t3tools/shared/reviewNote";
 import { dynamicToolTitle } from "@t3tools/shared/toolActivity";
 import { formatWorkspaceRelativePath } from "../../filePathDisplay";
 import {
@@ -94,7 +94,8 @@ function timelineEntryRunId(entry: TimelineEntry): RunId | null {
     entry.kind === "html-render" ||
     entry.kind === "mcp-app" ||
     entry.kind === "machine-card" ||
-    entry.kind === "review-note"
+    entry.kind === "review-note" ||
+    entry.kind === "review-reply"
   ) {
     return entry.runId;
   }
@@ -660,6 +661,12 @@ type MessagesTimelineRowContent =
       note: ReviewNote;
     }
   | {
+      kind: "review-reply";
+      id: string;
+      createdAt: string;
+      reply: ReviewReply;
+    }
+  | {
       kind: "mcp-app";
       id: string;
       createdAt: string;
@@ -825,6 +832,7 @@ function deriveSupersededAttemptFolds(
       entry.kind === "mcp-app" ||
       entry.kind === "machine-card" ||
       entry.kind === "review-note" ||
+      entry.kind === "review-reply" ||
       timelineEntryIsPersistentResourceCard(entry) ||
       liveSubagentEntryIds.has(entry.id) ||
       (entry.kind === "work" && entry.entry.itemType === "system_notice")
@@ -2130,6 +2138,16 @@ export function deriveMessagesTimelineRows(input: {
       continue;
     }
 
+    if (timelineEntry.kind === "review-reply") {
+      nextRows.push({
+        kind: "review-reply",
+        id: timelineEntry.id,
+        createdAt: timelineEntry.createdAt,
+        reply: timelineEntry.reply,
+      });
+      continue;
+    }
+
     if (timelineEntry.kind === "mcp-app") {
       nextRows.push({
         kind: "mcp-app",
@@ -2635,6 +2653,9 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
     case "review-note":
       // The server records a note once and never edits it.
       return a.note.id === (b as typeof a).note.id;
+
+    case "review-reply":
+      return a.reply.id === (b as typeof a).reply.id;
 
     case "mcp-app": {
       const bm = b as typeof a;

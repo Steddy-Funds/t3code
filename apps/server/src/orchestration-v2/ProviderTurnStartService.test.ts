@@ -4,6 +4,7 @@ import { expect, it, vi } from "vite-plus/test";
 import { it as effectIt } from "@effect/vitest";
 import {
   CheckpointScopeId,
+  ComposerContextId,
   ContextHandoffId,
   ContextTransferId,
   GitCommandError,
@@ -67,11 +68,14 @@ const normalize = (target: string) => {
   }
   return `/${parts.join("/")}`;
 };
-const layerWorktreeLocation = (worktreesDir = managedWorktreesDir) =>
+const layerWorktreeLocation = (
+  worktreesDir = managedWorktreesDir,
+  settings: Parameters<typeof ServerSettings.layerTest>[0] = {},
+) =>
   Layer.mergeAll(
     Path.layer,
     Layer.mock(ServerConfig.ServerConfig)({ worktreesDir } as ServerConfig.ServerConfig["Service"]),
-    ServerSettings.layerTest(),
+    ServerSettings.layerTest(settings),
   );
 
 function startWithMissingWorktree(
@@ -269,6 +273,8 @@ it.each([
 
 function makeLocalCommandHarness(input: {
   readonly text: string;
+  readonly context?: OrchestrationV2ThreadProjection["messages"][number]["context"];
+  readonly agentReviewNotesEnabled?: boolean;
   readonly worktreePath?: string;
   readonly worktreesDir?: string;
   readonly workspaceRoot?: string;
@@ -368,6 +374,7 @@ function makeLocalCommandHarness(input: {
     nodeId: rootNodeId,
     role: "user",
     text: input.text,
+    ...(input.context === undefined ? {} : { context: input.context }),
     attachments: [],
     streaming: false,
     createdBy: "user",
@@ -972,7 +979,12 @@ function makeLocalCommandHarness(input: {
             }),
         }),
         IdAllocator.layer,
-        layerWorktreeLocation(input.worktreesDir),
+        layerWorktreeLocation(
+          input.worktreesDir,
+          input.agentReviewNotesEnabled === undefined
+            ? {}
+            : { agentReviewNotesEnabled: input.agentReviewNotesEnabled },
+        ),
         input.fileSystem === undefined
           ? FileSystem.layerNoop({ exists: () => Effect.succeed(true) })
           : Layer.succeed(FileSystem.FileSystem, input.fileSystem),
@@ -1423,6 +1435,43 @@ effectIt.effect.each([
         }
       }
       expect(harness.projection().messages.at(-1)?.text).toBe(text);
+    }),
+);
+
+effectIt.effect.each([true, false])(
+  "asks for an inline reply to a review comment only while agents can send one: %s",
+  (agentReviewNotesEnabled) =>
+    Effect.gen(function* () {
+      const harness = makeLocalCommandHarness({
+        text: "Look at [client.ts +21](t3-context://v1/review-comment/ctx_retry)",
+        promptedTurn: true,
+        agentReviewNotesEnabled,
+        context: {
+          version: 1,
+          records: [
+            {
+              version: 1,
+              kind: "review-comment",
+              contextId: ComposerContextId.make("ctx_retry"),
+              label: "client.ts +21",
+              sectionId: "turn:run-1",
+              sectionTitle: "Turn 1",
+              filePath: "src/client.ts",
+              startIndex: 0,
+              endIndex: 0,
+              rangeLabel: "+21",
+              text: "Only retry GETs.",
+              diff: "@@ -21,1 +21,1 @@\n-  retries = 0,\n+  retries = 3,",
+            },
+          ],
+        },
+      });
+
+      yield* harness.start;
+
+      const prompt = harness.startTurn.mock.calls[0]?.[0].message.text ?? "";
+      expect(prompt).toContain("Only retry GETs.");
+      expect(prompt.includes("reply_to_review_comment")).toBe(agentReviewNotesEnabled);
     }),
 );
 

@@ -62,6 +62,33 @@ describe("sbsSplitOf", () => {
 
     expect(sbsSplitOf(document, layer, "additions", 0)).toBeNull();
   });
+
+  it("keeps only the part of a move's other end that its block holds", () => {
+    // Whitespace ignored, say: a line inside the move shows unchanged and cuts it in two blocks.
+    const before = ["parseOne(rows);", "parseTwo(rows);", "parseThree(rows);", "}", "four(1);"];
+    const parser = parseDiffFromFile(fileOf("a.ts", before), fileOf("a.ts", ["}", "kept();"]));
+    const document = buildSbsDocument(parser);
+    const move = {
+      side: "deletions" as const,
+      startLine: 1,
+      endLine: 5,
+      counterpart: { filePath: "b.ts", sameFile: false, startLine: 10, endLine: 14 },
+      label: "→ b.ts:10",
+      place: "b.ts:10-14",
+      description: "Moved to b.ts:10-14",
+    };
+    const layer = sbsMoveLayerOf(document, [move]);
+
+    const first = sbsSplitOf(document, layer, "deletions", 0)!;
+    expect(first.block).toEqual({ start: 0, end: 3 });
+    expect(first.pieces.map((piece) => [piece.counterpart, piece.place])).toEqual([
+      [{ startLine: 10, endLine: 12 }, "b.ts:10-12"],
+    ]);
+    const second = sbsSplitOf(document, layer, "deletions", 4)!;
+    expect(second.pieces.map((piece) => [piece.counterpart, piece.place])).toEqual([
+      [{ startLine: 14, endLine: 14 }, "b.ts:14"],
+    ]);
+  });
 });
 
 describe("sbsSplitCardOf", () => {

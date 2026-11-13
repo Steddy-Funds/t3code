@@ -1,11 +1,12 @@
 import type { ScopedThreadRef } from "@t3tools/contracts";
 import { type ReviewNote, type ReviewReply, reviewNoteSectionId } from "@t3tools/shared/reviewNote";
-import { BotMessageSquareIcon, FileDiffIcon, ReplyIcon } from "lucide-react";
+import { BotMessageSquareIcon, FileDiffIcon, FileTextIcon, ReplyIcon } from "lucide-react";
 import { type ReactNode, use } from "react";
 
 import type { DraftId } from "~/composerDraftStore";
 import { diffPathForWorkspaceFile } from "~/diffFileActions";
 import { cn } from "~/lib/utils";
+import { useRightPanelStore } from "~/rightPanelStore";
 import { useProject, useQuietThreadShell } from "~/state/entities";
 import {
   buildReviewNoteReply,
@@ -247,10 +248,6 @@ export function ReviewReplyCard({ reply }: { reply: ReviewReply }) {
   const ctx = use(TimelineRowCtx);
   const { threads, conversations } = useThreadReviewNotes(ctx.threadRef);
   const threadRef = ctx.threadRef;
-  const thread = useQuietThreadShell(threadRef);
-  const project = useProject(
-    thread?.projectId ? { environmentId: thread.environmentId, projectId: thread.projectId } : null,
-  );
   const reviewThread = threads.find(
     (candidate) =>
       candidate.id === reply.commentId ||
@@ -275,24 +272,25 @@ export function ReviewReplyCard({ reply }: { reply: ReviewReply }) {
             </Tooltip>
             <span className="shrink-0 text-muted-foreground">{comment.rangeLabel}</span>
           </div>
-          {showInDiff && threadRef && reviewThread ? (
+          {threadRef && reviewThread?.pathBase === "workspace" ? (
+            // A file-viewer comment is on the file as it reads now, not on a turn's diff.
+            <IconAction
+              label="Show in file"
+              wideLabel
+              onClick={() =>
+                useRightPanelStore
+                  .getState()
+                  .openFile(threadRef, reviewThread.path, reviewThread.startLine)
+              }
+            >
+              <FileTextIcon className="size-3" />
+            </IconAction>
+          ) : showInDiff && threadRef && reviewThread ? (
             <IconAction
               label="Show in diff"
               wideLabel
               onClick={() => {
-                showInDiff(
-                  reviewThread.runId ?? reply.runId,
-                  reviewThread.pathBase === "diff"
-                    ? reviewThread.path
-                    : diffPathForWorkspaceFile({
-                        filePath: reviewThread.path,
-                        workspaceRoot: ctx.workspaceRoot,
-                        repositoryRoot:
-                          thread?.worktreePath == null
-                            ? project?.repositoryIdentity?.rootPath
-                            : undefined,
-                      }),
-                );
+                showInDiff(reviewThread.runId ?? reply.runId, reviewThread.path);
                 useReviewNoteRevealStore.getState().request(threadRef, reviewThread.id);
               }}
             >

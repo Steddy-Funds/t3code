@@ -123,10 +123,11 @@ describe("Go to Declaration in a stacked or split diff", () => {
         {viewer("unified", onTokenActivate)}
       </>,
     );
-    const { token } = await rendered(screen.container, "gamma");
+    const { token, x, y } = await rendered(screen.container, "gamma");
     using keys = keydownsSeen();
 
-    await userEvent.click(token);
+    const box = token.getBoundingClientRect();
+    await userEvent.click(token, { position: { x: x - box.left, y: y - box.top } });
     expect(onTokenActivate).not.toHaveBeenCalled();
     await userEvent.keyboard(MOD_B);
 

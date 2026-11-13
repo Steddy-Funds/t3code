@@ -771,7 +771,7 @@ describe("diffSideRevision", () => {
   });
 
   it("has no old side for an added file", async () => {
-    const load = vi.fn(async () => ({ oldFile: undefined, newFile: wholeFiles.newFile }));
+    const load = vi.fn(async () => ({ newFile: wholeFiles.newFile }));
 
     await expect(diffSideRevision(patch(), "deletions", load)).resolves.toBeNull();
   });

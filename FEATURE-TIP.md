@@ -102,6 +102,7 @@ The Mac runs this tip, which already has them all.
 - #90 Code intelligence follow-ups (cold `tsc` seeding, ty name ranges, libraryRoots per package, status backoff, optional `enabled` on status): server half only (11 picks), since the branch carries the tip
 - #92 Diff and review stitch (a fork's review notes get their own ids and reply sections; a note stored before keeps its id): server half only (3 picks), with the shared `reviewNote` module its test reads
 - #91 Code stitch (how each file changed in working-tree status, worktree renames, a Python environment set under a symlinked workspace, the side-by-side diff's Mod+B as a late default): server half only (8 picks), since the branch carries the tip
+- #102 Inline review (`reply_to_review_comment` MCP tool, `review_reply.record`, the inline-reply hint on review comments while `agentReviewNotesEnabled` is on): server half only (`35cd774`, one commit), since the branch carries the tip
 
 A feature that changes `apps/server`, or a contract the server reads, is
 merged there too: its branch head with `--no-ff`, never this tip.

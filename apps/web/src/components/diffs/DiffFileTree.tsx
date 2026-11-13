@@ -101,7 +101,9 @@ export function DiffFileTree({
     };
   });
   // The panel builds a new map each render; only a changed count redraws the rows.
-  const countsKey = JSON.stringify(Array.from(agentCommentCounts));
+  const countsKey = JSON.stringify(
+    Array.from(agentCommentCounts).toSorted(([left], [right]) => left.localeCompare(right)),
+  );
   const handledRevealRef = useRef<{
     path: string;
     revealRequestId: number;

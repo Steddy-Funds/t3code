@@ -710,6 +710,22 @@ describe("useDiffCodeNavigation", () => {
       const after = document.querySelector("[data-code-nav-popup]")!.getBoundingClientRect();
       expect([after.left, after.top]).toEqual([before.left, before.top]);
     });
+
+    it("opens where the token was when the view redrew it before the answer came", async () => {
+      setup();
+      await using _screen = await render(<Harness context={context} />);
+      using _timers = fakeTimers();
+      await click("activate");
+      const anchor = tokenElement("first").getBoundingClientRect();
+
+      tokenElement("first").remove();
+      await settle(0, answer([]));
+
+      await expect.element(status()).toBeVisible();
+      const popup = document.querySelector("[data-code-nav-popup]")!.getBoundingClientRect();
+      expect(popup.top).toBeGreaterThanOrEqual(anchor.bottom - 1);
+      expect(Math.abs(popup.left - anchor.left)).toBeLessThan(2);
+    });
   });
 });
 

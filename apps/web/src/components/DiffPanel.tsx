@@ -1563,6 +1563,24 @@ export default function DiffPanel({
               )
             ) : lazySource || renderablePatch?.kind === "files" ? (
               <div className="flex min-h-0 flex-1 overflow-hidden">
+                {fileTreeOpen ? (
+                  <FileExplorerPane
+                    side="left"
+                    resizable
+                    storageKey="t3code:diff-file-tree-width"
+                    defaultWidthFraction={0.4}
+                    resizeLabel="Resize Changes files"
+                  >
+                    <DiffFileTree
+                      ariaLabel={`${reviewSectionTitle} files`}
+                      entries={fileTreeEntries}
+                      agentCommentCounts={reviewNotes.sentCommentCounts}
+                      selectedPath={treeSelectedPath}
+                      revealRequestId={selectedFileRevealRequestId}
+                      onSelectFile={revealDiffFile}
+                    />
+                  </FileExplorerPane>
+                ) : null}
                 {sideBySide ? (
                   <div ref={observeDiffArea} className="flex min-h-0 min-w-0 flex-1">
                     <SbsReviewPanel
@@ -1752,23 +1770,6 @@ export default function DiffPanel({
                     {codeNavigation.popup}
                   </div>
                 )}
-                {fileTreeOpen ? (
-                  <FileExplorerPane
-                    resizable
-                    storageKey="t3code:diff-file-tree-width"
-                    defaultWidthFraction={0.4}
-                    resizeLabel="Resize Changes files"
-                  >
-                    <DiffFileTree
-                      ariaLabel={`${reviewSectionTitle} files`}
-                      entries={fileTreeEntries}
-                      agentCommentCounts={reviewNotes.sentCommentCounts}
-                      selectedPath={treeSelectedPath}
-                      revealRequestId={selectedFileRevealRequestId}
-                      onSelectFile={revealDiffFile}
-                    />
-                  </FileExplorerPane>
-                ) : null}
               </div>
             ) : (
               <div className="min-h-0 flex-1 overflow-auto p-2">

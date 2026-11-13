@@ -1000,7 +1000,10 @@ export function SideBySideDiffView<T = unknown>(props: SideBySideDiffViewProps<T
   };
 
   const openSplitPiece = (mark: SbsMoveMark) => {
+    const side = split?.side;
     flushSync(() => setSplitAt(null));
+    // The card's button is gone; a move with nowhere to go would leave focus on nothing.
+    if (side) scrollers.current[side]?.focus({ preventScroll: true });
     followMove(mark);
   };
 
@@ -1023,7 +1026,8 @@ export function SideBySideDiffView<T = unknown>(props: SideBySideDiffViewProps<T
   };
 
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (event.defaultPrevented || MODIFIER_KEYS.has(event.key)) return;
+    // The panes are inert under the split view: the keys here are its own.
+    if (split || event.defaultPrevented || MODIFIER_KEYS.has(event.key)) return;
     const mod = event.metaKey || event.ctrlKey;
     const plainMod = mod && !event.altKey && !event.shiftKey;
     const key = event.key.toLowerCase();
@@ -1354,8 +1358,8 @@ export function SideBySideDiffView<T = unknown>(props: SideBySideDiffViewProps<T
     <SbsSplitView
       document={model}
       split={split}
-      cards={split.pieces.map(({ mark }) => {
-        const { counterpart } = mark.move;
+      cards={split.pieces.map((piece) => {
+        const { counterpart } = piece.mark.move;
         const cardSide = otherSide(split.side);
         const source = counterpart.sameFile
           ? model
@@ -1363,7 +1367,12 @@ export function SideBySideDiffView<T = unknown>(props: SideBySideDiffViewProps<T
         return {
           document: source,
           card: source
-            ? sbsSplitCardOf(source, cardSide, counterpart.startLine, counterpart.endLine)
+            ? sbsSplitCardOf(
+                source,
+                cardSide,
+                piece.counterpart.startLine,
+                piece.counterpart.endLine,
+              )
             : null,
           highlightedRows: counterpart.sameFile ? highlightedRows[cardSide] : null,
         };

@@ -50,7 +50,7 @@ function summaryOf(split: SbsSplit): string {
   const files = new Set(split.pieces.map((piece) => piece.mark.move.counterpart.filePath)).size;
   const places =
     split.pieces.length === 1
-      ? split.pieces[0]!.mark.move.place
+      ? split.pieces[0]!.place
       : `${plural(split.pieces.length, "place", "places")}${files > 1 ? ` in ${files} files` : ""}`;
   return split.side === "deletions"
     ? `${lines} removed here, moved to ${places}`
@@ -172,7 +172,7 @@ export function SbsSplitView(props: SbsSplitViewProps) {
               className="sbs-split-card-title"
               onClick={() => props.onOpenPiece(piece.mark)}
             >
-              <span className="truncate">{move.place}</span>
+              <span className="truncate">{piece.place}</span>
               <span className="sbs-split-card-count">{plural(lineCount, "line", "lines")}</span>
             </button>
             {card ? (
@@ -241,9 +241,9 @@ export function SbsSplitView(props: SbsSplitViewProps) {
     showPiece(target?.closest("[data-piece]")?.getAttribute("data-piece") ?? null);
   };
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    // The file view underneath must not take the keys meant for this one.
-    event.stopPropagation();
     if (event.key !== "Escape") return;
+    // Escape closes this layer only, not the panel around it.
+    event.stopPropagation();
     event.preventDefault();
     props.onClose();
   };

@@ -2769,8 +2769,8 @@ code {
 }
 
 /* A moved line opens where its block went on a click. */
-.sbs-row[data-tint="moved"] .sbs-code,
-.sbs-row[data-tint="moved-out"] .sbs-code {
+[data-sbs-pane] .sbs-row[data-tint="moved"] .sbs-code,
+[data-sbs-pane] .sbs-row[data-tint="moved-out"] .sbs-code {
   cursor: pointer;
 }
 

@@ -6,13 +6,17 @@ import {
   type SbsLineRange,
   type SbsSide,
 } from "./sbsModel";
-import type { SbsMoveLayer, SbsMoveMark } from "./sbsMoves";
+import { sbsMovePlaceOf, type SbsMoveLayer, type SbsMoveMark } from "./sbsMoves";
 
 /** One place a block's code went to, or came from. */
 export interface SbsSplitPiece {
   readonly mark: SbsMoveMark;
   /** The piece's lines in the block, counted from the block's first line. */
   readonly rows: SbsLineRange;
+  /** The other end's file lines for just these rows: a move can run past its block. */
+  readonly counterpart: { readonly startLine: number; readonly endLine: number };
+  /** Where these rows went, as `move.place` says it. */
+  readonly place: string;
 }
 
 /** A changed block with moved code in it, opened to show where each piece went. */
@@ -40,13 +44,19 @@ export function sbsSplitOf(
   const block = change[side];
   const pieces = moves.marks[side]
     .filter((mark) => mark.range.start < block.end && block.start < mark.range.end)
-    .map((mark) => ({
-      mark,
-      rows: {
-        start: Math.max(mark.range.start, block.start) - block.start,
-        end: Math.min(mark.range.end, block.end) - block.start,
-      },
-    }))
+    .map((mark) => {
+      const start = Math.max(mark.range.start, block.start);
+      const end = Math.min(mark.range.end, block.end);
+      // A move matches line for line, so an offset into one end is the same into the other.
+      const startLine = mark.move.counterpart.startLine + (start - mark.range.start);
+      const endLine = mark.move.counterpart.startLine + (end - 1 - mark.range.start);
+      return {
+        mark,
+        rows: { start: start - block.start, end: end - block.start },
+        counterpart: { startLine, endLine },
+        place: sbsMovePlaceOf(mark.move, startLine, endLine),
+      };
+    })
     .sort((left, right) => left.rows.start - right.rows.start);
   if (pieces.length === 0) return null;
 

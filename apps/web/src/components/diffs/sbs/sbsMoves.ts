@@ -154,6 +154,14 @@ function placeOf(
   return sameFile ? span : `${shownPath(end.path)}:${span.slice(1)}`;
 }
 
+/** A move's place narrowed to some of its other end's lines: `b.ts:10-14` → `b.ts:10-12`. */
+export function sbsMovePlaceOf(move: SbsMove, startLine: number, endLine: number): string {
+  const { counterpart } = move;
+  const whole = lineSpan(counterpart.startLine, counterpart.endLine).slice(1);
+  const part = lineSpan(startLine, endLine).slice(1);
+  return move.place.slice(0, move.place.length - whole.length) + part;
+}
+
 function lineEnds(end: { startLine: number; endLine: number }) {
   return { startLine: end.startLine, endLine: end.endLine };
 }

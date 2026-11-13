@@ -115,6 +115,20 @@ export function wordAtTarget(target: CodePointerTarget): CodeWordHit | null {
   };
 }
 
+/** A DOM range over a word hit, inside its token: rows can repeat a line number (a diff's sides). */
+export function wordHitRange(hit: CodeWordHit): Range | null {
+  const start = tokenStart(hit.token);
+  if (start === null) return null;
+  const pieces = textPieces(hit.token);
+  const from = pointInPieces(pieces, hit.range.start.character - start);
+  const to = pointInPieces(pieces, hit.range.end.character - start);
+  if (from === null || to === null) return null;
+  const range = document.createRange();
+  range.setStart(from.node, from.offset);
+  range.setEnd(to.node, to.offset);
+  return range;
+}
+
 function rowElement(root: ParentNode, line: number): Element | null {
   return root.querySelector(`[data-line="${line + 1}"]`);
 }
@@ -167,6 +181,9 @@ export function setCodeHighlight(name: CodeHighlightName, ranges: ReadonlyArray<
   if (ranges.length === 0) CSS.highlights.delete(name);
   else CSS.highlights.set(name, new Highlight(...ranges));
 }
+
+/** Marks a view whose words are links under a held Cmd, outside a `code` focus scope (a diff). */
+export const CODE_LINKS_ATTRIBUTE = "data-code-links";
 
 export const CODE_NAVIGATION_UNSAFE_CSS = `
   ::highlight(t3-code-link) {

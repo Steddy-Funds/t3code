@@ -1844,6 +1844,7 @@ export function PullRequestDetailPanel({
                     refreshToken={refreshToken}
                     backgroundRefreshToken={turnRefresh ?? 0}
                     revealRequest={codeRevealRequest}
+                    threadRef={threadRef}
                   />
                 </Suspense>
               </div>

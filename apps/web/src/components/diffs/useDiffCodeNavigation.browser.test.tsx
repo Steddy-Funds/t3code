@@ -1,3 +1,5 @@
+import { type FileDiffMetadata, parseDiffFromFile } from "@pierre/diffs";
+import { parsePatchFiles } from "@pierre/diffs/utils/parsePatchFiles";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { CodeIntelUnsupportedError } from "@t3tools/client-runtime/state/code-intel";
 import {
@@ -7,12 +9,13 @@ import {
   EnvironmentId,
   ThreadId,
 } from "@t3tools/contracts";
+import { fileContentRevision } from "@t3tools/shared/fileContentRevision";
 import * as Cause from "effect/Cause";
 import { AsyncResult } from "effect/reactivity";
 import { describe, expect, it, vi } from "vite-plus/test";
 import { page } from "vite-plus/test/browser";
 
-import { act, fakeTimers, render } from "../../../../test/render";
+import { act, fakeTimers, render } from "../../../test/render";
 
 // Each query waits until the test settles it, so a lookup can be superseded or dropped while it runs.
 const mocks = vi.hoisted(() => ({
@@ -22,6 +25,11 @@ const mocks = vi.hoisted(() => ({
     settle: (result: unknown) => void;
   }>,
   navigateToCodeLocation: vi.fn(),
+  thread: null as { worktreePath: string | null } | null,
+  project: null as {
+    workspaceRoot: string;
+    repositoryIdentity: { rootPath: string } | null;
+  } | null,
 }));
 
 vi.mock(import("@t3tools/client-runtime/state/runtime"), async (original) => ({
@@ -34,6 +42,14 @@ vi.mock(import("@t3tools/client-runtime/state/runtime"), async (original) => ({
 vi.mock(import("~/state/codeIntel"), () => ({
   codeIntelEnvironment: { definition: (request: unknown) => request } as never,
 }));
+vi.mock(import("~/state/entities"), async (original) => ({
+  ...(await original()),
+  useQuietThreadShell: ((ref: unknown) =>
+    ref === null || mocks.thread === null
+      ? null
+      : { environmentId: "env-sbs", projectId: "project-1", ...mocks.thread }) as never,
+  useProject: ((ref: unknown) => (ref === null ? null : mocks.project)) as never,
+}));
 vi.mock(import("~/components/code/navigation"), () => ({
   codeNavigationThreadKey: () => "thread",
   navigateToCodeLocation: mocks.navigateToCodeLocation,
@@ -41,16 +57,18 @@ vi.mock(import("~/components/code/navigation"), () => ({
 }));
 
 import {
+  type DiffCodeNavigationContext,
+  type DiffTokenActivation,
+  diffSideRevision,
   NOT_CURRENT_VERSION,
   OUTSIDE_PROJECT,
-  type SbsCodeNavigationContext,
-  useSbsCodeNavigation,
-} from "./useSbsCodeNavigation";
-import type { SbsTokenActivation } from "./SideBySideDiffView";
+  useDiffCodeNavigation,
+  useThreadCodeNavigationContext,
+} from "./useDiffCodeNavigation";
 
 const REVISION = "rev-current";
 const threadRef = scopeThreadRef(EnvironmentId.make("env-sbs"), ThreadId.make("thread-sbs"));
-const context: SbsCodeNavigationContext = {
+const context: DiffCodeNavigationContext = {
   environmentId: threadRef.environmentId,
   cwd: "/repo",
   repositoryRoot: undefined,
@@ -63,11 +81,13 @@ const declaration: CodeLocation = {
 };
 const other: CodeLocation = { ...declaration, path: "src/other.ts" };
 
-type ActivationOverrides = Partial<Omit<SbsTokenActivation, "anchor">>;
+type ActivationOverrides = Partial<Omit<DiffTokenActivation, "anchor">>;
 
 function setup() {
   mocks.queries.length = 0;
   mocks.navigateToCodeLocation.mockReset();
+  mocks.thread = null;
+  mocks.project = null;
   for (const token of document.querySelectorAll("[data-test-token]")) token.remove();
 }
 
@@ -88,14 +108,16 @@ function tokenElement(id: string): HTMLElement {
 }
 
 function Harness(props: {
-  readonly context: SbsCodeNavigationContext | null;
+  readonly context: DiffCodeNavigationContext | null;
   readonly shownFile?: string | null;
   readonly onOpenFile?: (filePath: string, line?: number) => void;
   readonly filePath?: string;
   readonly activation?: ActivationOverrides;
   readonly second?: ActivationOverrides;
+  /** A stacked or split view's word in this diff. */
+  readonly codeViewDiff?: FileDiffMetadata;
 }) {
-  const navigation = useSbsCodeNavigation(
+  const navigation = useDiffCodeNavigation(
     props.context,
     props.shownFile === undefined ? "src/main.ts" : props.shownFile,
     props.onOpenFile ?? (() => {}),
@@ -107,7 +129,6 @@ function Harness(props: {
         side: "additions",
         line: 3,
         character: 4,
-        modifiers: { meta: true, ctrl: false, alt: false, shift: false },
         revision: REVISION,
         anchor,
         ...overrides,
@@ -124,6 +145,19 @@ function Harness(props: {
       <button type="button" onClick={() => activate(props.second, "second")}>
         activate again
       </button>
+      {props.codeViewDiff ? (
+        <button
+          type="button"
+          onClick={() =>
+            navigation.onCodeViewTokenActivate?.(
+              { side: "additions", line: 2, character: 6, anchor: tokenElement("first") },
+              props.codeViewDiff!,
+            )
+          }
+        >
+          activate in code view
+        </button>
+      ) : null}
       {navigation.popup}
     </div>
   );
@@ -147,7 +181,40 @@ const click = (name: string) =>
   act(() => (page.getByRole("button", { name }).element() as HTMLElement).click());
 const status = () => page.getByRole("status");
 
-describe("useSbsCodeNavigation", () => {
+function ThreadContext() {
+  return <output>{JSON.stringify(useThreadCodeNavigationContext(threadRef))}</output>;
+}
+
+describe("useThreadCodeNavigationContext", () => {
+  it.each([
+    {
+      name: "a worktree thread asks in its worktree, whatever the project's folder",
+      thread: { worktreePath: "/worktrees/feature" },
+      expected: { cwd: "/worktrees/feature", repositoryRoot: undefined },
+    },
+    {
+      name: "a local thread asks in its project's folder, under the repository's root",
+      thread: { worktreePath: null },
+      expected: { cwd: "/repo/app", repositoryRoot: "/repo" },
+    },
+  ])("$name", async ({ thread, expected }) => {
+    setup();
+    mocks.thread = thread;
+    mocks.project = { workspaceRoot: "/repo/app", repositoryIdentity: { rootPath: "/repo" } };
+    await using screen = await render(<ThreadContext />);
+
+    const shown = JSON.parse(screen.container.querySelector("output")!.textContent!);
+    expect(shown).toEqual({ environmentId: threadRef.environmentId, ...expected, threadRef });
+  });
+
+  it("is null until the thread loads", async () => {
+    setup();
+    await using screen = await render(<ThreadContext />);
+    expect(screen.container.querySelector("output")!.textContent).toBe("null");
+  });
+});
+
+describe("useDiffCodeNavigation", () => {
   it("has no handler and renders nothing without a context", async () => {
     setup();
     await using screen = await render(<Harness context={null} />);
@@ -318,6 +385,109 @@ describe("useSbsCodeNavigation", () => {
 
       await expect.element(status()).toHaveTextContent(NOT_CURRENT_VERSION);
       expect(mocks.navigateToCodeLocation).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("a whole file still being read for its revision", () => {
+    function pending() {
+      let resolve: (revision: string | null) => void = () => {};
+      const revision = new Promise<string | null>((settle) => (resolve = settle));
+      return { revision, resolve };
+    }
+    const resolveRevision = (resolve: (revision: string | null) => void, value: string | null) =>
+      act(async () => {
+        resolve(value);
+        await vi.advanceTimersByTimeAsync(0);
+      });
+
+    it("asks once the revision is known, for that revision", async () => {
+      setup();
+      const read = pending();
+      await using _screen = await render(
+        <Harness context={context} activation={{ revision: read.revision }} />,
+      );
+      using _timers = fakeTimers();
+
+      await click("activate");
+      expect(mocks.queries).toHaveLength(0);
+      await resolveRevision(read.resolve, REVISION);
+
+      expect(mocks.queries).toHaveLength(1);
+      expect(mocks.queries[0]!.request).toMatchObject({
+        input: { document: { ifRevision: REVISION } },
+      });
+    });
+
+    it("offers the file without asking when the whole file cannot be read", async () => {
+      setup();
+      const read = pending();
+      await using _screen = await render(
+        <Harness context={context} activation={{ revision: read.revision }} />,
+      );
+      using _timers = fakeTimers();
+
+      await click("activate");
+      await resolveRevision(read.resolve, null);
+
+      await expect.element(status()).toHaveTextContent(NOT_CURRENT_VERSION);
+      expect(mocks.queries).toHaveLength(0);
+    });
+
+    it("never asks for a lookup a newer one replaced while its file was read", async () => {
+      setup();
+      const read = pending();
+      await using _screen = await render(
+        <Harness context={context} activation={{ revision: read.revision }} />,
+      );
+      using _timers = fakeTimers();
+
+      await click("activate");
+      await click("activate again");
+      await resolveRevision(read.resolve, REVISION);
+      expect(mocks.queries).toHaveLength(1);
+      await settle(0, answer([other]));
+
+      expect(mocks.navigateToCodeLocation).toHaveBeenCalledExactlyOnceWith(threadRef, other);
+    });
+
+    it("never asks once the view shows something else", async () => {
+      setup();
+      const read = pending();
+      await using screen = await render(
+        <Harness context={context} activation={{ revision: read.revision }} />,
+      );
+      using _timers = fakeTimers();
+
+      await click("activate");
+      await screen.rerender(
+        <Harness context={context} activation={{ revision: read.revision }} shownFile={null} />,
+      );
+      await resolveRevision(read.resolve, REVISION);
+
+      expect(mocks.queries).toHaveLength(0);
+      expect(page.getByRole("status").query()).toBeNull();
+    });
+  });
+
+  it("asks about a stacked view's word with its file's path and its side's revision", async () => {
+    setup();
+    const codeViewDiff = parseDiffFromFile(
+      { name: "src/main.ts", contents: "a\nb\n" },
+      { name: "src/main.ts", contents: "a\nconst c = 1;\n" },
+    );
+    await using _screen = await render(<Harness context={context} codeViewDiff={codeViewDiff} />);
+
+    await click("activate in code view");
+
+    expect(mocks.queries[0]!.request).toMatchObject({
+      input: {
+        document: {
+          cwd: "/repo",
+          path: "src/main.ts",
+          ifRevision: fileContentRevision("a\nconst c = 1;\n"),
+        },
+        position: { line: 1, character: 6 },
+      },
     });
   });
 
@@ -540,5 +710,85 @@ describe("useSbsCodeNavigation", () => {
       const after = document.querySelector("[data-code-nav-popup]")!.getBoundingClientRect();
       expect([after.left, after.top]).toEqual([before.left, before.top]);
     });
+
+    it("opens where the token was when the view redrew it before the answer came", async () => {
+      setup();
+      await using _screen = await render(<Harness context={context} />);
+      using _timers = fakeTimers();
+      await click("activate");
+      const anchor = tokenElement("first").getBoundingClientRect();
+
+      tokenElement("first").remove();
+      await settle(0, answer([]));
+
+      await expect.element(status()).toBeVisible();
+      const popup = document.querySelector("[data-code-nav-popup]")!.getBoundingClientRect();
+      expect(popup.top).toBeGreaterThanOrEqual(anchor.bottom - 1);
+      expect(Math.abs(popup.left - anchor.left)).toBeLessThan(2);
+    });
+  });
+});
+
+describe("diffSideRevision", () => {
+  const OLD = "one\ntwo\nthree\n";
+  const NEW = "one\n2\nthree\n";
+  const patch = () =>
+    parsePatchFiles("diff --git a/f.ts b/f.ts\n--- a/f.ts\n+++ b/f.ts\n@@ -2 +2 @@\n-two\n+2\n", {
+      cacheKeyPrefix: "patch",
+    })[0]!.files[0]!;
+  const wholeFiles = {
+    oldFile: { name: "f.ts", contents: OLD },
+    newFile: { name: "f.ts", contents: NEW },
+  };
+
+  it("gives each side of a whole-file diff its own text's revision", () => {
+    const whole = parseDiffFromFile(wholeFiles.oldFile, wholeFiles.newFile);
+
+    expect(diffSideRevision(whole, "deletions", undefined)).toBe(fileContentRevision(OLD));
+    expect(diffSideRevision(whole, "additions", undefined)).toBe(fileContentRevision(NEW));
+  });
+
+  it("has none for a patch's hunks when the whole files cannot be read", () => {
+    const hunks = patch();
+
+    expect(hunks.isPartial).toBe(true);
+    expect(diffSideRevision(hunks, "additions", undefined)).toBeNull();
+  });
+
+  it("reads a patch's whole files once, for both sides", async () => {
+    const hunks = patch();
+    const load = vi.fn(async () => wholeFiles);
+
+    const revisions = await Promise.all([
+      diffSideRevision(hunks, "additions", load),
+      diffSideRevision(hunks, "deletions", load),
+      diffSideRevision(hunks, "additions", load),
+    ]);
+
+    expect(revisions).toEqual([
+      fileContentRevision(NEW),
+      fileContentRevision(OLD),
+      fileContentRevision(NEW),
+    ]);
+    expect(load).toHaveBeenCalledOnce();
+  });
+
+  it("has none when reading the whole files fails, and reads them again on the next ask", async () => {
+    const hunks = patch();
+    const load = vi
+      .fn<() => Promise<typeof wholeFiles>>()
+      .mockRejectedValueOnce(new Error("gone"))
+      .mockResolvedValueOnce(wholeFiles);
+
+    await expect(diffSideRevision(hunks, "additions", load)).resolves.toBeNull();
+    await expect(diffSideRevision(hunks, "additions", load)).resolves.toBe(
+      fileContentRevision(NEW),
+    );
+  });
+
+  it("has no old side for an added file", async () => {
+    const load = vi.fn(async () => ({ oldFile: null, newFile: wholeFiles.newFile }));
+
+    await expect(diffSideRevision(patch(), "deletions", load)).resolves.toBeNull();
   });
 });

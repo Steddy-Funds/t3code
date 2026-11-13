@@ -112,7 +112,7 @@ import { observeResize } from "~/lib/observeResize";
 import { orchestrationEnvironment } from "../state/orchestration";
 import { SbsReviewPanel, type SbsNoteReveal } from "./diffs/sbs/review/SbsReviewPanel";
 import { SIDE_BY_SIDE_MIN_WIDTH } from "./diffs/sbs/SideBySideDiffPanel";
-import { useSbsCodeNavigation } from "./diffs/sbs/useSbsCodeNavigation";
+import { useDiffCodeNavigation } from "./diffs/useDiffCodeNavigation";
 
 import { observeIntersection } from "~/lib/observeIntersection";
 import { useReviewFilePatches } from "./diffs/useReviewFilePatches";
@@ -849,7 +849,7 @@ export default function DiffPanel({
       },
     });
   };
-  const sbsCodeNavigation = useSbsCodeNavigation(
+  const codeNavigation = useDiffCodeNavigation(
     routeThreadRef && activeCwd
       ? {
           environmentId: routeThreadRef.environmentId,
@@ -858,8 +858,13 @@ export default function DiffPanel({
           threadRef: routeThreadRef,
         }
       : null,
-    sideBySideShownFile ? `${collapseScopeKey}:${sideBySideShownFile.fileKey}` : null,
+    sideBySide
+      ? sideBySideShownFile
+        ? `${collapseScopeKey}:${sideBySideShownFile.fileKey}`
+        : null
+      : `stacked:${collapseScopeKey ?? reviewSectionId}`,
     openDiffFile,
+    currentLoadWholeFiles ? loadWholeFiles : undefined,
   );
   const toggleDiffFileCollapsed = useStableCallback((fileKey: string) => {
     const file = renderableFileEntries.find((file) => file.fileKey === fileKey);
@@ -1625,9 +1630,9 @@ export default function DiffPanel({
                       onRetryPatch={retry}
                       onOpenFile={openDiffFile}
                       workspaceRoot={activeCwd}
-                      onTokenActivate={sbsCodeNavigation.onTokenActivate}
+                      onTokenActivate={codeNavigation.onTokenActivate}
                     />
-                    {sbsCodeNavigation.popup}
+                    {codeNavigation.popup}
                   </div>
                 ) : (
                   <div
@@ -1729,6 +1734,7 @@ export default function DiffPanel({
                           }
                         : {})}
                       onRevealSearchMatch={unfoldDiffFile}
+                      onTokenActivate={codeNavigation.onCodeViewTokenActivate}
                       renderHeaderPrefix={(fileDiff, fileKey, collapsed) => {
                         return (
                           <DiffFileCollapseToggle
@@ -1761,6 +1767,7 @@ export default function DiffPanel({
                         ...(currentLoadDiffFiles ? { loadDiffFiles } : {}),
                       }}
                     />
+                    {codeNavigation.popup}
                   </div>
                 )}
               </div>

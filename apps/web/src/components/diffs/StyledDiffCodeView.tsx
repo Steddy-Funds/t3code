@@ -9,9 +9,14 @@ import {
 /* oxlint-enable eslint/no-restricted-imports */
 import type { Ref } from "react";
 
+import { CODE_NAVIGATION_UNSAFE_CSS } from "~/components/code/codeNavigationDom";
 import { useThemeEditorSurfaceCss } from "~/hooks/useDiffThemeName";
 import { DIFF_SURFACE_THEME_UNSAFE_CSS } from "~/lib/diffRendering";
 import { DiffWorkerPoolProvider } from "../DiffWorkerPoolProvider";
+import {
+  type DiffCodeViewTokenActivate,
+  useCodeViewTokenNavigation,
+} from "./useCodeViewTokenNavigation";
 
 export const DIFF_VIEW_UNSAFE_CSS = `${DIFF_SURFACE_THEME_UNSAFE_CSS}
 /* A 1fr track's automatic minimum grows with the currently mounted lines. In split
@@ -227,6 +232,8 @@ type StyledDiffCodeViewProps<LAnnotation> = (
   readonly options?: StyledDiffCodeViewOptions<LAnnotation>;
   readonly viewerRef?: Ref<CodeViewHandle<LAnnotation, undefined>>;
   readonly unsafeCSSExtra?: string;
+  /** Go to Declaration from a word: Cmd+click, the Cmd-hover link and the keymap's command. */
+  readonly onTokenActivate?: DiffCodeViewTokenActivate | undefined;
 };
 
 export function StyledDiffCodeView<LAnnotation = undefined>({
@@ -234,37 +241,57 @@ export function StyledDiffCodeView<LAnnotation = undefined>({
   viewerRef,
   className,
   unsafeCSSExtra,
+  onTokenActivate,
   ...props
 }: StyledDiffCodeViewProps<LAnnotation>) {
   const themeCss = useThemeEditorSurfaceCss();
+  const { setRoot, onTokenClick } = useCodeViewTokenNavigation(onTokenActivate);
   // A theme with its own editor colours keeps the diff on its code surface; the others blend
   // the diff into the panel it sits in.
   const surfaceClass = themeCss
     ? "diff-render-surface bg-(--code-background) outline-none"
     : "diff-render-surface [--code-background:var(--background)] outline-none";
   return (
-    <DiffWorkerPoolProvider>
-      <CodeView<LAnnotation>
-        {...props}
-        {...(viewerRef ? { ref: viewerRef } : {})}
-        className={className ? `${surfaceClass} ${className}` : surfaceClass}
-        options={{
-          ...options,
-          unsafeCSS: [DIFF_VIEW_UNSAFE_CSS, unsafeCSSExtra, themeCss].filter(Boolean).join("\n"),
-          itemMetrics: {
-            diffHeaderHeight: 32,
-            hunkSeparatorHeight: 24,
-            // Zero both spacing and paddingTop; Pierre's expanded-file fallback otherwise adds an 8px header
-            // gap.
-            spacing: 0,
-            paddingTop: 0,
-            // Include Pierre's 8px --diffs-gap-fallback in metrics or each expanded file loses a scrollable
-            // row.
-            paddingBottom: 8,
-          },
-          layout: { paddingTop: 0, paddingBottom: 0, gap: 0 },
-        }}
-      />
-    </DiffWorkerPoolProvider>
+    <div ref={setRoot} className="contents">
+      <DiffWorkerPoolProvider>
+        <CodeView<LAnnotation>
+          {...props}
+          {...(viewerRef ? { ref: viewerRef } : {})}
+          className={className ? `${surfaceClass} ${className}` : surfaceClass}
+          options={{
+            ...options,
+            ...(onTokenClick
+              ? {
+                  onTokenClick: (token, event, context) => {
+                    if (context.type === "diff" && "side" in token) {
+                      onTokenClick(token, event, context.item.fileDiff);
+                    }
+                  },
+                }
+              : {}),
+            unsafeCSS: [
+              DIFF_VIEW_UNSAFE_CSS,
+              onTokenClick ? CODE_NAVIGATION_UNSAFE_CSS : null,
+              unsafeCSSExtra,
+              themeCss,
+            ]
+              .filter(Boolean)
+              .join("\n"),
+            itemMetrics: {
+              diffHeaderHeight: 32,
+              hunkSeparatorHeight: 24,
+              // Zero both spacing and paddingTop; Pierre's expanded-file fallback otherwise adds an 8px header
+              // gap.
+              spacing: 0,
+              paddingTop: 0,
+              // Include Pierre's 8px --diffs-gap-fallback in metrics or each expanded file loses a scrollable
+              // row.
+              paddingBottom: 8,
+            },
+            layout: { paddingTop: 0, paddingBottom: 0, gap: 0 },
+          }}
+        />
+      </DiffWorkerPoolProvider>
+    </div>
   );
 }

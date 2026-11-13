@@ -20,6 +20,7 @@ import type {
   PullRequestReviewPosition,
   PullRequestReviewThread,
   PullRequestThreadCommentsResult,
+  ScopedThreadRef,
 } from "@t3tools/contracts";
 import {
   ChevronDownIcon,
@@ -80,6 +81,8 @@ import { APP_BASE_NAME } from "~/branding";
 import { PREFERRED_HIGHLIGHTER } from "~/lib/syntaxHighlighting";
 import { cn } from "~/lib/utils";
 import { createPullRequestDiffFileContentsLoader } from "~/lib/diffFileContents";
+import { resolveDiffPathForWorkspace } from "~/diffFileActions";
+import { useRightPanelStore } from "~/rightPanelStore";
 import { useStableCallback } from "~/hooks/useStableCallback";
 import {
   buildDiffReviewComment,
@@ -99,6 +102,10 @@ import { useCodeViewFileReveal } from "../diffs/useCodeViewFileReveal";
 import { useHideTestFiles } from "../diffs/useHideTestFiles";
 import { diffFileTreeEntries, orderDiffFilesLikeTree } from "../diffs/diffFileTree.logic";
 import { StyledDiffCodeView } from "../diffs/StyledDiffCodeView";
+import {
+  useDiffCodeNavigation,
+  useThreadCodeNavigationContext,
+} from "../diffs/useDiffCodeNavigation";
 import {
   SIDE_BY_SIDE_MIN_WIDTH,
   type SbsFileEntry,
@@ -372,6 +379,7 @@ function PullRequestCodeTab({
   refreshToken = 0,
   backgroundRefreshToken = 0,
   revealRequest = null,
+  threadRef = null,
 }: {
   scrollerRef: (node: HTMLDivElement | null) => void;
   environmentId: EnvironmentId;
@@ -389,6 +397,8 @@ function PullRequestCodeTab({
   refreshToken?: number;
   backgroundRefreshToken?: number;
   revealRequest?: { readonly path: string; readonly nonce: number } | null;
+  /** The thread whose panel shows the pull request; Go to Declaration opens files there. */
+  threadRef?: ScopedThreadRef | null;
 }) {
   const resolvedTheme = useRenderedAppearance();
   const diffThemeName = useDiffThemeName(resolvedTheme);
@@ -811,6 +821,22 @@ function PullRequestCodeTab({
   };
   const sbsShownFileKey =
     sbsFileKey !== null && fileKeys.includes(sbsFileKey) ? sbsFileKey : fileKeys[0];
+  // The thread's checkout, not the project's: that is where its files open.
+  const codeNavigationContext = useThreadCodeNavigationContext(threadRef);
+  const codeNavigation = useDiffCodeNavigation(
+    codeNavigationContext,
+    sideBySide ? (sbsShownFileKey ? `${scopeKey}:${sbsShownFileKey}` : null) : scopeKey,
+    (filePath, line) => {
+      if (!codeNavigationContext) return;
+      const path = resolveDiffPathForWorkspace({
+        filePath,
+        workspaceRoot: codeNavigationContext.cwd,
+        repositoryRoot: codeNavigationContext.repositoryRoot,
+      });
+      if (path) useRightPanelStore.getState().openFile(codeNavigationContext.threadRef, path, line);
+    },
+    loadDiffFiles,
+  );
 
   const toggleFile = (fileKey: string) =>
     setToggledFiles((current) => {
@@ -1716,7 +1742,9 @@ function PullRequestCodeTab({
               onRequestPatch={NO_PATCH_REQUEST}
               onRetryPatch={NO_PATCH_REQUEST}
               renderView={renderSbsView}
+              onTokenActivate={codeNavigation.onTokenActivate}
             />
+            {codeNavigation.popup}
             {/* One file shows at a time, so the next page loads once the last one loaded is shown. */}
             {nextCursor !== null && sbsShownFileKey === fileKeys.at(-1) ? (
               <div className="shrink-0 border-t border-border/60">{renderCodeViewFooter()}</div>
@@ -1762,8 +1790,10 @@ function PullRequestCodeTab({
                 renderHeaderMetadata={renderHeaderMetadata}
                 renderAnnotation={renderAnnotation}
                 unsafeCSSExtra={REPLACE_FILE_COUNTS_CSS}
+                onTokenActivate={codeNavigation.onCodeViewTokenActivate}
               />
             </FileViewedToggleContext>
+            {codeNavigation.popup}
           </div>
         )}
       </div>

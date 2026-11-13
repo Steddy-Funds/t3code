@@ -1657,6 +1657,43 @@ function PullRequestCodeTab({
         </p>
       ) : null}
       <div className="flex min-h-0 flex-1 overflow-hidden">
+        {fileTreeOpen ? (
+          <FileExplorerPane
+            side="left"
+            resizable
+            storageKey="t3code:diff-file-tree-width"
+            defaultWidth={320}
+            defaultWidthFraction={0.4}
+            minWidth={192}
+            resizeLabel="Resize PR Code files"
+          >
+            <DiffFileTree
+              ariaLabel={`${capitalizeTerm(term)} #${detail.number} files`}
+              entries={fileTreeEntries}
+              onSelectFile={revealFile}
+              footer={
+                nextCursor === null ? null : (
+                  <div className="shrink-0 border-t border-border/60 p-2">
+                    <Button
+                      type="button"
+                      size="xs"
+                      variant="outline"
+                      className="w-full"
+                      disabled={diffQuery.isPending}
+                      onClick={diffQuery.error !== null ? () => diffQuery.refresh() : loadNextSlice}
+                    >
+                      {diffQuery.error !== null
+                        ? "Retry"
+                        : diffQuery.isPending
+                          ? "Loading more files..."
+                          : "Load more files"}
+                    </Button>
+                  </div>
+                )
+              }
+            />
+          </FileExplorerPane>
+        ) : null}
         {sideBySide ? (
           <div ref={observeArea} className="flex min-h-0 min-w-0 flex-1 flex-col">
             <SideBySideDiffPanel
@@ -1729,42 +1766,6 @@ function PullRequestCodeTab({
             </FileViewedToggleContext>
           </div>
         )}
-        {fileTreeOpen ? (
-          <FileExplorerPane
-            resizable
-            storageKey="t3code:diff-file-tree-width"
-            defaultWidth={320}
-            defaultWidthFraction={0.4}
-            minWidth={192}
-            resizeLabel="Resize PR Code files"
-          >
-            <DiffFileTree
-              ariaLabel={`${capitalizeTerm(term)} #${detail.number} files`}
-              entries={fileTreeEntries}
-              onSelectFile={revealFile}
-              footer={
-                nextCursor === null ? null : (
-                  <div className="shrink-0 border-t border-border/60 p-2">
-                    <Button
-                      type="button"
-                      size="xs"
-                      variant="outline"
-                      className="w-full"
-                      disabled={diffQuery.isPending}
-                      onClick={diffQuery.error !== null ? () => diffQuery.refresh() : loadNextSlice}
-                    >
-                      {diffQuery.error !== null
-                        ? "Retry"
-                        : diffQuery.isPending
-                          ? "Loading more files..."
-                          : "Load more files"}
-                    </Button>
-                  </div>
-                )
-              }
-            />
-          </FileExplorerPane>
-        ) : null}
       </div>
       {unstructured}
     </div>

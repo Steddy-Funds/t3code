@@ -1,3 +1,4 @@
+import { userEvent } from "vite-plus/test/browser";
 import { describe, expect, it } from "vite-plus/test";
 
 import { render } from "../../../test/render";
@@ -42,4 +43,33 @@ describe("FileExplorerPane", () => {
       }
     },
   );
+
+  it.each([
+    { side: "right", grow: "{ArrowLeft}", shrink: "{ArrowRight}" },
+    { side: "left", grow: "{ArrowRight}", shrink: "{ArrowLeft}" },
+  ] as const)("a $side pane grows toward the content", async ({ side, grow, shrink }) => {
+    const previous = localStorage.getItem(STORAGE_KEY);
+    localStorage.removeItem(STORAGE_KEY);
+    try {
+      // This layout has no navigation or links.
+      await using screen = await render(
+        <div style={{ display: "flex", width: 800 }}>
+          <FileExplorerPane side={side} resizable storageKey={STORAGE_KEY} defaultWidth={256}>
+            File tree
+          </FileExplorerPane>
+        </div>,
+        { router: false },
+      );
+      const separator = screen.getByRole("separator");
+      (separator.element() as HTMLElement).focus();
+      await userEvent.keyboard(grow);
+      await expect.element(separator).toHaveAttribute("aria-valuenow", "272");
+      await userEvent.keyboard(shrink);
+      await userEvent.keyboard(shrink);
+      await expect.element(separator).toHaveAttribute("aria-valuenow", "240");
+    } finally {
+      if (previous === null) localStorage.removeItem(STORAGE_KEY);
+      else localStorage.setItem(STORAGE_KEY, previous);
+    }
+  });
 });

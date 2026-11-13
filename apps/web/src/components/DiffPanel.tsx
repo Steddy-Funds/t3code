@@ -1372,6 +1372,23 @@ export default function DiffPanel({
               )
             ) : lazySource || renderablePatch?.kind === "files" ? (
               <div className="flex min-h-0 flex-1 overflow-hidden">
+                {fileTreeOpen ? (
+                  <FileExplorerPane
+                    side="left"
+                    resizable
+                    storageKey="t3code:diff-file-tree-width"
+                    defaultWidthFraction={0.4}
+                    resizeLabel="Resize Changes files"
+                  >
+                    <DiffFileTree
+                      ariaLabel={`${reviewSectionTitle} files`}
+                      entries={fileTreeEntries}
+                      selectedPath={selectedFilePath}
+                      revealRequestId={selectedFileRevealRequestId}
+                      onSelectFile={revealDiffFile}
+                    />
+                  </FileExplorerPane>
+                ) : null}
                 <div
                   className="min-h-0 min-w-0 flex-1"
                   onClickCapture={(event) => {
@@ -1494,22 +1511,6 @@ export default function DiffPanel({
                     }}
                   />
                 </div>
-                {fileTreeOpen ? (
-                  <FileExplorerPane
-                    resizable
-                    storageKey="t3code:diff-file-tree-width"
-                    defaultWidthFraction={0.4}
-                    resizeLabel="Resize Changes files"
-                  >
-                    <DiffFileTree
-                      ariaLabel={`${reviewSectionTitle} files`}
-                      entries={fileTreeEntries}
-                      selectedPath={selectedFilePath}
-                      revealRequestId={selectedFileRevealRequestId}
-                      onSelectFile={revealDiffFile}
-                    />
-                  </FileExplorerPane>
-                ) : null}
               </div>
             ) : (
               <div className="min-h-0 flex-1 overflow-auto p-2">

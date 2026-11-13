@@ -9675,7 +9675,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
    * build without notes shows it as a plain tool row. A retry of the same note
    * finds its item and records nothing.
    */
-  const dispatchReviewItemRecord = Effect.fn("orchestrationV2.dispatch.reviewItemRecord")(
+  const dispatchReviewItemRecord = Effect.fn("orchestrationV2.dispatch.reviewNoteRecord")(
     function* (
       command: Extract<
         OrchestrationV2InternalCommand,

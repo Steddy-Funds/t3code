@@ -22,10 +22,21 @@ function stubHelperValue(value: unknown) {
 }
 
 /** A helper whose dialog stays up until the test settles it, as the real one does. */
-function stubOpenableHelper() {
+function stubOpenableHelper({ focused = null }: { readonly focused?: FakeElement | null } = {}) {
   const settles: Array<(outcome: HelperOutcome) => void> = [];
   const sent: Array<{ type: string; id: string }> = [];
-  const wheelListeners = new Set<EventListener>();
+  const listeners = new Map<string, Set<EventListener>>();
+  const body = {};
+  const document = { activeElement: focused ?? body, body };
+  if (focused) {
+    focused.blur = () => {
+      document.activeElement = body;
+    };
+    focused.focus = () => {
+      document.activeElement = focused;
+    };
+  }
+  vi.stubGlobal("document", document);
   vi.stubGlobal("window", {
     desktopBridge: {
       glint: {
@@ -42,18 +53,51 @@ function stubOpenableHelper() {
       },
     },
     addEventListener: (type: string, listener: EventListener) => {
-      if (type === "wheel") wheelListeners.add(listener);
+      listeners.set(type, (listeners.get(type) ?? new Set()).add(listener));
     },
     removeEventListener: (type: string, listener: EventListener) => {
-      if (type === "wheel") wheelListeners.delete(listener);
+      listeners.get(type)?.delete(listener);
     },
   });
+  /** Dispatches a page event; true when the page would have heard it. */
+  const dispatch = (type: string, init: { button?: number; target?: unknown } = {}) => {
+    let heard = true;
+    const event = {
+      type,
+      button: init.button ?? 0,
+      target: init.target ?? null,
+      preventDefault: () => {
+        heard = false;
+      },
+      stopImmediatePropagation: () => {},
+    } as unknown as Event;
+    for (const listener of listeners.get(type) ?? []) listener(event);
+    return heard;
+  };
   return {
     settle: (outcome: HelperOutcome) => settles.at(-1)?.(outcome),
     sent,
-    wheelListeners,
+    document,
+    dispatch,
+    shielded: () => [...listeners.values()].reduce((count, set) => count + set.size, 0),
     [Symbol.dispose]: () => vi.unstubAllGlobals(),
   };
+}
+
+interface FakeElement {
+  isConnected: boolean;
+  contains: (node: unknown) => boolean;
+  blur?: () => void;
+  focus?: () => void;
+}
+
+/** A trigger button holding `children`, attached to the page. */
+function fakeElement(children: ReadonlyArray<unknown> = []): FakeElement {
+  const element: FakeElement = {
+    isConnected: true,
+    contains: (node) => node === element || children.includes(node),
+  };
+  return element;
 }
 
 const PARAMS = { providers: [], selection: { provider: "claude", model: "opus" } };
@@ -80,15 +124,76 @@ describe("presentGlint", () => {
     ["a result", { type: "result", value: RESULT }],
     ["a cancel", { type: "cancelled" }],
     ["an error", { type: "unavailable", message: "The Glint helper exited." }],
-  ] as const)("is open, swallowing window wheels, until %s", async (_name, outcome) => {
+  ] as const)("is open, shielding the page, until %s", async (_name, outcome) => {
     using helper = stubOpenableHelper();
     const shown = presentGlint("model", { x: 0, y: 0 }, PARAMS);
     expect(isGlintDialogOpen()).toBe(true);
-    expect(helper.wheelListeners.size).toBe(1);
+    for (const type of [
+      "wheel",
+      "pointerdown",
+      "mousedown",
+      "click",
+      "contextmenu",
+      "touchstart",
+    ]) {
+      expect(helper.dispatch(type)).toBe(false);
+    }
     helper.settle(outcome);
     await shown;
     expect(isGlintDialogOpen()).toBe(false);
-    expect(helper.wheelListeners.size).toBe(0);
+    expect(helper.shielded()).toBe(0);
+    expect(helper.dispatch("click")).toBe(true);
+  });
+
+  it("forwards one click per primary click, and none after it closes", async () => {
+    using helper = stubOpenableHelper();
+    const shown = presentGlint("timeFromNow", fakeElement() as unknown as Element, {
+      title: "Snooze until",
+    });
+    helper.dispatch("pointerdown");
+    helper.dispatch("mousedown");
+    helper.dispatch("click");
+    helper.dispatch("auxclick", { button: 1 });
+    helper.dispatch("contextmenu", { button: 2 });
+    expect(helper.sent.map((message) => message.type)).toEqual(["click"]);
+    helper.settle({ type: "result", value: { date: "2026-11-12T12:00:00.000Z" } });
+    await shown;
+    helper.dispatch("click");
+    expect(helper.sent.map((message) => message.type)).toEqual(["click"]);
+  });
+
+  it("closes when its trigger is clicked through the shield", async () => {
+    using helper = stubOpenableHelper();
+    const icon = {};
+    const trigger = fakeElement([icon]);
+    const shown = presentGlint("model", trigger as unknown as Element, PARAMS);
+    expect(helper.dispatch("pointerdown", { target: icon })).toBe(false);
+    expect(helper.dispatch("click", { target: icon })).toBe(false);
+    expect(helper.sent.map((message) => message.type)).toEqual(["dismiss"]);
+    expect(await shown).toEqual({ type: "cancelled" });
+    // Closed by T3 itself, so the next click opens it again.
+    expect(glintTriggerAction(trigger as unknown as Element, 0)).toBe("native");
+  });
+
+  it("takes focus from the trigger and gives it back after", async () => {
+    const trigger = fakeElement();
+    using helper = stubOpenableHelper({ focused: trigger });
+    const shown = presentGlint("model", trigger as unknown as Element, PARAMS);
+    expect(helper.document.activeElement).toBe(helper.document.body);
+    helper.settle({ type: "cancelled" });
+    await shown;
+    expect(helper.document.activeElement).toBe(trigger);
+  });
+
+  it("leaves focus where the page moved it while the dialog was up", async () => {
+    const trigger = fakeElement();
+    using helper = stubOpenableHelper({ focused: trigger });
+    const shown = presentGlint("model", trigger as unknown as Element, PARAMS);
+    const field = {};
+    helper.document.activeElement = field;
+    helper.settle({ type: "cancelled" });
+    await shown;
+    expect(helper.document.activeElement).toBe(field);
   });
 
   it("closes on a dismiss sent by a second click on its trigger", async () => {

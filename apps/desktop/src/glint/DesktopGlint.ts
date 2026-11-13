@@ -19,6 +19,7 @@ import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import * as IpcChannels from "../ipc/channels.ts";
 import * as DesktopClientSettings from "../settings/DesktopClientSettings.ts";
 import { makeGlintHelper, toScreenAnchor, type GlintHelper } from "./GlintHelper.ts";
+import { makeGlintKeyLock } from "./GlintInput.ts";
 
 /** A helper path that applies when Labs turns native dialogs on and leaves its path empty. */
 const GLINT_HELPER_ENV = "T3CODE_GLINT_HELPER";
@@ -59,6 +60,32 @@ const make = Effect.gen(function* () {
   const onEvent = (message: DesktopGlintMessage) =>
     void runFork(electronWindow.sendAll(IpcChannels.GLINT_EVENT_CHANNEL, message));
 
+  const keyLocks = new WeakMap<Electron.WebContents, ReturnType<typeof makeGlintKeyLock>>();
+  /** The window's keyboard lock, hooked up the first time it presents a dialog. */
+  const keyLockFor = (contents: Electron.WebContents) => {
+    const existing = keyLocks.get(contents);
+    if (existing) return existing;
+    const lock = makeGlintKeyLock(environment.platform);
+    keyLocks.set(contents, lock);
+    const helper = () => Ref.getUnsafe(helperRef);
+    contents.on("before-input-event", (event, input) => {
+      const { prevent, forward } = lock.handle(input);
+      if (prevent) event.preventDefault();
+      if (forward) helper()?.sendInput(forward);
+    });
+    // A reload or crash takes the dialog's owner with it, so it must not keep the lock.
+    const release = () => {
+      const id = lock.openId;
+      if (id !== null) helper()?.send({ type: "dismiss", id });
+    };
+    contents.on("did-start-navigation", (details) => {
+      if (details.isMainFrame && !details.isSameDocument) release();
+    });
+    contents.on("render-process-gone", release);
+    contents.once("destroyed", release);
+    return lock;
+  };
+
   const configure = Effect.fn("desktop.glint.configure")(function* (settings: ClientSettings) {
     const path = resolveGlintHelperPath(environment.platform, settings, env);
     const found =
@@ -89,10 +116,19 @@ const make = Effect.gen(function* () {
       window.value.getContentBounds(),
       window.value.webContents.getZoomFactor(),
     );
+    const lock = keyLockFor(window.value.webContents);
+    lock.open(input.id);
     yield* Ref.set(glintDialogId, input.id);
     return yield* Effect.promise(() =>
       helper.present(input.id, input.kind, anchor, input.params),
-    ).pipe(Effect.ensuring(Ref.update(glintDialogId, (id) => (id === input.id ? null : id))));
+    ).pipe(
+      Effect.ensuring(
+        Effect.andThen(
+          Effect.sync(() => lock.close(input.id)),
+          Ref.update(glintDialogId, (id) => (id === input.id ? null : id)),
+        ),
+      ),
+    );
   });
 
   return DesktopGlint.of({

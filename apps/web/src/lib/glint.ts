@@ -103,7 +103,11 @@ type GlintAnchor =
 interface OpenDialog {
   readonly anchor: GlintAnchor;
   readonly dismiss: () => void;
+  /** Tells the helper about a primary click T3 kept from the page. */
+  readonly click: () => void;
   dismissed: boolean;
+  /** Where focus was before the dialog took it, given back when it closes. */
+  readonly focused: Element | null;
 }
 
 /** One dialog shows at a time: presenting another closes the one before. */
@@ -113,12 +117,39 @@ let lastCancel: { readonly anchor: GlintAnchor; readonly atMs: number } | null =
 /** How soon after the helper cancels a dialog a click on its trigger still counts as closing it. */
 export const GLINT_TRIGGER_CLOSE_MS = 400;
 
-// The two-finger touches that drive a dialog also reach this window as wheels, so scrolling,
-// swipe to reply, the history swipe and pinch would all move underneath it.
-const swallowWheel = (event: Event) => {
+// The helper's panel never takes focus, so every click and touch meant for it lands on this
+// window: the two-finger drags as wheels (scroll, swipe to reply, the history swipe, pinch),
+// a tap as a click on whatever is under it. While a dialog is up the page hears none of them.
+const SHIELDED_EVENTS = [
+  "pointerdown",
+  "pointerup",
+  "mousedown",
+  "mouseup",
+  "click",
+  "dblclick",
+  "auxclick",
+  "contextmenu",
+  "wheel",
+  "touchstart",
+  "touchmove",
+  "touchend",
+  "gesturestart",
+  "gesturechange",
+  "gestureend",
+] as const;
+
+const shield = (event: Event) => {
   event.preventDefault();
   event.stopImmediatePropagation();
+  const dialog = openDialog;
+  if (!dialog || event.type !== "click" || (event as MouseEvent).button !== 0) return;
+  // The trigger's own click closes its dialog; any other goes to the helper.
+  const { anchor } = dialog;
+  if ("contains" in anchor && anchor.contains(event.target as Node | null)) dialog.dismiss();
+  else dialog.click();
 };
+
+const SHIELD_OPTIONS = { capture: true, passive: false } as const;
 
 /** True from present until the dialog's result, cancel, dismiss or failure. */
 export function isGlintDialogOpen(): boolean {
@@ -151,16 +182,32 @@ export function glintTriggerAction(
 }
 
 function trackOpen(dialog: OpenDialog) {
-  if (!openDialog)
-    window.addEventListener("wheel", swallowWheel, { capture: true, passive: false });
+  if (!openDialog) {
+    for (const type of SHIELDED_EVENTS) window.addEventListener(type, shield, SHIELD_OPTIONS);
+  }
   openDialog = dialog;
   lastCancel = null;
+  // A focused trigger or default button would take the Enter meant for the dialog.
+  if (dialog.focused && "blur" in dialog.focused) (dialog.focused as HTMLElement).blur();
+}
+
+/** Focus goes back where it was, or to the trigger, unless something took it meanwhile. */
+function restoreFocus(dialog: OpenDialog) {
+  if (typeof document === "undefined") return;
+  const active = document.activeElement;
+  if (active && active !== document.body) return;
+  const target = [dialog.focused, dialog.anchor].find(
+    (element): element is HTMLElement =>
+      element !== null && "focus" in element && "isConnected" in element && element.isConnected,
+  );
+  target?.focus({ preventScroll: true });
 }
 
 function trackClosed(dialog: OpenDialog, outcome: GlintOutcome<GlintKind>["type"]) {
   if (openDialog !== dialog) return;
   openDialog = null;
-  window.removeEventListener("wheel", swallowWheel, { capture: true });
+  for (const type of SHIELDED_EVENTS) window.removeEventListener(type, shield, { capture: true });
+  restoreFocus(dialog);
   // Only the helper's own cancel, a click outside or Esc there, races a trigger click.
   if (outcome === "cancelled" && !dialog.dismissed) {
     lastCancel = { anchor: dialog.anchor, atMs: Date.now() };
@@ -198,9 +245,13 @@ function openGlint<K extends GlintKind>(
     const dialog: OpenDialog = {
       anchor,
       dismissed: false,
+      focused: typeof document === "undefined" ? null : document.activeElement,
       dismiss: () => {
         dialog.dismissed = true;
         void send({ type: "dismiss" });
+      },
+      click: () => {
+        if (openDialog === dialog) void send({ type: "click" });
       },
     };
     trackOpen(dialog);

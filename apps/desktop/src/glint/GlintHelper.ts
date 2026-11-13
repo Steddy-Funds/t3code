@@ -11,8 +11,11 @@ import type {
   DesktopGlintOutcome,
 } from "@t3tools/contracts";
 
-const PROTOCOL_VERSION = 1;
+// Version 2 adds `input` to `ready`: the keys and clicks T3 forwards while a dialog is up.
+const PROTOCOL_VERSIONS: ReadonlySet<unknown> = new Set([1, 2]);
 const DEFAULT_READY_TIMEOUT_MS = 5_000;
+/** How long a forwarded Return or Escape may go unanswered before T3 closes the dialog itself. */
+const GLINT_INPUT_WATCHDOG_MS = 3_000;
 // The protocol's own lifecycle; every other message is a dialog's, passed through untouched.
 const LIFECYCLE_TYPES: ReadonlySet<string> = new Set([
   "ready",
@@ -33,14 +36,30 @@ export interface GlintHelper {
   ) => Promise<DesktopGlintOutcome>;
   /** Sends a message such as `update`, `input`, `key` or `dismiss` to the open dialog `id`. */
   readonly send: (message: DesktopGlintMessage) => boolean;
+  /**
+   * Input T3 swallowed while dialog `id` is up. Forwarded when the helper lists its type in
+   * `ready.input`; otherwise Escape dismisses and the rest is dropped.
+   */
+  readonly sendInput: (message: GlintInputMessage) => boolean;
   readonly dispose: () => void;
 }
+
+export type GlintInputMessage =
+  | {
+      readonly type: "key";
+      readonly id: string;
+      readonly key: string;
+      readonly text?: string;
+      readonly modifiers?: ReadonlyArray<string>;
+    }
+  | { readonly type: "click"; readonly id: string };
 
 interface Pending {
   readonly id: string;
   readonly resolve: (outcome: DesktopGlintOutcome) => void;
   /** Messages sent before the helper was ready, written after `present`. */
-  queue: Array<DesktopGlintMessage> | null;
+  queue: Array<{ readonly message: DesktopGlintMessage; readonly input: boolean }> | null;
+  watchdog: ReturnType<typeof setTimeout> | null;
 }
 
 /** Spawns the helper on the first `present`, and again after it exits. */
@@ -48,6 +67,7 @@ export function makeGlintHelper(
   path: string,
   options: {
     readonly readyTimeoutMs?: number;
+    readonly watchdogMs?: number;
     readonly log?: (message: string) => void;
     /** The open dialog's own messages, such as `changed`. */
     readonly onEvent?: (message: DesktopGlintMessage) => void;
@@ -58,11 +78,14 @@ export function makeGlintHelper(
   let ready: Promise<string | null> | null = null;
   let current: Pending | null = null;
   let disposed = false;
+  /** What the running helper takes from `sendInput`, per its `ready`. */
+  let inputTypes: ReadonlySet<string> = new Set();
 
   const settle = (id: string, outcome: DesktopGlintOutcome) => {
     if (current?.id !== id) return;
     const pending = current;
     current = null;
+    if (pending.watchdog) clearTimeout(pending.watchdog);
     pending.resolve(outcome);
   };
 
@@ -75,6 +98,11 @@ export function makeGlintHelper(
   const handleMessage = (message: unknown) => {
     if (typeof message !== "object" || message === null) return;
     const { type, id } = message as { type?: unknown; id?: unknown };
+    // A line the helper could not read (a malformed `key` or `click`) belongs to no dialog.
+    if (type === "error" && id === null) {
+      log(`glint: protocol warning: ${String((message as { message?: unknown }).message)}`);
+      return;
+    }
     if (typeof id !== "string" || typeof type !== "string") return;
     if (!LIFECYCLE_TYPES.has(type)) {
       if (current?.id === id) options.onEvent?.(message as DesktopGlintMessage);
@@ -96,13 +124,38 @@ export function makeGlintHelper(
   function send(message: DesktopGlintMessage): boolean {
     const pending = current;
     if (pending?.id !== message.id || LIFECYCLE_TYPES.has(message.type)) return false;
+    if (message.type === "click") return sendInput({ type: "click", id: message.id });
     if (pending.queue) {
-      pending.queue.push(message);
+      pending.queue.push({ message, input: false });
       if (message.type === "dismiss") settle(message.id, { type: "cancelled" });
       return true;
     }
     if (!write(message)) return false;
     if (message.type === "dismiss") settle(message.id, { type: "cancelled" });
+    return true;
+  }
+
+  function sendInput(message: GlintInputMessage): boolean {
+    const pending = current;
+    if (pending?.id !== message.id) return false;
+    if (pending.queue) {
+      pending.queue.push({ message, input: true });
+      return true;
+    }
+    if (!inputTypes.has(message.type)) {
+      return message.type === "key" && message.key === "escape"
+        ? send({ type: "dismiss", id: message.id })
+        : false;
+    }
+    if (!write(message)) return false;
+    // These should close the dialog; a helper that never answers must not leave T3 locked.
+    if (message.type === "key" && (message.key === "return" || message.key === "escape")) {
+      pending.watchdog ??= setTimeout(() => {
+        if (current !== pending) return;
+        write({ type: "dismiss", id: pending.id });
+        settle(pending.id, { type: "cancelled" });
+      }, options.watchdogMs ?? GLINT_INPUT_WATCHDOG_MS);
+    }
     return true;
   }
 
@@ -145,11 +198,17 @@ export function makeGlintHelper(
         }
         if (!started && (message as { type?: unknown } | null)?.type === "ready") {
           const version = (message as { version?: unknown }).version;
-          if (version !== PROTOCOL_VERSION) {
-            stop(`The Glint helper speaks protocol ${String(version)}, not ${PROTOCOL_VERSION}.`);
+          if (!PROTOCOL_VERSIONS.has(version)) {
+            stop(`The Glint helper speaks protocol ${String(version)}, not 1 or 2.`);
             proc.kill();
             return;
           }
+          const input = (message as { input?: unknown }).input;
+          inputTypes = new Set(
+            version === 2 && Array.isArray(input)
+              ? input.filter((type): type is string => typeof type === "string")
+              : [],
+          );
           started = true;
           clearTimeout(timer);
           resolve(null);
@@ -177,7 +236,7 @@ export function makeGlintHelper(
       // The helper closes the old dialog itself when a new one is presented.
       if (current) settle(current.id, { type: "cancelled" });
       const { promise: outcome, resolve } = Promise.withResolvers<DesktopGlintOutcome>();
-      const pending: Pending = { id, resolve, queue: [] };
+      const pending: Pending = { id, resolve, queue: [], watchdog: null };
       current = pending;
       void start().then((failure) => {
         if (current !== pending) return;
@@ -191,11 +250,15 @@ export function makeGlintHelper(
         }
         const queued = pending.queue ?? [];
         pending.queue = null;
-        for (const message of queued) send(message);
+        for (const entry of queued) {
+          if (entry.input) sendInput(entry.message as GlintInputMessage);
+          else send(entry.message);
+        }
       });
       return outcome;
     },
     send,
+    sendInput,
     dispose: () => {
       disposed = true;
       if (current) settle(current.id, { type: "cancelled" });

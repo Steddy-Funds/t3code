@@ -113,8 +113,12 @@ vi.mock("./diffs/DiffCommentAnnotation", () => ({ DiffCommentAnnotation: () => n
 vi.mock("./diffs/DiffFileTree", () => ({ DiffFileTree: () => null }));
 vi.mock("./DiffFilePathCopyButton", () => ({ DiffFilePathCopyButton: () => null }));
 // Go to Declaration reaches the router and server state this file mocks only in part.
-vi.mock("./diffs/sbs/useSbsCodeNavigation", () => ({
-  useSbsCodeNavigation: () => ({ onTokenActivate: undefined, popup: null }),
+vi.mock("./diffs/useDiffCodeNavigation", () => ({
+  useDiffCodeNavigation: () => ({
+    onTokenActivate: undefined,
+    onCodeViewTokenActivate: undefined,
+    popup: null,
+  }),
 }));
 
 import DiffPanel from "./DiffPanel";

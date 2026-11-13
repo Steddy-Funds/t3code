@@ -64,6 +64,7 @@ upstream; a feature can, from its own branch, when Akiva decides.
 | Glint native dialogs (Labs, macOS): snooze Time from now, the model picker, /color; a generic helper bridge                                       | #93 | 5b4b111 |
 | "Why snooze?" as Glint's native choice dialog (Labs, macOS), with the web prompt as fallback                                                      | #94 | 7f0beef |
 | Glint dialogs own the trackpad: snooze button opens the dial, gestures pause while a dialog is up, triggers toggle                                | #96 | a8d5243 |
+| Glint dialogs take the keyboard and mouse while up: keys and clicks go to the helper (protocol v2), no click-through                              | #103 | c40c096 |
 | Code stitch: External Libraries, a Python environment field, the quick reference by focus, Mod+B in side-by-side diffs, user docs                 | #91 | a143e08 |
 | Sidebar branch names are plain text again (no click to copy); Copy branch stays in the thread menu                                                | #97 | 74c14e8 |
 | Burn rate flame flickers faster toward 500K/m; Machines page and machine card show burn; lineage keeps agents winding down                        | #99 | 022ce5e |

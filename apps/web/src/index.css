@@ -2768,6 +2768,97 @@ code {
   outline: none;
 }
 
+/* A moved line opens where its block went on a click. */
+.sbs-row[data-tint="moved"] .sbs-code,
+.sbs-row[data-tint="moved-out"] .sbs-code {
+  cursor: pointer;
+}
+
+.sbs-split-bar {
+  display: flex;
+  flex: none;
+  gap: 0.5rem;
+  align-items: center;
+  padding: 0.25rem 0.5rem;
+  border-bottom: 1px solid var(--border);
+  color: var(--muted-foreground);
+  font-family: var(--font-sans);
+  font-size: 0.75rem;
+}
+
+.sbs-split-card {
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--sbs-marker-moved) 40%, transparent);
+  border-radius: 4px;
+}
+
+.sbs-split-card-title {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+  width: 100%;
+  height: var(--sbs-line-height);
+  padding-inline: 0.75rem;
+  background: color-mix(in srgb, var(--sbs-marker-moved) 10%, var(--code-background));
+  color: var(--sbs-marker-moved);
+  font-family: var(--font-sans);
+  font-size: 0.75rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.sbs-split-card-title:is(:hover, :focus-visible) {
+  text-decoration: underline;
+  outline: none;
+}
+
+.sbs-split-card-count {
+  flex: none;
+  margin-left: auto;
+  color: var(--muted-foreground);
+}
+
+.sbs-split-card-missing {
+  padding: 0.25rem 0.75rem;
+  color: var(--muted-foreground);
+  font-family: var(--font-sans);
+  font-size: 0.75rem;
+}
+
+/* The code around a piece: there to read it by, not part of the move. */
+.sbs-row[data-sbs-split-context] .sbs-code {
+  opacity: 0.6;
+}
+
+.sbs-split-band {
+  fill: var(--diff-block-moved);
+  stroke: var(--sbs-marker-moved);
+  stroke-width: 1px;
+  stroke-opacity: 0.6;
+}
+
+.sbs-split-gap[data-side="deletions"] {
+  fill: var(--diff-block-deleted);
+}
+
+.sbs-split-gap[data-side="additions"] {
+  fill: var(--diff-block-inserted);
+}
+
+/* Hovering one piece sets the others back. */
+.sbs-row[data-dim] {
+  --sbs-row-bg: var(--diff-block-moved-out);
+}
+
+.sbs-split-card[data-dim] {
+  border-color: var(--border);
+}
+
+.sbs-split-band[data-dim] {
+  fill: var(--diff-block-moved-out);
+  stroke-opacity: 0.2;
+}
+
 .sbs-fold-link {
   cursor: pointer;
 }

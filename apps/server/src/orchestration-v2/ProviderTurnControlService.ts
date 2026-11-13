@@ -93,6 +93,7 @@ export const layer: Layer.Layer<
   Effect.gen(function* () {
     const projections = yield* ProjectionStore.ProjectionStoreV2;
     const sessions = yield* ProviderSessionManager.ProviderSessionManagerV2;
+    const serverSettings = yield* Effect.serviceOption(ServerSettings.ServerSettingsService);
 
     const load = Effect.fn("ProviderTurnControlService.load")(function* (input: {
       readonly threadId: ThreadId;
@@ -367,7 +368,7 @@ export const layer: Layer.Layer<
               cause: "The persisted steering message or target run is missing.",
             });
           }
-          const reviewReplies = yield* ServerSettings.reviewRepliesEnabled;
+          const reviewReplies = yield* ServerSettings.reviewRepliesEnabled(serverSettings);
           yield* loaded.session.value
             .steerTurn({
               threadId: input.threadId,

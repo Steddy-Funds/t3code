@@ -14755,6 +14755,111 @@ describe("ClaudeAdapterV2 background wake turns", () => {
     ),
   );
 
+  // regression: a settle that ran between the subagent's end and its wake run closed the session
+  it.effect(
+    "keeps an ended background subagent holding completion until its wake turn starts",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const TASK_ID = "task-wake-hold";
+          const TOOL_USE_ID = "toolu-wake-hold";
+          const harness = yield* makeWakeHarness;
+          const now = yield* DateTime.now;
+          const hasPendingWorkForThread = harness.runtime.hasPendingBackgroundWorkForThread;
+          if (hasPendingWorkForThread === undefined) {
+            throw new Error(
+              "Claude adapter runtime must expose hasPendingBackgroundWorkForThread.",
+            );
+          }
+          const rosterAt = (index: number) => {
+            const event = harness.events[index];
+            return event?.type === "provider_thread.updated"
+              ? (event.providerThread.pendingBackgroundTasks ?? [])
+              : [];
+          };
+          const lastRosterIndex = () =>
+            harness.events.findLastIndex((event) => event.type === "provider_thread.updated");
+          yield* harness.runtime.startTurn(
+            makeClaudeTestTurnInput({
+              threadId: harness.threadId,
+              providerThread: harness.providerThread,
+              now,
+              attemptId: RunAttemptId.make("attempt-claude-subagent-hold-1"),
+              text: "Audit in the background.",
+              attachments: [],
+            }),
+          );
+          for (const frame of [
+            makeSubagentTaskStartedFrame({
+              taskId: TASK_ID,
+              toolUseId: TOOL_USE_ID,
+              uuid: "00000000-0000-4000-8000-000000000a11",
+            }),
+            makeResultFrame({
+              uuid: "00000000-0000-4000-8000-000000000a12",
+              result: "Auditing in the background.",
+            }),
+          ]) {
+            yield* Queue.offer(harness.sdkMessages, frame);
+          }
+          yield* harness.awaitTerminal(1);
+
+          yield* harness.offerAndWait(
+            makeSubagentNotificationFrame({
+              taskId: TASK_ID,
+              toolUseId: TOOL_USE_ID,
+              summary: "Audit done.",
+              uuid: "00000000-0000-4000-8000-000000000a13",
+            }),
+          );
+          const endedIndex = () =>
+            harness.events.findIndex(
+              (event) => event.type === "subagent.updated" && event.subagent.status === "completed",
+            );
+          yield* harness.until(() => endedIndex() !== -1);
+          // The hold is stored before the subagent's end, which is what starts the settlement sweep.
+          const heldIndex = harness.events.findIndex(
+            (event, index) =>
+              event.type === "provider_thread.updated" &&
+              backgroundWorkHoldsCompletion(rosterAt(index)),
+          );
+          assert.isAbove(heldIndex, -1);
+          assert.isBelow(heldIndex, endedIndex());
+          assert.deepStrictEqual(
+            rosterAt(lastRosterIndex()).map((task) => [task.taskId, task.kind]),
+            [[TASK_ID, "subagent"]],
+          );
+          assert.isTrue(yield* hasPendingWorkForThread(harness.providerThread));
+          assert.lengthOf(harness.continuationRequests, 1);
+
+          yield* harness.runtime.startTurn(
+            makeClaudeTestTurnInput({
+              threadId: harness.threadId,
+              providerThread: harness.providerThread,
+              now,
+              attemptId: RunAttemptId.make("attempt-claude-subagent-hold-2"),
+              text: "Background task completed.",
+              attachments: [],
+              providerTurnOrdinal: 2,
+              messageCreatedBy: "agent",
+              messageCreationSource: "provider",
+            }),
+          );
+          yield* harness.until(() => rosterAt(lastRosterIndex()).length === 0);
+          assert.isFalse(yield* hasPendingWorkForThread(harness.providerThread));
+        }).pipe(
+          Effect.provide(
+            Layer.mergeAll(
+              IdAllocator.layer,
+              McpProviderSessions.layer,
+              NodeServices.layer,
+              NodeCrypto.layer,
+            ),
+          ),
+        ),
+      ),
+  );
+
   it.effect.each(["exit", "Stop"] as const)(
     "settles a plain background subagent and its open call on %s after the root turn completes",
     (reason) =>

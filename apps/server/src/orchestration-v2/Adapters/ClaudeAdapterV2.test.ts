@@ -12599,8 +12599,14 @@ describe("ClaudeAdapterV2 background wake turns", () => {
       throw new Error("Claude adapter runtime must expose its background task hooks.");
     }
     const latestRoster = () =>
-      harness.events.findLast((event) => event.type === "provider_thread.updated")?.providerThread
-        .pendingBackgroundTasks ?? [];
+      harness.events.findLast(
+        (
+          event,
+        ): event is Extract<
+          ProviderAdapter.ProviderAdapterV2Event,
+          { type: "provider_thread.updated" }
+        > => event.type === "provider_thread.updated",
+      )?.providerThread.pendingBackgroundTasks ?? [];
     const roster = (taskIds: ReadonlyArray<string>, uuid: string) =>
       claudeSdkFrame({
         type: "system",

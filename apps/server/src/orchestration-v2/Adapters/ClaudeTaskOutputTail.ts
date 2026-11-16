@@ -10,6 +10,8 @@ import * as Path from "effect/Path";
 const CLAUDE_TASK_OUTPUT_POLL_MS = 250;
 /** Bound discovery when Claude never writes the file. */
 const MAX_LOCATE_ATTEMPTS = 40;
+/** A host can hold thousands of project folders; past this many the search gives up and live output is omitted. */
+const MAX_SCANNED_PROJECT_FOLDERS = 500;
 /** Skip ahead of fast writers; only the tail is displayed. */
 const MAX_READ_BYTES = 256 * 1024;
 
@@ -34,25 +36,44 @@ export function claudeTaskOutputRoot(
   return path.resolve(cwd ?? ".", base, `claude-${uid}`);
 }
 
+/** The folder Claude Code keeps a session's temp files in, named after its working directory. */
+export function claudeTaskOutputProjectFolder(cwd: string | null | undefined): string | undefined {
+  return cwd == null ? undefined : cwd.replace(/[^a-zA-Z0-9]/g, "-");
+}
+
 const locate = Effect.fn("ClaudeTaskOutputTail.locate")(function* (input: {
   readonly root: string;
+  readonly projectFolder: string | undefined;
   readonly sessionId: string;
   readonly taskId: string;
 }) {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const projects = yield* fileSystem.readDirectory(input.root).pipe(Effect.orElseSucceed(() => []));
-  for (const project of projects) {
-    const candidate = path.join(
-      input.root,
-      project,
-      input.sessionId,
-      "tasks",
-      `${input.taskId}.output`,
-    );
-    if (yield* fileSystem.exists(candidate).pipe(Effect.orElseSucceed(() => false))) {
-      return Option.some(candidate);
+  const exists = (target: string) =>
+    fileSystem.exists(target).pipe(Effect.orElseSucceed(() => false));
+  let session =
+    input.projectFolder === undefined
+      ? undefined
+      : path.join(input.root, input.projectFolder, input.sessionId);
+  // Claude shortens long folder names, so the session can live under a name this cannot derive.
+  // Searched once, not on every poll: each folder is a filesystem call on a busy server.
+  if (session === undefined || !(yield* exists(session))) {
+    const projects = yield* fileSystem
+      .readDirectory(input.root)
+      .pipe(Effect.orElseSucceed(() => []));
+    for (const project of projects.slice(0, MAX_SCANNED_PROJECT_FOLDERS)) {
+      const candidate = path.join(input.root, project, input.sessionId);
+      if (yield* exists(candidate)) {
+        session = candidate;
+        break;
+      }
     }
+  }
+  if (session === undefined) return Option.none<string>();
+  const file = path.join(session, "tasks", `${input.taskId}.output`);
+  for (let attempt = 0; attempt < MAX_LOCATE_ATTEMPTS; attempt += 1) {
+    if (yield* exists(file)) return Option.some(file);
+    yield* Effect.sleep(CLAUDE_TASK_OUTPUT_POLL_MS);
   }
   return Option.none<string>();
 });
@@ -60,6 +81,7 @@ const locate = Effect.fn("ClaudeTaskOutputTail.locate")(function* (input: {
 /** Complete stop on tool result or turn end, then await the effect; it performs a final read before returning. */
 export const tailClaudeTaskOutput = Effect.fn("ClaudeTaskOutputTail.tail")(function* (input: {
   readonly root: string;
+  readonly projectFolder: string | undefined;
   readonly sessionId: string;
   readonly taskId: string;
   readonly stop: Deferred.Deferred<void>;
@@ -73,12 +95,13 @@ export const tailClaudeTaskOutput = Effect.fn("ClaudeTaskOutputTail.tail")(funct
       orElse: () => Effect.succeed(false),
     }),
   );
-  let file = Option.none<string>();
-  for (let attempt = 0; Option.isNone(file); attempt += 1) {
-    file = yield* locate(input);
-    if (Option.isSome(file)) break;
-    if (attempt + 1 >= MAX_LOCATE_ATTEMPTS || (yield* pause)) return;
-  }
+  // The caller awaits this effect after stop while it holds the session's message lock, so a
+  // search still running then is dropped: the tool result carries the output anyway.
+  const file = yield* Effect.raceFirst(
+    locate(input),
+    Deferred.await(input.stop).pipe(Effect.as(Option.none<string>())),
+  );
+  if (Option.isNone(file)) return;
   const filePath = file.value;
   let decoder = new TextDecoder("utf-8", { fatal: false });
   let offset = 0;

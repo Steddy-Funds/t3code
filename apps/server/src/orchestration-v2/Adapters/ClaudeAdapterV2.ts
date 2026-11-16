@@ -344,6 +344,9 @@ const CLAUDE_MCP_REGISTRATION_TIMEOUT = "90 seconds";
 // Claude can consume a subagent result before the launching turn ends, leaving
 // its notification with no native wake turn to answer the continuation.
 const CLAUDE_WAKE_TURN_START_DEADLINE = "2 minutes";
+// Claude Code opens the wake turn for a notice that landed late in a turn right after that
+// turn's result (1 to 46 ms in provider logs), and most such notices get no wake turn at all.
+const CLAUDE_WAKE_AFTER_TURN_DEADLINE = "5 seconds";
 // Claude Code flushes transcript writes every 100 ms, so a workflow member's
 // reply can land after the progress frame that settles it. Its transcript
 // stays the source of its answer this long after it settles.
@@ -8322,6 +8325,19 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                   driver: CLAUDE_PROVIDER,
                   providerThread,
                 });
+                const heldDuringTurn = [
+                  ...rosterForNativeThread(
+                    yield* Ref.get(wakeHeldBackgroundTasksByNativeThread),
+                    input.context.nativeThreadId,
+                  ).values(),
+                ];
+                if (heldDuringTurn.length > 0) {
+                  yield* releaseWakeHeldBackgroundTasksAfter(
+                    input.context.nativeThreadId,
+                    heldDuringTurn,
+                    CLAUDE_WAKE_AFTER_TURN_DEADLINE,
+                  );
+                }
               }),
               emitProviderEvent(terminalEvent),
             ],
@@ -8785,6 +8801,22 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           );
         });
 
+        // Claude may open no wake turn, and the thread must not wait on the task forever.
+        // Matching these objects keeps the deadline from ending a later hold of a reused id.
+        const releaseWakeHeldBackgroundTasksAfter = (
+          nativeThreadId: string,
+          tasks: ReadonlyArray<OrchestrationV2PendingBackgroundTask>,
+          deadline: Duration.Input,
+        ) =>
+          Effect.sleep(deadline).pipe(
+            Effect.andThen(
+              sdkMessageLock.withPermits(1)(
+                releaseWakeHeldBackgroundTasks(nativeThreadId, (task) => tasks.includes(task)),
+              ),
+            ),
+            Effect.forkIn(sessionScope),
+          );
+
         const holdBackgroundTasksForWake = Effect.fnUntraced(function* (
           nativeThreadId: string,
           tasks: ReadonlyArray<OrchestrationV2PendingBackgroundTask>,
@@ -8795,15 +8827,12 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             for (const task of tasks) held.set(task.taskId, task);
             return new Map(current).set(nativeThreadId, held);
           });
-          // Claude may open no wake turn, and the thread must not wait on the task forever.
-          // Matching these objects keeps the deadline from ending a later hold of a reused id.
-          yield* Effect.sleep(CLAUDE_WAKE_TURN_START_DEADLINE).pipe(
-            Effect.andThen(
-              sdkMessageLock.withPermits(1)(
-                releaseWakeHeldBackgroundTasks(nativeThreadId, (task) => tasks.includes(task)),
-              ),
-            ),
-            Effect.forkIn(sessionScope),
+          // A hold made during a turn gets its deadline when that turn completes.
+          if ((yield* Ref.get(activeTurn)) !== null) return;
+          yield* releaseWakeHeldBackgroundTasksAfter(
+            nativeThreadId,
+            tasks,
+            CLAUDE_WAKE_TURN_START_DEADLINE,
           );
         });
 

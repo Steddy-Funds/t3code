@@ -12711,26 +12711,32 @@ describe("ClaudeAdapterV2 background wake turns", () => {
       ),
   );
 
-  it.effect("stops holding an ended awaited task when Claude opens no wake turn", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const { harness, latestRoster, hasPendingWork } = yield* endAwaitedTask("notice-first");
-        assert.isTrue(backgroundWorkHoldsCompletion(latestRoster()));
+  // A notice read inside its turn gets no wake turn, so that hold ends soon after the turn.
+  it.effect.each([
+    ["notice-first", "2 minutes"],
+    ["notice-in-turn", "5 seconds"],
+  ] as const)(
+    "stops holding an ended awaited task when Claude opens no wake turn (%s)",
+    ([order, deadline]) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { harness, latestRoster, hasPendingWork } = yield* endAwaitedTask(order);
+          assert.isTrue(backgroundWorkHoldsCompletion(latestRoster()));
 
-        yield* TestClock.adjust("2 minutes");
-        yield* harness.until(() => latestRoster().length === 0);
-        assert.isFalse(yield* hasPendingWork);
-      }).pipe(
-        Effect.provide(
-          Layer.mergeAll(
-            IdAllocator.layer,
-            McpProviderSessions.layer,
-            NodeServices.layer,
-            NodeCrypto.layer,
+          yield* TestClock.adjust(deadline);
+          yield* harness.until(() => latestRoster().length === 0);
+          assert.isFalse(yield* hasPendingWork);
+        }).pipe(
+          Effect.provide(
+            Layer.mergeAll(
+              IdAllocator.layer,
+              McpProviderSessions.layer,
+              NodeServices.layer,
+              NodeCrypto.layer,
+            ),
           ),
         ),
       ),
-    ),
   );
 
   it.effect("keeps the hold through a stale roster level, until the agent stops waiting", () =>

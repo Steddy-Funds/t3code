@@ -5271,9 +5271,9 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
         const awaitedBackgroundTasksByNativeThread = yield* Ref.make(
           new Map<string, Set<string>>(),
         );
-        // Awaited tasks that ended while the root was idle. They keep holding completion until
-        // the wake turn attaches: an empty roster before that run exists lets an auto-settle
-        // close the session under the completion notice.
+        // Awaited tasks that ended. They keep holding completion until the next turn attaches:
+        // an empty roster before the wake run exists lets an auto-settle close the session
+        // under the completion notice.
         const wakeHeldBackgroundTasksByNativeThread = yield* Ref.make(
           new Map<string, Map<string, OrchestrationV2PendingBackgroundTask>>(),
         );
@@ -5740,6 +5740,28 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             taskId,
           );
 
+        const pendingBackgroundTasksWithWakeHolds = Effect.fnUntraced(function* (
+          nativeThreadId: string,
+          roster: ReadonlyMap<string, OrchestrationV2PendingBackgroundTask>,
+        ) {
+          const awaitedTaskIds = taskIdSetForNativeThread(
+            yield* Ref.get(awaitedBackgroundTasksByNativeThread),
+            nativeThreadId,
+          );
+          const wakeHeld = rosterForNativeThread(
+            yield* Ref.get(wakeHeldBackgroundTasksByNativeThread),
+            nativeThreadId,
+          );
+          // A stale roster level can list a held task again; it stays awaited until its hold ends.
+          return [
+            ...claudePendingBackgroundTasksFromRoster(
+              roster,
+              new Set([...awaitedTaskIds, ...wakeHeld.keys()]),
+            ),
+            ...[...wakeHeld.values()].filter((task) => !roster.has(task.taskId)),
+          ];
+        });
+
         const emitProviderThreadRoster = Effect.fnUntraced(function* (input: {
           readonly nativeThreadId: string;
           readonly providerThread: OrchestrationV2ProviderThread;
@@ -5749,27 +5771,15 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             yield* Ref.get(pendingBackgroundTasksByNativeThread),
             input.nativeThreadId,
           );
-          const awaitedTaskIds = taskIdSetForNativeThread(
-            yield* Ref.get(awaitedBackgroundTasksByNativeThread),
-            input.nativeThreadId,
-          );
-          const wakeHeld = rosterForNativeThread(
-            yield* Ref.get(wakeHeldBackgroundTasksByNativeThread),
-            input.nativeThreadId,
-          );
           const now = yield* DateTime.now;
           const providerThread: OrchestrationV2ProviderThread = {
             ...input.providerThread,
             providerSessionId: session.id,
             ...(input.status === undefined ? {} : { status: input.status }),
-            // A stale roster level can list a held task again; it stays awaited until its hold ends.
-            pendingBackgroundTasks: [
-              ...claudePendingBackgroundTasksFromRoster(
-                roster,
-                new Set([...awaitedTaskIds, ...wakeHeld.keys()]),
-              ),
-              ...[...wakeHeld.values()].filter((task) => !roster.has(task.taskId)),
-            ],
+            pendingBackgroundTasks: yield* pendingBackgroundTasksWithWakeHolds(
+              input.nativeThreadId,
+              roster,
+            ),
             ...(goalsByNativeThread.has(input.nativeThreadId)
               ? { goal: goalsByNativeThread.get(input.nativeThreadId) ?? null }
               : {}),
@@ -8261,13 +8271,6 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                         yield* Ref.get(pendingBackgroundTasksByNativeThread),
                         nativeThreadId,
                       );
-                const awaitedTaskIds =
-                  nativeThreadId === null
-                    ? new Set<string>()
-                    : taskIdSetForNativeThread(
-                        yield* Ref.get(awaitedBackgroundTasksByNativeThread),
-                        nativeThreadId,
-                      );
                 // A stopped turn that wrote to the transcript moved past the pinned head.
                 const clearConversationHead =
                   (input.status === "completed" || input.context.nativeMessageCursor !== null) &&
@@ -8306,10 +8309,10 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                     input.context.input.providerThread.firstRunOrdinal ??
                     input.context.input.runOrdinal,
                   lastRunOrdinal: input.context.input.runOrdinal,
-                  pendingBackgroundTasks: claudePendingBackgroundTasksFromRoster(
-                    roster,
-                    awaitedTaskIds,
-                  ),
+                  pendingBackgroundTasks:
+                    nativeThreadId === null
+                      ? []
+                      : yield* pendingBackgroundTasksWithWakeHolds(nativeThreadId, roster),
                   status: input.status === "completed" ? "active" : "idle",
                   updatedAt: input.completedAt,
                 };
@@ -8786,8 +8789,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           nativeThreadId: string,
           tasks: ReadonlyArray<OrchestrationV2PendingBackgroundTask>,
         ) {
-          // A turn that attached while this frame was handled already has its run.
-          if (tasks.length === 0 || (yield* Ref.get(activeTurn)) !== null) return;
+          if (tasks.length === 0) return;
           yield* Ref.update(wakeHeldBackgroundTasksByNativeThread, (current) => {
             const held = new Map(rosterForNativeThread(current, nativeThreadId));
             for (const task of tasks) held.set(task.taskId, task);
@@ -8812,19 +8814,18 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
         }) {
           const message = input.message;
           let rosterChanged = false;
-          const awaitedWhileIdle =
-            input.activeContext === null
-              ? claudePendingBackgroundTasksFromRoster(
-                  rosterForNativeThread(
-                    yield* Ref.get(pendingBackgroundTasksByNativeThread),
-                    input.nativeThreadId,
-                  ),
-                  taskIdSetForNativeThread(
-                    yield* Ref.get(awaitedBackgroundTasksByNativeThread),
-                    input.nativeThreadId,
-                  ),
-                ).filter((task) => task.awaited === true)
-              : [];
+          // A notice that lands late in a turn still gets a wake turn of its own after the result,
+          // so a task that ends during a turn is held like one that ends while idle.
+          const awaitedBefore = claudePendingBackgroundTasksFromRoster(
+            rosterForNativeThread(
+              yield* Ref.get(pendingBackgroundTasksByNativeThread),
+              input.nativeThreadId,
+            ),
+            taskIdSetForNativeThread(
+              yield* Ref.get(awaitedBackgroundTasksByNativeThread),
+              input.nativeThreadId,
+            ),
+          ).filter((task) => task.awaited === true);
 
           if (isClaudeBackgroundTasksChangedMessage(message)) {
             const roster = Reflect.get(message, "tasks");
@@ -8907,14 +8908,14 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           if (!rosterChanged) {
             return false;
           }
-          if (awaitedWhileIdle.length > 0) {
+          if (awaitedBefore.length > 0) {
             const roster = rosterForNativeThread(
               yield* Ref.get(pendingBackgroundTasksByNativeThread),
               input.nativeThreadId,
             );
             yield* holdBackgroundTasksForWake(
               input.nativeThreadId,
-              awaitedWhileIdle.filter((task) => !roster.has(task.taskId)),
+              awaitedBefore.filter((task) => !roster.has(task.taskId)),
             );
           }
 

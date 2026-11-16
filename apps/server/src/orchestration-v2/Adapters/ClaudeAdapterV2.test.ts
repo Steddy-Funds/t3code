@@ -12588,8 +12588,8 @@ describe("ClaudeAdapterV2 background wake turns", () => {
     ),
   );
 
-  const endAwaitedTaskWhileIdle = Effect.fnUntraced(function* (
-    order: "notice-first" | "roster-first",
+  const endAwaitedTask = Effect.fnUntraced(function* (
+    order: "notice-first" | "roster-first" | "notice-in-turn",
   ) {
     const harness = yield* makeWakeHarness;
     const now = yield* DateTime.now;
@@ -12638,13 +12638,17 @@ describe("ClaudeAdapterV2 background wake turns", () => {
       taskIds: [WAKE_TASK_ID],
       awaited: true,
     });
+    // Claude Code opens a wake turn after the result for a notice that lands late in a turn.
+    if (order === "notice-in-turn") yield* harness.offerAndWait(wakeNotification);
     yield* Queue.offer(harness.sdkMessages, turnOneResult);
     yield* harness.awaitTerminal(1);
 
     const emptyRoster = roster([], "00000000-0000-4000-8000-000000000312");
     for (const frame of order === "notice-first"
       ? [wakeNotification, emptyRoster]
-      : [emptyRoster, wakeNotification]) {
+      : order === "roster-first"
+        ? [emptyRoster, wakeNotification]
+        : [emptyRoster]) {
       yield* harness.offerAndWait(frame);
     }
     // The empty level always emits, so this waits for the roster both frames leave behind.
@@ -12660,13 +12664,13 @@ describe("ClaudeAdapterV2 background wake turns", () => {
   });
 
   // regression: an auto-settle that read the emptied roster closed the session before the wake turn
-  it.effect.each(["notice-first", "roster-first"] as const)(
+  it.effect.each(["notice-first", "roster-first", "notice-in-turn"] as const)(
     "keeps an ended awaited task holding completion until its wake turn starts (%s)",
     (order) =>
       Effect.scoped(
         Effect.gen(function* () {
           const { harness, now, latestRoster, hasPendingWork } =
-            yield* endAwaitedTaskWhileIdle(order);
+            yield* endAwaitedTask(order);
           // The dev server nobody awaited is gone; only the awaited task is kept.
           assert.deepStrictEqual(
             latestRoster().map((task) => [task.taskId, task.awaited === true]),
@@ -12712,7 +12716,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
     Effect.scoped(
       Effect.gen(function* () {
         const { harness, latestRoster, hasPendingWork } =
-          yield* endAwaitedTaskWhileIdle("notice-first");
+          yield* endAwaitedTask("notice-first");
         assert.isTrue(backgroundWorkHoldsCompletion(latestRoster()));
 
         yield* TestClock.adjust("2 minutes");
@@ -12735,7 +12739,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
     Effect.scoped(
       Effect.gen(function* () {
         const { harness, roster, latestRoster, awaitBackgroundTasks } =
-          yield* endAwaitedTaskWhileIdle("notice-first");
+          yield* endAwaitedTask("notice-first");
 
         const rosterUpdates = () =>
           harness.events.filter((event) => event.type === "provider_thread.updated").length;

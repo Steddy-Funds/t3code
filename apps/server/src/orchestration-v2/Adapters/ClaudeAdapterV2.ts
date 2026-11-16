@@ -9206,6 +9206,24 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                   message.task_id,
                   message,
                 );
+                // Ending a root subagent leaves nothing holding the thread, and its wake run exists
+                // only once its dispatch commits. Stored first, so the settle its end starts sees it.
+                // Not kind subagent: what is pending is the report, and no agent runs.
+                if (
+                  registered.task.status === "running" &&
+                  !(yield* isNestedSubagentTask(message.task_id))
+                ) {
+                  yield* holdBackgroundTasksForWake(liveQuery.nativeThreadId, [
+                    {
+                      taskId: message.task_id,
+                      kind: "background_task",
+                      ...(registered.task.title == null
+                        ? {}
+                        : { description: registered.task.title }),
+                    },
+                  ]);
+                  yield* emitRosterUpdate(liveQuery.nativeThreadId, null);
+                }
                 yield* updateClaudeSubagentNode({
                   context: settled,
                   taskId: message.task_id,

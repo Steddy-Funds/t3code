@@ -8745,6 +8745,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             threadId: route.threadId,
             providerThreadId: route.providerThreadId,
           });
+          yield* rearmWakeHeldBackgroundTasks(wakeInput.nativeThreadId);
           yield* continuationRequests.offer({
             threadId: route.threadId,
             providerThreadId: route.providerThreadId,
@@ -8816,6 +8817,25 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             ),
             Effect.forkIn(sessionScope),
           );
+
+        // The wake run exists only once its dispatch commits, which a loaded server can delay
+        // past a hold's own deadline. Fresh objects take the holds away from earlier timers.
+        const rearmWakeHeldBackgroundTasks = Effect.fnUntraced(function* (nativeThreadId: string) {
+          const rearmed = yield* Ref.modify(wakeHeldBackgroundTasksByNativeThread, (current) => {
+            const held = current.get(nativeThreadId);
+            if (held === undefined) {
+              return [[] as ReadonlyArray<OrchestrationV2PendingBackgroundTask>, current] as const;
+            }
+            const copies = new Map([...held].map(([taskId, task]) => [taskId, { ...task }]));
+            return [[...copies.values()], new Map(current).set(nativeThreadId, copies)] as const;
+          });
+          if (rearmed.length === 0) return;
+          yield* releaseWakeHeldBackgroundTasksAfter(
+            nativeThreadId,
+            rearmed,
+            CLAUDE_WAKE_TURN_START_DEADLINE,
+          );
+        });
 
         const holdBackgroundTasksForWake = Effect.fnUntraced(function* (
           nativeThreadId: string,

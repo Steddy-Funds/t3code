@@ -12739,6 +12739,37 @@ describe("ClaudeAdapterV2 background wake turns", () => {
       ),
   );
 
+  it.effect("keeps an in-turn hold once the wake turn is detected, until its start deadline", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { harness, roster, latestRoster } = yield* endAwaitedTask("notice-in-turn");
+        const rosterUpdates = () =>
+          harness.events.filter((event) => event.type === "provider_thread.updated").length;
+
+        // The wake run exists only once its dispatch commits, which can take longer than 5 seconds.
+        yield* harness.offerAndWait(wakeTurnInit);
+        assert.lengthOf(harness.continuationRequests, 1);
+        yield* TestClock.adjust("5 seconds");
+        const before = rosterUpdates();
+        yield* harness.offerAndWait(roster([], "00000000-0000-4000-8000-000000000315"));
+        yield* harness.until(() => rosterUpdates() > before);
+        assert.isTrue(backgroundWorkHoldsCompletion(latestRoster()));
+
+        yield* TestClock.adjust("2 minutes");
+        yield* harness.until(() => latestRoster().length === 0);
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            IdAllocator.layer,
+            McpProviderSessions.layer,
+            NodeServices.layer,
+            NodeCrypto.layer,
+          ),
+        ),
+      ),
+    ),
+  );
+
   it.effect("keeps the hold through a stale roster level, until the agent stops waiting", () =>
     Effect.scoped(
       Effect.gen(function* () {

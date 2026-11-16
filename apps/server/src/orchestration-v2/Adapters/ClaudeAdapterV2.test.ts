@@ -14827,7 +14827,8 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           assert.isBelow(heldIndex, endedIndex());
           assert.deepStrictEqual(
             rosterAt(lastRosterIndex()).map((task) => [task.taskId, task.kind]),
-            [[TASK_ID, "subagent"]],
+            // Its report is what is pending: no agent runs, so the entry is not a subagent.
+            [[TASK_ID, "background_task"]],
           );
           assert.isTrue(yield* hasPendingWorkForThread(harness.providerThread));
           assert.lengthOf(harness.continuationRequests, 1);

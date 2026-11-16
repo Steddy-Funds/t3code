@@ -183,7 +183,7 @@ describe("tailClaudeTaskOutput on a host with many project folders", () => {
         },
         readDirectory: () => {
           calls.readDirectory += 1;
-          return Effect.succeed(folders);
+          return Effect.succeed([...folders]);
         },
       }),
     );

@@ -12669,8 +12669,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
     (order) =>
       Effect.scoped(
         Effect.gen(function* () {
-          const { harness, now, latestRoster, hasPendingWork } =
-            yield* endAwaitedTask(order);
+          const { harness, now, latestRoster, hasPendingWork } = yield* endAwaitedTask(order);
           // The dev server nobody awaited is gone; only the awaited task is kept.
           assert.deepStrictEqual(
             latestRoster().map((task) => [task.taskId, task.awaited === true]),
@@ -12715,8 +12714,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
   it.effect("stops holding an ended awaited task when Claude opens no wake turn", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const { harness, latestRoster, hasPendingWork } =
-          yield* endAwaitedTask("notice-first");
+        const { harness, latestRoster, hasPendingWork } = yield* endAwaitedTask("notice-first");
         assert.isTrue(backgroundWorkHoldsCompletion(latestRoster()));
 
         yield* TestClock.adjust("2 minutes");

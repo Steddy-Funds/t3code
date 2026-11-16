@@ -8332,10 +8332,16 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                   ).values(),
                 ];
                 if (heldDuringTurn.length > 0) {
+                  // A wake turn detected during this turn keeps its start deadline past the turn's end.
+                  const wakeRequested = (yield* Ref.get(requestedContinuations)).has(
+                    input.context.nativeThreadId,
+                  );
                   yield* releaseWakeHeldBackgroundTasksAfter(
                     input.context.nativeThreadId,
                     heldDuringTurn,
-                    CLAUDE_WAKE_AFTER_TURN_DEADLINE,
+                    wakeRequested
+                      ? CLAUDE_WAKE_TURN_START_DEADLINE
+                      : CLAUDE_WAKE_AFTER_TURN_DEADLINE,
                   );
                 }
               }),

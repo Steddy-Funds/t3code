@@ -12770,6 +12770,118 @@ describe("ClaudeAdapterV2 background wake turns", () => {
     ),
   );
 
+  it.effect("keeps the hold of a wake turn detected during another turn past that turn's end", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const harness = yield* makeWakeHarness;
+        const now = yield* DateTime.now;
+        const awaitBackgroundTasks = harness.runtime.awaitBackgroundTasks;
+        if (awaitBackgroundTasks === undefined) {
+          throw new Error("Claude adapter runtime must expose awaitBackgroundTasks.");
+        }
+        const rosters = () =>
+          harness.events.flatMap((event) =>
+            event.type === "provider_thread.updated"
+              ? [event.providerThread.pendingBackgroundTasks ?? []]
+              : [],
+          );
+        const roster = (taskIds: ReadonlyArray<string>, uuid: string) =>
+          claudeSdkFrame({
+            type: "system",
+            subtype: "background_tasks_changed",
+            tasks: taskIds.map((taskId) => ({
+              task_id: taskId,
+              task_type: "local_bash",
+              description: taskId,
+            })),
+            uuid,
+            session_id: WAKE_NATIVE_SESSION,
+          });
+        const echoing = (frame: SDKMessage, prompt: number) =>
+          claudeSdkFrame({ ...frame, user_message_uuid: harness.promptUuid(prompt) });
+
+        yield* harness.runtime.startTurn(
+          makeClaudeTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now,
+            attemptId: RunAttemptId.make("attempt-claude-raced-wake-1"),
+            text: "Run the tests in the background.",
+            attachments: [],
+          }),
+        );
+        yield* harness.offerAndWait(roster([WAKE_TASK_ID], "00000000-0000-4000-8000-000000000321"));
+        yield* awaitBackgroundTasks({
+          providerThread: harness.providerThread,
+          taskIds: [WAKE_TASK_ID],
+          awaited: true,
+        });
+        // This CLI echoes a prompt ahead of its output, so output with no echo is another turn's.
+        yield* harness.offerAndWait(
+          echoing(
+            makeAssistantTextFrame({
+              uuid: "00000000-0000-4000-8000-000000000322",
+              text: "On it.",
+            }),
+            0,
+          ),
+        );
+        yield* Queue.offer(harness.sdkMessages, echoing(turnOneResult, 0));
+        yield* harness.awaitTerminal(1);
+
+        // The user writes as the task ends: Claude runs the wake turn ahead of the new prompt.
+        yield* harness.runtime.startTurn(
+          makeClaudeTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now,
+            attemptId: RunAttemptId.make("attempt-claude-raced-wake-2"),
+            text: "And the lint?",
+            attachments: [],
+            providerTurnOrdinal: 2,
+          }),
+        );
+        yield* harness.offerAndWait(wakeNotification);
+        yield* harness.offerAndWait(wakeAssistant);
+        yield* harness.offerAndWait(wakeResult);
+        assert.lengthOf(harness.continuationRequests, 1);
+        yield* harness.offerAndWait(
+          echoing(
+            makeAssistantTextFrame({ uuid: "00000000-0000-4000-8000-000000000323", text: "Lint." }),
+            1,
+          ),
+        );
+        yield* Queue.offer(
+          harness.sdkMessages,
+          echoing(
+            makeResultFrame({ uuid: "00000000-0000-4000-8000-000000000324", result: "Lint." }),
+            1,
+          ),
+        );
+        yield* harness.awaitTerminal(2);
+
+        // The wake run is queued behind the user's turn: its hold keeps the wake turn's deadline.
+        yield* TestClock.adjust("5 seconds");
+        const before = rosters().length;
+        yield* harness.offerAndWait(roster([], "00000000-0000-4000-8000-000000000325"));
+        yield* harness.until(() => rosters().length > before);
+        assert.isTrue(backgroundWorkHoldsCompletion(rosters().at(-1) ?? []));
+
+        yield* TestClock.adjust("2 minutes");
+        yield* harness.until(() => rosters().at(-1)?.length === 0);
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            IdAllocator.layer,
+            McpProviderSessions.layer,
+            NodeServices.layer,
+            NodeCrypto.layer,
+          ),
+        ),
+      ),
+    ),
+  );
+
   it.effect("keeps the hold through a stale roster level, until the agent stops waiting", () =>
     Effect.scoped(
       Effect.gen(function* () {

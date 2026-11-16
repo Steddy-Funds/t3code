@@ -5762,8 +5762,12 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             ...input.providerThread,
             providerSessionId: session.id,
             ...(input.status === undefined ? {} : { status: input.status }),
+            // A stale roster level can list a held task again; it stays awaited until its hold ends.
             pendingBackgroundTasks: [
-              ...claudePendingBackgroundTasksFromRoster(roster, awaitedTaskIds),
+              ...claudePendingBackgroundTasksFromRoster(
+                roster,
+                new Set([...awaitedTaskIds, ...wakeHeld.keys()]),
+              ),
               ...[...wakeHeld.values()].filter((task) => !roster.has(task.taskId)),
             ],
             ...(goalsByNativeThread.has(input.nativeThreadId)
@@ -8751,24 +8755,26 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           yield* emitProviderThreadRoster({ nativeThreadId, providerThread: baseThread, status });
         });
 
-        // `only` limits the release to those holds, so a deadline cannot end a later hold.
-        const releaseWakeHeldBackgroundTasks = Effect.fnUntraced(function* (
+        const dropWakeHeldBackgroundTasks = (
           nativeThreadId: string,
-          only?: ReadonlyArray<OrchestrationV2PendingBackgroundTask>,
-        ) {
-          const released = yield* Ref.modify(wakeHeldBackgroundTasksByNativeThread, (current) => {
+          drops: (task: OrchestrationV2PendingBackgroundTask) => boolean,
+        ) =>
+          Ref.modify(wakeHeldBackgroundTasksByNativeThread, (current) => {
             const held = current.get(nativeThreadId);
             if (held === undefined) return [false, current] as const;
-            const kept = new Map(
-              [...held].filter(([, task]) => only !== undefined && !only.includes(task)),
-            );
+            const kept = new Map([...held].filter(([, task]) => !drops(task)));
             if (kept.size === held.size) return [false, current] as const;
             const updated = new Map(current);
             if (kept.size === 0) updated.delete(nativeThreadId);
             else updated.set(nativeThreadId, kept);
             return [true, updated] as const;
           });
-          if (!released) return;
+
+        const releaseWakeHeldBackgroundTasks = Effect.fnUntraced(function* (
+          nativeThreadId: string,
+          releases: (task: OrchestrationV2PendingBackgroundTask) => boolean = () => true,
+        ) {
+          if (!(yield* dropWakeHeldBackgroundTasks(nativeThreadId, releases))) return;
           const active = yield* Ref.get(activeTurn);
           yield* emitRosterUpdate(
             nativeThreadId,
@@ -8780,16 +8786,20 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           nativeThreadId: string,
           tasks: ReadonlyArray<OrchestrationV2PendingBackgroundTask>,
         ) {
-          if (tasks.length === 0) return;
+          // A turn that attached while this frame was handled already has its run.
+          if (tasks.length === 0 || (yield* Ref.get(activeTurn)) !== null) return;
           yield* Ref.update(wakeHeldBackgroundTasksByNativeThread, (current) => {
             const held = new Map(rosterForNativeThread(current, nativeThreadId));
             for (const task of tasks) held.set(task.taskId, task);
             return new Map(current).set(nativeThreadId, held);
           });
           // Claude may open no wake turn, and the thread must not wait on the task forever.
+          // Matching these objects keeps the deadline from ending a later hold of a reused id.
           yield* Effect.sleep(CLAUDE_WAKE_TURN_START_DEADLINE).pipe(
             Effect.andThen(
-              sdkMessageLock.withPermits(1)(releaseWakeHeldBackgroundTasks(nativeThreadId, tasks)),
+              sdkMessageLock.withPermits(1)(
+                releaseWakeHeldBackgroundTasks(nativeThreadId, (task) => tasks.includes(task)),
+              ),
             ),
             Effect.forkIn(sessionScope),
           );
@@ -12261,7 +12271,13 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 yield* Ref.get(pendingBackgroundTasksByNativeThread),
                 nativeThreadId,
               );
-              const matched = [...new Set(taskIds)].filter((taskId) => roster.has(taskId));
+              const held = rosterForNativeThread(
+                yield* Ref.get(wakeHeldBackgroundTasksByNativeThread),
+                nativeThreadId,
+              );
+              const matched = [...new Set(taskIds)].filter(
+                (taskId) => roster.has(taskId) || (!awaited && held.has(taskId)),
+              );
               if (matched.length === 0) return { matched };
               if (awaited) {
                 yield* addTaskIdsToNativeThreadSet(
@@ -12277,6 +12293,9 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                     taskId,
                   );
                 }
+                yield* dropWakeHeldBackgroundTasks(nativeThreadId, (task) =>
+                  matched.includes(task.taskId),
+                );
               }
               const active = yield* Ref.get(activeTurn);
               yield* emitRosterUpdate(

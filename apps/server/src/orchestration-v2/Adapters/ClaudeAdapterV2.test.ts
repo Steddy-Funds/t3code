@@ -12652,7 +12652,9 @@ describe("ClaudeAdapterV2 background wake turns", () => {
     return {
       harness,
       now,
+      roster,
       latestRoster,
+      awaitBackgroundTasks,
       hasPendingWork: hasPendingWorkForThread(harness.providerThread),
     };
   });
@@ -12716,6 +12718,44 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         yield* TestClock.adjust("2 minutes");
         yield* harness.until(() => latestRoster().length === 0);
         assert.isFalse(yield* hasPendingWork);
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            IdAllocator.layer,
+            McpProviderSessions.layer,
+            NodeServices.layer,
+            NodeCrypto.layer,
+          ),
+        ),
+      ),
+    ),
+  );
+
+  it.effect("keeps the hold through a stale roster level, until the agent stops waiting", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { harness, roster, latestRoster, awaitBackgroundTasks } =
+          yield* endAwaitedTaskWhileIdle("notice-first");
+
+        const rosterUpdates = () =>
+          harness.events.filter((event) => event.type === "provider_thread.updated").length;
+        for (const [taskIds, uuid] of [
+          [[WAKE_TASK_ID], "00000000-0000-4000-8000-000000000313"],
+          [[], "00000000-0000-4000-8000-000000000314"],
+        ] as const) {
+          const before = rosterUpdates();
+          yield* harness.offerAndWait(roster(taskIds, uuid));
+          yield* harness.until(() => rosterUpdates() > before);
+          assert.isTrue(backgroundWorkHoldsCompletion(latestRoster()));
+        }
+
+        const released = yield* awaitBackgroundTasks({
+          providerThread: harness.providerThread,
+          taskIds: [WAKE_TASK_ID],
+          awaited: false,
+        });
+        assert.deepStrictEqual(released.matched, [WAKE_TASK_ID]);
+        yield* harness.until(() => latestRoster().length === 0);
       }).pipe(
         Effect.provide(
           Layer.mergeAll(

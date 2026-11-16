@@ -144,6 +144,17 @@ describe("isAutoSettlementCandidate", () => {
         NOW_MS,
       ),
     ).toBe(true);
+    // The Claude adapter keeps an ended awaited command listed until its wake run exists.
+    expect(
+      ThreadSettlementService.isAutoSettlementCandidate(
+        shell({
+          pendingBackgroundTasks: [
+            { taskId: "tests", kind: "command", description: "vp test run", awaited: true },
+          ],
+        }),
+        NOW_MS,
+      ),
+    ).toBe(false);
   });
 
   it("never settles a load-paused thread", () => {

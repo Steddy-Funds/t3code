@@ -10556,7 +10556,8 @@ describe("ClaudeAdapterV2 background wake turns", () => {
             "real",
             "tmp",
             `claude-${process.getuid?.()}`,
-            "project",
+            // Claude Code names the folder after the physical working directory.
+            physicalCwd.replace(/[^a-zA-Z0-9]/g, "-"),
             WAKE_NATIVE_SESSION,
             "tasks",
           );

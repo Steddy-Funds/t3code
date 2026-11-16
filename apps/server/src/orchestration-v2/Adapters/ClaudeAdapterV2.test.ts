@@ -78,6 +78,7 @@ import { Tool } from "effect/ai";
 import { formatClaudeResumeCompactionQuestion } from "@t3tools/shared/claudeCompaction";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
+import { backgroundWorkHoldsCompletion } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import { SpawnExecutableResolution } from "@t3tools/shared/shell";
 
 import * as PortScanner from "../../preview/PortScanner.ts";
@@ -10336,11 +10337,9 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           ],
         );
 
-        // Once the task leaves the roster, a reused id starts unmarked.
-        yield* Queue.offer(
-          harness.sdkMessages,
-          roster(["dev-server"], "00000000-0000-4000-8000-000000000303"),
-        );
+        // Once the task leaves the roster and its wake deadline passes, a reused id starts unmarked.
+        yield* harness.offerAndWait(roster(["dev-server"], "00000000-0000-4000-8000-000000000303"));
+        yield* TestClock.adjust("2 minutes");
         yield* nextRoster((tasks) => tasks.length === 1);
         yield* Queue.offer(
           harness.sdkMessages,
@@ -12576,6 +12575,141 @@ describe("ClaudeAdapterV2 background wake turns", () => {
             (event) => event.type === "message.updated" && event.message.text === WAKE_RESULT_TEXT,
           ),
         );
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            IdAllocator.layer,
+            McpProviderSessions.layer,
+            NodeServices.layer,
+            NodeCrypto.layer,
+          ),
+        ),
+      ),
+    ),
+  );
+
+  const endAwaitedTaskWhileIdle = Effect.fnUntraced(function* (
+    order: "notice-first" | "roster-first",
+  ) {
+    const harness = yield* makeWakeHarness;
+    const now = yield* DateTime.now;
+    const awaitBackgroundTasks = harness.runtime.awaitBackgroundTasks;
+    const hasPendingWorkForThread = harness.runtime.hasPendingBackgroundWorkForThread;
+    if (awaitBackgroundTasks === undefined || hasPendingWorkForThread === undefined) {
+      throw new Error("Claude adapter runtime must expose its background task hooks.");
+    }
+    const latestRoster = () =>
+      harness.events.findLast((event) => event.type === "provider_thread.updated")?.providerThread
+        .pendingBackgroundTasks ?? [];
+    const roster = (taskIds: ReadonlyArray<string>, uuid: string) =>
+      claudeSdkFrame({
+        type: "system",
+        subtype: "background_tasks_changed",
+        tasks: taskIds.map((taskId) => ({
+          task_id: taskId,
+          task_type: "local_bash",
+          description: taskId,
+        })),
+        uuid,
+        session_id: WAKE_NATIVE_SESSION,
+      });
+
+    yield* harness.runtime.startTurn(
+      makeClaudeTestTurnInput({
+        threadId: harness.threadId,
+        providerThread: harness.providerThread,
+        now,
+        attemptId: RunAttemptId.make("attempt-claude-awaited-wake-1"),
+        text: "Run the tests in the background and the dev server.",
+        attachments: [],
+      }),
+    );
+    yield* harness.offerAndWait(
+      roster([WAKE_TASK_ID, "dev-server"], "00000000-0000-4000-8000-000000000311"),
+    );
+    yield* awaitBackgroundTasks({
+      providerThread: harness.providerThread,
+      taskIds: [WAKE_TASK_ID],
+      awaited: true,
+    });
+    yield* Queue.offer(harness.sdkMessages, turnOneResult);
+    yield* harness.awaitTerminal(1);
+
+    const emptyRoster = roster([], "00000000-0000-4000-8000-000000000312");
+    for (const frame of order === "notice-first"
+      ? [wakeNotification, emptyRoster]
+      : [emptyRoster, wakeNotification]) {
+      yield* harness.offerAndWait(frame);
+    }
+    // The empty level always emits, so this waits for the roster both frames leave behind.
+    yield* harness.until(() => !latestRoster().some((task) => task.taskId === "dev-server"));
+    return {
+      harness,
+      now,
+      latestRoster,
+      hasPendingWork: hasPendingWorkForThread(harness.providerThread),
+    };
+  });
+
+  // regression: an auto-settle that read the emptied roster closed the session before the wake turn
+  it.effect.each(["notice-first", "roster-first"] as const)(
+    "keeps an ended awaited task holding completion until its wake turn starts (%s)",
+    (order) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { harness, now, latestRoster, hasPendingWork } =
+            yield* endAwaitedTaskWhileIdle(order);
+          // The dev server nobody awaited is gone; only the awaited task is kept.
+          assert.deepStrictEqual(
+            latestRoster().map((task) => [task.taskId, task.awaited === true]),
+            [[WAKE_TASK_ID, true]],
+          );
+          assert.isTrue(yield* hasPendingWork);
+
+          // Offering the wake run does not create it, so the hold outlives the offer.
+          yield* harness.offerAndWait(wakeTurnInit);
+          assert.lengthOf(harness.continuationRequests, 1);
+          assert.isTrue(yield* hasPendingWork);
+          assert.isTrue(backgroundWorkHoldsCompletion(latestRoster()));
+
+          yield* harness.runtime.startTurn(
+            makeClaudeTestTurnInput({
+              threadId: harness.threadId,
+              providerThread: harness.providerThread,
+              now,
+              attemptId: RunAttemptId.make("attempt-claude-awaited-wake-2"),
+              text: "Background task completed.",
+              attachments: [],
+              providerTurnOrdinal: 2,
+              messageCreatedBy: "agent",
+              messageCreationSource: "provider",
+            }),
+          );
+          yield* harness.until(() => latestRoster().length === 0);
+          assert.isFalse(yield* hasPendingWork);
+        }).pipe(
+          Effect.provide(
+            Layer.mergeAll(
+              IdAllocator.layer,
+              McpProviderSessions.layer,
+              NodeServices.layer,
+              NodeCrypto.layer,
+            ),
+          ),
+        ),
+      ),
+  );
+
+  it.effect("stops holding an ended awaited task when Claude opens no wake turn", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { harness, latestRoster, hasPendingWork } =
+          yield* endAwaitedTaskWhileIdle("notice-first");
+        assert.isTrue(backgroundWorkHoldsCompletion(latestRoster()));
+
+        yield* TestClock.adjust("2 minutes");
+        yield* harness.until(() => latestRoster().length === 0);
+        assert.isFalse(yield* hasPendingWork);
       }).pipe(
         Effect.provide(
           Layer.mergeAll(

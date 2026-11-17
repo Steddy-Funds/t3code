@@ -317,6 +317,44 @@ export const make = Effect.gen(function* () {
   // Repeated thread.settled retains settledAt; run the action only once per settlement.
   const settleActionRunAt = new Map<ThreadId, number>();
 
+  const settleSubagentsWithParents = Effect.fn(
+    "ThreadSettlementServiceV2.settleSubagentsWithParents",
+  )(function* (settings: import("@t3tools/contracts").ServerSettings) {
+    const subagents = yield* projections.getSubagentsOfSettledParents();
+    yield* Effect.forEach(
+      subagents,
+      ({ thread, parentSettledAt }) => {
+        const projectSettings = resolveProjectSettings(settings, thread.projectId).settings;
+        if (
+          !projectSettings.sidebarAutoSettleOnMerge &&
+          projectSettings.sidebarAutoSettleAfterDays === null
+        ) {
+          return Effect.void;
+        }
+        return random.uuidV4().pipe(
+          Effect.flatMap((uuid) =>
+            orchestrator.dispatch({
+              type: "thread.auto-settle",
+              commandId: CommandId.make(`server:auto-settle:${thread.id}:${uuid}`),
+              threadId: thread.id,
+              snapshotAt: thread.updatedAt,
+              settledAt: parentSettledAt,
+            }),
+          ),
+          Effect.catchCauseIf(
+            (cause) => !Cause.hasInterruptsOnly(cause),
+            (cause) =>
+              Effect.logWarning("settling a subagent with its parent skipped", {
+                threadId: thread.id,
+                cause: Cause.pretty(cause),
+              }),
+          ),
+        );
+      },
+      { concurrency: 8, discard: true },
+    );
+  });
+
   const sweep = Effect.fn("ThreadSettlementServiceV2.sweep")(function* (
     mergedPullRequest: PullRequestService.PullRequestMergeEvent | null,
     threadId?: ThreadId,
@@ -325,6 +363,7 @@ export const make = Effect.gen(function* () {
     if (!autoSettlementConfigured(settings)) {
       return;
     }
+    if (threadId === undefined) yield* settleSubagentsWithParents(settings);
     const threads = yield* projections.getSettlementCandidates(threadId);
     if (threads.length === 0) return;
     const projectShells = yield* projectStore.listShells();
@@ -392,6 +431,8 @@ export const make = Effect.gen(function* () {
       { concurrency: 8 },
     ))
       .filter((thread) => thread !== null)
+      // Subagents share their parent's checkout and settle with it; a lookup each costs git work every minute.
+      .filter((thread) => thread.lineage.relationshipToParent !== "subagent")
       .filter((thread) => visibleThreadPullRequests(thread.pullRequests ?? []).length === 0)
       .filter(
         (thread) =>
@@ -604,6 +645,8 @@ export const make = Effect.gen(function* () {
       const settled = yield* projections.getThread(threadId);
       if (settled.settledOverride !== "settled") return;
       yield* terminals.closeOnSettle({ threadId });
+      // A subagent works in its parent's checkout, whose own settlement runs the settle script.
+      if (settled.lineage.relationshipToParent === "subagent") return;
       const worktreePath = settled.worktreePath;
       if (worktreePath === null || !(yield* fileSystem.exists(worktreePath))) return;
       // Recheck after closing and worktree I/O; re-engaged threads must not be cleaned up.

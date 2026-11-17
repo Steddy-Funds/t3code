@@ -1113,7 +1113,9 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
         },
       });
       const lookup = manager.branchPullRequest({ cwd: repoDir, branch: "feature/settled" });
-      const freshLookups = () => gitCommands.filter((args) => args === "remote").length;
+      // Each settled result rereads its fingerprint; any other for-each-ref rereads the lookup's state.
+      const freshLookups = (lookups = 1) =>
+        gitCommands.filter((args) => args.startsWith("for-each-ref ")).length - lookups;
 
       expect((yield* lookup)?.state).toBe("merged");
       gitCommands.length = 0;
@@ -1125,7 +1127,7 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
         "for-each-ref",
         "for-each-ref",
       ]);
-      expect(freshLookups()).toBe(0);
+      expect(freshLookups(2)).toBe(0);
 
       NodeFS.writeFileSync(NodePath.join(repoDir, "settled.txt"), "new work\n");
       yield* runGit(repoDir, ["add", "settled.txt"]);
@@ -1152,6 +1154,72 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
       yield* TestClock.adjust("5 minutes");
       expect((yield* lookup)?.number).toBe(2);
     }),
+  );
+
+  it.effect(
+    "background sweeps of one branch share its lookup and read git state in two commands",
+    () =>
+      Effect.gen(function* () {
+        const repoDir = yield* makeTempDir("t3code-git-manager-");
+        yield* initRepo(repoDir);
+        const remoteDir = yield* createBareRemote();
+        yield* runGit(repoDir, ["remote", "add", "origin", remoteDir]);
+        yield* runGit(repoDir, ["push", "-u", "origin", "main"]);
+        yield* runGit(repoDir, ["remote", "set-head", "origin", "main"]);
+        yield* runGit(repoDir, ["checkout", "-b", "feature/shared"]);
+        yield* runGit(repoDir, ["push", "-u", "origin", "feature/shared"]);
+        const gitCommands: string[] = [];
+        const { manager } = yield* makeManager({
+          gitCommands,
+          providerScenario: {
+            prListOtherwise: [
+              {
+                number: 7,
+                title: "Shared",
+                url: "https://github.com/pingdotgg/codething-mvp/pull/7",
+                baseRefName: "main",
+                headRefName: "feature/shared",
+                state: "merged",
+                updatedAt: "2026-04-07T15:00:00Z",
+              },
+            ],
+          },
+        });
+        const sweepLookup = manager
+          .branchPullRequest({ cwd: repoDir, branch: "feature/shared" })
+          .pipe(Effect.provideService(GitVcsDriver.BackgroundGitWork, true));
+        const commandsOf = Effect.fnUntraced(function* <A, E, R>(effect: Effect.Effect<A, E, R>) {
+          gitCommands.length = 0;
+          const result = yield* effect;
+          return { result, commands: gitCommands.map((args) => args.split(" ", 1)[0]).toSorted() };
+        });
+
+        // Remotes, upstream, default branch and remote URLs: one config listing and one for-each-ref.
+        const cold = yield* commandsOf(
+          manager.branchPullRequest({ cwd: repoDir, branch: "feature/shared" }),
+        );
+        expect(cold.result?.state).toBe("merged");
+        // Lookup state, the host lookup's config, the settled fingerprint, and the fresh
+        // confirmation, which rereads config once more after asking the host.
+        expect(cold.commands).toEqual([
+          ...Array.from({ length: 5 }, () => "config"),
+          ...Array.from({ length: 3 }, () => "for-each-ref"),
+        ]);
+
+        // The settlement and pull request sweeps of one checkout share a lookup.
+        expect((yield* commandsOf(sweepLookup)).commands).toEqual(["config", "for-each-ref"]);
+        const shared = yield* commandsOf(sweepLookup);
+        expect(shared.result?.state).toBe("merged");
+        expect(shared.commands).toEqual([]);
+
+        // The next sweep, a minute later, reads again.
+        yield* TestClock.adjust("31 seconds");
+        expect((yield* commandsOf(sweepLookup)).commands).toEqual(["config", "for-each-ref"]);
+
+        // A T3 git action is never answered from a shared result.
+        yield* manager.invalidateStatus(repoDir);
+        expect((yield* commandsOf(sweepLookup)).commands).not.toEqual([]);
+      }),
   );
 
   it.effect("branch PR lookup uses a saved tracked branch without changing checkout", () =>

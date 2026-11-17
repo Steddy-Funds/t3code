@@ -199,6 +199,7 @@ export type ProjectionSettlementCandidate = Pick<
   OrchestrationV2ThreadShell,
   | "id"
   | "projectId"
+  | "lineage"
   | "branch"
   | "worktreePath"
   | "pullRequests"
@@ -227,6 +228,11 @@ export type ProjectionSettlementCandidate = Pick<
   Pick<OrchestrationV2AppThread, "lastSnoozeWakeAt"> & {
     readonly latestUserAuthoredMessageAt: DateTime.Utc | null;
   };
+
+export interface ProjectionSettledParentSubagent {
+  readonly thread: Pick<OrchestrationV2AppThread, "id" | "projectId" | "updatedAt">;
+  readonly parentSettledAt: DateTime.Utc;
+}
 
 const ProjectionCheckpointContext = Schema.Struct({
   runs: Schema.Array(
@@ -561,6 +567,11 @@ export interface ProjectionStoreV2Shape {
   readonly getSettlementCandidates: (
     threadId?: ThreadId,
   ) => Effect.Effect<ReadonlyArray<ProjectionSettlementCandidate>, ProjectionStoreV2Error>;
+  /** Idle, unsettled subagents whose parent is settled; they settle with it. */
+  readonly getSubagentsOfSettledParents: () => Effect.Effect<
+    ReadonlyArray<ProjectionSettledParentSubagent>,
+    ProjectionStoreV2Error
+  >;
   readonly getThreadsWithPullRequests: (
     threadId?: ThreadId,
   ) => Effect.Effect<ReadonlyArray<ProjectionThreadPullRequests>, ProjectionStoreV2Error>;
@@ -6678,6 +6689,18 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               AND json_extract(t.payload_json, '$.settledOverride') IS NULL
               AND json_extract(t.payload_json, '$.pinnedAt') IS NULL
               AND json_extract(t.payload_json, '$.autoSettleDisabledAt') IS NULL
+              -- A subagent of a settled, archived or deleted parent is never swept: it settles
+              -- with its parent (getSubagentsOfSettledParents) rather than through a lookup.
+              AND NOT EXISTS (
+                SELECT 1 FROM orchestration_v2_projection_threads parent
+                WHERE json_extract(t.payload_json, '$.lineage.relationshipToParent') = 'subagent'
+                  AND parent.thread_id = json_extract(t.payload_json, '$.lineage.parentThreadId')
+                  AND (
+                    json_extract(parent.payload_json, '$.settledOverride') = 'settled'
+                    OR json_extract(parent.payload_json, '$.archivedAt') IS NOT NULL
+                    OR parent.deleted_at IS NOT NULL
+                  )
+              )
               AND NOT EXISTS (
                 SELECT 1 FROM orchestration_v2_projection_runs active
                 WHERE active.thread_id = t.thread_id
@@ -6768,6 +6791,51 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           }),
         )
         .pipe(Effect.mapError((cause) => new ProjectionStoreSetupError({ cause })));
+
+    const getSubagentsOfSettledParents: ProjectionStoreV2Shape["getSubagentsOfSettledParents"] =
+      () =>
+        sql<{ readonly payload_json: string; readonly parent_settled_at: string }>`
+          SELECT t.payload_json,
+            json_extract(parent.payload_json, '$.settledAt') AS parent_settled_at
+          FROM orchestration_v2_projection_threads t
+          JOIN orchestration_v2_projection_threads parent
+            ON parent.thread_id = json_extract(t.payload_json, '$.lineage.parentThreadId')
+          WHERE t.deleted_at IS NULL
+            AND json_extract(t.payload_json, '$.lineage.relationshipToParent') = 'subagent'
+            AND json_extract(t.payload_json, '$.archivedAt') IS NULL
+            AND json_extract(t.payload_json, '$.settledOverride') IS NULL
+            AND json_extract(t.payload_json, '$.pinnedAt') IS NULL
+            AND json_extract(t.payload_json, '$.autoSettleDisabledAt') IS NULL
+            AND parent.deleted_at IS NULL
+            AND json_extract(parent.payload_json, '$.settledOverride') = 'settled'
+            AND json_extract(parent.payload_json, '$.settledAt') IS NOT NULL
+            AND NOT EXISTS (
+              SELECT 1 FROM orchestration_v2_projection_runs run
+              WHERE run.thread_id = t.thread_id
+                AND run.status IN ('queued', 'preparing', 'starting', 'running', 'waiting')
+            )
+            AND NOT EXISTS (
+              SELECT 1 FROM orchestration_v2_projection_runtime_requests request
+              WHERE request.thread_id = t.thread_id AND request.status = 'pending'
+            )
+          ORDER BY t.thread_id
+        `.pipe(
+          Effect.flatMap((rows) =>
+            Effect.forEach(rows, (row) =>
+              decodeThreadPayload(row.payload_json).pipe(
+                Effect.map((thread): ProjectionSettledParentSubagent => ({
+                  thread: {
+                    id: thread.id,
+                    projectId: thread.projectId,
+                    updatedAt: thread.updatedAt,
+                  },
+                  parentSettledAt: DateTime.makeUnsafe(row.parent_settled_at),
+                })),
+              ),
+            ),
+          ),
+          Effect.mapError((cause) => new ProjectionStoreSetupError({ cause })),
+        );
 
     const getOpenRemoteDelegatedTasks: ProjectionStoreV2Shape["getOpenRemoteDelegatedTasks"] = sql<{
       readonly thread_id: string;
@@ -7570,6 +7638,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       findGuestShareThreadId: readOnReader(findGuestShareThreadId),
       getThread: readOnReader(getThread),
       getSettlementCandidates: readOnReader(getSettlementCandidates),
+      getSubagentsOfSettledParents: readOnReader(getSubagentsOfSettledParents),
       getThreadsWithPullRequests: readOnReader(getThreadsWithPullRequests),
       getThreadTitles: readOnReader(getThreadTitles),
       getThreadLinkMetadata: readOnReader(getThreadLinkMetadata),

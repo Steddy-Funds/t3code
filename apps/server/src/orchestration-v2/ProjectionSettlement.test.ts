@@ -365,6 +365,55 @@ it.effect(
     }).pipe(Effect.provide(layerSql)),
 );
 
+it.effect("sql: a subagent of a settled, archived or deleted parent is never swept", () =>
+  Effect.gen(function* () {
+    const store = yield* ProjectionStore.ProjectionStoreV2;
+    const subagentOf = (parentThreadId: ThreadId) => ({
+      lineage: {
+        parentThreadId,
+        relationshipToParent: "subagent" as const,
+        rootThreadId: parentThreadId,
+      },
+    });
+    const parentSettledAt = DateTime.subtract(now, { days: 2 });
+    const active = yield* createThread("parent-active");
+    const settled = yield* createThread("parent-settled", {
+      settledOverride: "settled",
+      settledAt: parentSettledAt,
+    });
+    const archived = yield* createThread("parent-archived", { archivedAt: old });
+    const deleted = yield* createThread("parent-deleted", { deletedAt: old });
+    const activeChild = yield* createThread("child-of-active", subagentOf(active));
+    const settledChild = yield* createThread("child-of-settled", subagentOf(settled));
+    yield* createThread("child-of-archived", subagentOf(archived));
+    yield* createThread("child-of-deleted", subagentOf(deleted));
+    yield* createThread("pinned-child-of-settled", { ...subagentOf(settled), pinnedAt: old });
+    yield* createThread("settled-child-of-settled", {
+      ...subagentOf(settled),
+      settledOverride: "settled",
+      settledAt: old,
+    });
+    yield* createRun(
+      yield* createThread("running-child-of-settled", subagentOf(settled)),
+      "running",
+    );
+    yield* createRun(yield* createThread("queued-child-of-settled", subagentOf(settled)), "queued");
+
+    assert.deepEqual(
+      new Set((yield* store.getSettlementCandidates()).map((thread) => thread.id)),
+      new Set([active, activeChild]),
+    );
+    assert.deepEqual(yield* store.getSettlementCandidates(settledChild), []);
+    assert.deepEqual(
+      (yield* store.getSubagentsOfSettledParents()).map(({ thread, parentSettledAt }) => [
+        thread.id,
+        DateTime.formatIso(parentSettledAt),
+      ]),
+      [[settledChild, DateTime.formatIso(parentSettledAt)]],
+    );
+  }).pipe(Effect.provide(layerSql)),
+);
+
 it.effect("sql: the user-authored message time ignores agent notifications", () =>
   Effect.gen(function* () {
     const store = yield* ProjectionStore.ProjectionStoreV2;

@@ -6,7 +6,10 @@ import type {
   ResourceTelemetryHistoryBucket,
   ResourceTelemetryProcess,
   ResourceTelemetryProcessSummary,
+  ThreadId,
+  ThreadResourcePoint,
 } from "@t3tools/contracts";
+import { THREAD_RESOURCE_HISTORY_POINTS } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Option from "effect/Option";
 
@@ -289,4 +292,124 @@ export function buildResourceTelemetryHistory(
     topProcesses: summarizeProcesses(processSamples),
     health: input.health,
   };
+}
+
+/** One thread history point per window. */
+export const THREAD_HISTORY_STEP_MS = 30_000;
+/** Threads with history; those whose newest point is oldest go first. */
+export const THREAD_HISTORY_MAX_THREADS = 200;
+
+export interface ThreadUsage {
+  readonly cpuPercent: number;
+  readonly memoryBytes: number;
+}
+
+/** A fixed ring of (at, cpu, memory) triples, oldest overwritten first. */
+class ThreadRing {
+  private readonly values = new Float64Array(THREAD_RESOURCE_HISTORY_POINTS * 3);
+  private head = 0;
+  count = 0;
+  lastAtMs = 0;
+
+  push(atMs: number, cpuPercent: number, memoryBytes: number): void {
+    const slot = this.head * 3;
+    this.values[slot] = atMs;
+    this.values[slot + 1] = cpuPercent;
+    this.values[slot + 2] = memoryBytes;
+    this.head = (this.head + 1) % THREAD_RESOURCE_HISTORY_POINTS;
+    this.count = Math.min(this.count + 1, THREAD_RESOURCE_HISTORY_POINTS);
+    this.lastAtMs = atMs;
+  }
+
+  read(nowMs: number): Array<ThreadResourcePoint> {
+    const points: Array<ThreadResourcePoint> = [];
+    for (let index = 0; index < this.count; index++) {
+      const slot =
+        ((this.head - this.count + index + THREAD_RESOURCE_HISTORY_POINTS) %
+          THREAD_RESOURCE_HISTORY_POINTS) *
+        3;
+      points.push({
+        ageMs: Math.max(0, Math.round(nowMs - this.values[slot]!)),
+        cpuPercent: this.values[slot + 1]!,
+        memoryBytes: this.values[slot + 2]!,
+        gpuUtilPercent: null,
+      });
+    }
+    return points;
+  }
+}
+
+/**
+ * Per-thread history in fixed rings: each 30 s window's ticks average into one point for every
+ * thread seen in it. A thread absent from some ticks averages lower; one absent from a whole
+ * window gets no point, so the gap shows.
+ */
+export class ThreadResourceHistory {
+  private readonly rings = new Map<ThreadId, ThreadRing>();
+  private readonly window = new Map<ThreadId, { cpuSum: number; memoryBytes: number }>();
+  private windowTicks = 0;
+  private windowStartMs: number | null = null;
+  private lastTickMs = 0;
+
+  /** Folds one tick in; true when it closed a window. */
+  record(atMs: number, usage: ReadonlyMap<ThreadId, ThreadUsage>): boolean {
+    let closed = false;
+    // Ticks stopped for longer than a window (the monitor was down): close at the last one.
+    if (this.windowStartMs !== null && atMs - this.lastTickMs > THREAD_HISTORY_STEP_MS) {
+      this.close(this.lastTickMs);
+      this.windowStartMs = null;
+      closed = true;
+    }
+    this.windowStartMs ??= atMs;
+    this.windowTicks += 1;
+    this.lastTickMs = atMs;
+    for (const [threadId, { cpuPercent, memoryBytes }] of usage) {
+      const entry = this.window.get(threadId);
+      if (entry === undefined) this.window.set(threadId, { cpuSum: cpuPercent, memoryBytes });
+      else {
+        entry.cpuSum += cpuPercent;
+        entry.memoryBytes = memoryBytes;
+      }
+    }
+    if (atMs - this.windowStartMs >= THREAD_HISTORY_STEP_MS) {
+      this.close(atMs);
+      this.windowStartMs = atMs;
+      closed = true;
+    }
+    return closed;
+  }
+
+  /** Oldest first, ages relative to `nowMs`. */
+  read(threadId: ThreadId, nowMs: number): ReadonlyArray<ThreadResourcePoint> {
+    return this.rings.get(threadId)?.read(nowMs) ?? [];
+  }
+
+  threadIds(): ReadonlyArray<ThreadId> {
+    return [...this.rings.keys()];
+  }
+
+  forget(threadIds: Iterable<ThreadId>): void {
+    for (const threadId of threadIds) {
+      this.rings.delete(threadId);
+      this.window.delete(threadId);
+    }
+  }
+
+  private close(atMs: number): void {
+    for (const [threadId, { cpuSum, memoryBytes }] of this.window) {
+      let ring = this.rings.get(threadId);
+      if (ring === undefined) {
+        ring = new ThreadRing();
+        this.rings.set(threadId, ring);
+      }
+      ring.push(atMs, Math.round((cpuSum / this.windowTicks) * 10) / 10, Math.round(memoryBytes));
+    }
+    this.window.clear();
+    this.windowTicks = 0;
+    if (this.rings.size <= THREAD_HISTORY_MAX_THREADS) return;
+    const stale = [...this.rings]
+      .toSorted((a, b) => b[1].lastAtMs - a[1].lastAtMs)
+      .slice(THREAD_HISTORY_MAX_THREADS);
+    for (const [threadId] of stale) this.rings.delete(threadId);
+  }
 }

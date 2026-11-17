@@ -26,12 +26,7 @@ import {
   type ServerSettingsError,
   type ServerSettingsPatch,
 } from "@t3tools/contracts";
-import {
-  cgroupDirectory,
-  isCgroupWithin,
-  parseUnifiedCgroupPath,
-  pickRootCgroup,
-} from "@t3tools/shared/cgroup";
+import { cgroupDirectory, parseUnifiedCgroupPath, pickRootCgroup } from "@t3tools/shared/cgroup";
 import { processProviderGroup } from "@t3tools/shared/processProviderGroup";
 import {
   makeProcessOwnershipRegistry,
@@ -117,6 +112,18 @@ export function buildProcessTree(rows: ReadonlyArray<OwnershipRow>): ProcessTree
       return parent !== undefined && parent.startTimeMs <= row.startTimeMs ? parent : undefined;
     },
   };
+}
+
+/**
+ * Calls `visit` with the cgroup, then each enclosing cgroup up to `/`, until it returns true:
+ * exactly the paths `isCgroupWithin(cgroup, path)` from `@t3tools/shared/cgroup` accepts.
+ */
+function forEachCgroupAncestor(cgroup: string, visit: (path: string) => boolean): void {
+  let path = cgroup;
+  while (!visit(path) && path !== "/") {
+    const cut = path.lastIndexOf("/");
+    path = cut <= 0 ? "/" : path.slice(0, cut);
+  }
 }
 
 /** The nearest of the row and its ancestors that `mark` names, memoised per call. */
@@ -343,21 +350,27 @@ export function attributeRows(input: AttributionInput): Map<string, ProcessOwner
   const { tree } = input;
 
   const pidRoots = new Map<OwnershipRow, RegisteredRoot>();
-  const cgroupRoots: Array<{ readonly cgroup: string; readonly entry: RegisteredRoot }> = [];
+  // The first root per cgroup; walking a row's cgroup upward finds the deepest unit holding it.
+  const cgroupRoots = new Map<string, RegisteredRoot>();
   for (const entry of input.roots) {
     const row = boundRootRow(entry, tree.byPid);
     if (row !== undefined) pidRoots.set(row, entry);
     // A root still sharing the server's cgroup counts only its pid subtree meanwhile.
-    if (entry.cgroup.type === "adopted") cgroupRoots.push({ cgroup: entry.cgroup.cgroup, entry });
+    if (entry.cgroup.type === "adopted" && !cgroupRoots.has(entry.cgroup.cgroup)) {
+      cgroupRoots.set(entry.cgroup.cgroup, entry);
+    }
   }
-  // Deepest cgroup first, so a unit nested in another unit wins.
-  cgroupRoots.sort((a, b) => b.cgroup.length - a.cgroup.length);
   const nearestPidRoot = nearestMarked(tree, (row) => pidRoots.get(row));
-  const rootOf = (row: OwnershipRow) =>
-    nearestPidRoot(row) ??
-    (row.cgroup === ""
-      ? undefined
-      : cgroupRoots.find((root) => isCgroupWithin(row.cgroup, root.cgroup))?.entry);
+  const rootOf = (row: OwnershipRow) => {
+    const byPid = nearestPidRoot(row);
+    if (byPid !== undefined || row.cgroup === "" || cgroupRoots.size === 0) return byPid;
+    let found: RegisteredRoot | undefined;
+    forEachCgroupAncestor(row.cgroup, (path) => {
+      found = cgroupRoots.get(path);
+      return found !== undefined;
+    });
+    return found;
+  };
 
   const ownerFromRoot = (row: OwnershipRow, entry: RegisteredRoot): ProcessOwner => {
     const owner = entry.root.owner;
@@ -401,15 +414,30 @@ export function attributeRows(input: AttributionInput): Map<string, ProcessOwner
   }
   const nearestProcessClaim = nearestMarked(tree, (row) => processClaims.get(row));
   const groupClaims = input.claims.filter((resolved) => resolved.claim.target.type !== "process");
-  const claimOf = (row: OwnershipRow) =>
-    nearestProcessClaim(row) ??
-    groupClaims.find(
-      (resolved) =>
-        (resolved.containerId !== undefined && row.containerId === resolved.containerId) ||
-        (resolved.cgroup !== undefined &&
-          row.cgroup !== "" &&
-          isCgroupWithin(row.cgroup, resolved.cgroup)),
-    );
+  // The oldest claim per container and per cgroup, by position, so a row costs a few lookups.
+  const containerClaims = new Map<string, number>();
+  const cgroupClaims = new Map<string, number>();
+  groupClaims.forEach((resolved, index) => {
+    if (resolved.containerId !== undefined && !containerClaims.has(resolved.containerId)) {
+      containerClaims.set(resolved.containerId, index);
+    }
+    if (resolved.cgroup !== undefined && !cgroupClaims.has(resolved.cgroup)) {
+      cgroupClaims.set(resolved.cgroup, index);
+    }
+  });
+  /** The oldest group claim holding the row, by container or by an enclosing cgroup. */
+  const groupClaimOf = (row: OwnershipRow) => {
+    let first = containerClaims.get(row.containerId);
+    if (row.cgroup !== "" && cgroupClaims.size > 0) {
+      forEachCgroupAncestor(row.cgroup, (path) => {
+        const index = cgroupClaims.get(path);
+        if (index !== undefined && (first === undefined || index < first)) first = index;
+        return false;
+      });
+    }
+    return first === undefined ? undefined : groupClaims[first];
+  };
+  const claimOf = (row: OwnershipRow) => nearestProcessClaim(row) ?? groupClaimOf(row);
 
   const ownBucket = (row: OwnershipRow) => {
     const key = processKey(row.pid, row.startTimeMs);

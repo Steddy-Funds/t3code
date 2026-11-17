@@ -214,32 +214,36 @@ describe("HostResources status", () => {
 });
 
 describe("HostResources read", () => {
-  it.effect("samples on demand until two ticks have run, then serves the latest tick", () => {
-    setup();
-    const { layer, tick } = makeLayer();
-    return Effect.gen(function* () {
-      const resources = yield* HostResources;
-      const onDemand = Effect.gen(function* () {
-        const reading = yield* Effect.forkChild(resources.read);
-        yield* TestClock.adjust("200 millis");
-        return yield* Fiber.join(reading);
-      });
+  it.effect(
+    "serves the latest tick and never samples on its own, waiting only for the first",
+    () => {
+      setup();
+      const { layer, tick } = makeLayer();
+      return Effect.gen(function* () {
+        const resources = yield* HostResources;
+        const early = yield* Effect.forkChild(resources.read);
+        expect(yield* resources.latestSample).toBeUndefined();
+        // The counters are seeded at start, so the first tick already has CPU.
+        yield* tick;
+        expect(yield* Fiber.join(early)).toMatchObject({
+          cpuUtilization: 0.5,
+          totalMemoryBytes: 1000,
+        });
 
-      expect(yield* onDemand).toMatchObject({ cpuUtilization: 0.5, totalMemoryBytes: 1000 });
-      yield* tick;
-      expect(yield* onDemand).toMatchObject({ cpuUtilization: 0.5 });
-
-      yield* tick;
-      const readsBefore = vi.mocked(readHostTotals).mock.calls.length;
-      expect(yield* resources.read).toMatchObject({
-        cpuUtilization: 0.5,
-        cpuCount: 1,
-        availableMemoryBytes: 500,
-        totalMemoryBytes: 1000,
-      });
-      expect(vi.mocked(readHostTotals).mock.calls.length).toBe(readsBefore);
-    }).pipe(Effect.provide(layer));
-  });
+        const readsBefore = vi.mocked(readHostTotals).mock.calls.length;
+        const countersBefore = vi.mocked(readCpuCounters).mock.calls.length;
+        expect(yield* resources.read).toMatchObject({
+          cpuUtilization: 0.5,
+          cpuCount: 1,
+          availableMemoryBytes: 500,
+          totalMemoryBytes: 1000,
+        });
+        expect(yield* resources.latestSample).toEqual({ perCore: [50], gpus: [] });
+        expect(vi.mocked(readHostTotals).mock.calls.length).toBe(readsBefore);
+        expect(vi.mocked(readCpuCounters).mock.calls.length).toBe(countersBefore);
+      }).pipe(Effect.provide(layer));
+    },
+  );
 });
 
 describe("HostResources samples", () => {
@@ -248,9 +252,11 @@ describe("HostResources samples", () => {
     () => {
       setup();
       const { layer } = makeLayer();
-      const counterReads = () => vi.mocked(readCpuCounters).mock.calls.length;
       return Effect.gen(function* () {
         const resources = yield* HostResources;
+        // Reads since start; the start itself seeds the base tick's counters once.
+        const seeded = vi.mocked(readCpuCounters).mock.calls.length;
+        const counterReads = () => vi.mocked(readCpuCounters).mock.calls.length - seeded;
         const first = yield* Scope.make();
         const second = yield* Scope.make();
         const open = (scope: Scope.Closeable, intervalMs: number) =>
@@ -323,12 +329,13 @@ describe("HostResources samples", () => {
     const { layer, tick } = makeLayer();
     return Effect.gen(function* () {
       const resources = yield* HostResources;
+      const seeded = vi.mocked(readCpuCounters).mock.calls.length;
       yield* tick;
       const statusOnly = yield* statusQueue(resources.subscribe({}));
       expect(yield* take(statusOnly)).not.toHaveProperty("sample");
       yield* TestClock.adjust("30 seconds");
       expect(yield* take(statusOnly)).not.toHaveProperty("sample");
-      expect(vi.mocked(readCpuCounters)).not.toHaveBeenCalled();
+      expect(vi.mocked(readCpuCounters).mock.calls.length).toBe(seeded);
 
       const sampled = yield* statusQueue(resources.subscribe({ intervalMs: 1_000 }));
       expect(yield* take(sampled)).not.toHaveProperty("sample");

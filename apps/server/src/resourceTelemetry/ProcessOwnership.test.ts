@@ -463,6 +463,29 @@ describe("attributeRows", () => {
       expect(owner(inside)).toEqual({ type: "claimed", claimId: "c1", threadId: THREAD_A });
       expect(owner(outside)).toEqual({ type: "other" });
       expect(owner(unknown)).toEqual({ type: "other" });
+
+      // With a container claim and enclosing cgroup claims on one row, the oldest wins.
+      const container = { ...inside, containerId: "abc" };
+      const containerTarget: ClaimTarget = { type: "container", id: "abc" };
+      const ordered = (claims: ReadonlyArray<ResolvedClaim>) =>
+        attribute([serverRow, container], { claims })(container);
+      const outer = resolvedClaim(
+        "c-outer",
+        THREAD_B,
+        { type: "cgroup", path: "/system.slice" },
+        {
+          cgroup: "/system.slice",
+        },
+      );
+      const inContainer = resolvedClaim("c-box", THREAD_A, containerTarget, { containerId: "abc" });
+      expect(ordered([outer, inContainer])).toMatchObject({ claimId: "c-outer" });
+      expect(ordered([inContainer, outer])).toMatchObject({ claimId: "c-box" });
+      expect(
+        ordered([
+          resolvedClaim("c-root", THREAD_A, { type: "cgroup", path: "/" }, { cgroup: "/" }),
+          outer,
+        ]),
+      ).toMatchObject({ claimId: "c-root" });
     });
 
     it("prefers a process claim over a group claim, and a root over any claim", () => {

@@ -29,6 +29,7 @@ import {
 } from "@t3tools/shared/nodeVerdict";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
@@ -152,8 +153,10 @@ export class MachineHistoryRing {
 export class HostResources extends Context.Service<
   HostResources,
   {
-    /** Served from the latest base tick; samples on demand until two ticks have run. */
+    /** Served from the latest base tick; waits for the first only in the server's first seconds. */
     readonly read: Effect.Effect<HostResourcesSnapshot>;
+    /** The latest base tick's per-core and GPU device reading, without starting a live sample. */
+    readonly latestSample: Effect.Effect<MachineStatusSample | undefined>;
     /** The current snapshot, then verdict changes, plus a 30 s heartbeat. */
     readonly status: Stream.Stream<MachineStatusSnapshot>;
     /** Verdict or reason-rule changes only. */
@@ -227,13 +230,15 @@ const make = Effect.fn("makeHostResources")(function* () {
   const layerScope = yield* Effect.scope;
   const history = new MachineHistoryRing();
 
+  // Seeded now, so the first tick already measures CPU over a real interval.
   const state = yield* Ref.make<TickState>({
-    counters: null,
+    counters: readCpuCounters(),
     totals: null,
     verdict: initialVerdictState(yield* Clock.currentTimeMillis),
     sequence: 0,
   });
   const changes = yield* PubSub.sliding<MachineStatusSnapshot>(16);
+  const firstTotals = yield* Deferred.make<HostTotals>();
   const tickTotals = yield* PubSub.sliding<HostTotals>(1);
 
   const readTotals = (prev: CpuCounters | null, nativeTotals: NativeHostTotals | null = null) =>
@@ -289,7 +294,10 @@ const make = Effect.fn("makeHostResources")(function* () {
       sequence: changed ? prev.sequence + 1 : prev.sequence,
     };
     yield* Ref.set(state, next);
-    if (totals !== null) yield* PubSub.publish(tickTotals, totals);
+    if (totals !== null) {
+      yield* Deferred.succeed(firstTotals, totals);
+      yield* PubSub.publish(tickTotals, totals);
+    }
     if (changed) yield* PubSub.publish(changes, toStatusSnapshot(next, now));
   });
   yield* scheduler.register("HostResources.tick", tick());
@@ -298,20 +306,19 @@ const make = Effect.fn("makeHostResources")(function* () {
     return toStatusSnapshot(yield* Ref.get(state), yield* Clock.currentTimeMillis);
   });
 
-  const sampleOnDemand = Effect.gen(function* () {
-    const first = readCpuCounters();
-    yield* Effect.sleep("200 millis");
-    const read = yield* readTotals(first);
-    if (read._tag === "Some") return toHostResourcesSnapshot(read.value.totals);
-    return yield* Effect.die(new Error("Host totals are unavailable."));
-  });
-
   const read = Effect.fn("HostResources.read")(function* () {
     const { totals } = yield* Ref.get(state);
-    if (totals !== null && totals.cpuUtilization !== null) {
-      return toHostResourcesSnapshot(totals);
-    }
-    return yield* sampleOnDemand;
+    return toHostResourcesSnapshot(totals ?? (yield* Deferred.await(firstTotals)));
+  });
+
+  const latestSample = Effect.gen(function* () {
+    const { totals } = yield* Ref.get(state);
+    if (totals === null) return undefined;
+    const gpus = yield* Ref.get(latestGpus);
+    return {
+      perCore: totals.perCore,
+      ...(Option.isSome(gpus) ? { gpus: gpus.value } : {}),
+    } satisfies MachineStatusSample;
   });
 
   // Subscribe first, so a change between the subscription and the first snapshot is not lost.
@@ -414,6 +421,7 @@ const make = Effect.fn("makeHostResources")(function* () {
 
   return HostResources.of({
     read: read(),
+    latestSample,
     status,
     statusChanges: Stream.fromPubSub(changes),
     ticks: Stream.fromPubSub(tickTotals),

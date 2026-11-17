@@ -36,7 +36,6 @@ import {
   type HostFrameInput,
   HostProcesses,
   HostProcessesUnavailable,
-  hostOwnershipRows,
   hostSnapshotRows,
   initialFrameBuilderState,
   initialHostFrameBuilderState,
@@ -51,6 +50,7 @@ import {
   unbucketedSharePercent,
 } from "./HostProcesses.ts";
 import * as NativeTelemetryClient from "./NativeTelemetryClient.ts";
+import { type AttributedSample, hostOwnershipRows, ResourceSampler } from "./ResourceSampler.ts";
 import { ResourceTelemetry, ResourceTelemetryRefreshFailed } from "./ResourceTelemetry.ts";
 
 const EPOCH = DateTime.makeUnsafe(0);
@@ -1381,32 +1381,58 @@ function telemetryLayer(
   );
 }
 
+/** The shared sampler, holding `latest`; `samples` emits it and ends. */
+function samplerLayer(
+  latest: Ref.Ref<Option.Option<AttributedSample>>,
+  demands: Ref.Ref<ReadonlyArray<NativeTelemetryClient.HostSampleDemand>>,
+): Layer.Layer<ResourceSampler> {
+  return Layer.succeed(
+    ResourceSampler,
+    ResourceSampler.of({
+      latest: Ref.get(latest),
+      samples: Stream.unwrap(
+        Effect.map(Ref.get(latest), (current) => Stream.fromIterable(Option.toArray(current))),
+      ),
+      demand: (demand) => Ref.update(demands, (all) => [...all, demand]),
+    }),
+  );
+}
+
+const attributed = (sample: NativeTelemetryClient.NativeHostSample): AttributedSample => ({
+  sample,
+  owners: new Map(),
+  claims: [],
+});
+
 const makeHostProcesses = Effect.fn("test.makeHostProcesses")(function* (
   health: NativeTelemetryClient.NativeTelemetryClientHealth,
   changes: Stream.Stream<NativeTelemetryClient.NativeTelemetryClientHealth> = Stream.empty,
   overrides: {
-    readonly hostSampleNow?: NativeTelemetryClient.NativeTelemetryClient["Service"]["hostSampleNow"];
+    readonly shared?: NativeTelemetryClient.NativeHostSample;
     readonly refresh?: ResourceTelemetry["Service"]["refresh"];
     readonly latest?: ResourceTelemetrySnapshot;
   } = {},
 ) {
   const holders = yield* Ref.make(0);
   const latest = yield* Ref.make(overrides.latest ?? telemetrySnapshot(0));
+  const shared = yield* Ref.make(Option.map(Option.fromUndefinedOr(overrides.shared), attributed));
   const demands = yield* Ref.make<ReadonlyArray<NativeTelemetryClient.HostSampleDemand>>([]);
+  // Every reading comes from the shared sampler; a walk of its own fails the test.
   const native = NativeTelemetryClient.layerTest({
-    ...(overrides.hostSampleNow === undefined ? {} : { hostSampleNow: overrides.hostSampleNow }),
     subscribeHealth: Effect.succeed({ latest: health, changes }),
-    hostSamples: (demand) =>
-      Stream.unwrap(
-        Ref.update(demands, (all) => [...all, demand]).pipe(
-          Effect.as(Stream.make(hostSample(threeRows, { gpus: [gpuDevice], gpuProcesses: [] }))),
-        ),
-      ),
+    hostSampleNow: () => Effect.die("walked the host on demand"),
+    hostSamples: () => Stream.die("streamed the host on its own"),
   });
   const processes = yield* HostProcesses.pipe(
     Effect.provide(
       hostProcessesLayer.pipe(
-        Layer.provide(Layer.merge(telemetryLayer(latest, holders, overrides.refresh), native)),
+        Layer.provide(
+          Layer.mergeAll(
+            telemetryLayer(latest, holders, overrides.refresh),
+            native,
+            samplerLayer(shared, demands),
+          ),
+        ),
       ),
     ),
   );
@@ -1448,6 +1474,8 @@ describe("HostProcesses.frames", () => {
     Effect.gen(function* () {
       const { processes, holders, demands } = yield* makeHostProcesses(
         nativeHealth("healthy", true),
+        Stream.empty,
+        { shared: hostSample(threeRows, { gpus: [gpuDevice], gpuProcesses: [] }) },
       );
 
       const frame = yield* firstFrame(processes);
@@ -1479,6 +1507,7 @@ describe("HostProcesses.frames", () => {
         const { processes } = yield* makeHostProcesses(
           nativeHealth("starting"),
           Stream.fromQueue(changes),
+          { shared: hostSample(threeRows) },
         );
         const frame = yield* firstFrame(processes).pipe(Effect.forkChild);
         yield* Queue.offerAll(changes, [nativeHealth("starting"), settled]);
@@ -1495,50 +1524,22 @@ describe("HostProcesses.snapshot", () => {
     commands: true,
     bucketNames: new Map(),
   };
-  const recordingHostSampleNow =
-    (
-      requests: Ref.Ref<ReadonlyArray<unknown>>,
-      result: Effect.Effect<
-        NativeTelemetryClient.NativeHostSample,
-        NativeTelemetryClient.NativeTelemetryClientError
-      >,
-    ): NativeTelemetryClient.NativeTelemetryClient["Service"]["hostSampleNow"] =>
-    (options) =>
-      Ref.update(requests, (all) => [...all, options]).pipe(Effect.andThen(result));
-
-  it.effect("walks the whole host in host mode, skipping the GPU walk at limit 0", () =>
+  it.effect("serves the latest shared host sample, with its age, without walking the host", () =>
     Effect.gen(function* () {
-      const requests = yield* Ref.make<ReadonlyArray<unknown>>([]);
       const { processes } = yield* makeHostProcesses(nativeHealth("healthy", true), Stream.empty, {
-        hostSampleNow: recordingHostSampleNow(
-          requests,
-          Effect.succeed(hostSample(threeRows, { sampledAtUnixMs: 0 })),
-        ),
+        shared: hostSample(threeRows, { sampledAtUnixMs: 0 }),
       });
       yield* TestClock.adjust("1500 millis");
       const { snapshot } = yield* processes.snapshot(snapshotInput);
       expect(snapshot).toMatchObject({ source: "host", sampleAgeMs: 1_500 });
       expect(snapshot.processes.map((process) => process.pid)).toEqual([3, 2, 1]);
-
-      yield* processes.snapshot({ ...snapshotInput, limit: 0 });
-      expect(yield* Ref.get(requests)).toEqual([
-        { processes: true, gpus: true, gpuProcesses: true },
-        { processes: true, gpus: false, gpuProcesses: false },
-      ]);
     }),
   );
 
-  it.effect("falls back to the T3 subtree when the host walk fails or host mode is missing", () =>
+  it.effect("falls back to the T3 subtree until there is a shared host sample", () =>
     Effect.gen(function* () {
-      const failing = recordingHostSampleNow(
-        yield* Ref.make<ReadonlyArray<unknown>>([]),
-        Effect.fail(
-          new NativeTelemetryClient.NativeTelemetryUnavailable({ reason: "monitor restarting" }),
-        ),
-      );
       for (const health of [nativeHealth("healthy", true), nativeHealth("healthy", false)]) {
         const { processes } = yield* makeHostProcesses(health, Stream.empty, {
-          hostSampleNow: failing,
           refresh: Effect.succeed(telemetrySnapshot(0)),
         });
         const { snapshot } = yield* processes.snapshot(snapshotInput);
@@ -1733,38 +1734,23 @@ describe("unbucketed processes", () => {
 describe("HostProcesses.unbucketed", () => {
   const unbucketedInput = { limit: 20, commands: true, bucketNames: new Map() };
 
-  it.effect("walks the host once without the GPU, and lists every process nothing owns", () =>
+  it.effect("lists every process nothing owns from the latest shared host sample", () =>
     Effect.gen(function* () {
-      const requests = yield* Ref.make<ReadonlyArray<unknown>>([]);
       const { processes } = yield* makeHostProcesses(nativeHealth("healthy", true), Stream.empty, {
-        hostSampleNow: (options) =>
-          Ref.update(requests, (all) => [...all, options]).pipe(
-            Effect.as(hostSample(threeRows, { sampledAtUnixMs: 0 })),
-          ),
+        shared: hostSample(threeRows, { sampledAtUnixMs: 0 }),
       });
       yield* TestClock.adjust("1500 millis");
       const result = yield* processes.unbucketed(unbucketedInput);
       expect(result).toMatchObject({ sharePercent: 100, sampleAgeMs: 1_500 });
       expect(result.processes.map((process) => process.pid)).toEqual([3, 2, 1]);
-      expect(yield* Ref.get(requests)).toEqual([
-        { processes: true, gpus: false, gpuProcesses: false },
-      ]);
     }),
   );
 
-  it.effect("is unavailable off host mode or when the walk fails", () =>
+  it.effect("is unavailable until there is a shared host sample", () =>
     Effect.gen(function* () {
-      const failing: NativeTelemetryClient.NativeTelemetryClient["Service"]["hostSampleNow"] = () =>
-        Effect.fail(
-          new NativeTelemetryClient.NativeTelemetryUnavailable({ reason: "monitor restarting" }),
-        );
-      for (const health of [nativeHealth("healthy", false), nativeHealth("healthy", true)]) {
-        const { processes } = yield* makeHostProcesses(health, Stream.empty, {
-          hostSampleNow: failing,
-        });
-        const error = yield* processes.unbucketed(unbucketedInput).pipe(Effect.flip);
-        expect(error).toBeInstanceOf(HostProcessesUnavailable);
-      }
+      const { processes } = yield* makeHostProcesses(nativeHealth("healthy", true));
+      const error = yield* processes.unbucketed(unbucketedInput).pipe(Effect.flip);
+      expect(error).toBeInstanceOf(HostProcessesUnavailable);
     }),
   );
 });

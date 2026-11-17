@@ -27,11 +27,9 @@ import * as Stream from "effect/Stream";
 
 import * as NativeTelemetryClient from "./NativeTelemetryClient.ts";
 import { ownerThreadId, ProcessOwnership, type OwnershipRow } from "./ProcessOwnership.ts";
+import { ResourceSampler } from "./ResourceSampler.ts";
 import * as ResourceTelemetry from "./ResourceTelemetry.ts";
 import * as ThreadResources from "./ThreadResources.ts";
-
-/** How long a thread-filtered stream keeps its lineage before rereading it for new subagents. */
-const LINEAGE_TTL = "5 seconds";
 
 export class HostProcesses extends Context.Service<
   HostProcesses,
@@ -41,11 +39,11 @@ export class HostProcesses extends Context.Service<
      * subtree. Full on subscribe, on each new generation and after the monitor's `staticReset`.
      */
     readonly frames: (input: SubscribeMachineProcessesInput) => Stream.Stream<MachineProcessFrame>;
-    /** One process walk, host-wide when the monitor can, otherwise the T3 subtree. */
+    /** The latest shared host sample; the T3 subtree only before one exists or without host mode. */
     readonly snapshot: (
       input: ProcessSnapshotInput,
     ) => Effect.Effect<ProcessSnapshotResult, HostProcessesUnavailable>;
-    /** One host-wide walk for auto-buckets; unavailable without a host-mode monitor. */
+    /** The latest shared host sample for auto-buckets; unavailable until there is one. */
     readonly unbucketed: (
       input: UnbucketedInput,
     ) => Effect.Effect<UnbucketedResult, HostProcessesUnavailable>;
@@ -377,32 +375,6 @@ const hostByRss = (a: HostRow, b: HostRow) => b.rss - a.rss;
 
 // One decimal is all a table shows, and it keeps idle rows unchanged between frames.
 const roundCpu = (percent: number) => Math.round(percent * 10) / 10;
-
-/** Every process in a host sample as attribution reads it, statics "" where unread. */
-export function hostOwnershipRows(
-  sample: NativeTelemetryClient.NativeHostSample["sample"],
-  statics: NativeTelemetryClient.HostProcessStatics,
-): Array<OwnershipRow> {
-  const columns = sample.processes;
-  if (!columns) return [];
-  return columns.pid.map((pid, index) => {
-    const startTimeMs = columns.startTimeMs[index]!;
-    const known = statics.get(pid);
-    const entry = known?.startTimeMs === startTimeMs ? known : undefined;
-    return {
-      pid,
-      ppid: columns.ppid[index]!,
-      startTimeMs,
-      name: entry?.name ?? "",
-      command: entry?.command ?? "",
-      exe: entry?.exe ?? "",
-      cwd: entry?.cwd ?? "",
-      user: entry?.user ?? "",
-      cgroup: entry?.cgroup ?? "",
-      containerId: entry?.containerId ?? "",
-    };
-  });
-}
 
 function hostRows(sample: NativeTelemetryClient.NativeHostSample["sample"]): Array<HostRow> {
   const columns = sample.processes;
@@ -975,53 +947,46 @@ const make = Effect.fn("makeHostProcesses")(function* () {
   const telemetry = yield* ResourceTelemetry.ResourceTelemetry;
   const native = yield* NativeTelemetryClient.NativeTelemetryClient;
   const ownership = yield* ProcessOwnership;
+  const sampler = yield* ResourceSampler;
   const threadResources = yield* ThreadResources.ThreadResources;
 
   /** The thread filter: the thread's lineage, as one set, or undefined for every process. */
   const lineageFilter = (threadId: ThreadId | undefined) =>
     threadId === undefined
-      ? Effect.succeed(Effect.undefined)
-      : threadResources.lineage(threadId).pipe(
-          Effect.map((threadIds): ReadonlySet<ThreadId> => new Set(threadIds)),
-          Effect.cachedWithTTL(LINEAGE_TTL),
-        );
+      ? Effect.undefined
+      : threadResources
+          .lineage(threadId)
+          .pipe(Effect.map((threadIds): ReadonlySet<ThreadId> => new Set(threadIds)));
 
+  // Every view reads the shared, already attributed samples; its demand only raises their rate.
   const hostFrames = (input: SubscribeMachineProcessesInput) =>
     Stream.unwrap(
       Effect.gen(function* () {
         const builder = yield* Ref.make(initialHostFrameBuilderState);
-        const lineage = yield* lineageFilter(input.threadId);
         const intervalMs = Math.max(MACHINE_PROCESSES_MIN_INTERVAL_MS, input.intervalMs);
         const gpuProcesses = input.gpuProcesses === true;
-        return native
-          .hostSamples({ intervalMs, processes: true, gpus: gpuProcesses, gpuProcesses })
-          .pipe(
-            Stream.mapEffect((sample) =>
-              Effect.gen(function* () {
-                const owners = yield* ownership.attribute(
-                  hostOwnershipRows(sample.sample, sample.statics),
-                );
-                const claims = yield* ownership.claims;
-                const threadIds = yield* lineage;
-                const nowMs = yield* Clock.currentTimeMillis;
-                return yield* Ref.modify(builder, (state) =>
-                  nextHostFrames(state, {
-                    sample,
-                    nowMs,
-                    intervalMs,
-                    top: input.top,
-                    gpuProcesses,
-                    owners,
-                    claims,
-                    ...(threadIds === undefined ? {} : { threadIds }),
-                  }),
-                );
-              }),
-            ),
-            Stream.flatMap((frames) => Stream.fromIterable(frames)),
-            // The subtree fallback never fails; neither does the host stream from a viewer's side.
-            Stream.catch(() => Stream.empty),
-          );
+        yield* sampler.demand({ intervalMs, processes: true, gpus: gpuProcesses, gpuProcesses });
+        return sampler.samples.pipe(
+          Stream.mapEffect(({ sample, owners, claims }) =>
+            Effect.gen(function* () {
+              const threadIds = yield* lineageFilter(input.threadId);
+              const nowMs = yield* Clock.currentTimeMillis;
+              return yield* Ref.modify(builder, (state) =>
+                nextHostFrames(state, {
+                  sample,
+                  nowMs,
+                  intervalMs,
+                  top: input.top,
+                  gpuProcesses,
+                  owners,
+                  claims,
+                  ...(threadIds === undefined ? {} : { threadIds }),
+                }),
+              );
+            }),
+          ),
+          Stream.flatMap((frames) => Stream.fromIterable(frames)),
+        );
       }),
     );
 
@@ -1031,7 +996,6 @@ const make = Effect.fn("makeHostProcesses")(function* () {
         // Holding the subscription keeps the native monitor sampling; releasing it lets it idle.
         yield* telemetry.subscribe;
         const builder = yield* Ref.make(initialFrameBuilderState);
-        const lineage = yield* lineageFilter(input.threadId);
         const intervalMs = Math.max(MACHINE_PROCESSES_MIN_INTERVAL_MS, input.intervalMs);
         return Stream.tick(intervalMs).pipe(
           Stream.mapEffect(() =>
@@ -1040,7 +1004,7 @@ const make = Effect.fn("makeHostProcesses")(function* () {
               const nowMs = yield* Clock.currentTimeMillis;
               const owners = yield* ownership.attribute(subtreeOwnershipRows(snapshot.processes));
               const claims = yield* ownership.claims;
-              const threadIds = yield* lineage;
+              const threadIds = yield* lineageFilter(input.threadId);
               return yield* Ref.modify(builder, (state) =>
                 nextFrame(state, {
                   generation: snapshot.health.restartCount,
@@ -1068,26 +1032,7 @@ const make = Effect.fn("makeHostProcesses")(function* () {
       ),
     );
 
-  const hostSnapshot = Effect.fn("HostProcesses.hostSnapshot")(function* (
-    input: ProcessSnapshotInput,
-  ) {
-    const gpuProcesses = input.limit > 0;
-    const sample = yield* native.hostSampleNow({
-      processes: true,
-      gpus: gpuProcesses,
-      gpuProcesses,
-    });
-    const owners = yield* ownership.attribute(hostOwnershipRows(sample.sample, sample.statics));
-    const nowMs = yield* Clock.currentTimeMillis;
-    return buildProcessSnapshot({
-      ...input,
-      rows: hostSnapshotRows(sample),
-      owners,
-      source: "host",
-      sampleAgeMs: nowMs - sample.sample.sampledAtUnixMs,
-    });
-  });
-
+  /** A monitor without host mode, or one that has not sampled yet, has only the T3 subtree. */
   const subtreeSnapshot = Effect.fn("HostProcesses.subtreeSnapshot")(function* (
     input: ProcessSnapshotInput,
   ) {
@@ -1105,18 +1050,24 @@ const make = Effect.fn("makeHostProcesses")(function* () {
   });
 
   const snapshot = Effect.fn("HostProcesses.snapshot")(function* (input: ProcessSnapshotInput) {
-    if (!(yield* supportsHostProcesses(native))) return yield* subtreeSnapshot(input);
-    return yield* hostSnapshot(input).pipe(Effect.catch(() => subtreeSnapshot(input)));
+    const latest = yield* sampler.latest;
+    if (Option.isNone(latest)) return yield* subtreeSnapshot(input);
+    const { sample, owners } = latest.value;
+    const nowMs = yield* Clock.currentTimeMillis;
+    return buildProcessSnapshot({
+      ...input,
+      rows: hostSnapshotRows(sample),
+      owners,
+      source: "host",
+      sampleAgeMs: nowMs - sample.sample.sampledAtUnixMs,
+    });
   });
 
   const unbucketed = Effect.fn("HostProcesses.unbucketed")(function* (input: UnbucketedInput) {
-    if (!(yield* supportsHostProcesses(native))) return yield* new HostProcessesUnavailable();
-    const sample = yield* native
-      .hostSampleNow({ processes: true, gpus: false, gpuProcesses: false })
-      .pipe(Effect.mapError(() => new HostProcessesUnavailable()));
-    const owners = yield* ownership.attribute(hostOwnershipRows(sample.sample, sample.statics));
+    const latest = yield* sampler.latest;
+    if (Option.isNone(latest)) return yield* new HostProcessesUnavailable();
     const nowMs = yield* Clock.currentTimeMillis;
-    return buildUnbucketed({ ...input, sample, owners, nowMs });
+    return buildUnbucketed({ ...input, ...latest.value, nowMs });
   });
 
   return HostProcesses.of({ frames, snapshot, unbucketed });

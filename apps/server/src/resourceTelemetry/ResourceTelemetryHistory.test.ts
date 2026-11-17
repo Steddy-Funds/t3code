@@ -1,14 +1,21 @@
-import type {
-  DesktopHostTelemetrySnapshot,
-  ResourceMonitorProcessSample,
-  ResourceMonitorSnapshotEvent,
-  ResourceTelemetryHealth,
+import {
+  type DesktopHostTelemetrySnapshot,
+  type ResourceMonitorProcessSample,
+  type ResourceMonitorSnapshotEvent,
+  type ResourceTelemetryHealth,
+  THREAD_RESOURCE_HISTORY_POINTS,
+  ThreadId,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
 import * as Option from "effect/Option";
 
-import { buildResourceTelemetryHistory } from "./ResourceTelemetryHistory.ts";
+import {
+  buildResourceTelemetryHistory,
+  THREAD_HISTORY_MAX_THREADS,
+  THREAD_HISTORY_STEP_MS,
+  ThreadResourceHistory,
+} from "./ResourceTelemetryHistory.ts";
 
 const SERVER_PID = 100;
 const ELECTRON_PID = 200;
@@ -348,5 +355,58 @@ describe("buildResourceTelemetryHistory", () => {
     expect(history.topProcesses.find((process) => process.identity.pid === 201)?.category).toBe(
       "electron-main",
     );
+  });
+});
+
+describe("ThreadResourceHistory", () => {
+  const threadA = ThreadId.make("thread-a");
+  const usage = (threadId: ThreadId, memoryBytes = 1) =>
+    new Map([[threadId, { cpuPercent: 1, memoryBytes }]]);
+
+  it("keeps the newest 240 points per thread, oldest first", () => {
+    const history = new ThreadResourceHistory();
+    const windows = THREAD_RESOURCE_HISTORY_POINTS + 10;
+    for (let window = 0; window <= windows; window++) {
+      history.record(window * THREAD_HISTORY_STEP_MS, usage(threadA, window));
+    }
+    const points = history.read(threadA, windows * THREAD_HISTORY_STEP_MS);
+    expect(points).toHaveLength(THREAD_RESOURCE_HISTORY_POINTS);
+    expect(points[0]?.memoryBytes).toBe(11);
+    expect(points.at(-1)).toEqual({
+      ageMs: 0,
+      cpuPercent: 1,
+      memoryBytes: windows,
+      gpuUtilPercent: null,
+    });
+  });
+
+  it("keeps the threads with the newest points, and forgets on request", () => {
+    const history = new ThreadResourceHistory();
+    const ids = Array.from({ length: THREAD_HISTORY_MAX_THREADS + 1 }, (_, index) =>
+      ThreadId.make(`thread-${index}`),
+    );
+    // One window each, so thread-0's only point is the oldest when the cap is passed.
+    ids.forEach((threadId, index) => {
+      history.record(index * THREAD_HISTORY_STEP_MS, usage(threadId));
+      history.record((index + 1) * THREAD_HISTORY_STEP_MS, new Map());
+    });
+    expect(history.threadIds()).toHaveLength(THREAD_HISTORY_MAX_THREADS);
+    expect(history.read(ids[0]!, 0)).toEqual([]);
+    expect(history.read(ids.at(-1)!, 0)).toHaveLength(1);
+
+    history.forget([ids.at(-1)!]);
+    expect(history.read(ids.at(-1)!, 0)).toEqual([]);
+    expect(history.threadIds()).toHaveLength(THREAD_HISTORY_MAX_THREADS - 1);
+  });
+
+  it("closes a window at its last tick when ticks stop, so no point spans the outage", () => {
+    const history = new ThreadResourceHistory();
+    expect(history.record(0, usage(threadA, 5))).toBe(false);
+    expect(history.record(5_000, usage(threadA, 7))).toBe(false);
+    // The monitor was down for a minute.
+    expect(history.record(65_000, usage(threadA, 9))).toBe(true);
+    expect(history.read(threadA, 65_000).map((point) => [point.ageMs, point.memoryBytes])).toEqual([
+      [60_000, 7],
+    ]);
   });
 });

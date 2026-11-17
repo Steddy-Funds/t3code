@@ -204,6 +204,7 @@ import * as ResourceMonitorBinary from "./resourceTelemetry/ResourceMonitorBinar
 import * as ProcessGroupMetrics from "./resourceTelemetry/ProcessGroupMetrics.ts";
 import * as ProcessOwnership from "./resourceTelemetry/ProcessOwnership.ts";
 import * as LoadGuard from "./resourceTelemetry/LoadGuard.ts";
+import * as ResourceSampler from "./resourceTelemetry/ResourceSampler.ts";
 import * as ThreadResources from "./resourceTelemetry/ThreadResources.ts";
 import * as ResourceTelemetry from "./resourceTelemetry/ResourceTelemetry.ts";
 import * as AntigravityUsage from "./provider/Drivers/AntigravityUsage.ts";
@@ -330,9 +331,14 @@ const layerProcessOwnership = ProcessOwnership.layer.pipe(
   Layer.provide(layerServerSettings),
 );
 
-const layerThreadResources = ThreadResources.layer.pipe(
+// The one host-wide process sampler; every per-thread and per-view reading derives from it.
+const layerResourceSampler = ResourceSampler.layer.pipe(
   Layer.provide(layerProcessOwnership),
   Layer.provide(layerNativeTelemetry),
+);
+
+const layerThreadResources = ThreadResources.layer.pipe(
+  Layer.provide(layerResourceSampler),
   Layer.provide(ProjectionStoreV2.layer.pipe(Layer.provide(layerServerSettings))),
 );
 
@@ -341,6 +347,7 @@ const layerResourceDiagnostics = Layer.mergeAll(
   HostProcesses.layer.pipe(
     Layer.provide(layerResourceTelemetry),
     Layer.provide(layerProcessOwnership),
+    Layer.provide(layerResourceSampler),
     Layer.provide(layerThreadResources),
   ),
   layerProcessOwnership,

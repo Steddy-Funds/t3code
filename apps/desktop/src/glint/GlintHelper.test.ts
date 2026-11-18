@@ -25,7 +25,7 @@ function mockHelper(
     { mode: 0o755 },
   );
   // The mock echoes each line it reads to stderr, which the helper logs.
-  const received: Array<{ type: string; key?: string }> = [];
+  const received: Array<{ type: string; key?: string; size?: string }> = [];
   const waiters: Array<{ type: string; resolve: () => void }> = [];
   const warnings: Array<string> = [];
   const log = (line: string) => {
@@ -83,6 +83,15 @@ describe("GlintHelper", () => {
       type: "result",
       value: { selection: { provider: "claude", model: "b", effort: "max", fast: true } },
     });
+  });
+
+  it("writes size only for mini, so older helpers see no change at full size", async () => {
+    using mock = mockHelper("result");
+    await mock.helper.present("d1", "color", ANCHOR, {}, undefined, "full");
+    await mock.helper.present("d2", "color", ANCHOR, {}, "dark", "mini");
+    const presents = mock.received.filter((message) => message.type === "present");
+    expect(presents.map((message) => "size" in message)).toEqual([false, true]);
+    expect(presents[1]).toMatchObject({ size: "mini", appearance: "dark" });
   });
 
   it("cancels the shown dialog when another is presented, and on dismiss", async () => {

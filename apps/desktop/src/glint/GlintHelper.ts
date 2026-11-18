@@ -9,6 +9,7 @@ import type {
   DesktopGlintKind,
   DesktopGlintMessage,
   DesktopGlintOutcome,
+  GlintDialogSize,
 } from "@t3tools/contracts";
 
 // Version 2 adds `input` to `ready`: the keys and clicks T3 forwards while a dialog is up.
@@ -35,6 +36,8 @@ export interface GlintHelper {
     params: unknown,
     /** Leaves the helper on macOS's appearance when absent. */
     appearance?: "light" | "dark",
+    /** Full is the helper's default, so only `mini` is written. */
+    size?: GlintDialogSize,
   ) => Promise<DesktopGlintOutcome>;
   /** Sends a message such as `update`, `input`, `key` or `dismiss` to the open dialog `id`. */
   readonly send: (message: DesktopGlintMessage) => boolean;
@@ -231,7 +234,7 @@ export function makeGlintHelper(
 
   return {
     path,
-    present: (id, kind, anchor, params, appearance) => {
+    present: (id, kind, anchor, params, appearance, size) => {
       if (disposed) {
         return Promise.resolve({ type: "unavailable", message: "The Glint helper was stopped." });
       }
@@ -246,7 +249,16 @@ export function makeGlintHelper(
           settle(id, { type: "unavailable", message: failure });
           return;
         }
-        if (!write({ type: "present", id, kind, anchor, params, ...(appearance ? { appearance } : {}) })) {
+        const message = {
+          type: "present",
+          id,
+          kind,
+          anchor,
+          params,
+          ...(appearance ? { appearance } : {}),
+          ...(size === "mini" ? { size: "mini" } : {}),
+        };
+        if (!write(message)) {
           settle(id, { type: "unavailable", message: "The Glint helper is not running." });
           return;
         }

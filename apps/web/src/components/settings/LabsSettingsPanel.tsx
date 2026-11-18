@@ -11,6 +11,7 @@ import { useState } from "react";
 import { isElectron } from "~/env";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
+import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Switch } from "../ui/switch";
 import { ScopedSwitch } from "./ScopedSwitch";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
@@ -402,6 +403,26 @@ function NativeTrackpadDialogsRow() {
               if (event.key === "Enter") commitPath();
             }}
           />
+          <div className="mt-2 flex items-center justify-between gap-3">
+            <p className="text-muted-foreground text-xs">
+              Mini draws dialogs at a quarter of the size, for demos. The trackpad works the same.
+            </p>
+            <Select
+              value={settings.glintDialogSize}
+              onValueChange={(value) => {
+                if (value === "full" || value === "mini")
+                  updateSettings({ glintDialogSize: value });
+              }}
+            >
+              <SelectTrigger size="sm" className="w-auto min-w-0" aria-label="Dialog size">
+                <SelectValue>{settings.glintDialogSize === "mini" ? "Mini" : "Full"}</SelectValue>
+              </SelectTrigger>
+              <SelectPopup align="end" alignItemWithTrigger={false}>
+                <SelectItem value="full">Full</SelectItem>
+                <SelectItem value="mini">Mini</SelectItem>
+              </SelectPopup>
+            </Select>
+          </div>
         </div>
       ) : null}
     </SettingsRow>

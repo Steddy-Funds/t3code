@@ -581,6 +581,7 @@ interface HarnessOptions {
   ) => Effect.Effect<void>;
   readonly onCloseIdle?: () => Effect.Effect<void>;
   readonly currentThreads?: ReadonlyArray<OrchestrationV2AppThread>;
+  readonly subagentsOfSettledParents?: ReadonlyArray<ProjectionStore.ProjectionSettledParentSubagent>;
 }
 
 const makeHarness = Effect.fn("makeThreadSettlementHarness")(function* (options: HarnessOptions) {
@@ -688,6 +689,7 @@ const makeHarness = Effect.fn("makeThreadSettlementHarness")(function* (options:
               : snapshot.threads.filter((thread) => thread.id === threadId),
           ),
         ),
+      getSubagentsOfSettledParents: () => Effect.succeed(options.subagentsOfSettledParents ?? []),
       getThread: (threadId) => {
         const thread = options.currentThreads?.find((candidate) => candidate.id === threadId);
         return thread
@@ -1334,11 +1336,28 @@ describe("ThreadSettlementServiceV2 worker", () => {
           yield* TestClock.setTime(Date.parse(NOW));
           const state = yield* Ref.make<"open" | "merged">("open");
           const mergedThreadSettled = yield* Deferred.make<void>();
+          const subagentOf = (parentThreadId: string) => ({
+            latestUserMessageAt: DateTime.makeUnsafe("2026-08-27T00:00:00.000Z"),
+            lineage: {
+              rootThreadId: ThreadId.make(parentThreadId),
+              parentThreadId: ThreadId.make(parentThreadId),
+              relationshipToParent: "subagent" as const,
+            },
+          });
           const fixture = yield* makeHarness({
             snapshot: makeSnapshot([
               makeThread("branch-thread", {
                 branch: "saved-feature",
                 latestUserMessageAt: DateTime.makeUnsafe("2026-08-27T00:00:00.000Z"),
+              }),
+              // Subagents settle with their parent, never through their own lookup.
+              makeThread("branch-subagent", {
+                ...subagentOf("branch-thread"),
+                branch: "saved-feature",
+              }),
+              makeThread("lone-subagent", {
+                ...subagentOf("linked-parent"),
+                branch: "subagent-only",
               }),
             ]),
             branchPullRequest: () => Ref.get(state).pipe(Effect.map(makeBranchPullRequest)),
@@ -1359,11 +1378,50 @@ describe("ThreadSettlementServiceV2 worker", () => {
               (yield* Ref.get(fixture.commands)).map((command) => command.threadId),
               [ThreadId.make("branch-thread")],
             );
+            assert.deepStrictEqual(
+              new Set((yield* Ref.get(fixture.branchCalls)).map((call) => call.branch)),
+              new Set(["saved-feature"]),
+            );
             assert.deepStrictEqual(yield* Ref.get(fixture.invalidatedCwds), ["/workspace/project"]);
             yield* reactor.drain;
           }).pipe(Effect.provide(fixture.layer));
         }),
       ),
+  );
+
+  it.effect("settles a settled parent's subagents with it, without a lookup", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        yield* TestClock.setTime(Date.parse(NOW));
+        const parentSettledAt = DateTime.makeUnsafe("2026-08-27T00:00:00.000Z");
+        const optedOut = ProjectId.make("opted-out-project");
+        const subagent = (id: string, projectId: ProjectId = PROJECT_ID) => ({
+          thread: { id: ThreadId.make(id), projectId, updatedAt: DateTime.makeUnsafe(NOW) },
+          parentSettledAt,
+        });
+        const fixture = yield* makeHarness({
+          snapshot: makeSnapshot([]),
+          settings: {
+            ...DEFAULT_SERVER_SETTINGS,
+            projectSettingsOverrides: {
+              [optedOut]: { sidebarAutoSettleOnMerge: false, sidebarAutoSettleAfterDays: null },
+            },
+          },
+          subagentsOfSettledParents: [subagent("orphan"), subagent("opted-out-orphan", optedOut)],
+        });
+        yield* Effect.gen(function* () {
+          const service = yield* ThreadSettlementService.ThreadSettlementServiceV2;
+          yield* startHarness(service, fixture.activation, fixture.snapshotReads);
+          expect(
+            (yield* Ref.get(fixture.commands)).map((command) => [
+              command.threadId,
+              command.settledAt && DateTime.formatIso(command.settledAt),
+            ]),
+          ).toEqual([["orphan", DateTime.formatIso(parentSettledAt)]]);
+          assert.deepStrictEqual(yield* Ref.get(fixture.branchCalls), []);
+        }).pipe(Effect.provide(fixture.layer));
+      }),
+    ),
   );
 
   it.effect("a merge does not settle threads linked to an unrelated pull request", () =>
@@ -1502,9 +1560,18 @@ describe("ThreadSettlementServiceV2 terminals", () => {
         const shared = appThread("shared-checkout-thread", "settled");
         const missing = appThread("removed-worktree-thread", "settled", "/worktrees/removed");
         const worktree = appThread("worktree-thread", "settled", "/worktrees/thread");
+        // A subagent shares its parent's checkout; the parent's settlement runs the script.
+        const subagent: OrchestrationV2AppThread = {
+          ...appThread("subagent-thread", "settled", "/worktrees/thread"),
+          lineage: {
+            parentThreadId: worktree.id,
+            relationshipToParent: "subagent",
+            rootThreadId: worktree.id,
+          },
+        };
         const fixture = yield* makeHarness({
           snapshot: makeSnapshot([]),
-          currentThreads: [shared, missing, worktree],
+          currentThreads: [shared, missing, worktree, subagent],
           existingWorktreePaths: ["/worktrees/thread"],
         });
 
@@ -1513,6 +1580,7 @@ describe("ThreadSettlementServiceV2 terminals", () => {
           yield* startHarness(service, fixture.activation, fixture.snapshotReads);
           yield* fixture.publishEvent(settledEvent(shared));
           yield* fixture.publishEvent(settledEvent(missing));
+          yield* fixture.publishEvent(settledEvent(subagent));
           yield* fixture.publishEvent(settledEvent(worktree));
           const run = yield* Queue.take(fixture.scriptRuns);
           assert.strictEqual(run.threadId, worktree.id);

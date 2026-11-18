@@ -242,6 +242,7 @@ describe("DesktopClientSettings", () => {
           assert.equal(persisted.value.timestampFormat, "24-hour");
           // Files saved before the machine-stressed toggle existed keep it on.
           assert.isTrue(persisted.value.notifyOnMachineStressed);
+          assert.equal(persisted.value.glintDialogSize, "full");
         }
       }),
     ),

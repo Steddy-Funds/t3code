@@ -119,8 +119,13 @@ const make = Effect.gen(function* () {
     const lock = keyLockFor(window.value.webContents);
     lock.open(input.id);
     yield* Ref.set(glintDialogId, input.id);
+    const size = yield* clientSettings.get.pipe(
+      Effect.map((stored) => Option.getOrElse(stored, () => DEFAULT_CLIENT_SETTINGS)),
+      Effect.map((settings) => settings.glintDialogSize),
+      Effect.orElseSucceed(() => "full" as const),
+    );
     return yield* Effect.promise(() =>
-      helper.present(input.id, input.kind, anchor, input.params, input.appearance),
+      helper.present(input.id, input.kind, anchor, input.params, input.appearance, size),
     ).pipe(
       Effect.ensuring(
         Effect.andThen(

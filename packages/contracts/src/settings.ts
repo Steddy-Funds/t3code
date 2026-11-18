@@ -350,6 +350,10 @@ export const EffortDisplay = Schema.Literals(["label", "bars"]);
 export type EffortDisplay = typeof EffortDisplay.Type;
 
 /** What a plain two-finger swipe on a message replies to; Cmd on macOS picks the other. */
+/** Mini draws Glint dialogs at a quarter of the area, for demos; the trackpad maps the same. */
+export const GlintDialogSize = Schema.Literals(["full", "mini"]);
+export type GlintDialogSize = typeof GlintDialogSize.Type;
+
 export const SwipeReplyTarget = Schema.Literals(["section", "message"]);
 export type SwipeReplyTarget = typeof SwipeReplyTarget.Type;
 
@@ -539,6 +543,7 @@ export const ClientSettingsSchema = Schema.Struct({
   // Labs, macOS desktop: Glint native dialogs. An empty path falls back to $T3CODE_GLINT_HELPER.
   glintEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   glintHelperPath: Schema.String.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
+  glintDialogSize: GlintDialogSize.pipe(Schema.withDecodingDefault(Effect.succeed("full"))),
   boringSidebarMultilineRows: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(false)),
   ),
@@ -2171,6 +2176,7 @@ export const ClientSettingsPatch = Schema.Struct({
   snapShotAnimations: Schema.optionalKey(Schema.Boolean),
   glintEnabled: Schema.optionalKey(Schema.Boolean),
   glintHelperPath: Schema.optionalKey(Schema.String),
+  glintDialogSize: Schema.optionalKey(GlintDialogSize),
   wordWrap: Schema.optionalKey(Schema.Boolean),
   mathRenderingEnabled: Schema.optionalKey(Schema.Boolean),
 });

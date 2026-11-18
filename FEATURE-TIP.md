@@ -74,6 +74,7 @@ upstream; a feature can, from its own branch, when Akiva decides.
 | Smart Diff: moved code in purple in the split diff, chips that jump to where it went; Settings > Labs (on by default)                             | #101 | 2b86d60 |
 | Glint dialogs stay open through the press that opened them (Snooze), and draw dark in T3's dark theme                                             | #106 | e4be208 |
 | Smart Diff: click moved code to open its block beside every place it went (split view, needs #101)                                                | #107 | d2548cd |
+| Glint dialog size in Settings > Labs: Full (the trackpad's size) or Mini (a quarter, for demos)                                                   | #113 | 396bbd7 |
 
 Held: #38 (pods notes in the t3-orchestration skill). It edits
 `.agents/skills/t3-orchestration/`, which exists only on

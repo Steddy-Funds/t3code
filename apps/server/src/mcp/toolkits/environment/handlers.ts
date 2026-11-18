@@ -1,7 +1,6 @@
 import {
   type BucketEditedError,
   MACHINE_BUCKETS_THREAD_TAG,
-  MACHINE_SAMPLE_MIN_INTERVAL_MS,
   type MachineActor,
   MachineBucketId,
   type MachineBucketLimitError,
@@ -127,12 +126,6 @@ export const layer = McpToolAccess.toLayer(
     const hostProcesses = yield* HostProcesses.HostProcesses;
     const threadResources = yield* ThreadResources.ThreadResources;
 
-    const perCoreSample = Effect.scoped(
-      hostResources
-        .samples(MACHINE_SAMPLE_MIN_INTERVAL_MS)
-        .pipe(Effect.flatMap(Stream.runHead), Effect.map(Option.getOrUndefined)),
-    );
-
     const runningThreads = Effect.fn("EnvironmentHandlers.runningThreads")(function* (
       caller: Caller,
     ) {
@@ -232,7 +225,7 @@ export const layer = McpToolAccess.toLayer(
           const [status, sample, walk, running, thread] = yield* Effect.all(
             [
               hostResources.status.pipe(Stream.runHead),
-              perCoreSample,
+              hostResources.latestSample,
               processWalk.pipe(Effect.result),
               runningThreads(context),
               input.threadId === undefined

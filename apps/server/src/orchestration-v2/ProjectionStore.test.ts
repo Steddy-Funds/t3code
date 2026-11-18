@@ -2467,6 +2467,16 @@ it.effect("lists live subagent links, without forks or deleted threads", () =>
         link("loop-b", "loop-a"),
       ],
     );
+    // Thread resources drop the history of archived, deleted and unknown threads.
+    assert.sameMembers(
+      [
+        ...(yield* store.listActiveThreadIds(
+          ["parent", "archived", "deleted", "missing"].map((id) => ThreadId.make(id)),
+        )),
+      ],
+      [ThreadId.make("parent")],
+    );
+    assert.deepEqual(yield* store.listActiveThreadIds([]), []);
   }).pipe(Effect.provide(layerTest)),
 );
 

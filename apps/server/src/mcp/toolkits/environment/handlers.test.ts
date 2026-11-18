@@ -389,7 +389,7 @@ const machineReadHarness = (
         ...overrides,
         hostResources: {
           status: Stream.fromIterable(overrides.status ?? [stressedStatus]),
-          samples: () => Effect.succeed(Stream.make({ perCore: [99.6, 12.2] })),
+          latestSample: Effect.succeed({ perCore: [99.6, 12.2] }),
         },
         hostProcesses: {
           snapshot: (input) =>
@@ -613,7 +613,7 @@ it.effect("fails as unavailable when no status arrives, and reads an empty per-c
       {
         hostResources: {
           status: Stream.make(stressedStatus),
-          samples: () => Effect.succeed(Stream.empty),
+          latestSample: Effect.undefined,
         },
         hostProcesses: {
           snapshot: () => Effect.fail(new HostProcesses.HostProcessesUnavailable()),
@@ -638,7 +638,7 @@ describe("t3_machine_read unbucketed", () => {
           ...(client === undefined ? {} : { client }),
           hostResources: {
             status: Stream.make(stressedStatus),
-            samples: () => Effect.succeed(Stream.make({ perCore: [50] })),
+            latestSample: Effect.succeed({ perCore: [50] }),
           },
           hostProcesses: {
             snapshot: (input) =>

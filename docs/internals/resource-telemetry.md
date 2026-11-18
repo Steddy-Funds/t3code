@@ -16,24 +16,35 @@ requests one sample a minute and exports process totals by group
 ([`ProcessGroupMetrics`](../../apps/server/src/resourceTelemetry/ProcessGroupMetrics.ts)),
 because the user asked for continuous telemetry. Groups are a fixed set named after
 the server's direct children, never process IDs or threads, so the series count
-stays bounded as agents come and go. Per-thread ownership
-([`ProcessOwnership`](../../apps/server/src/resourceTelemetry/ProcessOwnership.ts)) runs only
-on process-table frames, so it costs nothing without a viewer; its claims stay in memory and
-end with the process, the container or the thread. History therefore covers only time with a live
+stays bounded as agents come and go. Diagnostics history therefore covers only time with a live
 subscriber, plus on-demand and export samples. Consuming host power for background scheduling must not retain
 live diagnostics. There is no telemetry database or recurring shell-probe fallback.
 
+The one always-on process walk is the
+[`ResourceSampler`](../../apps/server/src/resourceTelemetry/ResourceSampler.ts): a host-mode
+stream of every process on the machine, every 5 s for the server's lifetime, each sample
+attributed once by
+[`ProcessOwnership`](../../apps/server/src/resourceTelemetry/ProcessOwnership.ts). Every
+reader takes its latest sample: per-thread totals, process tables (a live view only raises the
+stream's rate and fields while it is open), the MCP machine tools and the load monitor. None of
+them walks the host or attributes on its own, so the cost does not grow with readers. On a host
+with about 11k processes, 250 owning threads and 3.5k threads with 3.2k subagent links, one
+sample costs about 14 ms of the server's main thread (decode about 3 ms, attribution about 9 ms,
+per-thread sums about 2 ms). Attribution looks cgroups and containers up by path, never by
+scanning every root or claim. Claims stay in memory and end with the process, the container or
+the thread.
+
 Per-thread totals
-([`ThreadResources`](../../apps/server/src/resourceTelemetry/ThreadResources.ts)) are the one
-viewer-independent exception, and stay cheap because they run only while a turn is running:
-every 30 s on the `Scheduler` tick, and skipped outright when no run is active. On Linux a
-rollup reads each owned unit's cgroup files (`cpu.stat`, `memory.current`, falling back to
-`statm` over `cgroup.procs`). Nested units are subtracted, so a process under both a root and a
-claim counts once. Members of shared roots are split by the `T3CODE_THREAD_ID` in their
-environment. Roots without a cgroup, macOS and Windows take one native discovery pass instead
-(about 130 ms). History is in memory only: 240 points for each of at most 200 threads. A thread
-with no running turn gets its current value sampled on demand, which adds no point, so idle time
-shows as a gap rather than filler.
+([`ThreadResources`](../../apps/server/src/resourceTelemetry/ThreadResources.ts)) sum each
+sample's processes by owning thread once, then add each owning thread into its subagent
+ancestors, so a lineage read is a lookup. Members of shared roots are split by the
+`T3CODE_THREAD_ID` in their environment. CPU is the monitor's per-process figure and memory is
+resident bytes, so `source` is always `sample`. History
+([`ThreadResourceHistory`](../../apps/server/src/resourceTelemetry/ResourceTelemetryHistory.ts))
+averages each 30 s window into one point for every lineage holding a running turn, so idle time
+shows as a gap rather than filler. It is in memory only, in fixed rings: 240 points for each of
+at most 200 threads. A window's close drops archived and deleted threads. No state is kept per
+process outside attribution, whose memos are pruned to the live processes on every sample.
 
 ## Machine verdict
 
@@ -56,9 +67,8 @@ bounded at 512 KB. Only the first snapshot of a subscription that asks for `hist
 carries it, quantised to permille, so a heartbeat never repeats it.
 
 The monitor's host mode (protocol 4) walks every process on the machine, not just the
-server's tree, so it runs only while a view streams it (`setHostStreaming`) or on one
-request (`hostSampleNow`), and it frees its process table when streaming stops. Host samples
-never enter history. Static fields (command, cwd, user, cgroup) are read once per process
+server's tree. The sampler keeps it streaming (`setHostStreaming`) at 5 s; views raise the rate
+and add GPU fields while they are open. Host samples never enter the native history. Static fields (command, cwd, user, cgroup) are read once per process
 identity, and the client keeps that table per monitor generation. `gpuTotals` reads device
 totals only, so it rides the always-on 5 s tick, and live views reuse that tick's reading
 rather than querying at their own rate; a suspended GPU is never woken to read it. Each vendor

@@ -23,7 +23,7 @@ import * as ScheduledTaskService from "./ScheduledTaskService.ts";
 export const LOAD_COOLDOWN_MS = 60_000;
 export const RELEASE_JITTER_MIN_MS = 20_000;
 export const RELEASE_JITTER_MAX_MS = 40_000;
-/** The unbucketed share needs a full process walk, so it is read at most this often. */
+/** The built-in re-arms at each unbucketed read, so the share is read at most this often. */
 export const UNBUCKETED_INTERVAL_MS = 3_600_000;
 /** Matches the run's own `t3_machine_read` limit, so both see the same top processes. */
 const MACHINE_BUCKETS_UNOWNED_LIMIT = 50;
@@ -236,7 +236,7 @@ export const monitorLayer = Layer.effectDiscard(
     let nextReleaseAt = 0;
     let unbucketedReadAt: number | null = null;
 
-    // One host walk and attribution pass; a monitor that cannot list processes reads no value.
+    // From the shared sampler's latest walk; before its first sample this reads no value.
     const readUnbucketedShare = hostProcesses
       .unbucketed({ limit: 0, commands: false, bucketNames: new Map() })
       .pipe(

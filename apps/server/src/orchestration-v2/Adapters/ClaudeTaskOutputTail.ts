@@ -10,6 +10,10 @@ import * as Path from "effect/Path";
 const CLAUDE_TASK_OUTPUT_POLL_MS = 250;
 /** Bound discovery when Claude never writes the file. */
 const MAX_LOCATE_ATTEMPTS = 40;
+/** A host can hold thousands of project folders; past this many the search gives up and live output is omitted. */
+const MAX_SCANNED_PROJECT_FOLDERS = 500;
+/** How much of a folder name is compared to spot one Claude shortened. */
+const SHORTENED_NAME_START = 100;
 /** Skip ahead of fast writers; only the tail is displayed. */
 const MAX_READ_BYTES = 256 * 1024;
 
@@ -34,37 +38,78 @@ export function claudeTaskOutputRoot(
   return path.resolve(cwd ?? ".", base, `claude-${uid}`);
 }
 
-const locate = Effect.fn("ClaudeTaskOutputTail.locate")(function* (input: {
+/** The folder Claude Code keeps a session's temp files in, named after its working directory. */
+export function claudeTaskOutputProjectFolder(cwd: string | null | undefined): string | undefined {
+  return cwd == null ? undefined : cwd.replace(/[^a-zA-Z0-9]/g, "-");
+}
+
+type ClaudeTaskOutputLocation = {
   readonly root: string;
+  readonly projectFolder: string | undefined;
   readonly sessionId: string;
   readonly taskId: string;
-}) {
+};
+
+/** Where the task's file is when the session's folder is named as expected. */
+const expectedTaskFile = (path: Path.Path, input: ClaudeTaskOutputLocation) =>
+  input.projectFolder === undefined
+    ? undefined
+    : path.join(
+        input.root,
+        input.projectFolder,
+        input.sessionId,
+        "tasks",
+        `${input.taskId}.output`,
+      );
+
+const locate = Effect.fn("ClaudeTaskOutputTail.locate")(function* (
+  input: ClaudeTaskOutputLocation,
+) {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const projects = yield* fileSystem.readDirectory(input.root).pipe(Effect.orElseSucceed(() => []));
-  for (const project of projects) {
-    const candidate = path.join(
-      input.root,
-      project,
-      input.sessionId,
-      "tasks",
-      `${input.taskId}.output`,
-    );
-    if (yield* fileSystem.exists(candidate).pipe(Effect.orElseSucceed(() => false))) {
-      return Option.some(candidate);
+  const exists = (target: string) =>
+    fileSystem.exists(target).pipe(Effect.orElseSucceed(() => false));
+  const expected = expectedTaskFile(path, input);
+  const candidates = expected === undefined ? [] : [expected];
+  // Claude shortens long folder names, so the session can live under a name this cannot derive.
+  // Searched once, not on every poll: each folder is a filesystem call on a busy server.
+  if (expected === undefined || !(yield* exists(path.dirname(path.dirname(expected))))) {
+    const projects = yield* fileSystem
+      .readDirectory(input.root)
+      .pipe(Effect.orElseSucceed(() => []));
+    // A shortened name keeps its start, so those folders go first and the cap cannot hide them.
+    const start = input.projectFolder?.slice(0, SHORTENED_NAME_START);
+    const startsAlike = (project: string) => start !== undefined && project.startsWith(start);
+    const ordered = [
+      ...projects.filter(startsAlike),
+      ...projects.filter((project) => !startsAlike(project)),
+    ];
+    for (const project of ordered.slice(0, MAX_SCANNED_PROJECT_FOLDERS)) {
+      const session = path.join(input.root, project, input.sessionId);
+      if (yield* exists(session)) {
+        // The expected folder stays a candidate: a resumed session can leave its id in an old one.
+        candidates.push(path.join(session, "tasks", `${input.taskId}.output`));
+        break;
+      }
     }
+  }
+  if (candidates.length === 0) return Option.none<string>();
+  for (let attempt = 0; attempt < MAX_LOCATE_ATTEMPTS; attempt += 1) {
+    for (const candidate of candidates) {
+      if (yield* exists(candidate)) return Option.some(candidate);
+    }
+    yield* Effect.sleep(CLAUDE_TASK_OUTPUT_POLL_MS);
   }
   return Option.none<string>();
 });
 
 /** Complete stop on tool result or turn end, then await the effect; it performs a final read before returning. */
-export const tailClaudeTaskOutput = Effect.fn("ClaudeTaskOutputTail.tail")(function* (input: {
-  readonly root: string;
-  readonly sessionId: string;
-  readonly taskId: string;
-  readonly stop: Deferred.Deferred<void>;
-  readonly onChunk: (chunk: string) => Effect.Effect<void>;
-}) {
+export const tailClaudeTaskOutput = Effect.fn("ClaudeTaskOutputTail.tail")(function* (
+  input: ClaudeTaskOutputLocation & {
+    readonly stop: Deferred.Deferred<void>;
+    readonly onChunk: (chunk: string) => Effect.Effect<void>;
+  },
+) {
   const fileSystem = yield* FileSystem.FileSystem;
   const pause = Deferred.await(input.stop).pipe(
     Effect.as(true),
@@ -73,12 +118,21 @@ export const tailClaudeTaskOutput = Effect.fn("ClaudeTaskOutputTail.tail")(funct
       orElse: () => Effect.succeed(false),
     }),
   );
-  let file = Option.none<string>();
-  for (let attempt = 0; Option.isNone(file); attempt += 1) {
-    file = yield* locate(input);
-    if (Option.isSome(file)) break;
-    if (attempt + 1 >= MAX_LOCATE_ATTEMPTS || (yield* pause)) return;
-  }
+  // The caller awaits this effect after stop while it holds the session's message lock, so a
+  // search still running then is dropped. A command that already ended gets one look where
+  // its file is expected, for the final read.
+  const located = yield* Effect.raceFirst(
+    locate(input),
+    Deferred.await(input.stop).pipe(Effect.as(Option.none<string>())),
+  );
+  const expected = expectedTaskFile(yield* Path.Path, input);
+  const file = Option.isSome(located)
+    ? located
+    : expected !== undefined &&
+        (yield* fileSystem.exists(expected).pipe(Effect.orElseSucceed(() => false)))
+      ? Option.some(expected)
+      : Option.none<string>();
+  if (Option.isNone(file)) return;
   const filePath = file.value;
   let decoder = new TextDecoder("utf-8", { fatal: false });
   let offset = 0;

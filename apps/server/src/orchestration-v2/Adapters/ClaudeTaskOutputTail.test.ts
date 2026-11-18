@@ -4,19 +4,26 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
+import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Queue from "effect/Queue";
+import * as TestClock from "effect/testing/TestClock";
 
-import { claudeTaskOutputRoot, tailClaudeTaskOutput } from "./ClaudeTaskOutputTail.ts";
+import {
+  claudeTaskOutputProjectFolder,
+  claudeTaskOutputRoot,
+  tailClaudeTaskOutput,
+} from "./ClaudeTaskOutputTail.ts";
 
 const SESSION_ID = "0c91bb28-9e89-4889-bd22-3de9880233d3";
 const TASK_ID = "bk6xreeye";
+const PROJECT_FOLDER = "-private-tmp-project";
 
 const makeTaskFile = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "claude-task-output-" });
-  const tasks = path.join(root, "-private-tmp-project", SESSION_ID, "tasks");
+  const tasks = path.join(root, PROJECT_FOLDER, SESSION_ID, "tasks");
   return { root, tasks, file: path.join(tasks, `${TASK_ID}.output`) };
 });
 
@@ -30,6 +37,7 @@ describe("tailClaudeTaskOutput", () => {
         const chunks = yield* Queue.unbounded<string>();
         yield* tailClaudeTaskOutput({
           root,
+          projectFolder: PROJECT_FOLDER,
           sessionId: SESSION_ID,
           taskId: TASK_ID,
           stop: yield* Deferred.make<void>(),
@@ -60,6 +68,7 @@ describe("tailClaudeTaskOutput", () => {
         const stop = yield* Deferred.make<void>();
         yield* tailClaudeTaskOutput({
           root,
+          projectFolder: PROJECT_FOLDER,
           sessionId: SESSION_ID,
           taskId: TASK_ID,
           stop,
@@ -84,6 +93,7 @@ describe("tailClaudeTaskOutput", () => {
         const chunks = yield* Queue.unbounded<string>();
         yield* tailClaudeTaskOutput({
           root,
+          projectFolder: PROJECT_FOLDER,
           sessionId: SESSION_ID,
           taskId: TASK_ID,
           stop: yield* Deferred.make<void>(),
@@ -100,6 +110,27 @@ describe("tailClaudeTaskOutput", () => {
     ).pipe(Effect.provide(NodeServices.layer)),
   );
 
+  it.effect("finds a session kept under a folder its working directory does not name", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const { root, tasks, file } = yield* makeTaskFile;
+        yield* fileSystem.makeDirectory(tasks, { recursive: true });
+        yield* fileSystem.writeFileString(file, "found\n");
+        const chunks = yield* Queue.unbounded<string>();
+        yield* tailClaudeTaskOutput({
+          root,
+          projectFolder: "-some-other-name",
+          sessionId: SESSION_ID,
+          taskId: TASK_ID,
+          stop: yield* Deferred.make<void>(),
+          onChunk: (chunk) => Queue.offer(chunks, chunk),
+        }).pipe(Effect.forkScoped);
+        assert.equal(yield* Queue.take(chunks), "found\n");
+      }),
+    ).pipe(Effect.provide(NodeServices.layer)),
+  );
+
   it.live("reads what was written last when the tool result stops it", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -112,6 +143,7 @@ describe("tailClaudeTaskOutput", () => {
         const first = yield* Deferred.make<void>();
         const fiber = yield* tailClaudeTaskOutput({
           root,
+          projectFolder: PROJECT_FOLDER,
           sessionId: SESSION_ID,
           taskId: TASK_ID,
           stop,
@@ -130,7 +162,125 @@ describe("tailClaudeTaskOutput", () => {
   );
 });
 
+// A host that has run Claude in thousands of checkouts: every folder checked is a filesystem call.
+describe("tailClaudeTaskOutput on a host with many project folders", () => {
+  const ROOT = "/tmp/claude-1001";
+  const OTHER_FOLDERS = Array.from({ length: 5_000 }, (_, index) => `-other-project-${index}`);
+  const OWN_SESSION = `${ROOT}/${PROJECT_FOLDER}/${SESSION_ID}`;
+
+  const makeHost = (
+    exists: (target: string, checked: number) => Effect.Effect<boolean>,
+    folders: ReadonlyArray<string> = OTHER_FOLDERS,
+  ) => {
+    const calls = { exists: 0, readDirectory: 0, checked: [] as Array<string> };
+    const layer = Layer.merge(
+      Path.layer,
+      FileSystem.layerNoop({
+        exists: (target) => {
+          calls.exists += 1;
+          calls.checked.push(target);
+          return exists(target, calls.exists);
+        },
+        readDirectory: () => {
+          calls.readDirectory += 1;
+          return Effect.succeed([...folders]);
+        },
+      }),
+    );
+    return { calls, layer };
+  };
+  const tail = (stop: Deferred.Deferred<void>) =>
+    tailClaudeTaskOutput({
+      root: ROOT,
+      projectFolder: PROJECT_FOLDER,
+      sessionId: SESSION_ID,
+      taskId: TASK_ID,
+      stop,
+      onChunk: () => Effect.void,
+    });
+
+  it.effect("looks only in the session's own folder when it is there", () =>
+    Effect.gen(function* () {
+      const stop = yield* Deferred.make<void>();
+      const host = makeHost((target, checked) =>
+        // The session folder exists; the task's file never does, and the second poll stops the tail.
+        checked === 3
+          ? Deferred.succeed(stop, undefined).pipe(Effect.as(false))
+          : Effect.succeed(target === OWN_SESSION),
+      );
+      const fiber = yield* tail(stop).pipe(Effect.provide(host.layer), Effect.forkChild);
+      yield* TestClock.adjust("1 second");
+      yield* Fiber.join(fiber);
+      // The session's folder, two polls for the file, and one last look after the stop.
+      assert.equal(host.calls.exists, 4);
+      assert.equal(host.calls.readDirectory, 0);
+    }),
+  );
+
+  it.effect("stops searching the other folders once the tool result stops it", () =>
+    Effect.gen(function* () {
+      const stop = yield* Deferred.make<void>();
+      // Each check settles on a later tick, as a real filesystem call does.
+      const host = makeHost((_target, checked) =>
+        Effect.promise(() => Promise.resolve(false)).pipe(
+          Effect.tap(() => (checked === 3 ? Deferred.succeed(stop, undefined) : Effect.void)),
+        ),
+      );
+      yield* tail(stop).pipe(Effect.provide(host.layer));
+      assert.isAtMost(host.calls.exists, 5);
+    }),
+  );
+
+  it.effect("searches a bounded number of folders, once, when the session is not found", () =>
+    Effect.gen(function* () {
+      const host = makeHost(() => Effect.succeed(false));
+      const fiber = yield* tail(yield* Deferred.make<void>()).pipe(
+        Effect.provide(host.layer),
+        Effect.forkChild,
+      );
+      yield* TestClock.adjust("11 seconds");
+      yield* Fiber.join(fiber);
+      // Its own folder, 500 others, 40 polls for the task's file, and one last look.
+      assert.equal(host.calls.exists, 542);
+      assert.equal(host.calls.readDirectory, 1);
+    }),
+  );
+
+  it.effect("checks a folder that starts like the session's own before the others", () =>
+    Effect.gen(function* () {
+      const stop = yield* Deferred.make<void>();
+      // Claude Code shortens a long folder name and keeps its start.
+      const shortened = `${PROJECT_FOLDER.repeat(8)}-1a2b3c`;
+      const session = `${ROOT}/${shortened}/${SESSION_ID}`;
+      const host = makeHost(
+        (target, checked) =>
+          checked === 3
+            ? Deferred.succeed(stop, undefined).pipe(Effect.as(false))
+            : Effect.succeed(target === session),
+        [...OTHER_FOLDERS, shortened],
+      );
+      yield* tailClaudeTaskOutput({
+        root: ROOT,
+        projectFolder: PROJECT_FOLDER.repeat(9),
+        sessionId: SESSION_ID,
+        taskId: TASK_ID,
+        stop,
+        onChunk: () => Effect.void,
+      }).pipe(Effect.provide(host.layer));
+      assert.equal(host.calls.checked[1], session);
+    }),
+  );
+});
+
 describe("claudeTaskOutputRoot", () => {
+  it("names a session's folder as Claude Code does", () => {
+    assert.equal(
+      claudeTaskOutputProjectFolder("/home/dev/.t3/worktrees/steddyfunds.ai/pod_1"),
+      "-home-dev--t3-worktrees-steddyfunds-ai-pod-1",
+    );
+    assert.isUndefined(claudeTaskOutputProjectFolder(null));
+  });
+
   it.effect.skipIf(process.getuid === undefined)(
     "uses the temp dir Claude Code resolves from its environment on each platform",
     () =>

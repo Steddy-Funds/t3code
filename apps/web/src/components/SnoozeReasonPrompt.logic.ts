@@ -9,7 +9,7 @@ import {
 } from "@t3tools/contracts";
 import { create } from "zustand";
 
-import { isGlintAvailable, presentGlint } from "../lib/glint";
+import { endGlintChain, isGlintAvailable, presentGlint, takeGlintChain } from "../lib/glint";
 
 /** The first shown reasons, at most four. Fewer than two shown falls back to the defaults. */
 export function promptSnoozeReasons(
@@ -95,7 +95,8 @@ export function glintSnoozeReasonParams(reasons: ReadonlyArray<SnoozeReasonSetti
 /**
  * Asks why a thread was snoozed: in Glint's native dialog when the helper runs and the prompt has
  * an anchor, else in the popover. Resolves null when dismissed (Esc, a click outside, or a newer
- * snooze replacing it); never blocks the snooze itself.
+ * snooze replacing it); never blocks the snooze itself. A Glint dialog held from the snooze's own
+ * time pick is continued into, or closed when the popover asks instead.
  */
 export function requestSnoozeReason(
   request: SnoozeReasonRequest,
@@ -113,7 +114,8 @@ export function requestSnoozeReason(
   useSnoozeReasonPrompt.setState({
     open: { ...request, openedAtMs: nowMs, answer, resolve, native: glint !== null },
   });
-  if (glint && request.anchor) void askGlint(answer, request.anchor, glint);
+  if (glint && request.anchor) void askGlint(answer, request.anchor, glint, takeGlintChain(nowMs));
+  else endGlintChain();
   return answer;
 }
 
@@ -121,8 +123,9 @@ async function askGlint(
   answer: Promise<ThreadSnoozeReason | null>,
   anchor: SnoozeReasonAnchor,
   params: NonNullable<ReturnType<typeof glintSnoozeReasonParams>>,
+  continues: string | null,
 ): Promise<void> {
-  const outcome = await presentGlint("choice", anchor, params);
+  const outcome = await presentGlint("choice", anchor, params, { continues });
   const open = useSnoozeReasonPrompt.getState().open;
   if (open?.answer !== answer) return;
   if (outcome.type === "cancelled") return answerSnoozeReason(null);

@@ -125,7 +125,10 @@ const make = Effect.gen(function* () {
       Effect.orElseSucceed(() => "full" as const),
     );
     return yield* Effect.promise(() =>
-      helper.present(input.id, input.kind, anchor, input.params, input.appearance, size),
+      helper.present(input.id, input.kind, anchor, input.params, input.appearance, size, {
+        ...(input.chain ? { chain: true } : {}),
+        ...(input.continues ? { continues: input.continues } : {}),
+      }),
     ).pipe(
       Effect.ensuring(
         Effect.andThen(

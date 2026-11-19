@@ -7,7 +7,8 @@ import {
   resolveCustomSnooze,
   type CustomSnoozeInput,
 } from "@t3tools/client-runtime/state/thread-settled";
-import { isGlintAvailable, presentGlint } from "../lib/glint";
+import { endGlintChain, isGlintAvailable, presentGlint } from "../lib/glint";
+import { getClientSettings } from "../hooks/useSettings";
 import { Button } from "./ui/button";
 import { CalendarIcon, Settings2Icon } from "lucide-react";
 import { Calendar } from "./ui/calendar";
@@ -41,16 +42,23 @@ const useRequest = create<{ request: Request | null }>(() => ({ request: null })
 
 /**
  * Asks for a custom snooze time. With an anchor and Glint's native dialogs on, its "Time from now"
- * dial opens there; otherwise, or when the helper fails, this dialog does.
+ * dial opens there; otherwise, or when the helper fails, this dialog does. With the Why-snooze
+ * prompt on, the dial is held after its result so the reason opens in the same panel.
  */
 export async function requestCustomSnooze(
   anchor?: Element | { readonly x: number; readonly y: number },
 ): Promise<SnoozeChoice | null> {
   if (anchor && isGlintAvailable()) {
-    const outcome = await presentGlint("timeFromNow", anchor, { title: "Snooze until" });
+    const outcome = await presentGlint(
+      "timeFromNow",
+      anchor,
+      { title: "Snooze until" },
+      { chain: getClientSettings().snoozeReasonPromptEnabled },
+    );
     if (outcome.type === "cancelled") return null;
     const until = outcome.type === "result" ? Date.parse(outcome.value.date) : Number.NaN;
     if (until > Date.now()) return { snoozedUntil: new Date(until).toISOString() };
+    endGlintChain();
   }
   useRequest.getState().request?.resolve(null);
   return new Promise((resolve) => useRequest.setState({ request: { resolve } }));

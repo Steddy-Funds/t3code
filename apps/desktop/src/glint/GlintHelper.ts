@@ -38,6 +38,7 @@ export interface GlintHelper {
     appearance?: "light" | "dark",
     /** Full is the helper's default, so only `mini` is written. */
     size?: GlintDialogSize,
+    chain?: GlintChainOptions,
   ) => Promise<DesktopGlintOutcome>;
   /** Sends a message such as `update`, `input`, `key` or `dismiss` to the open dialog `id`. */
   readonly send: (message: DesktopGlintMessage) => boolean;
@@ -47,6 +48,12 @@ export interface GlintHelper {
    */
   readonly sendInput: (message: GlintInputMessage) => boolean;
   readonly dispose: () => void;
+}
+
+/** Written only when set; helpers without chains ignore them. */
+interface GlintChainOptions {
+  readonly chain?: boolean;
+  readonly continues?: string;
 }
 
 export type GlintInputMessage =
@@ -234,7 +241,7 @@ export function makeGlintHelper(
 
   return {
     path,
-    present: (id, kind, anchor, params, appearance, size) => {
+    present: (id, kind, anchor, params, appearance, size, chain) => {
       if (disposed) {
         return Promise.resolve({ type: "unavailable", message: "The Glint helper was stopped." });
       }
@@ -257,6 +264,8 @@ export function makeGlintHelper(
           params,
           ...(appearance ? { appearance } : {}),
           ...(size === "mini" ? { size: "mini" } : {}),
+          ...(chain?.chain ? { chain: true } : {}),
+          ...(chain?.continues ? { continues: chain.continues } : {}),
         };
         if (!write(message)) {
           settle(id, { type: "unavailable", message: "The Glint helper is not running." });

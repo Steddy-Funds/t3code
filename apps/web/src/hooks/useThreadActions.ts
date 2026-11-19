@@ -57,6 +57,7 @@ import { formatWorktreePathForDisplay, getOrphanedWorktreePathForThread } from "
 import { stackedThreadToast, toastManager } from "../components/ui/toast";
 import { useClientSettings } from "./useSettings";
 import { randomUUID } from "../lib/utils";
+import { endGlintChain } from "../lib/glint";
 import { requestSnoozeReason, snoozeReasonAnchor } from "../components/SnoozeReasonPrompt";
 import {
   promptSnoozeReasons,
@@ -960,6 +961,7 @@ export function useThreadActions() {
     });
     if (result._tag !== "Success") {
       action.finish();
+      endGlintChain();
       return result;
     }
     void (async () => {

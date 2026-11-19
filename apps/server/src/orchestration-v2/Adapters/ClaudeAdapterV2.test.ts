@@ -13437,6 +13437,102 @@ describe("ClaudeAdapterV2 background wake turns", () => {
       ),
   );
 
+  // regression: a wake run settled on an aborted turn's result while the turn after it ran on,
+  // with no run, until its own result
+  it.effect.each([
+    { label: "stays open for the turn that follows an aborted one", nextTurnOpened: true },
+    { label: "settles interrupted on an aborted turn nothing follows", nextTurnOpened: false },
+  ])("a wake run $label", ({ nextTurnOpened }) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const harness = yield* makeWakeHarness;
+        const now = yield* DateTime.now;
+        const wakeAttempt = RunAttemptId.make("attempt-claude-aborted-wake-2");
+
+        yield* harness.runtime.startTurn(
+          makeClaudeTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now,
+            attemptId: RunAttemptId.make("attempt-claude-aborted-wake-1"),
+            text: "Run the build in the background.",
+            attachments: [],
+          }),
+        );
+        yield* Queue.offer(harness.sdkMessages, turnOneResult);
+        yield* harness.awaitTerminal(1);
+
+        // Claude opens a turn for a prompt sent as the last one ended, a second prompt aborts
+        // it, and the turn for that one opens: all before the wake run attaches.
+        for (const frame of [
+          wakeTurnInit,
+          makeAssistantTextFrame({
+            uuid: "00000000-0000-4000-8000-000000000971",
+            text: "Looking.",
+          }),
+          makeResultFrame({
+            uuid: "00000000-0000-4000-8000-000000000972",
+            result: "",
+            numTurns: 3,
+            terminalReason: "aborted_streaming",
+          }),
+          ...(nextTurnOpened
+            ? [claudeSdkFrame({ ...wakeTurnInit, uuid: "00000000-0000-4000-8000-000000000973" })]
+            : []),
+        ]) {
+          yield* harness.offerAndWait(frame);
+        }
+        assert.lengthOf(harness.continuationRequests, 1);
+
+        yield* harness.runtime.startTurn(
+          makeClaudeTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now,
+            attemptId: wakeAttempt,
+            text: "Background task completed.",
+            attachments: [],
+            providerTurnOrdinal: 2,
+            messageCreatedBy: "agent",
+            messageCreationSource: "provider",
+          }),
+        );
+        if (!nextTurnOpened) {
+          yield* harness.awaitTerminal(2);
+          assert.equal(harness.terminalEvents()[1]?.status, "interrupted");
+          return;
+        }
+
+        yield* harness.offerAndWait(wakeAssistant);
+        yield* harness.offerAndWait(wakeResult);
+        yield* harness.awaitTerminal(2);
+        assert.deepStrictEqual(
+          harness.terminalEvents().map((terminal) => terminal.status),
+          ["completed", "completed"],
+        );
+        // The live turn's output is this run's, and it asked for no second wake run.
+        assert.lengthOf(harness.continuationRequests, 1);
+        assert.isTrue(
+          harness.events.some(
+            (event) =>
+              event.type === "message.updated" &&
+              event.message.runId === RunId.make(`run-${wakeAttempt}`) &&
+              event.message.text === WAKE_RESULT_TEXT,
+          ),
+        );
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            IdAllocator.layer,
+            McpProviderSessions.layer,
+            NodeServices.layer,
+            NodeCrypto.layer,
+          ),
+        ),
+      ),
+    ),
+  );
+
   // A Stop closes the first process, and a turn replaces it before its stream ends.
   const stopRacedByReplacementTurn = (label: string) =>
     Effect.gen(function* () {

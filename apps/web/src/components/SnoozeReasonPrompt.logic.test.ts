@@ -1,6 +1,7 @@
 import { DEFAULT_SNOOZE_REASONS } from "@t3tools/contracts";
 import { describe, expect, it, vi } from "vite-plus/test";
 
+import { GLINT_CHAIN_HOLD_MS, presentGlint } from "../lib/glint";
 import {
   answerSnoozeReason,
   glintSnoozeReasonParams,
@@ -64,11 +65,14 @@ describe("requestSnoozeReason through Glint", () => {
 
   function stubGlint(outcome: unknown) {
     const present = vi.fn(async (_input: unknown) => outcome);
+    const send = vi.fn(async (_message: unknown) => true);
     vi.stubGlobal("window", {
-      desktopBridge: { glint: { isAvailable: () => true, present } },
+      desktopBridge: { glint: { isAvailable: () => true, present, send } },
+      addEventListener: () => {},
+      removeEventListener: () => {},
     });
     useSnoozeReasonPrompt.setState({ open: null });
-    return { present, [Symbol.dispose]: () => vi.unstubAllGlobals() };
+    return { present, send, [Symbol.dispose]: () => vi.unstubAllGlobals() };
   }
 
   /** Resolves once the native dialog has handed the prompt to the popover. */
@@ -140,5 +144,44 @@ describe("requestSnoozeReason through Glint", () => {
     using _glint = stubGlint({ type: "cancelled" });
     await expect(requestSnoozeReason(anchored, 1_000)).resolves.toBeNull();
     expect(useSnoozeReasonPrompt.getState().open).toBeNull();
+  });
+
+  it("continues the held time dial, or closes it when the popover asks", async () => {
+    using glint = stubGlint({ type: "result", value: { date: "2030-01-01T00:00:00Z" } });
+    using _now = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    await presentGlint("timeFromNow", anchored.anchor, { title: "Snooze until" }, { chain: true });
+    const held = glint.present.mock.calls[0]?.[0] as { id: string; chain?: boolean };
+    expect(held.chain).toBe(true);
+    glint.present.mockResolvedValue({ type: "result", value: { id: "later" } });
+    await requestSnoozeReason(anchored, 1_000);
+    expect(glint.present.mock.calls[1]?.[0]).toMatchObject({
+      kind: "choice",
+      continues: held.id,
+      anchor: anchored.anchor,
+    });
+    expect(glint.send).not.toHaveBeenCalled();
+
+    glint.present.mockResolvedValue({ type: "result", value: { date: "2030-01-01T00:00:00Z" } });
+    await presentGlint("timeFromNow", anchored.anchor, { title: "Snooze until" }, { chain: true });
+    const second = glint.present.mock.calls[2]?.[0] as { id: string };
+    void requestSnoozeReason(request, 1_000);
+    expect(glint.send).toHaveBeenCalledWith({ type: "dismiss", id: second.id });
+    answerSnoozeReason(null);
+
+    // Once the helper's hold has run out, the reason opens at its anchor.
+    glint.present.mockResolvedValue({ type: "result", value: { date: "2030-01-01T00:00:00Z" } });
+    await presentGlint("timeFromNow", anchored.anchor, { title: "Snooze until" }, { chain: true });
+    glint.present.mockResolvedValue({ type: "result", value: { id: "later" } });
+    await requestSnoozeReason(anchored, 1_000 + GLINT_CHAIN_HOLD_MS);
+    expect(glint.present.mock.calls.at(-1)?.[0]).not.toHaveProperty("continues");
+  });
+
+  it("sends no chain fields when nothing is held", async () => {
+    using glint = stubGlint({ type: "result", value: { id: "later" } });
+    await requestSnoozeReason(anchored, 1_000);
+    const input = glint.present.mock.calls[0]?.[0];
+    expect(input).not.toHaveProperty("continues");
+    expect(input).not.toHaveProperty("chain");
+    expect(glint.send).not.toHaveBeenCalled();
   });
 });

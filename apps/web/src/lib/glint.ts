@@ -230,11 +230,40 @@ function appearance(): "light" | "dark" | undefined {
   return root.classList.contains("dark") ? "dark" : "light";
 }
 
+/** How long the helper keeps a chained dialog on screen after its result. */
+export const GLINT_CHAIN_HOLD_MS = 1_500;
+
+/** The chained dialog the helper is holding after its result, if any. */
+let heldChain: { readonly id: string; readonly atMs: number } | null = null;
+
+/** The held dialog's id for a `continues`, once: null after the hold has run out. */
+export function takeGlintChain(nowMs: number = Date.now()): string | null {
+  const held = heldChain;
+  heldChain = null;
+  return held && nowMs - held.atMs < GLINT_CHAIN_HOLD_MS ? held.id : null;
+}
+
+/** Closes a held dialog now, for when nothing continues it. */
+export function endGlintChain(): void {
+  const held = heldChain;
+  heldChain = null;
+  if (held)
+    void window.desktopBridge?.glint?.send({ type: "dismiss", id: held.id }).catch(() => false);
+}
+
+interface GlintPresentOptions {
+  /** Keep the dialog on screen as answered after a result, for a dialog that continues it. */
+  readonly chain?: boolean;
+  /** A held dialog's id: opens in its panel and place, or at `anchor` once the hold ended. */
+  readonly continues?: string | null;
+}
+
 /** Opens a dialog that can be fed and heard while it is up. Anchors at an element, point or rect. */
 function openGlint<K extends GlintKind>(
   kind: K,
   anchor: GlintAnchor,
   params: GlintParams[K],
+  options: GlintPresentOptions = {},
 ): GlintDialog<K> {
   const glint = window.desktopBridge?.glint;
   const id = randomUUID();
@@ -247,8 +276,19 @@ function openGlint<K extends GlintKind>(
   const outcome = (async (): Promise<GlintOutcome<K>> => {
     if (!glint) return { type: "unavailable" };
     try {
-      const outcome = await glint.present({ id, kind, anchor: rect, params, appearance: appearance() });
+      // Any present ends the helper's hold, continuing it or not.
+      heldChain = null;
+      const outcome = await glint.present({
+        id,
+        kind,
+        anchor: rect,
+        params,
+        appearance: appearance(),
+        ...(options.chain ? { chain: true } : {}),
+        ...(options.continues ? { continues: options.continues } : {}),
+      });
       if (outcome.type !== "result") return { type: outcome.type };
+      if (options.chain) heldChain = { id, atMs: Date.now() };
       const value = GLINT_DECODERS[kind](outcome.value);
       return Option.isSome(value)
         ? { type: "result", value: value.value as (typeof GLINT_VALUES)[K]["Type"] }
@@ -286,6 +326,7 @@ export function presentGlint<K extends GlintKind>(
   kind: K,
   anchor: GlintAnchor,
   params: GlintParams[K],
+  options?: GlintPresentOptions,
 ): Promise<GlintOutcome<K>> {
-  return openGlint(kind, anchor, params).outcome;
+  return openGlint(kind, anchor, params, options).outcome;
 }

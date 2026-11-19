@@ -94,6 +94,21 @@ describe("GlintHelper", () => {
     expect(presents[1]).toMatchObject({ size: "mini", appearance: "dark" });
   });
 
+  it("writes chain and continues only when set", async () => {
+    using mock = mockHelper("result");
+    await mock.helper.present("d1", "timeFromNow", ANCHOR, {});
+    await mock.helper.present("d2", "timeFromNow", ANCHOR, {}, undefined, "full", { chain: true });
+    await mock.helper.present("d3", "choice", ANCHOR, {}, "dark", "full", { continues: "d2" });
+    const presents = mock.received.filter((message) => message.type === "present");
+    expect(presents.map((message) => ["chain" in message, "continues" in message])).toEqual([
+      [false, false],
+      [true, false],
+      [false, true],
+    ]);
+    expect(presents[1]).toMatchObject({ chain: true });
+    expect(presents[2]).toMatchObject({ continues: "d2", appearance: "dark" });
+  });
+
   it("cancels the shown dialog when another is presented, and on dismiss", async () => {
     using mock = mockHelper("result", 60_000);
     const first = mock.helper.present("d1", "color", ANCHOR, {});

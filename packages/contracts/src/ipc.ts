@@ -365,6 +365,10 @@ export const DesktopGlintPresentInputSchema = Schema.Struct({
   params: Schema.Unknown,
   /** T3's own light or dark theme, so the dialog's glass matches it whatever macOS is in. */
   appearance: Schema.optional(Schema.Literals(["light", "dark"])),
+  /** Keep the dialog on screen as answered after a result, for a dialog that continues it. */
+  chain: Schema.optional(Schema.Boolean),
+  /** A held dialog's id: opens in its panel and place, or at `anchor` once the hold ended. */
+  continues: Schema.optional(TrimmedNonEmptyString),
 });
 export type DesktopGlintPresentInput = typeof DesktopGlintPresentInputSchema.Type;
 

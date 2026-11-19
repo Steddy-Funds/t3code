@@ -75,6 +75,7 @@ upstream; a feature can, from its own branch, when Akiva decides.
 | Glint dialogs stay open through the press that opened them (Snooze), and draw dark in T3's dark theme                                             | #106 | e4be208 |
 | Smart Diff: click moved code to open its block beside every place it went (split view, needs #101)                                                | #107 | d2548cd |
 | Glint dialog size in Settings > Labs: Full (the trackpad's size) or Mini (a quarter, for demos)                                                   | #113 | 396bbd7 |
+| Glint: after a native Snooze until, Why snooze? opens in the same dialog window (chain/continues)                                                 | #114 | dab2837 |
 
 Held: #38 (pods notes in the t3-orchestration skill). It edits
 `.agents/skills/t3-orchestration/`, which exists only on

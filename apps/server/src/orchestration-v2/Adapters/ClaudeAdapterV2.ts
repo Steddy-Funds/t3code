@@ -11479,14 +11479,21 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 // Replay results last to avoid rebuffering later frames. An empty turn's result must not settle a newer running turn.
                 const lastResultIndex = drained.findLastIndex((entry) => entry.type === "result");
                 const tailResult = drained[lastResultIndex];
+                const nextTurnStarted = drained
+                  .slice(lastResultIndex + 1)
+                  .some((entry) => isClaudeTurnStartMessage(entry));
                 const emptyTurnBeforeNextTurn =
                   tailResult?.type === "result" &&
                   tailResult.num_turns === 0 &&
                   !tailResult.is_error &&
                   terminalStatusFromResult(tailResult) === "completed" &&
-                  drained
-                    .slice(lastResultIndex + 1)
-                    .some((entry) => isClaudeTurnStartMessage(entry));
+                  nextTurnStarted;
+                // A prompt sent as a turn ended makes Claude abort the turn it opened and open
+                // another. Settling on that abort would leave the turn that followed with no run.
+                const abortedTurnBeforeNextTurn =
+                  tailResult?.type === "result" &&
+                  isClaudeActiveSteeringAbortResult(tailResult) &&
+                  nextTurnStarted;
                 // The CLI can append empty task successes after a failure. Filter
                 // those for replay without changing the raw-tail successor guard.
                 const isEmptyTaskNotificationSuccess = (entry: SDKMessage) =>
@@ -11535,7 +11542,13 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                     return next;
                   });
                 }
-                if (lastResult !== undefined && !emptyTurnBeforeNextTurn) {
+                if (abortedTurnBeforeNextTurn && tailResult?.type === "result") {
+                  context.steeredSegmentUsage.push(tailResult.usage);
+                  context.steeredLedgerUsage = addClaudeLedgerUsage(
+                    context.steeredLedgerUsage,
+                    resultLedgerUsage.get(tailResult),
+                  );
+                } else if (lastResult !== undefined && !emptyTurnBeforeNextTurn) {
                   yield* handleSdkMessage({ query: querySession.query, message: lastResult });
                   return;
                 }

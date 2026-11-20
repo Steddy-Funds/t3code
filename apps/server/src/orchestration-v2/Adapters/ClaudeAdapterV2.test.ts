@@ -13448,6 +13448,19 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         const harness = yield* makeWakeHarness;
         const now = yield* DateTime.now;
         const wakeAttempt = RunAttemptId.make("attempt-claude-aborted-wake-2");
+        // The process's running totals, as each result reports them.
+        const ledger = (inputTokens: number, outputTokens: number) => ({
+          m: {
+            inputTokens,
+            outputTokens,
+            cacheReadInputTokens: 0,
+            cacheCreationInputTokens: 0,
+            webSearchRequests: 0,
+            costUSD: 0,
+            contextWindow: 200_000,
+            maxOutputTokens: 32_000,
+          },
+        });
 
         yield* harness.runtime.startTurn(
           makeClaudeTestTurnInput({
@@ -13459,7 +13472,14 @@ describe("ClaudeAdapterV2 background wake turns", () => {
             attachments: [],
           }),
         );
-        yield* Queue.offer(harness.sdkMessages, turnOneResult);
+        yield* Queue.offer(
+          harness.sdkMessages,
+          makeResultFrame({
+            uuid: "00000000-0000-4000-8000-000000000970",
+            result: "Kicked off the build in the background.",
+            modelUsage: ledger(1, 1),
+          }),
+        );
         yield* harness.awaitTerminal(1);
 
         // Claude opens a turn for a prompt sent as the last one ended, a second prompt aborts
@@ -13481,6 +13501,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
               cache_creation_input_tokens: 0,
               cache_read_input_tokens: 0,
             },
+            modelUsage: ledger(16, 26),
           }),
           ...(nextTurnOpened
             ? [claudeSdkFrame({ ...wakeTurnInit, uuid: "00000000-0000-4000-8000-000000000973" })]
@@ -13510,7 +13531,14 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         }
 
         yield* harness.offerAndWait(wakeAssistant);
-        yield* harness.offerAndWait(wakeResult);
+        yield* harness.offerAndWait(
+          makeResultFrame({
+            uuid: "00000000-0000-4000-8000-000000000974",
+            result: WAKE_RESULT_TEXT,
+            origin: { kind: "task-notification" },
+            modelUsage: ledger(18, 28),
+          }),
+        );
         yield* harness.awaitTerminal(2);
         assert.deepStrictEqual(
           harness.terminalEvents().map((terminal) => terminal.status),
@@ -13518,15 +13546,18 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         );
         // The live turn's output is this run's, and it asked for no second wake run.
         assert.lengthOf(harness.continuationRequests, 1);
-        // The aborted turn's tokens count in the run beside the live turn's (1 in, 1 out).
+        // The aborted turn's tokens count in the run beside the live turn's (1 in, 1 out). The
+        // totals grew by 17 in and 27 out over both, so 6 and 6 were spent outside the results.
         const settled = harness.events.findLast((event) => event.type === "provider_turn.updated");
         const usage =
           settled?.type === "provider_turn.updated"
             ? settled.providerTurn.turnTokenUsage
             : undefined;
         assert.deepStrictEqual(
-          usage?.usageStatus === "complete" ? [usage.inputTokens, usage.outputTokens] : usage,
-          [11, 21],
+          usage?.usageStatus === "complete"
+            ? [usage.inputTokens, usage.outputTokens, usage.otherUsage]
+            : usage,
+          [11, 21, { inputTokens: 6, outputTokens: 6 }],
         );
         assert.isTrue(
           harness.events.some(

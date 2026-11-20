@@ -13440,8 +13440,8 @@ describe("ClaudeAdapterV2 background wake turns", () => {
   // regression: a wake run settled on an aborted turn's result while the turn after it ran on,
   // with no run, until its own result
   it.effect.each([
-    { label: "stays open for the turn that follows an aborted one", nextTurnOpened: true },
-    { label: "settles interrupted on an aborted turn nothing follows", nextTurnOpened: false },
+    { label: "stays open for the turn after an abort", nextTurnOpened: true },
+    { label: "settles interrupted on a lone abort", nextTurnOpened: false },
   ])("a wake run $label", ({ nextTurnOpened }) =>
     Effect.scoped(
       Effect.gen(function* () {

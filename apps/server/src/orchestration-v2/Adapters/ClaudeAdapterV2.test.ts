@@ -13475,6 +13475,12 @@ describe("ClaudeAdapterV2 background wake turns", () => {
             result: "",
             numTurns: 3,
             terminalReason: "aborted_streaming",
+            usage: {
+              input_tokens: 10,
+              output_tokens: 20,
+              cache_creation_input_tokens: 0,
+              cache_read_input_tokens: 0,
+            },
           }),
           ...(nextTurnOpened
             ? [claudeSdkFrame({ ...wakeTurnInit, uuid: "00000000-0000-4000-8000-000000000973" })]
@@ -13512,6 +13518,16 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         );
         // The live turn's output is this run's, and it asked for no second wake run.
         assert.lengthOf(harness.continuationRequests, 1);
+        // The aborted turn's tokens count in the run beside the live turn's (1 in, 1 out).
+        const settled = harness.events.findLast((event) => event.type === "provider_turn.updated");
+        const usage =
+          settled?.type === "provider_turn.updated"
+            ? settled.providerTurn.turnTokenUsage
+            : undefined;
+        assert.deepStrictEqual(
+          usage?.usageStatus === "complete" ? [usage.inputTokens, usage.outputTokens] : usage,
+          [11, 21],
+        );
         assert.isTrue(
           harness.events.some(
             (event) =>

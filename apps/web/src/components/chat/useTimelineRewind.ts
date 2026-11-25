@@ -25,7 +25,8 @@ import { buildThreadRouteParams } from "../../threadRoutes";
 import { useComposerDraftStore } from "../../composerDraftStore";
 import { threadEnvironment } from "../../state/threads";
 import { waitForThreadShell } from "../../state/entities";
-import { openRevertConfirm } from "./ChatOverlayHosts";
+import { openRevertConfirm, type PendingRevert } from "./ChatOverlayHosts";
+import type { TimelineRevertMode } from "./timelineRowContext";
 import { assetEnvironment } from "../../state/assets";
 import { readEnvironmentScope } from "../../state/session";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -54,8 +55,8 @@ interface TimelineRewindInput {
 }
 
 /**
- * Going back in a thread's timeline: reverting to an earlier turn (restoring that message into
- * the composer) and forking a new thread from a run.
+ * Going back in a thread's timeline: reverting to before a message (restoring it into the
+ * composer) or to just after its run, and forking a new thread from a run.
  */
 export function useTimelineRewind(input: TimelineRewindInput) {
   const {
@@ -93,6 +94,7 @@ export function useTimelineRewind(input: TimelineRewindInput) {
   const onRevertToTurnCount = async (
     turnCount: number,
     messageId: MessageId,
+    mode: TimelineRevertMode,
     restoreFiles?: boolean,
   ) => {
     const localApi = readLocalApi();
@@ -125,7 +127,7 @@ export function useTimelineRewind(input: TimelineRewindInput) {
       return;
     }
     if (restoreFiles === undefined) {
-      openRevertConfirm(routeThreadKey, { turnCount, messageId });
+      openRevertConfirm(routeThreadKey, { turnCount, messageId, mode });
       return;
     }
 
@@ -140,6 +142,7 @@ export function useTimelineRewind(input: TimelineRewindInput) {
       threadId: activeThread.id,
       turnCount,
       restoreFiles,
+      restorePrompt: mode === "edit",
       // Keep the live checkpoint identity when command context refetches a bounded window.
       checkpoint: findRevertCheckpoint(serverProjection?.checkpoints ?? [], turnCount),
       draftTarget: composerDraftTarget,
@@ -156,7 +159,7 @@ export function useTimelineRewind(input: TimelineRewindInput) {
       setThreadError(activeThread.id, rewind.error);
       return;
     }
-    if (currentRouteThreadKeyRef.current === routeThreadKey) {
+    if (rewind.prompt !== null && currentRouteThreadKeyRef.current === routeThreadKey) {
       const nextPrompt = rewind.prompt;
       promptRef.current = nextPrompt;
       composerRef.current?.resetCursorState({ prompt: nextPrompt, cursor: nextPrompt.length });
@@ -166,8 +169,8 @@ export function useTimelineRewind(input: TimelineRewindInput) {
     }
   };
   const onRevertToTurnCountStable = useStableCallback(onRevertToTurnCount);
-  const onConfirmRevert = (turnCount: number, messageId: MessageId, restoreFiles: boolean) => {
-    void onRevertToTurnCount(turnCount, messageId, restoreFiles);
+  const onConfirmRevert = (pending: PendingRevert, restoreFiles: boolean) => {
+    void onRevertToTurnCount(pending.turnCount, pending.messageId, pending.mode, restoreFiles);
   };
   const onConfirmRevertStable = useStableCallback(onConfirmRevert);
 
@@ -211,8 +214,12 @@ export function useTimelineRewind(input: TimelineRewindInput) {
     });
   };
   const onForkFromRunStable = useStableCallback(onForkFromRun);
-  const onRevertTimelineTurn = (targetTurnCount: number, messageId: MessageId) => {
-    void onRevertToTurnCountStable(targetTurnCount, messageId);
+  const onRevertTimelineTurn = (
+    targetTurnCount: number,
+    messageId: MessageId,
+    mode: TimelineRevertMode,
+  ) => {
+    void onRevertToTurnCountStable(targetTurnCount, messageId, mode);
   };
   const onRevertTimelineTurnStable = useStableCallback(onRevertTimelineTurn);
   return {

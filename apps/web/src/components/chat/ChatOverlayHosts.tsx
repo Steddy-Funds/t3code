@@ -25,6 +25,7 @@ import { Button } from "../ui/button";
 import { Dialog } from "../ui/dialog";
 import { WizardPopup } from "../ui/wizard";
 import { registerThreadOverlay } from "./threadOverlayRetention";
+import type { TimelineRevertMode } from "./timelineRowContext";
 
 /**
  * Open state for overlays the chat view hosts. It lives in atoms rather than
@@ -179,9 +180,10 @@ export function BranchRestoreConfirmHost(props: {
   );
 }
 
-interface PendingRevert {
+export interface PendingRevert {
   readonly turnCount: number;
   readonly messageId: MessageId;
+  readonly mode: TimelineRevertMode;
 }
 
 const revertConfirmAtom = makeThreadOverlayAtom<PendingRevert>("revert-confirm");
@@ -192,14 +194,15 @@ export function openRevertConfirm(threadKey: string, pending: PendingRevert): vo
 
 export function RevertConfirmHost(props: {
   readonly threadKey: string;
-  readonly onConfirm: (turnCount: number, messageId: MessageId, restoreFiles: boolean) => void;
+  readonly onConfirm: (pending: PendingRevert, restoreFiles: boolean) => void;
 }) {
   const pending = useThreadOverlay(revertConfirmAtom, props.threadKey);
   const confirm = (restoreFiles: boolean) => {
     if (pending === null) return;
     closeThreadOverlay(revertConfirmAtom);
-    props.onConfirm(pending.turnCount, pending.messageId, restoreFiles);
+    props.onConfirm(pending, restoreFiles);
   };
+  const keep = pending?.mode === "keep";
   return (
     <AlertDialog
       open={pending !== null}
@@ -209,9 +212,11 @@ export function RevertConfirmHost(props: {
     >
       <AlertDialogPopup>
         <AlertDialogHeader>
-          <AlertDialogTitle>Edit from here?</AlertDialogTitle>
+          <AlertDialogTitle>{keep ? "Revert to here?" : "Edit from here?"}</AlertDialogTitle>
           <AlertDialogDescription>
-            Rewind chat to before this message. Your prompt and attachments return to the composer.
+            {keep
+              ? "Keep this message and its reply, and remove everything after it from the chat and the agent's context."
+              : "Rewind chat to before this message. Your prompt and attachments return to the composer."}{" "}
             “Revert files too” also undoes your own edits.
           </AlertDialogDescription>
         </AlertDialogHeader>

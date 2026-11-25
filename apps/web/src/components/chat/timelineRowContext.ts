@@ -16,6 +16,9 @@ import {
   type TurnItemId,
 } from "@t3tools/contracts";
 import type { AsyncResult, Atom } from "effect/reactivity";
+
+/** `edit` drops the prompt into the composer; `keep` keeps it and its reply. */
+export type TimelineRevertMode = "edit" | "keep";
 import type { CommandOutputView } from "@t3tools/client-runtime/state/command-output";
 import type { WorkflowOpening } from "@t3tools/client-runtime/state/subagentRuntime";
 import { createContext, type MouseEvent, type ReactNode } from "react";
@@ -60,7 +63,11 @@ export interface TimelineRowSharedState {
   skills: ReadonlyArray<ServerProviderSkill>;
   runs: ReadonlyArray<HandoffTimelineRun>;
   activeThreadEnvironmentId: EnvironmentId;
-  onRevertToTurnCount: (targetTurnCount: number, messageId: MessageId) => void;
+  onRevertToTurnCount: (
+    targetTurnCount: number,
+    messageId: MessageId,
+    mode: TimelineRevertMode,
+  ) => void;
   onUseArtifactTemplate: (template: CodexArtifactTemplate) => void;
   onSendAppMessage: ((text: string) => Promise<void>) | undefined;
   onAppFullscreenChange: (rowId: string, fullscreen: boolean) => void;

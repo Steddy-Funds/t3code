@@ -31,6 +31,7 @@ import {
   ChevronDownIcon,
   DownloadIcon,
   EyeIcon,
+  HistoryIcon,
   type LucideIcon,
   MessagesSquareIcon,
   Redo2Icon,
@@ -79,7 +80,12 @@ import { markdownProseDirection } from "~/textDirection";
 import { useMediaQuery } from "~/hooks/useMediaQuery";
 import { formatChatTimestampTooltip, formatDayAwareTimestamp } from "../../timestampFormat";
 import { WorkflowOpeningBlock } from "./WorkflowOpeningBlock";
-import { TimelineRowCtx, TimelineRowActivityCtx, type TimelineRow } from "./timelineRowContext";
+import {
+  TimelineRowCtx,
+  TimelineRowActivityCtx,
+  type TimelineRevertMode,
+  type TimelineRow,
+} from "./timelineRowContext";
 import {
   MESSAGE_HEADING_LEVEL,
   MessageAuthorHeading,
@@ -287,7 +293,7 @@ function AutomationMessageRow({ row }: { row: Extract<TimelineRow, { kind: "mess
     text.trim().split(/\r?\n/, 1)[0] ??
     "";
 
-  const revertTurnCount = row.revertTurnCount;
+  const { revertTurnCount, keepTurnCount } = row;
   const promptLink = promptLinkFor(text);
   // Find reads the DOM, so a folded prompt stays mounted but hidden while find is open.
   const bodyMounted = expanded || ctx.findActive;
@@ -344,8 +350,19 @@ function AutomationMessageRow({ row }: { row: Extract<TimelineRow, { kind: "mess
               alwaysVisible
             />
             <div className="flex items-center gap-0.5">
+              {typeof keepTurnCount === "number" && (
+                <RevertUserMessageButton
+                  turnCount={keepTurnCount}
+                  messageId={row.message.id}
+                  mode="keep"
+                />
+              )}
               {typeof revertTurnCount === "number" && (
-                <RevertUserMessageButton turnCount={revertTurnCount} messageId={row.message.id} />
+                <RevertUserMessageButton
+                  turnCount={revertTurnCount}
+                  messageId={row.message.id}
+                  mode="edit"
+                />
               )}
               <MessageCopyButton text={text} variant="ghost" />
               {promptLink !== null && (
@@ -463,7 +480,7 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
   const senderLabel = senderShell?.title.trim() || "Agent";
   const resolvedContext = resolveUserMessageContext({ ...row.message, text: userMessage.text });
   const previewImages = userImages.filter((image) => image.name.startsWith("preview-annotation-"));
-  const revertTurnCount = row.revertTurnCount;
+  const { revertTurnCount, keepTurnCount } = row;
   const attachmentReferences = collectComposerContextReferences(resolvedContext.text).flatMap(
     (occurrence) => {
       const record = asKnownContextRecord(resolvedContext.recordsById.get(occurrence.contextId));
@@ -796,8 +813,19 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
         </TooltipPopup>
       </Tooltip>
       <div className={cn("flex items-center gap-0.5", floatActions && "flex-wrap justify-end")}>
+        {typeof keepTurnCount === "number" && (
+          <RevertUserMessageButton
+            turnCount={keepTurnCount}
+            messageId={row.message.id}
+            mode="keep"
+          />
+        )}
         {typeof revertTurnCount === "number" && (
-          <RevertUserMessageButton turnCount={revertTurnCount} messageId={row.message.id} />
+          <RevertUserMessageButton
+            turnCount={revertTurnCount}
+            messageId={row.message.id}
+            mode="edit"
+          />
         )}
         {copyText && (
           <MessageCopyButton
@@ -1076,12 +1104,16 @@ function UserMessageIntentMarker({
 function RevertUserMessageButton({
   turnCount,
   messageId,
+  mode,
 }: {
   turnCount: number;
   messageId: MessageId;
+  mode: TimelineRevertMode;
 }) {
   const ctx = use(TimelineRowCtx);
   const activity = use(TimelineRowActivityCtx);
+  const label = mode === "keep" ? "Revert to here" : "Edit from here";
+  const Icon = mode === "keep" ? HistoryIcon : PencilIcon;
 
   return (
     <Tooltip>
@@ -1092,14 +1124,14 @@ function RevertUserMessageButton({
             size="xs"
             variant="ghost"
             disabled={activity.isRevertingCheckpoint || activity.isWorking}
-            onClick={() => ctx.onRevertToTurnCount(turnCount, messageId)}
-            aria-label="Edit from here"
+            onClick={() => ctx.onRevertToTurnCount(turnCount, messageId, mode)}
+            aria-label={label}
           />
         }
       >
-        <PencilIcon className="size-3" />
+        <Icon className="size-3" />
       </TooltipTrigger>
-      <TooltipPopup side="top">Edit from here</TooltipPopup>
+      <TooltipPopup side="top">{label}</TooltipPopup>
     </Tooltip>
   );
 }

@@ -323,6 +323,20 @@ export const layer: Layer.Layer<
               },
             }),
           );
+          // An adapter that moved the conversation to a new native session re-points kept turns.
+          for (const providerTurn of "providerTurns" in snapshot ? snapshot.providerTurns : []) {
+            events.push(
+              yield* makeEvent({
+                type: "provider-turn.updated",
+                threadId: input.threadId,
+                nodeId: providerTurn.nodeId,
+                driver: providerThread.driver,
+                providerInstanceId: providerThread.providerInstanceId,
+                occurredAt: now,
+                payload: providerTurn,
+              }),
+            );
+          }
           for (const staleCheckpoint of staleCheckpoints) {
             events.push(
               yield* makeEvent({

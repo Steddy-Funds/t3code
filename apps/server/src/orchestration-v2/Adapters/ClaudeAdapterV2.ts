@@ -2255,9 +2255,6 @@ const claudeForkedUuids = (lines: ReadonlyArray<string>): ReadonlyMap<string, st
   return forked;
 };
 
-const aliasClaudeCursor = (providerThread: OrchestrationV2ProviderThread, cursor: string) =>
-  providerThread.nativeMetadata?.claudeCursorAliases?.[cursor] ?? cursor;
-
 const getNativeThreadId = Effect.fnUntraced(function* (
   providerThread: OrchestrationV2ProviderThread,
 ) {
@@ -2335,7 +2332,7 @@ const resolveClaudeForkUpToMessageId = Effect.fn("ClaudeAdapterV2.resolveForkUpT
       boundaryNativeId !== null &&
       !isSyntheticClaudeTurnId(boundaryNativeId)
     ) {
-      return aliasClaudeCursor(input.sourceProviderThread, boundaryNativeId);
+      return boundaryNativeId;
     }
 
     const terminalTurnsAfterBoundary = sourceTurns
@@ -2358,10 +2355,8 @@ const resolveClaudeRollbackResumeSessionAt = Effect.fn(
   "ClaudeAdapterV2.resolveRollbackResumeSessionAt",
 )(function* (input: ProviderAdapter.ProviderAdapterV2RollbackThreadInput) {
   switch (input.target.type) {
-    case "thread_start": {
-      const forkHead = input.providerThread.nativeMetadata?.forkHeadMessageId;
-      return forkHead === undefined ? null : aliasClaudeCursor(input.providerThread, forkHead);
-    }
+    case "thread_start":
+      return input.providerThread.nativeMetadata?.forkHeadMessageId ?? null;
     case "provider_turn": {
       const target = input.target;
       if (target.providerTurn.providerThreadId !== input.providerThread.id) {
@@ -2374,7 +2369,7 @@ const resolveClaudeRollbackResumeSessionAt = Effect.fn(
 
       const cursor = claudeTurnCursor(target.providerTurn);
       if (cursor !== null) {
-        return aliasClaudeCursor(input.providerThread, cursor);
+        return cursor;
       }
 
       const providerTurnsAfterTarget = input.providerThreadTurns.filter(
@@ -2392,7 +2387,7 @@ const resolveClaudeRollbackResumeSessionAt = Effect.fn(
           .at(-1);
         const earlierCursor = earlierTurn === undefined ? null : claudeTurnCursor(earlierTurn);
         if (earlierCursor != null) {
-          return aliasClaudeCursor(input.providerThread, earlierCursor);
+          return earlierCursor;
         }
       }
 
@@ -12357,11 +12352,23 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 };
               }
 
+              const target = rollbackInput.target;
+              // A compaction target resumes at the previous turn's cursor; its own boundary must stay.
+              const cursorIsTargets =
+                target.type === "thread_start" || claudeTurnCursor(target.providerTurn) !== null;
               const transcripts =
-                resumeSessionAt === null
+                resumeSessionAt === null || !cursorIsTargets
                   ? []
                   : yield* readClaudeTranscripts(nativeThreadId).pipe(
-                      Effect.orElseSucceed(() => []),
+                      Effect.catch((cause) =>
+                        Effect.logWarning(
+                          "orchestration-v2.claude-rollback-transcript-unreadable",
+                          {
+                            nativeThreadId,
+                            cause,
+                          },
+                        ).pipe(Effect.as([])),
+                      ),
                     );
               if (
                 resumeSessionAt !== null &&
@@ -12377,28 +12384,38 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                   threadId: input.threadId,
                   providerSessionId: input.providerSessionId,
                 });
-                yield* Ref.update(openedNativeThreads, (current) =>
-                  new Set(current).add(forked.sessionId),
-                );
                 const forkedUuids = claudeForkedUuids(
                   (yield* readClaudeTranscripts(forked.sessionId).pipe(
                     Effect.orElseSucceed(() => []),
                   )).flat(),
                 );
-                const { claudeCursorAliases: _replaced, ...nativeMetadata } =
-                  rollbackInput.providerThread.nativeMetadata ?? {};
-                const claudeCursorAliases: Record<string, string> = {};
-                for (const cursor of [
-                  nativeMetadata.forkHeadMessageId,
-                  ...rollbackInput.providerThreadTurns.map(claudeTurnCursor),
-                ]) {
-                  const copied =
-                    cursor == null
-                      ? undefined
-                      : forkedUuids.get(aliasClaudeCursor(rollbackInput.providerThread, cursor));
-                  if (cursor != null && copied !== undefined) claudeCursorAliases[cursor] = copied;
+                // Kept turns move to the fork's uuids so later rollbacks and forks resolve there.
+                const keptTurns =
+                  target.type === "thread_start"
+                    ? []
+                    : rollbackInput.providerThreadTurns.flatMap((turn) => {
+                        const cursor = claudeTurnCursor(turn);
+                        return cursor === null || turn.ordinal > target.providerTurn.ordinal
+                          ? []
+                          : [{ turn, cursor }];
+                      });
+                const forkHead = rollbackInput.providerThread.nativeMetadata?.forkHeadMessageId;
+                const unmapped = [
+                  resumeSessionAt,
+                  ...(forkHead === undefined ? [] : [forkHead]),
+                  ...keptTurns.map((kept) => kept.cursor),
+                ].filter((cursor) => !forkedUuids.has(cursor));
+                if (unmapped.length > 0) {
+                  return yield* new ProviderAdapter.ProviderAdapterRollbackThreadError({
+                    driver: CLAUDE_PROVIDER,
+                    providerThreadId: rollbackInput.providerThread.id,
+                    cause: `Claude session fork ${forked.sessionId} is missing messages ${unmapped.join(", ")}.`,
+                  });
                 }
-                const head = forkedUuids.get(resumeSessionAt) ?? forked.headMessageId;
+                const copyOf = (cursor: string) => forkedUuids.get(cursor) ?? cursor;
+                yield* Ref.update(openedNativeThreads, (current) =>
+                  new Set(current).add(forked.sessionId),
+                );
                 return {
                   providerThread: {
                     ...rollbackInput.providerThread,
@@ -12408,21 +12425,30 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                       nativeId: forked.sessionId,
                       strength: "strong" as const,
                     },
-                    nativeConversationHeadRef:
-                      head === undefined
-                        ? null
-                        : { driver: CLAUDE_PROVIDER, nativeId: head, strength: "weak" as const },
-                    nativeMetadata: {
-                      ...nativeMetadata,
-                      ...(Object.keys(claudeCursorAliases).length === 0
-                        ? {}
-                        : { claudeCursorAliases }),
+                    nativeConversationHeadRef: {
+                      driver: CLAUDE_PROVIDER,
+                      nativeId: copyOf(resumeSessionAt),
+                      strength: "weak" as const,
                     },
+                    ...(forkHead === undefined
+                      ? {}
+                      : {
+                          nativeMetadata: {
+                            ...rollbackInput.providerThread.nativeMetadata,
+                            forkHeadMessageId: copyOf(forkHead),
+                          },
+                        }),
                     status: "idle" as const,
                     lastRunOrdinal: rollbackInput.target.appRunOrdinal,
                     updatedAt: now,
                   },
-                  providerTurns: [],
+                  providerTurns: keptTurns.map(({ turn, cursor }) => ({
+                    ...turn,
+                    nativeTurnRef:
+                      turn.nativeTurnRef === null
+                        ? null
+                        : { ...turn.nativeTurnRef, nativeId: copyOf(cursor) },
+                  })),
                   messages: [],
                   runtimeRequests: [],
                 };

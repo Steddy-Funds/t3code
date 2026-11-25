@@ -1066,6 +1066,8 @@ export const OrchestrationV2ProviderThreadNativeMetadata = Schema.Struct({
   updatedAt: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   itemIdentityVersion: Schema.optional(Schema.Literal(2)),
   forkHeadMessageId: Schema.optional(TrimmedNonEmptyString),
+  /** Turn cursors recorded before a rollback re-forked the Claude session, mapped to the fork's uuids. */
+  claudeCursorAliases: Schema.optional(Schema.Record(TrimmedNonEmptyString, TrimmedNonEmptyString)),
   claudeAttachmentBudget: Schema.optional(
     Schema.Struct({ bytesUsed: NonNegativeInt, pagesUsed: NonNegativeInt }),
   ),

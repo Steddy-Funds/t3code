@@ -6938,6 +6938,8 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           entry("user", "compact-prompt"),
           entry("system", "compact-boundary", { subtype: "compact_boundary" }),
           entry("user", "compact-summary"),
+          entry("user", "third-prompt"),
+          entry("assistant", "third-reply"),
           "",
         ].join("\n"),
       );
@@ -6994,14 +6996,19 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         },
       });
       const secondTurn = turnWithCursor(firstTurn.ordinal + 1, "second-reply");
+      // A compaction run records no assistant message, so its cursor is synthetic.
+      const compactTurn = turnWithCursor(firstTurn.ordinal + 2, "turn:compact");
       const providerThreadTurns = [
         firstTurn,
         secondTurn,
-        turnWithCursor(firstTurn.ordinal + 2, "compact-summary"),
+        compactTurn,
+        turnWithCursor(firstTurn.ordinal + 3, "third-reply"),
       ];
       const rollbackTo = (
         providerThread: typeof harness.providerThread,
         providerTurn: typeof firstTurn,
+        turns: ReadonlyArray<typeof firstTurn> = providerThreadTurns,
+        text = "Continue.",
       ) =>
         harness.runtime.rollbackThread({
           providerThread,
@@ -7010,9 +7017,24 @@ describe("ClaudeAdapterV2 background wake turns", () => {
             checkpointId: CheckpointId.make(`checkpoint-${providerTurn.id}`),
             appRunOrdinal: providerTurn.ordinal,
             providerTurn,
+            message: { role: "user", text, attachments: [] },
           },
-          providerThreadTurns,
+          providerThreadTurns: turns,
         });
+
+      // Reverting to the compaction itself keeps it: no fork, Claude re-applies its own boundary.
+      const keptCompaction = yield* rollbackTo(
+        harness.providerThread,
+        compactTurn,
+        providerThreadTurns,
+        "/compact",
+      );
+      assert.equal(forkCalls.length, 0);
+      assert.equal(keptCompaction.providerThread.nativeThreadRef?.nativeId, WAKE_NATIVE_SESSION);
+      assert.equal(
+        keptCompaction.providerThread.nativeConversationHeadRef?.nativeId,
+        "second-reply",
+      );
 
       const beforeCompaction = yield* rollbackTo(harness.providerThread, secondTurn);
       assert.deepStrictEqual(
@@ -7026,8 +7048,23 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         "copy-of-second-reply",
       );
 
-      // Earlier cursors still name the original session's uuids; the fork has no compaction.
-      const firstOnly = yield* rollbackTo(beforeCompaction.providerThread, firstTurn);
+      assert.deepStrictEqual(
+        beforeCompaction.providerTurns.map((turn) => [turn.id, turn.nativeTurnRef?.nativeId]),
+        [
+          [firstTurn.id, "copy-of-first-reply"],
+          [secondTurn.id, "copy-of-second-reply"],
+        ],
+      );
+
+      // The fork has no compaction, so a later rollback on the moved turns stays on it.
+      const [movedFirst] = beforeCompaction.providerTurns;
+      assert.isDefined(movedFirst);
+      if (movedFirst === undefined) return;
+      const firstOnly = yield* rollbackTo(
+        beforeCompaction.providerThread,
+        movedFirst,
+        beforeCompaction.providerTurns,
+      );
       assert.equal(forkCalls.length, 1);
       assert.equal(firstOnly.providerThread.nativeThreadRef?.nativeId, forkedSession);
       yield* harness.runtime.startTurn({

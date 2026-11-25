@@ -16,9 +16,6 @@ import {
   type TurnItemId,
 } from "@t3tools/contracts";
 import type { AsyncResult, Atom } from "effect/reactivity";
-
-/** `edit` drops the prompt into the composer; `keep` keeps it and its reply. */
-export type TimelineRevertMode = "edit" | "keep";
 import type { CommandOutputView } from "@t3tools/client-runtime/state/command-output";
 import type { WorkflowOpening } from "@t3tools/client-runtime/state/subagentRuntime";
 import { createContext, type MouseEvent, type ReactNode } from "react";
@@ -32,6 +29,9 @@ import { type MessagesTimelineRow, type WorkGroupScrollAnchor } from "./Messages
 import { type TimestampFormat } from "@t3tools/contracts/settings";
 import type { TurnItemDetailSource } from "../../state/queries";
 import { type HandoffTimelineRun } from "./V2LifecycleRow";
+
+/** `edit` drops the prompt into the composer; `keep` keeps it and its reply. */
+export type TimelineRevertMode = "edit" | "keep";
 
 /**
  * Where an expanded row reads an item's detail and a command's output. The owner's rows read them

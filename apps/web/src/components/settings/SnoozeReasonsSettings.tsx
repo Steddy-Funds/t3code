@@ -13,10 +13,11 @@ import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Switch } from "../ui/switch";
 import { SettingResetButton, SettingsRow } from "./settingsLayout";
-import { searchableSetting } from "./settingsSearch";
+import { useSearchableSetting } from "./settingsSearch";
 import { useScopedSettings, useUpdateScopedSettings } from "./useScopedSettings";
 
 export function SnoozeReasonPromptRow() {
+  const searchableSetting = useSearchableSetting();
   const enabled = useScopedSettings((settings) => settings.snoozeReasonPromptEnabled);
   const updateSettings = useUpdateScopedSettings();
   return (
@@ -26,7 +27,7 @@ export function SnoozeReasonPromptRow() {
       resetAction={
         enabled ? null : (
           <SettingResetButton
-            label="snooze reason prompt"
+            ariaLabel="Reset snooze reason prompt to default"
             onClick={() => updateSettings({ snoozeReasonPromptEnabled: true })}
           />
         )
@@ -45,6 +46,7 @@ export function SnoozeReasonPromptRow() {
 }
 
 export function SnoozeReasonsRow() {
+  const searchableSetting = useSearchableSetting();
   const reasons = useScopedSettings((settings) => settings.snoozeReasons);
   const enabled = useScopedSettings((settings) => settings.snoozeReasonPromptEnabled);
   const updateSettings = useUpdateScopedSettings();
@@ -61,7 +63,10 @@ export function SnoozeReasonsRow() {
       description={`The prompt offers ${MIN_SHOWN_SNOOZE_REASONS} to ${MAX_SHOWN_SNOOZE_REASONS} of these. "Other" also asks for a note.`}
       resetAction={
         Equal.equals(reasons, DEFAULT_SNOOZE_REASONS) ? null : (
-          <SettingResetButton label="snooze reasons" onClick={() => save(DEFAULT_SNOOZE_REASONS)} />
+          <SettingResetButton
+            ariaLabel="Reset snooze reasons to default"
+            onClick={() => save(DEFAULT_SNOOZE_REASONS)}
+          />
         )
       }
     >

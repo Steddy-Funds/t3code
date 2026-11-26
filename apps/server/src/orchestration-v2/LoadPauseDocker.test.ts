@@ -10,6 +10,7 @@ import * as PreviewManager from "../preview/Manager.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import * as ScheduledTaskService from "../scheduledTasks/ScheduledTaskService.ts";
 import * as TerminalManager from "../terminal/Manager.ts";
+import * as DeviceService from "../device/DeviceService.ts";
 import * as LoadPauseDocker from "./LoadPauseDocker.ts";
 import * as ResourceCleanupService from "./ResourceCleanupService.ts";
 
@@ -240,6 +241,7 @@ describe("LoadPauseDocker", () => {
                 Layer.mock(TerminalManager.TerminalManager)({}),
                 Layer.mock(PreviewManager.PreviewManager)({}),
                 Layer.mock(ScheduledTaskService.ScheduledTaskService)({}),
+                Layer.mock(DeviceService.DeviceService)({}),
                 LoadPauseDocker.layer.pipe(
                   Layer.provide(Layer.succeed(ProcessRunner.ProcessRunner, runner)),
                 ),

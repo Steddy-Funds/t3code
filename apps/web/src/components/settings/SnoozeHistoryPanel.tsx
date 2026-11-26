@@ -15,7 +15,7 @@ import { Button } from "../ui/button";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Spinner } from "../ui/spinner";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
-import { searchableSetting } from "./settingsSearch";
+import { useSearchableSetting } from "./settingsSearch";
 import { useSettingsScope } from "./SettingsScopeContext";
 
 const RANGE_DAYS = {
@@ -53,6 +53,7 @@ function entryDescription(entry: EnvironmentSnoozeLogEntry, nowMs: number) {
 }
 
 export function SnoozeHistoryPanel() {
+  const searchableSetting = useSearchableSetting();
   const { scope } = useSettingsScope();
   const { entries: allEntries, error, isLoading } = useSnoozeLogs(scope.environmentIds);
   const [range, setRange] = useState<Range>("30");

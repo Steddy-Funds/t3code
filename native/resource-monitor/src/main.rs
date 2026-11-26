@@ -4,6 +4,8 @@ mod history;
 mod host;
 mod io;
 mod protocol;
+#[cfg(target_os = "windows")]
+mod windows_processes;
 
 use std::io::{BufWriter, Write};
 use std::sync::mpsc::RecvTimeoutError;
@@ -154,7 +156,9 @@ fn main() -> std::io::Result<()> {
                                 .map(|previous| previous.claimed_processes)
                                 .unwrap_or_default(),
                         });
-                        collector.prime_cpu_usage();
+                        if let Some(current) = config.as_ref() {
+                            collector.prime_cpu_usage(current);
+                        }
                         next_sample_at = sample_interval.map(|_| Instant::now());
                     }
                     Command::SetExternalProcesses { processes, .. } => {

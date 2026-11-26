@@ -7,8 +7,10 @@ import * as Equal from "effect/Equal";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Logger from "effect/Logger";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
 import * as ServerConfig from "./config.ts";
 import * as Keybindings from "./keybindings.ts";
 import * as SharedKeybindings from "@t3tools/shared/keybindings";
@@ -50,6 +52,19 @@ const readKeybindingsConfig = (configPath: string) =>
     const rawConfig = yield* fileSystem.readFileString(configPath);
     return yield* decodeKeybindingsConfigJson(rawConfig);
   });
+
+// Defaults fill the room a config leaves from the front, a command whole or not at all, so
+// cutting after the first of chat.new's two rules leaves the whole command out.
+function scriptBindingsAtChatNewCutoff(hiddenChatNewBindings: 0 | 1) {
+  const defaults = SharedKeybindings.DEFAULT_RESOLVED_KEYBINDINGS;
+  const firstChatNew = defaults.findIndex((binding) => binding.command === "chat.new");
+  assert.isAtLeast(firstChatNew, 0);
+  const visibleDefaults = firstChatNew + 2 - hiddenChatNewBindings;
+  return Array.from({ length: MAX_KEYBINDINGS_COUNT - visibleDefaults }, (_, index) => ({
+    key: "mod+alt+f1",
+    command: `script.filler-${index}.run` as const,
+  }));
+}
 
 it.layer(NodeServices.layer)("keybindings", (it) => {
   it.effect("parses shortcuts including plus key", () =>
@@ -185,6 +200,8 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
           { key: "mod+j", command: "terminal.toggle" },
           { key: "mod+shift+d+o", command: "terminal.new" },
           { key: "mod+x", command: "invalid.command" },
+          { key: "mod+", command: "sidebar.toggle" },
+          { key: "mod+a+++", command: "sidebar.toggle" },
         ]),
       );
 
@@ -207,6 +224,16 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
           kind: "keybindings.invalid-entry",
           index: 2,
           message: configState.issues[1]?.message ?? "",
+        },
+        {
+          kind: "keybindings.invalid-entry",
+          index: 3,
+          message: configState.issues[2]?.message ?? "",
+        },
+        {
+          kind: "keybindings.invalid-entry",
+          index: 4,
+          message: configState.issues[3]?.message ?? "",
         },
       ]);
     }).pipe(Effect.provide(layerKeybindings())),
@@ -708,6 +735,176 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
     }).pipe(Effect.provide(layerKeybindings())),
   );
 
+  it.effect("preserves sibling shortcuts when editing an inherited shortcut", () =>
+    Effect.gen(function* () {
+      const { keybindingsConfigPath } = yield* ServerConfig.ServerConfig;
+      const keybindings = yield* Keybindings.Keybindings;
+      const target = { key: "mod+shift+o", command: "chat.new", when: "!terminalFocus" } as const;
+      const sibling = { ...target, key: "mod+n" };
+      const unrelated = { ...sibling, command: "threadPanel.toggle" } as const;
+      yield* writeKeybindingsConfig(keybindingsConfigPath, [unrelated]);
+
+      const replacement = { ...target, key: "f8" };
+      const saved = yield* keybindings.upsertKeybindingRule({
+        ...replacement,
+        replace: { ...target, key: "Shift+Mod+O", when: "!(terminalFocus)" },
+      });
+      const relevant = (rule: (typeof saved.keybindings)[number]) =>
+        rule.command === target.command || rule.command === unrelated.command;
+      const expected = SharedKeybindings.compileResolvedKeybindingsConfig([
+        sibling,
+        unrelated,
+        replacement,
+      ]);
+      assert.deepEqual(saved.keybindings.filter(relevant), expected);
+
+      yield* keybindings.syncDefaultKeybindingsOnStartup;
+      const snapshot = yield* keybindings.getSnapshot;
+      assert.deepEqual(snapshot.keybindings.filter(relevant), expected);
+    }).pipe(Effect.provide(layerKeybindings())),
+  );
+
+  it.effect("preserves sibling shortcuts when adding to an inherited command", () =>
+    Effect.gen(function* () {
+      const { keybindingsConfigPath } = yield* ServerConfig.ServerConfig;
+      const keybindings = yield* Keybindings.Keybindings;
+      yield* writeKeybindingsConfig(keybindingsConfigPath, []);
+
+      const added = { key: "f9", command: "chat.new" } as const;
+      const saved = yield* keybindings.upsertKeybindingRule(added);
+      assert.deepEqual(
+        saved.keybindings.filter((rule) => rule.command === added.command),
+        SharedKeybindings.compileResolvedKeybindingsConfig([
+          { key: "mod+n", command: added.command, when: "!terminalFocus" },
+          { key: "mod+shift+o", command: added.command, when: "!terminalFocus" },
+          added,
+        ]),
+      );
+    }).pipe(Effect.provide(layerKeybindings())),
+  );
+
+  it.effect("preserves sibling shortcuts by rejecting an edit that would evict saved rules", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const { keybindingsConfigPath } = yield* ServerConfig.ServerConfig;
+      const keybindings = yield* Keybindings.Keybindings;
+      const original = JSON.stringify([
+        { key: "f7", command: "terminal.new" },
+        ...Array.from({ length: MAX_KEYBINDINGS_COUNT - 2 }, (_, index) => ({
+          key: "f1",
+          command: `future.command-${index}`,
+        })),
+      ]);
+      yield* fs.writeFileString(keybindingsConfigPath, original);
+
+      const target = { key: "mod+n", command: "chat.new", when: "!terminalFocus" } as const;
+      const result = yield* toDetailResult(
+        keybindings.upsertKeybindingRule({ ...target, key: "f8", replace: target }),
+      );
+      assertFailure(result, "Not enough room to save this shortcut and its inherited shortcuts.");
+      assert.equal(yield* fs.readFileString(keybindingsConfigPath), original);
+    }).pipe(Effect.provide(layerKeybindings())),
+  );
+
+  it.effect("preserves sibling shortcuts only if visible within the binding limit", () =>
+    Effect.gen(function* () {
+      const { keybindingsConfigPath } = yield* ServerConfig.ServerConfig;
+      const keybindings = yield* Keybindings.Keybindings;
+      yield* writeKeybindingsConfig(keybindingsConfigPath, scriptBindingsAtChatNewCutoff(1));
+
+      const target = { key: "mod+shift+o", command: "chat.new", when: "!terminalFocus" } as const;
+      const relevant = (rule: { readonly command: KeybindingCommand }) =>
+        rule.command === target.command;
+      const before = yield* keybindings.getSnapshot;
+      assert.deepEqual(before.keybindings.filter(relevant), []);
+
+      const replacement = { ...target, key: "f8" };
+      const saved = yield* keybindings.upsertKeybindingRule({ ...replacement, replace: target });
+      assert.deepEqual(
+        saved.keybindings.filter(relevant),
+        SharedKeybindings.compileResolvedKeybindingsConfig([replacement]),
+      );
+    }).pipe(Effect.provide(layerKeybindings())),
+  );
+
+  it.effect(
+    "restores no sibling shortcut when an inherited edit target has since become hidden",
+    () =>
+      Effect.gen(function* () {
+        const { keybindingsConfigPath } = yield* ServerConfig.ServerConfig;
+        const keybindings = yield* Keybindings.Keybindings;
+        yield* writeKeybindingsConfig(keybindingsConfigPath, scriptBindingsAtChatNewCutoff(0));
+
+        const target = { key: "mod+n", command: "chat.new", when: "!terminalFocus" } as const;
+        const sibling = { ...target, key: "mod+shift+o" };
+        const isChatNew = (binding: { readonly command: KeybindingCommand }) =>
+          binding.command === target.command;
+        const before = yield* keybindings.getSnapshot;
+        assert.deepEqual(
+          before.keybindings.filter(isChatNew),
+          SharedKeybindings.compileResolvedKeybindingsConfig([target, sibling]),
+        );
+
+        // One more rule of the user's leaves chat.new out whole, its sibling with it.
+        const afterUnrelatedSave = yield* keybindings.upsertKeybindingRule({
+          key: "mod+alt+f1",
+          command: "script.extra.run",
+        });
+        assert.deepEqual(afterUnrelatedSave.keybindings.filter(isChatNew), []);
+
+        const replacement = { ...target, key: "f8" };
+        const saved = yield* keybindings.upsertKeybindingRule({ ...replacement, replace: target });
+        assert.deepEqual(
+          saved.keybindings.filter(isChatNew),
+          SharedKeybindings.compileResolvedKeybindingsConfig([replacement]),
+        );
+      }).pipe(Effect.provide(layerKeybindings())),
+  );
+
+  it.effect("unassigns a shortcut without restoring it on startup and can reassign it", () =>
+    Effect.gen(function* () {
+      const { keybindingsConfigPath } = yield* ServerConfig.ServerConfig;
+      yield* writeKeybindingsConfig(keybindingsConfigPath, []);
+      const keybindings = yield* Keybindings.Keybindings;
+      const target = SharedKeybindings.DEFAULT_KEYBINDINGS.find(
+        (rule) => rule.command === "composer.sendBackground",
+      )!;
+      const siblings = SharedKeybindings.DEFAULT_KEYBINDINGS.filter(
+        (rule) => rule.command === target.command && rule !== target,
+      );
+      const removed = yield* keybindings.upsertKeybindingRule({
+        ...target,
+        when: "false",
+        replace: target,
+      });
+      const expected = SharedKeybindings.compileResolvedKeybindingsConfig([
+        ...siblings,
+        { ...target, when: "false" },
+      ]);
+      assert.deepEqual(
+        removed.keybindings.filter((rule) => rule.command === target.command),
+        expected,
+      );
+      yield* keybindings.syncDefaultKeybindingsOnStartup;
+      const snapshot = yield* keybindings.getSnapshot;
+      assert.deepEqual(
+        snapshot.keybindings.filter((rule) => rule.command === target.command),
+        expected,
+      );
+      const restored = yield* keybindings.upsertKeybindingRule({
+        ...target,
+        replace: { ...target, when: "false" },
+      });
+      // A default saved back takes its place among the defaults.
+      assert.deepEqual(
+        restored.keybindings.filter((rule) => rule.command === target.command),
+        SharedKeybindings.compileResolvedKeybindingsConfig(
+          SharedKeybindings.DEFAULT_KEYBINDINGS.filter((rule) => rule.command === target.command),
+        ),
+      );
+    }).pipe(Effect.provide(layerKeybindings())),
+  );
+
   it.effect("keeps entries it cannot decode when editing other keybindings", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -880,6 +1077,44 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
       }
     }).pipe(Effect.provide(layerKeybindings())),
   );
+
+  it.effect(
+    "suppresses change emission when revalidating unchanged keybindings configuration",
+    () =>
+      Effect.gen(function* () {
+        const { keybindingsConfigPath } = yield* ServerConfig.ServerConfig;
+        yield* writeKeybindingsConfig(keybindingsConfigPath, [
+          { key: "mod+j", command: "terminal.toggle" },
+        ]);
+
+        const keybindings = yield* Keybindings.Keybindings;
+        yield* keybindings.start;
+
+        const changes = yield* keybindings.subscribeChanges;
+
+        // Revalidate when config on disk has not changed (e.g. atime bump on Windows).
+        // `revalidate` publishes before it returns, so a wrongly emitted event would be
+        // buffered in the subscription ahead of the real change observed below.
+        yield* keybindings.revalidate;
+
+        yield* writeKeybindingsConfig(keybindingsConfigPath, [
+          { key: "mod+j", command: "terminal.toggle" },
+          { key: "mod+k", command: "threadPanel.toggle" },
+        ]);
+        yield* keybindings.revalidate;
+
+        // The first buffered event must be the real change, not the unchanged state.
+        const change = Option.getOrThrow(yield* Stream.runHead(changes));
+        assert.isTrue(
+          change.keybindings.some(
+            (rule) =>
+              rule.command === "threadPanel.toggle" &&
+              rule.shortcut.key === "k" &&
+              rule.shortcut.modKey,
+          ),
+        );
+      }).pipe(Effect.scoped, Effect.provide(layerKeybindings())),
+  );
 });
 
 // The keybindings.json of a server that ran builds from before the JetBrains keys, as those
@@ -901,6 +1136,8 @@ const EXISTING_INSTALL_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
   { key: "mod+shift+d", command: "terminal.splitVertical", when: "terminalFocus" },
   { key: "mod+n", command: "terminal.new", when: "terminalFocus" },
   { key: "mod+w", command: "terminal.close", when: "terminalFocus" },
+  { key: "ctrl+alt+[", command: "terminal.previous", when: "terminalFocus && !isMac" },
+  { key: "ctrl+alt+]", command: "terminal.next", when: "terminalFocus && !isMac" },
   { key: "mod+w", command: "rightPanel.close", when: "!terminalFocus" },
   { key: "mod+shift+t", command: "view.reopenClosed" },
   { key: "mod+d", command: "diff.toggle", when: "!terminalFocus" },
@@ -911,6 +1148,7 @@ const EXISTING_INSTALL_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
   { key: "mod++", command: "preview.zoomIn", when: "previewFocus" },
   { key: "mod+-", command: "preview.zoomOut", when: "previewFocus" },
   { key: "mod+0", command: "preview.resetZoom", when: "previewFocus" },
+  { key: "mod+f", command: "preview.find", when: "previewFocus" },
   { key: "mod+k", command: "commandPalette.toggle", when: "!terminalFocus" },
   { key: "mod+p", command: "filePicker.toggle", when: "!terminalFocus" },
   { key: "mod+shift+f", command: "projectSearch.toggle", when: "!terminalFocus" },
@@ -955,6 +1193,8 @@ const EXISTING_INSTALL_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
   { key: "mod+o", command: "editor.openFavorite" },
   { key: "mod+shift+[", command: "thread.previous" },
   { key: "mod+shift+]", command: "thread.next" },
+  { key: "cmd+shift+[", command: "terminal.previous", when: "terminalFocus && isMac" },
+  { key: "cmd+shift+]", command: "terminal.next", when: "terminalFocus && isMac" },
   { key: "mod+shift+c", command: "thread.copyReference", when: "!terminalFocus" },
   { key: "mod+shift+s", command: "thread.settle", when: "!terminalFocus" },
   { key: "mod+shift+p", command: "thread.pin", when: "!terminalFocus" },

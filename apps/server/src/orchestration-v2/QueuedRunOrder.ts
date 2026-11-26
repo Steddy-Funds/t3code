@@ -5,6 +5,7 @@ import {
   type OrchestrationV2ThreadProjection,
 } from "@t3tools/contracts";
 import { modelSelectionsEqual } from "@t3tools/shared/model";
+import * as DateTime from "effect/DateTime";
 
 export function isAutomaticCompletionRun(
   projection: Pick<OrchestrationV2ThreadProjection, "runs" | "messages">,
@@ -23,18 +24,36 @@ export function queuedRunsInDeliveryOrder(
       .filter((message) => message.delegatedCompletion !== undefined)
       .map((message) => message.id),
   );
-  return projection.runs
+  const queued = projection.runs
     .filter((run) => run.status === "queued")
-    .toSorted((left, right) => {
-      const deliveryPriority =
-        Number(automaticCompletionMessageIds.has(right.userMessageId)) -
-        Number(automaticCompletionMessageIds.has(left.userMessageId));
-      return (
-        deliveryPriority ||
+    .toSorted(
+      (left, right) =>
         (left.queuePosition ?? left.ordinal) - (right.queuePosition ?? right.ordinal) ||
-        left.ordinal - right.ordinal
-      );
-    });
+        left.ordinal - right.ordinal,
+    );
+  const completions = queued.filter((run) => automaticCompletionMessageIds.has(run.userMessageId));
+  const messages = queued.filter((run) => !automaticCompletionMessageIds.has(run.userMessageId));
+  // Completions and messages each keep their queue order and interleave by request time,
+  // so neither kind can hold the other back while more of it keeps arriving.
+  const ordered: Array<OrchestrationV2Run> = [];
+  let completionIndex = 0;
+  let messageIndex = 0;
+  for (;;) {
+    const completion = completions[completionIndex];
+    const message = messages[messageIndex];
+    if (completion === undefined || message === undefined) {
+      return [...ordered, ...completions.slice(completionIndex), ...messages.slice(messageIndex)];
+    }
+    if (
+      DateTime.toEpochMillis(completion.requestedAt) <= DateTime.toEpochMillis(message.requestedAt)
+    ) {
+      ordered.push(completion);
+      completionIndex += 1;
+    } else {
+      ordered.push(message);
+      messageIndex += 1;
+    }
+  }
 }
 
 /** Plain text an agent sent, with nothing else depending on its run starting by itself. */
@@ -50,6 +69,9 @@ function isMergeableQueuedRun(
     run.sourcePlanRef === undefined &&
     run.restartContinuationOfRunId === undefined &&
     run.usageLimitContinuationOfRunId === undefined &&
+    run.manualContinuationOfRunId === undefined &&
+    run.steerWhenReadyRunId === undefined &&
+    run.outputSchema === undefined &&
     run.restartCancelledBackgroundWork === undefined &&
     run.workspacePreparation === undefined &&
     message.runId === run.id &&
@@ -100,7 +122,11 @@ export function queuedRunsMergedInto(
   let chars = headMessage.text.length;
   for (const run of queue.slice(headIndex + 1)) {
     const message = mergeable(run);
-    if (message === undefined || !modelSelectionsEqual(run.modelSelection, head.modelSelection)) {
+    if (
+      message === undefined ||
+      message.followsThreadSelection !== headMessage.followsThreadSelection ||
+      !modelSelectionsEqual(run.modelSelection, head.modelSelection)
+    ) {
       break;
     }
     chars += message.text.length;

@@ -24,6 +24,7 @@ import {
   derivePendingThreadRequests,
   declinePendingApprovals,
   sendApprovalFeedback,
+  pushHooksApprovalRows,
   makeThreadRequestsResolvedAnnouncer,
   onThreadRequestsResolved,
   pruneResolvedUserInputDrafts,
@@ -133,6 +134,62 @@ describe("declining approvals before sending", () => {
   });
 });
 
+describe("a push hooks approval", () => {
+  const pushHooks = {
+    branch: "feature/greeting",
+    files: [".husky/pre-push"],
+    commands: [{ name: "checks", command: "pnpm run checks" }],
+  };
+  const pending = (item: { readonly pushHooks: typeof pushHooks } | { readonly appName: string }) =>
+    derivePendingThreadRequests({
+      runtimeRequests: [{ ...projection.runtimeRequests[0]!, kind: "mcp-elicitation" }],
+      turnItems: [
+        {
+          id: TurnItemId.make("push-hooks-approval-item"),
+          threadId: v2Projection.thread.id,
+          runId: null,
+          nodeId,
+          providerThreadId: null,
+          providerTurnId: null,
+          nativeItemRef: null,
+          parentItemId: null,
+          ordinal: 0,
+          status: "waiting",
+          title: null,
+          startedAt: v2Now,
+          completedAt: null,
+          updatedAt: v2Now,
+          type: "approval_request",
+          requestId,
+          requestKind: "mcp-elicitation",
+          prompt: "Push feature/greeting and run this repository's hook file .husky/pre-push?",
+          ...item,
+        },
+      ],
+    }).approvals[0]!;
+
+  it("carries what T3 Code names and no app, and another server's request its app", () => {
+    const own = pending({ pushHooks });
+    expect(own.pushHooks).toEqual(pushHooks);
+    expect(own).not.toHaveProperty("appName");
+    expect(own.detail).toBe(
+      "Push feature/greeting and run this repository's hook file .husky/pre-push?",
+    );
+
+    const other = pending({ appName: "deploys" });
+    expect(other.appName).toBe("deploys");
+    expect(other).not.toHaveProperty("pushHooks");
+  });
+
+  it("lists the branch, then each hook file and configured hook", () => {
+    expect(pushHooksApprovalRows(pushHooks)).toEqual([
+      { label: "Branch", code: "feature/greeting" },
+      { label: "Hook file", code: ".husky/pre-push" },
+      { label: "Configured hook", name: "checks", code: "pnpm run checks" },
+    ]);
+  });
+});
+
 describe("pruning resolved user input drafts", () => {
   const answered = userInputDraftKey("env", "thread", "answered");
   const pending = userInputDraftKey("env", "thread", "pending");
@@ -196,14 +253,20 @@ describe("announcing resolved thread requests", () => {
     using recorder = record();
     const announce = makeThreadRequestsResolvedAnnouncer(environmentId, threadId);
 
-    announce([first]);
-    announce([first, second]);
-    announce([first, second]);
-    announce([second]);
+    const pending = (id: RuntimeRequestId) => ({ id, status: "pending" as const });
+    announce([pending(first)]);
+    announce([pending(first), pending(second)]);
+    announce([pending(first), pending(second)]);
+    announce([{ id: first, status: "cancelled" }, pending(second)]);
+    announce([
+      { id: first, status: "cancelled" },
+      { id: second, status: "resolved" },
+    ]);
 
     expect(recorder.events).toEqual([
-      { environmentId, threadId, pendingRequestIds: [first] },
-      { environmentId, threadId, pendingRequestIds: [second] },
+      { environmentId, threadId, pendingRequestIds: [first], unansweredRequestIds: [] },
+      { environmentId, threadId, pendingRequestIds: [second], unansweredRequestIds: [first] },
+      { environmentId, threadId, pendingRequestIds: [], unansweredRequestIds: [first] },
     ]);
   });
 });

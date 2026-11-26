@@ -142,9 +142,15 @@ describe.runIf(HostProcess.Platform.defaultValue() === "linux")("ProviderProcess
           stderr: "pipe",
         }),
       );
+      // A launcher that did not start forks from the server, which never needed the launcher rule.
+      const launcherPid = yield* (yield* ProcessLauncher.ProcessLauncher).currentPid;
+      assert(launcherPid !== undefined);
+      const controller = AcpSessionRuntime.makePosixProcessTreeController("linux");
+      expect(controller.identity(handle.pid)?.ppid).toBe(launcherPid);
 
       const forget = register(handle.pid);
       forget();
+      expect(() => register(process.ppid)).toThrow("Cannot identify spawned provider");
     }).pipe(
       Effect.scoped,
       Effect.provideService(HostProcess.Platform, "linux"),

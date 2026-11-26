@@ -10086,6 +10086,172 @@ describe("ClaudeAdapterV2 background wake turns", () => {
       ),
   );
 
+  it.effect("rolls back before a compaction by forking the session without it", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const configDir = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-claude-compact-rollback-",
+      });
+      const projectDir = NodePath.join(configDir, "projects", "-workspace");
+      yield* fileSystem.makeDirectory(projectDir, { recursive: true });
+      const entry = (type: string, uuid: string, extra: object = {}) =>
+        JSON.stringify({ type, uuid, sessionId: WAKE_NATIVE_SESSION, ...extra });
+      yield* fileSystem.writeFileString(
+        NodePath.join(projectDir, `${WAKE_NATIVE_SESSION}.jsonl`),
+        [
+          entry("user", "first-prompt"),
+          entry("assistant", "first-reply"),
+          entry("user", "second-prompt"),
+          entry("assistant", "second-reply"),
+          entry("user", "compact-prompt"),
+          entry("system", "compact-boundary", { subtype: "compact_boundary" }),
+          entry("user", "compact-summary"),
+          entry("user", "third-prompt"),
+          entry("assistant", "third-reply"),
+          "",
+        ].join("\n"),
+      );
+      const forkCalls: Array<ClaudeAdapterV2.ClaudeAgentSdkSessionForkInput> = [];
+      const forkedSession = "forked-before-compaction";
+      const harness = yield* makeWakeHarnessWithOptions({
+        close: (sdkMessages) => Queue.shutdown(sdkMessages),
+        freshQueueOnReopen: true,
+        environment: { CLAUDE_CONFIG_DIR: configDir },
+        forkSession: (input) =>
+          Effect.gen(function* () {
+            forkCalls.push(input);
+            // The SDK copies messages under fresh uuids and records where each came from.
+            const copied = ["first-prompt", "first-reply", "second-prompt", "second-reply"];
+            yield* fileSystem.writeFileString(
+              NodePath.join(projectDir, `${forkedSession}.jsonl`),
+              copied
+                .map((uuid) =>
+                  JSON.stringify({
+                    type: uuid.endsWith("reply") ? "assistant" : "user",
+                    uuid: `copy-of-${uuid}`,
+                    sessionId: forkedSession,
+                    forkedFrom: { sessionId: WAKE_NATIVE_SESSION, messageUuid: uuid },
+                  }),
+                )
+                .join("\n"),
+            );
+            return { sessionId: forkedSession };
+          }).pipe(Effect.orDie),
+      });
+      const turnInput = makeClaudeTestTurnInput({
+        threadId: harness.threadId,
+        providerThread: harness.providerThread,
+        now: yield* DateTime.now,
+        attemptId: RunAttemptId.make("attempt-claude-compact-rollback"),
+        text: "Continue.",
+        attachments: [],
+      });
+      yield* harness.runtime.startTurn(turnInput);
+      yield* Queue.offerAll(harness.sdkMessages, [
+        makeAssistantTextFrame({ uuid: "first-reply", text: "First." }),
+        makeResultFrame({ uuid: "first-result", result: "First." }),
+      ]);
+      yield* Queue.take(harness.terminalReceipts);
+      const firstTurn = lastProviderTurn(harness.events);
+      const turnWithCursor = (ordinal: number, cursor: string) => ({
+        ...firstTurn,
+        id: ProviderTurnId.make(`provider-turn-${cursor}`),
+        ordinal,
+        nativeTurnRef: {
+          driver: ClaudeAdapterV2.CLAUDE_PROVIDER,
+          nativeId: cursor,
+          strength: "weak" as const,
+        },
+      });
+      const secondTurn = turnWithCursor(firstTurn.ordinal + 1, "second-reply");
+      // A compaction run records no assistant message, so its cursor is synthetic.
+      const compactTurn = turnWithCursor(firstTurn.ordinal + 2, "turn:compact");
+      const providerThreadTurns = [
+        firstTurn,
+        secondTurn,
+        compactTurn,
+        turnWithCursor(firstTurn.ordinal + 3, "third-reply"),
+      ];
+      const rollbackTo = (
+        providerThread: typeof harness.providerThread,
+        providerTurn: typeof firstTurn,
+        turns: ReadonlyArray<typeof firstTurn> = providerThreadTurns,
+        text = "Continue.",
+      ) =>
+        harness.runtime.rollbackThread({
+          providerThread,
+          target: {
+            type: "provider_turn",
+            checkpointId: CheckpointId.make(`checkpoint-${providerTurn.id}`),
+            appRunOrdinal: providerTurn.ordinal,
+            providerTurn,
+            message: { role: "user", text, attachments: [] },
+          },
+          providerThreadTurns: turns,
+        });
+
+      // Reverting to the compaction itself keeps it: no fork, Claude re-applies its own boundary.
+      const keptCompaction = yield* rollbackTo(
+        harness.providerThread,
+        compactTurn,
+        providerThreadTurns,
+        "/compact",
+      );
+      assert.equal(forkCalls.length, 0);
+      assert.equal(keptCompaction.providerThread.nativeThreadRef?.nativeId, WAKE_NATIVE_SESSION);
+      assert.equal(
+        keptCompaction.providerThread.nativeConversationHeadRef?.nativeId,
+        "second-reply",
+      );
+
+      const beforeCompaction = yield* rollbackTo(harness.providerThread, secondTurn);
+      assert.deepStrictEqual(
+        forkCalls.map((call) => [call.sessionId, call.options.upToMessageId]),
+        [[WAKE_NATIVE_SESSION, "second-reply"]],
+      );
+      assert.equal(beforeCompaction.providerThread.id, harness.providerThread.id);
+      assert.equal(beforeCompaction.providerThread.nativeThreadRef?.nativeId, forkedSession);
+      assert.equal(
+        beforeCompaction.providerThread.nativeConversationHeadRef?.nativeId,
+        "copy-of-second-reply",
+      );
+
+      const movedTurns = beforeCompaction.providerTurns ?? [];
+      assert.deepStrictEqual(
+        movedTurns.map((turn) => [turn.id, turn.nativeTurnRef?.nativeId]),
+        [
+          [firstTurn.id, "copy-of-first-reply"],
+          [secondTurn.id, "copy-of-second-reply"],
+        ],
+      );
+
+      // The fork has no compaction, so a later rollback on the moved turns stays on it.
+      const [movedFirst] = movedTurns;
+      assert.isDefined(movedFirst);
+      if (movedFirst === undefined) return;
+      const firstOnly = yield* rollbackTo(beforeCompaction.providerThread, movedFirst, movedTurns);
+      assert.equal(forkCalls.length, 1);
+      assert.equal(firstOnly.providerThread.nativeThreadRef?.nativeId, forkedSession);
+      yield* harness.runtime.startTurn({
+        ...turnInput,
+        attemptId: RunAttemptId.make("attempt-claude-after-compact-rollback"),
+        providerThread: firstOnly.providerThread,
+        providerTurnOrdinal: firstTurn.ordinal + 1,
+      });
+      assert.equal(harness.getOpenedOptions()?.resume, forkedSession);
+      assert.equal(harness.getOpenedOptions()?.resumeSessionAt, "copy-of-first-reply");
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          IdAllocator.layer,
+          McpProviderSessions.layer,
+          NodeServices.layer,
+          NodeCrypto.layer,
+        ),
+      ),
+    ),
+  );
+
   it.effect("an interrupted turn after a rollback stops resuming at the rolled-back head", () =>
     Effect.gen(function* () {
       const harness = yield* makeWakeHarnessWithOptions({

@@ -186,22 +186,25 @@ thread and near usage limits. Codex needs version 0.165 or later; if T3 Code man
 Codex, update it in Settings > Providers. Codex follows a change to the setting at once; open Claude
 threads follow it after they restart. Suggestions show on web and desktop.
 
-## Edit an earlier prompt
+## Edit an earlier prompt or revert to it
 
 On web and desktop, choose **Edit from here** beneath a sent message to rewind
-the conversation to before that message. Choose **Revert and keep changes** to
+the conversation to before that message. Choose **Revert to here** instead to keep
+that message and its reply and drop everything after it, such as an automation's
+turn, a prompt that sent the agent off course, or a compaction you did not want
+yet. Choose **Revert and keep changes** to
 leave workspace files as they are, or **Revert files too** to put the workspace back
-to its checkpoint from before that message. That also undoes edits you made yourself.
+to its checkpoint from that point. That also undoes edits you made yourself.
 File restore is only offered for threads running in a worktree, and it is
 refused when another thread or agent session also uses that directory, a folder
 inside it, or a folder that contains it, since
 restoring would erase their changes. Completed subagents belonging to the reverting
 thread do not block restoring that same worktree, provided they have no queued or
 active work, pending requests, or background tasks. A thread that works in the project
-directory rewinds the conversation only. The selected prompt and its attachments return to the composer for editing and
+directory rewinds the conversation only. With **Edit from here**, the selected prompt and its attachments return to the composer for editing and
 resending. Any unsent draft stays above the restored prompt.
 
-This removes the selected message and later conversation from the active thread
+This removes the rewound conversation from the active thread
 and provider history. It does not undo external actions or separate provider
 memory. The action is available only when the provider supports rewind.
 

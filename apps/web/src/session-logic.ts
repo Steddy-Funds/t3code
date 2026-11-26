@@ -1100,23 +1100,35 @@ export function deriveTimelineEntriesFromVisibleTurnItemsWithState(
   };
 }
 
-// Run ordinals keep increasing after a rewind; only visible local runs define predecessors.
+/**
+ * `edit` rewinds to before a prompt; `keep` rewinds to just after its run, so the prompt and its
+ * reply stay and every later run (a wake, a compaction, a prompt) goes.
+ * Run ordinals keep increasing after a rewind; only visible local runs define predecessors.
+ */
 export function deriveRevertTurnCountByUserMessageId(input: {
   readonly timelineEntries: ReadonlyArray<TimelineEntry>;
   readonly checkpoints: ReadonlyArray<ThreadCheckpointSummary>;
   readonly threadStartCheckpointAvailable: boolean;
   readonly availableRevertTurnCounts?: ReadonlySet<number> | undefined;
   readonly unsettledRunId?: RunId | null;
-}): Map<ChatMessage["id"], number> {
+}): {
+  readonly edit: Map<ChatMessage["id"], number>;
+  readonly keep: Map<ChatMessage["id"], number>;
+} {
   const turnCountByRunId = new Map<RunId, number>();
   for (const checkpoint of input.checkpoints) {
     if (isRewindableCheckpoint(checkpoint)) {
       turnCountByRunId.set(checkpoint.runId, checkpoint.checkpointTurnCount);
     }
   }
+  const available = (target: number | undefined): target is number =>
+    target !== undefined &&
+    (input.availableRevertTurnCounts === undefined || input.availableRevertTurnCounts.has(target));
   const targetByRunId = new Map<RunId, number | undefined>();
   const byUserMessageId = new Map<ChatMessage["id"], number>();
+  const keepByUserMessageId = new Map<ChatMessage["id"], number>();
   let previousRunId: RunId | null = null;
+  let previousRunPromptId: ChatMessage["id"] | null = null;
   for (const entry of input.timelineEntries) {
     // Inherited history belongs to the source thread, not our checkpoint scope.
     if (entry.kind !== "message" && entry.kind !== "work") continue;
@@ -1131,28 +1143,28 @@ export function deriveRevertTurnCountByUserMessageId(input: {
           : null;
     if (runId == null) continue;
     if (!targetByRunId.has(runId)) {
-      targetByRunId.set(
-        runId,
+      const target =
         previousRunId === null
           ? input.threadStartCheckpointAvailable
             ? 0
             : undefined
-          : turnCountByRunId.get(previousRunId),
-      );
+          : turnCountByRunId.get(previousRunId);
+      targetByRunId.set(runId, target);
+      if (previousRunPromptId !== null && available(target)) {
+        keepByUserMessageId.set(previousRunPromptId, target);
+      }
       previousRunId = runId;
+      previousRunPromptId = null;
     }
     if (entry.kind !== "message") continue;
     const { message } = entry;
     if (message.role !== "user" || message.runId === input.unsettledRunId) continue;
     if (message.inputIntent !== "turn_start" && message.inputIntent !== "queued_turn") continue;
+    previousRunPromptId = message.id;
     const target = targetByRunId.get(runId);
-    if (
-      target !== undefined &&
-      (input.availableRevertTurnCounts === undefined || input.availableRevertTurnCounts.has(target))
-    )
-      byUserMessageId.set(message.id, target);
+    if (available(target)) byUserMessageId.set(message.id, target);
   }
-  return byUserMessageId;
+  return { edit: byUserMessageId, keep: keepByUserMessageId };
 }
 
 // A missing or failed snapshot (no git, a side chat, a capture error) still pins a

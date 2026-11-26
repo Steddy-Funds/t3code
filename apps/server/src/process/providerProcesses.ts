@@ -12,6 +12,7 @@ import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 
 import * as ServerConfig from "../config.ts";
+import * as ProcessLauncher from "./ProcessLauncher.ts";
 
 const ProcessIdentity = Schema.Struct({
   pid: Schema.Int.check(Schema.isBetween({ minimum: 2, maximum: Number.MAX_SAFE_INTEGER })),
@@ -45,6 +46,8 @@ const make = Effect.gen(function* () {
   const platform = yield* HostProcess.Platform;
   if (platform !== "linux") return { hasOtherLiveOwner: false };
   const { stateDir } = yield* ServerConfig.ServerConfig;
+  const launcher = yield* ProcessLauncher.ProcessLauncher;
+  const runSync = Effect.runSyncWith(yield* Effect.context<never>());
   const directory = NodePath.join(stateDir, "provider-processes");
   const hostname = NodeOS.hostname();
   const boot = NodeFS.readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim();
@@ -127,11 +130,12 @@ const make = Effect.gen(function* () {
     hasOtherLiveOwner,
     register: (pid: number) => {
       const provider = identity(pid);
-      // On Linux the process launcher, itself a child of the server, forks piped commands.
-      const parent = provider && identity(provider.ppid);
+      // The process launcher forks piped commands. Only it and the server spawn providers:
+      // any other child of the server has children of its own, such as a CLI's tools.
+      const launcherPid = runSync(launcher.currentPid);
       if (
         provider === undefined ||
-        (provider.ppid !== process.pid && parent?.ppid !== process.pid)
+        (provider.ppid !== process.pid && provider.ppid !== launcherPid)
       ) {
         throw new Error("Cannot identify spawned provider");
       }

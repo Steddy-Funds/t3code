@@ -78,6 +78,8 @@ upstream; a feature can, from its own branch, when Akiva decides.
 | Glint: after a native Snooze until, Why snooze? opens in the same dialog window (chain/continues)                                                 | #114 | dab2837 |
 | Revert to here: keep a message and its reply, drop every later turn (Claude forks past a later compaction)                                        | #116 | 2a2367d |
 | Cursor turns start on Linux again: the server's process launcher may spawn a provider (upstream's open fix, narrowed to the launcher)             | #117 | 0a29747 |
+| A Claude session's frames no longer stall after a foreground command on a host with many project folders (the live-output tail's scan)            | #109 | eb9fe3c |
+| A Claude wake run stays open for the turn after an aborted one: a prompt sent as a turn ends no longer runs with no run in T3                     | #115 | b6ca5b7 |
 
 Held: #38 (pods notes in the t3-orchestration skill). It edits
 `.agents/skills/t3-orchestration/`, which exists only on
@@ -114,6 +116,8 @@ The Mac runs this tip, which already has them all.
 - #102 Inline review (`reply_to_review_comment` MCP tool, `review_reply.record`, the inline-reply hint on review comments while `agentReviewNotesEnabled` is on): server half only (`35cd774`, one commit), since the branch carries the tip
 - #116 Revert to here (`rollbackThread` returns the turns it moved, the Claude compaction fork): the whole branch, which starts from `main` (`c45b801`)
 - #117 Cursor worker registration under the Linux process launcher (`ProviderProcesses.register`): the whole branch, which starts from `main` (`4a4bede`). Revert it when upstream's own fix (its PR 41936 or 42692) comes in with a sync
+- #109 Claude live-output tail scan (the tail looks in the session's own project folder first, then searches the others once, capped): server half only (`b852016`, one commit), since the branch carries the tip
+- #115 Claude wake run after an aborted turn (the wake run's drain in `startTurn`): server half only (`518d32e`, one commit), since the branch carries the tip
 
 A feature that changes `apps/server`, or a contract the server reads, is
 merged there too: its branch head with `--no-ff`, never this tip.

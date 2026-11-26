@@ -76,6 +76,7 @@ upstream; a feature can, from its own branch, when Akiva decides.
 | Smart Diff: click moved code to open its block beside every place it went (split view, needs #101)                                                | #107 | d2548cd |
 | Glint dialog size in Settings > Labs: Full (the trackpad's size) or Mini (a quarter, for demos)                                                   | #113 | 396bbd7 |
 | Glint: after a native Snooze until, Why snooze? opens in the same dialog window (chain/continues)                                                 | #114 | dab2837 |
+| Revert to here: keep a message and its reply, drop every later turn (Claude forks past a later compaction)                                        | #116 | 2a2367d |
 
 Held: #38 (pods notes in the t3-orchestration skill). It edits
 `.agents/skills/t3-orchestration/`, which exists only on
@@ -110,6 +111,7 @@ The Mac runs this tip, which already has them all.
 - #92 Diff and review stitch (a fork's review notes get their own ids and reply sections; a note stored before keeps its id): server half only (3 picks), with the shared `reviewNote` module its test reads
 - #91 Code stitch (how each file changed in working-tree status, worktree renames, a Python environment set under a symlinked workspace, the side-by-side diff's Mod+B as a late default): server half only (8 picks), since the branch carries the tip
 - #102 Inline review (`reply_to_review_comment` MCP tool, `review_reply.record`, the inline-reply hint on review comments while `agentReviewNotesEnabled` is on): server half only (`35cd774`, one commit), since the branch carries the tip
+- #116 Revert to here (`rollbackThread` returns the turns it moved, the Claude compaction fork): the whole branch, which starts from `main` (`c45b801`)
 
 A feature that changes `apps/server`, or a contract the server reads, is
 merged there too: its branch head with `--no-ff`, never this tip.

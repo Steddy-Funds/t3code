@@ -58,6 +58,34 @@ const ownedProcess = Effect.gen(function* () {
   };
 });
 
+// A process started by a direct child of the server, as a CLI's tools and MCP servers are.
+// It reads the stdin its parent holds, so it exits when the parent is killed.
+const grandchildPid = Effect.gen(function* () {
+  const started = yield* Deferred.make<number>();
+  const exited = yield* Deferred.make<void>();
+  yield* Effect.acquireRelease(
+    Effect.sync(() => {
+      const child = NodeChildProcess.spawn(
+        process.execPath,
+        [
+          "-e",
+          'const c = require("node:child_process").spawn(process.execPath, ["-e", "process.stdin.resume()"], { stdio: ["pipe", "ignore", "ignore"] }); c.once("spawn", () => console.log(c.pid));',
+        ],
+        { stdio: ["ignore", "pipe", "ignore"] },
+      );
+      child.stdout.once("data", (chunk: Buffer) =>
+        Deferred.doneUnsafe(started, Effect.succeed(Number(chunk.toString()))),
+      );
+      child.once("error", (error) => Deferred.doneUnsafe(started, Effect.die(error)));
+      child.once("exit", () => Deferred.doneUnsafe(exited, Effect.void));
+      return child;
+    }),
+    (child) =>
+      Effect.sync(() => child.kill("SIGKILL")).pipe(Effect.andThen(Deferred.await(exited))),
+  );
+  return yield* Deferred.await(started);
+});
+
 describe.runIf(HostProcess.Platform.defaultValue() === "linux")("ProviderProcesses", () => {
   it.live("reaps only recorded CLIs of dead servers before startup completes", () =>
     Effect.gen(function* () {
@@ -151,6 +179,8 @@ describe.runIf(HostProcess.Platform.defaultValue() === "linux")("ProviderProcess
       const forget = register(handle.pid);
       forget();
       expect(() => register(process.ppid)).toThrow("Cannot identify spawned provider");
+      const startedByAChild = yield* grandchildPid;
+      expect(() => register(startedByAChild)).toThrow("Cannot identify spawned provider");
     }).pipe(
       Effect.scoped,
       Effect.provideService(HostProcess.Platform, "linux"),

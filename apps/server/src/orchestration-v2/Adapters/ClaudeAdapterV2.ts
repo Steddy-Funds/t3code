@@ -5,7 +5,11 @@ import {
   toolOutputImages,
 } from "@t3tools/shared/toolOutput";
 import { makeProviderTextDeltaCoalescer } from "./ProviderTextDeltaCoalescer.ts";
-import { claudeTaskOutputRoot, tailClaudeTaskOutput } from "./ClaudeTaskOutputTail.ts";
+import {
+  claudeTaskOutputProjectFolder,
+  claudeTaskOutputRoot,
+  tailClaudeTaskOutput,
+} from "./ClaudeTaskOutputTail.ts";
 import {
   dynamicToolTitle,
   formatReadToolLabel,
@@ -5692,6 +5696,7 @@ interface ClaudeLiveQueryContext {
   // Per process, not per session: a relative temp dir follows the cwd this CLI
   // was launched in, and a later turn's cwd can differ.
   readonly taskOutputRoot: string | undefined;
+  readonly taskOutputProjectFolder: string | undefined;
   // Root messages this process streamed; what it holds beyond the history it resumed.
   readonly emittedMessageUuids: Set<string>;
   transcriptPath: string | undefined;
@@ -12204,6 +12209,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 const stop = yield* Deferred.make<void>();
                 const fiber = yield* tailClaudeTaskOutput({
                   root: liveQuery.taskOutputRoot,
+                  projectFolder: liveQuery.taskOutputProjectFolder,
                   sessionId: message.session_id,
                   taskId: message.task_id,
                   stop,
@@ -14190,6 +14196,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               resolvedTurnCwd,
               hostPlatform,
             ),
+            taskOutputProjectFolder: claudeTaskOutputProjectFolder(resolvedTurnCwd),
             emittedMessageUuids: new Set(),
             transcriptPath: undefined,
           };

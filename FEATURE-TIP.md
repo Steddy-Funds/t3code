@@ -77,6 +77,7 @@ upstream; a feature can, from its own branch, when Akiva decides.
 | Glint dialog size in Settings > Labs: Full (the trackpad's size) or Mini (a quarter, for demos)                                                   | #113 | 396bbd7 |
 | Glint: after a native Snooze until, Why snooze? opens in the same dialog window (chain/continues)                                                 | #114 | dab2837 |
 | Revert to here: keep a message and its reply, drop every later turn (Claude forks past a later compaction)                                        | #116 | 2a2367d |
+| Cursor turns start on Linux again: the server's process launcher may spawn a provider (upstream's open fix, narrowed to the launcher)             | #117 | 0a29747 |
 
 Held: #38 (pods notes in the t3-orchestration skill). It edits
 `.agents/skills/t3-orchestration/`, which exists only on
@@ -112,6 +113,7 @@ The Mac runs this tip, which already has them all.
 - #91 Code stitch (how each file changed in working-tree status, worktree renames, a Python environment set under a symlinked workspace, the side-by-side diff's Mod+B as a late default): server half only (8 picks), since the branch carries the tip
 - #102 Inline review (`reply_to_review_comment` MCP tool, `review_reply.record`, the inline-reply hint on review comments while `agentReviewNotesEnabled` is on): server half only (`35cd774`, one commit), since the branch carries the tip
 - #116 Revert to here (`rollbackThread` returns the turns it moved, the Claude compaction fork): the whole branch, which starts from `main` (`c45b801`)
+- #117 Cursor worker registration under the Linux process launcher (`ProviderProcesses.register`): the whole branch, which starts from `main` (`4a4bede`). Revert it when upstream's own fix (its PR 41936 or 42692) comes in with a sync
 
 A feature that changes `apps/server`, or a contract the server reads, is
 merged there too: its branch head with `--no-ff`, never this tip.

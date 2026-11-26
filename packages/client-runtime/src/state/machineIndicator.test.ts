@@ -156,6 +156,7 @@ function connectionState(phase: SupervisorConnectionState["phase"]): SupervisorC
     generation: 0,
     lastFailure: null,
     retryAt: null,
+    refusedRouteIds: [],
   };
 }
 

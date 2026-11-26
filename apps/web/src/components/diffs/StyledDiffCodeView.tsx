@@ -7,6 +7,7 @@ import {
   type UncontrolledCodeViewProps,
 } from "@pierre/diffs/react";
 /* oxlint-enable eslint/no-restricted-imports */
+import { useGT } from "gt-react";
 import type { Ref } from "react";
 
 import { CODE_NAVIGATION_UNSAFE_CSS } from "~/components/code/codeNavigationDom";
@@ -244,6 +245,14 @@ export function StyledDiffCodeView<LAnnotation = undefined>({
   onTokenActivate,
   ...props
 }: StyledDiffCodeViewProps<LAnnotation>) {
+  const gt = useGT();
+  // The change bars are colour alone; this names each changed line for screen readers.
+  const lineKindCss = `[data-indicators="bars"] [data-line][data-line-type="change-deletion"]::before {
+  content: "" / ${JSON.stringify(gt("Removed", { $context: "diff line, read by screen readers" }))};
+}
+[data-indicators="bars"] [data-line][data-line-type="change-addition"]::before {
+  content: "" / ${JSON.stringify(gt("Added", { $context: "diff line, read by screen readers" }))};
+}`;
   const themeCss = useThemeEditorSurfaceCss();
   const { setRoot, onTokenClick } = useCodeViewTokenNavigation(onTokenActivate);
   // A theme with its own editor colours keeps the diff on its code surface; the others blend
@@ -271,6 +280,7 @@ export function StyledDiffCodeView<LAnnotation = undefined>({
               : {}),
             unsafeCSS: [
               DIFF_VIEW_UNSAFE_CSS,
+              lineKindCss,
               onTokenClick ? CODE_NAVIGATION_UNSAFE_CSS : null,
               unsafeCSSExtra,
               themeCss,

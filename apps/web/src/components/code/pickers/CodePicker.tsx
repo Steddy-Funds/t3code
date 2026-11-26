@@ -86,7 +86,7 @@ export function CodePicker(props: CodePickerProps) {
       const next = stepHighlight(highlightedIndex, itemValues.length, step);
       if (next === null) return;
       props.onHighlight(itemValues[next] ?? null);
-      scrollCommandPaletteRowIntoView(listRef.current, rowIndexByItemIndex[next] ?? 0);
+      scrollCommandPaletteRowIntoView(listRef.current, rowIndexByItemIndex[next] ?? 0, next === 0);
       return;
     }
     if (event.key === "Enter") {

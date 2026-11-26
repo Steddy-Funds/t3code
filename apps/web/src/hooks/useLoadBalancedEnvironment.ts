@@ -4,6 +4,7 @@ import {
   type LoadBalanceCandidate,
 } from "@t3tools/client-runtime/load-balancing";
 import { MACHINE_STATUS_STALE_MS } from "@t3tools/client-runtime/state/machineIndicator";
+import { executeAtomQuery } from "@t3tools/client-runtime/state/runtime";
 import type { EnvironmentId } from "@t3tools/contracts";
 import { Atom } from "effect/reactivity";
 import { useContext } from "react";
@@ -81,6 +82,38 @@ export function useLoadBalancedEnvironment(
       registry.refresh(serverEnvironment.hostResources({ environmentId, input: {} }));
     }
   };
+  const refreshSelection = async (ids: readonly EnvironmentId[]) => {
+    const candidates = await Promise.all(
+      ids.map(async (environmentId): Promise<LoadBalanceCandidate> => {
+        const weight = weights[environmentId] ?? 50;
+        if (registry.get(machineIndicator.machineCapableAtom(environmentId))) {
+          const result = registry.get(
+            machineResources.machine(environmentId, { intervalMs: MACHINE_TOTALS_INTERVAL_MS }),
+          );
+          return {
+            environmentId,
+            weight,
+            machine: {
+              status: result._tag === "Success" ? result.value : null,
+              receivedAt: result._tag === "Success" ? result.timestamp : 0,
+            },
+          };
+        }
+        const result = await executeAtomQuery(
+          registry,
+          serverEnvironment.hostResources({ environmentId, input: {} }),
+          { refresh: true, reportFailure: false, signal: AbortSignal.timeout(5_000) },
+        );
+        return {
+          environmentId,
+          resources: result._tag === "Success" ? result.value : null,
+          receivedAt: Date.now(),
+          weight,
+        };
+      }),
+    );
+    return chooseLoadBalancedEnvironment(candidates, Date.now()) as EnvironmentId | null;
+  };
   const { evaluatedAt, resources } = useAtomValue(
     candidateResourcesAtom(environmentIds.join("\n")),
   );
@@ -94,6 +127,7 @@ export function useLoadBalancedEnvironment(
   ) as EnvironmentId | null;
   return {
     refresh,
+    refreshSelection,
     pending,
     environmentId,
     failed: !pending && environmentId === null && resources.some((resource) => resource.failed),

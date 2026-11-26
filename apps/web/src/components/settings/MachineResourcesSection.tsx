@@ -32,7 +32,7 @@ import {
   SettingResetButton,
   SettingsRow,
 } from "./settingsLayout";
-import { searchableSetting } from "./settingsSearch";
+import { useSearchableSetting } from "./settingsSearch";
 
 type ThresholdKey = keyof MachineThresholds;
 
@@ -186,6 +186,7 @@ export function MachineResourcesSection({
 }: {
   readonly environmentId: EnvironmentId;
 }) {
+  const searchableSetting = useSearchableSetting();
   const config = useAtomValue(serverEnvironment.configValueAtom(environmentId));
   const canWrite = useEnvironmentScope(environmentId, AuthSettingsWriteScope);
   const updateSettings = useUpdateEnvironmentSettings(environmentId);
@@ -229,7 +230,10 @@ export function MachineResourcesSection({
           description={field.description}
           resetAction={
             canWrite && thresholds[field.key] !== DEFAULT_MACHINE_THRESHOLDS[field.key] ? (
-              <SettingResetButton label={field.title} onClick={() => resetKeys([field.key])} />
+              <SettingResetButton
+                ariaLabel={`Reset ${field.title} to default`}
+                onClick={() => resetKeys([field.key])}
+              />
             ) : null
           }
           control={
@@ -286,6 +290,7 @@ function LoadManagementSettings({
   readonly pauses: boolean;
   readonly canWrite: boolean;
 }) {
+  const searchableSetting = useSearchableSetting();
   const updateSettings = useUpdateEnvironmentSettings(environmentId);
   const loadManagement = settings.machineResources.loadManagement;
   const save = (
@@ -397,7 +402,10 @@ function AutoBucketsSettings({
           description="Auto uses a fast model from an enabled provider."
           resetAction={
             canWrite && autoBuckets.modelSelection !== null ? (
-              <SettingResetButton label="Auto-buckets model" onClick={() => saveModel(null)} />
+              <SettingResetButton
+                ariaLabel="Reset Auto-buckets model to default"
+                onClick={() => saveModel(null)}
+              />
             ) : null
           }
           control={

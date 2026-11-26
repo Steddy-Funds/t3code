@@ -1,7 +1,6 @@
-import { ChevronDown, ChevronRight } from "lucide";
+import { ChevronDownIcon, ChevronRightIcon } from "lucide-react";
 import type { ReactNode } from "react";
 
-import { MorphIcon } from "~/components/MorphIcon";
 import { Button } from "~/components/ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
 
@@ -40,7 +39,11 @@ export function ProcessTreeName({
           aria-expanded={expanded}
           aria-label={expanded ? `Collapse ${name}` : `Expand ${name}`}
         >
-          <MorphIcon className="size-3.5" icon={expanded ? ChevronDown : ChevronRight} />
+          {expanded ? (
+            <ChevronDownIcon className="size-3.5" />
+          ) : (
+            <ChevronRightIcon className="size-3.5" />
+          )}
         </Button>
       ) : (
         <span className="size-5 shrink-0" aria-hidden />

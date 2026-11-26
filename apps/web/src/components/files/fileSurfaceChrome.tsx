@@ -1,12 +1,13 @@
 import type { ReactNode } from "react";
 
+import { T, useGT } from "gt-react";
 import { Spinner } from "~/components/ui/spinner";
 import { Button } from "~/components/ui/button";
 import { Toggle } from "~/components/ui/toggle";
-import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
 import { CODE_NAVIGATION_UNSAFE_CSS } from "~/components/code/codeNavigationDom";
 import { DIFF_SURFACE_THEME_UNSAFE_CSS } from "~/lib/diffRendering";
 import { cn } from "~/lib/utils";
+import { SharedTooltipTrigger } from "~/components/ui/shared-tooltip";
 
 export const FILE_SURFACE_SUBHEADER_CLASS =
   "flex h-10 min-h-10 shrink-0 items-center gap-2 border-b border-border/60 bg-background px-3 in-data-[preview-panel-mode=inline]:mb-3 in-data-[preview-panel-mode=inline]:h-7 in-data-[preview-panel-mode=inline]:min-h-7 in-data-[preview-panel-mode=inline]:border-b-transparent";
@@ -70,38 +71,36 @@ export function FileSurfaceAction(props: {
 }) {
   const pressed = props.pressed;
   return (
-    <Tooltip>
-      <TooltipTrigger
-        render={
-          pressed === undefined ? (
-            <Button
-              type="button"
-              className="shrink-0"
-              disabled={props.disabled ?? false}
-              onClick={props.onPress}
-              aria-label={props.label}
-              variant="ghost"
-              size="icon-sm"
-            >
-              {props.children}
-            </Button>
-          ) : (
-            <Toggle
-              className="shrink-0"
-              pressed={pressed}
-              disabled={props.disabled ?? false}
-              onPressedChange={props.onPress}
-              aria-label={props.label}
-              variant="ghost"
-              size="sm"
-            >
-              {props.children}
-            </Toggle>
-          )
-        }
-      />
-      <TooltipPopup>{props.label}</TooltipPopup>
-    </Tooltip>
+    <SharedTooltipTrigger
+      render={
+        pressed === undefined ? (
+          <Button
+            type="button"
+            className="shrink-0"
+            disabled={props.disabled ?? false}
+            onClick={props.onPress}
+            aria-label={props.label}
+            variant="ghost"
+            size="icon-sm"
+          >
+            {props.children}
+          </Button>
+        ) : (
+          <Toggle
+            className="shrink-0"
+            pressed={pressed}
+            disabled={props.disabled ?? false}
+            onPressedChange={props.onPress}
+            aria-label={props.label}
+            variant="ghost"
+            size="sm"
+          >
+            {props.children}
+          </Toggle>
+        )
+      }
+      label={props.label}
+    />
   );
 }
 
@@ -117,10 +116,11 @@ export function FileSurfaceNotice(props: { readonly children: ReactNode }) {
 }
 
 export function FileSurfaceLoading(props: { readonly className?: string }) {
+  const gt = useGT();
   return (
     <div
       role="status"
-      aria-label="Loading file"
+      aria-label={gt("Loading file")}
       className={cn(
         "flex min-h-0 flex-1 items-center justify-center text-muted-foreground",
         props.className,
@@ -147,7 +147,7 @@ export function FileSurfaceFailure(props: {
           onClick={props.onRetry}
           className="rounded-md border border-input px-2.5 py-1 text-xs text-foreground hover:bg-accent focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
         >
-          Try again
+          <T>Try again</T>
         </button>
       ) : null}
     </div>

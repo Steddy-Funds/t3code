@@ -120,6 +120,28 @@ impl HostCollector {
         }
     }
 
+    // sysinfo opens every process it lists with PROCESS_VM_READ, which anti-cheat
+    // software flags. Toolhelp lists them without opening any.
+    #[cfg(target_os = "windows")]
+    pub(crate) fn process_table(&mut self) -> Vec<ProcessTableEntry> {
+        let mut processes = crate::windows_processes::list()
+            .into_iter()
+            // Kernel idle PID 0 would fail the server's positive-PID event schema.
+            .filter(|process| process.pid != 0)
+            .map(|process| ProcessTableEntry {
+                pid: process.pid,
+                ppid: process.ppid,
+                name: truncate_utf8(process.name, MAX_PROCESS_NAME_BYTES),
+                start_time_ms: crate::windows_processes::start_time(process.pid)
+                    .unwrap_or(0)
+                    .saturating_mul(1_000),
+            })
+            .collect::<Vec<_>>();
+        processes.sort_by_key(|process| process.pid);
+        processes
+    }
+
+    #[cfg(not(target_os = "windows"))]
     pub(crate) fn process_table(&mut self) -> Vec<ProcessTableEntry> {
         self.identity.refresh_processes_specifics(
             ProcessesToUpdate::All,

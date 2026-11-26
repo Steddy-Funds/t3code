@@ -2,6 +2,7 @@ import { useAtomValue } from "@effect/atom-react";
 import { useIsFocused } from "@react-navigation/native";
 import type { MachineIndicator } from "@t3tools/client-runtime/state/machineIndicator";
 import type { EnvironmentId, EnvironmentMachineKind } from "@t3tools/contracts";
+import { msg, useMessages } from "gt-react-native";
 import { useEffect } from "react";
 import { Animated, Easing, useAnimatedValue, View } from "react-native";
 
@@ -21,13 +22,13 @@ export const ENVIRONMENT_MACHINE_SYMBOLS = {
 } as const satisfies Record<EnvironmentMachineKind, AppSymbolName>;
 
 const ENVIRONMENT_MACHINE_KIND_LABELS: Record<EnvironmentMachineKind, string> = {
-  server: "Server",
-  cloud: "Cloud VM",
-  linux: "Linux/WSL",
-  desktop: "Desktop",
-  laptop: "Laptop",
-  "mac-mini": "Mini PC",
-  "mac-studio": "Workstation",
+  server: msg("Server", { $context: "machine type" }),
+  cloud: msg("Cloud VM"),
+  linux: msg("Linux/WSL"),
+  desktop: msg("Desktop", { $context: "machine type" }),
+  laptop: msg("Laptop"),
+  "mac-mini": msg("Mini PC"),
+  "mac-studio": msg("Workstation"),
 };
 
 export type MachineSymbolState = "ok" | "unknown" | "stressed" | "unreachable-stressed";
@@ -55,9 +56,10 @@ export function EnvironmentMachineSymbol(
 }
 
 function MachineGlyph(props: MachineSymbolProps) {
+  const m = useMessages();
   return (
     <SymbolView
-      accessibilityLabel={ENVIRONMENT_MACHINE_KIND_LABELS[props.kind]}
+      accessibilityLabel={m(ENVIRONMENT_MACHINE_KIND_LABELS[props.kind])}
       name={ENVIRONMENT_MACHINE_SYMBOLS[props.kind]}
       size={props.size}
       tintColorClassName={props.tintColorClassName}
@@ -76,6 +78,7 @@ function IndicatedMachineSymbol(
     useAtomValue(machineIndicator.machineIndicatorAtom(props.environmentId)),
   );
   const stressColor = useMachineStressColor();
+  const m = useMessages();
   if (state === "ok") return <MachineGlyph {...props} />;
   const stressed = state === "stressed";
   const haloSize = props.size * HALO_SCALE;
@@ -98,7 +101,7 @@ function IndicatedMachineSymbol(
       ) : null}
       {stressed ? (
         <SymbolView
-          accessibilityLabel={ENVIRONMENT_MACHINE_KIND_LABELS[props.kind]}
+          accessibilityLabel={m(ENVIRONMENT_MACHINE_KIND_LABELS[props.kind])}
           name={ENVIRONMENT_MACHINE_SYMBOLS[props.kind]}
           size={props.size}
           tintColor={stressColor}

@@ -14,7 +14,9 @@ import {
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as PlatformError from "effect/PlatformError";
 import * as Queue from "effect/Queue";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
@@ -35,11 +37,22 @@ vi.mock("@t3tools/shared/hostTotals", async (importOriginal) => ({
 interface Host {
   /** Load average per core on the one fake core. */
   load: number;
+  cpus: number;
+  busy: number;
+  memoryTotalBytes: number;
+  memoryAvailableBytes: number;
 }
 
 // Each counter read advances one core by 100 ticks, half of them idle: 50 % busy.
-function setup(): Host {
-  const host: Host = { load: 1 };
+function setup(overrides: Partial<Host> = {}): Host {
+  const host: Host = {
+    load: 1,
+    cpus: 1,
+    busy: 0.5,
+    memoryTotalBytes: 1000,
+    memoryAvailableBytes: 500,
+    ...overrides,
+  };
   vi.mocked(readCpuCounters).mockReset();
   vi.mocked(readCpuCounters).mockImplementation(() => {
     const reads = vi.mocked(readCpuCounters).mock.calls.length;
@@ -50,12 +63,12 @@ function setup(): Host {
     const totals: HostTotals = {
       platform: options?.platform ?? "linux",
       sampledAt: 0,
-      cpuCount: 1,
-      cpuUtilization: prev === null ? null : 0.5,
-      perCore: prev === null ? [] : [50],
+      cpuCount: host.cpus,
+      cpuUtilization: prev === null ? null : host.busy,
+      perCore: prev === null ? [] : [host.busy * 100],
       load: { one: host.load, five: host.load, fifteen: host.load },
-      memoryTotalBytes: 1000,
-      memoryAvailableBytes: 500,
+      memoryTotalBytes: host.memoryTotalBytes,
+      memoryAvailableBytes: host.memoryAvailableBytes,
       swapTotalBytes: 0,
       swapUsedBytes: 0,
       memoryPressure: options?.native?.memoryPressure ?? null,
@@ -70,9 +83,31 @@ function makeLayer(
   options: {
     platform?: NodeJS.Platform;
     native?: Partial<NativeTelemetryClient.NativeTelemetryClient["Service"]>;
+    /** Each path serves its values in order and repeats the last one. */
+    files?: Record<string, ReadonlyArray<string>>;
   } = {},
 ) {
   const ticks: Array<Effect.Effect<void>> = [];
+  const files = options.files ?? {};
+  const reads = new Map<string, number>();
+  const fileSystem = FileSystem.layerNoop({
+    readFileString: (path) => {
+      const values = files[path];
+      if (!values) {
+        return Effect.fail(
+          PlatformError.systemError({
+            _tag: "NotFound",
+            module: "FileSystem",
+            method: "readFileString",
+            pathOrDescriptor: path,
+          }),
+        );
+      }
+      const index = reads.get(path) ?? 0;
+      reads.set(path, index + 1);
+      return Effect.succeed(values[Math.min(index, values.length - 1)]!);
+    },
+  });
   const scheduler = Layer.succeed(
     Scheduler,
     Scheduler.of({
@@ -86,6 +121,7 @@ function makeLayer(
     Layer.provide(scheduler),
     Layer.provide(Layer.succeed(HostProcess.Platform, options.platform ?? "linux")),
     Layer.provide(NativeTelemetryClient.layerTest(options.native)),
+    Layer.provide(fileSystem),
     Layer.provideMerge(
       ServerSettingsService.layerTest({
         machineResources: { thresholds: { enterHoldMs: 0, exitHoldMs: 0 } },
@@ -240,6 +276,135 @@ describe("HostResources read", () => {
       expect(vi.mocked(readHostTotals).mock.calls.length).toBe(readsBefore);
     }).pipe(Effect.provide(layer));
   });
+});
+
+const GiB = 1024 ** 3;
+const MiB = 1024 ** 2;
+const cgroup = "/sys/fs/cgroup/t3.slice/server.scope";
+const unlimitedCgroup = {
+  "/proc/self/cgroup": ["0::/t3.slice/server.scope\n"],
+  [`${cgroup}/cpu.max`]: ["max 100000\n"],
+  [`${cgroup}/cpu.stat`]: ["usage_usec 5000000\n"],
+  [`${cgroup}/memory.max`]: ["max\n"],
+  [`${cgroup}/memory.current`]: [`${600 * MiB}\n`],
+  [`${cgroup}/memory.stat`]: [`anon ${450 * MiB}\ninactive_file ${100 * MiB}\n`],
+};
+
+// An 8-CPU host with 2 of 4 GiB available; an on-demand read takes the cgroup twice, 200 ms apart.
+const readInCgroup = (files: Record<string, ReadonlyArray<string>>, busy = 0) => {
+  setup({ cpus: 8, busy, memoryTotalBytes: 4 * GiB, memoryAvailableBytes: 2 * GiB });
+  const { layer } = makeLayer({ files });
+  return Effect.gen(function* () {
+    const resources = yield* HostResources;
+    const reading = yield* Effect.forkChild(resources.read);
+    yield* TestClock.adjust("200 millis");
+    return yield* Fiber.join(reading);
+  }).pipe(Effect.provide(layer));
+};
+
+describe("HostResources read in a cgroup", () => {
+  it.effect("reports the CPU quota and usage of the server's cgroup", () =>
+    Effect.gen(function* () {
+      const snapshot = yield* readInCgroup({
+        ...unlimitedCgroup,
+        [`${cgroup}/cpu.max`]: ["100000 100000\n"],
+        [`${cgroup}/cpu.stat`]: [
+          "usage_usec 5000000\nuser_usec 4000000\nsystem_usec 1000000\n",
+          "usage_usec 5150000\nuser_usec 4100000\nsystem_usec 1050000\n",
+        ],
+      });
+
+      // One CPU of quota, 150 ms of it used during the 200 ms between reads.
+      expect(snapshot.cpuCount).toBe(1);
+      expect(snapshot.cpuUtilization).toBe(0.75);
+    }),
+  );
+
+  it.effect("reports memory against the server cgroup's memory.max", () =>
+    Effect.gen(function* () {
+      const snapshot = yield* readInCgroup({
+        ...unlimitedCgroup,
+        [`${cgroup}/memory.max`]: [`${GiB}\n`],
+      });
+
+      expect(snapshot.totalMemoryBytes).toBe(GiB);
+      // 600 MiB charged, of which 100 MiB is reclaimable page cache.
+      expect(snapshot.availableMemoryBytes).toBe(GiB - 500 * MiB);
+    }),
+  );
+
+  it.effect("counts a busy host against an idle, quota-limited server cgroup", () =>
+    Effect.gen(function* () {
+      // Agents in sibling cgroups keep the host 90% busy; the server's own cgroup is idle.
+      const snapshot = yield* readInCgroup(
+        { ...unlimitedCgroup, [`${cgroup}/cpu.max`]: ["200000 100000\n"] },
+        0.9,
+      );
+
+      expect(snapshot.cpuCount).toBe(2);
+      // Only 0.8 of 8 host CPUs are free, which is 60% of the 2-CPU quota in use.
+      expect(snapshot.cpuUtilization).toBeCloseTo(0.6, 9);
+    }),
+  );
+
+  it.effect("samples the CPUs the server is pinned to by id, not by os.cpus() index", () =>
+    Effect.gen(function* () {
+      const snapshot = yield* readInCgroup({
+        ...unlimitedCgroup,
+        "/proc/self/status": ["Name:\tnode\nCpus_allowed_list:\t4\n"],
+        // CPU 1 is offline; the server's CPU 4 is saturated, everything else is idle.
+        "/proc/stat": [0, 100].map((elapsed) =>
+          [0, 2, 3, 4, 5, 6, 7]
+            .map((id) =>
+              id === 4 ? `cpu${id} ${elapsed} 0 0 0 0 0 0 0` : `cpu${id} 0 0 0 ${elapsed} 0 0 0 0`,
+            )
+            .join("\n"),
+        ),
+      });
+
+      expect(snapshot.cpuCount).toBe(1);
+      expect(snapshot.cpuUtilization).toBe(1);
+    }),
+  );
+
+  it.effect("keeps host memory when the cgroup's memory.current is unreadable", () =>
+    Effect.gen(function* () {
+      const snapshot = yield* readInCgroup({
+        ...unlimitedCgroup,
+        [`${cgroup}/memory.max`]: [`${GiB}\n`],
+        [`${cgroup}/memory.current`]: [""],
+      });
+
+      expect(snapshot.totalMemoryBytes).toBe(4 * GiB);
+      expect(snapshot.availableMemoryBytes).toBe(2 * GiB);
+    }),
+  );
+
+  it.effect("keeps host values when the cgroup has no limits", () =>
+    Effect.gen(function* () {
+      const snapshot = yield* readInCgroup(unlimitedCgroup, 0.25);
+
+      expect(snapshot.cpuCount).toBe(8);
+      expect(snapshot.cpuUtilization).toBeCloseTo(0.25, 9);
+      expect(snapshot.availableMemoryBytes).toBe(2 * GiB);
+    }),
+  );
+
+  it.effect("falls back to host load when the cgroup's cpu.stat is unreadable", () =>
+    Effect.gen(function* () {
+      const snapshot = yield* readInCgroup(
+        {
+          ...unlimitedCgroup,
+          [`${cgroup}/cpu.max`]: ["200000 100000\n"],
+          [`${cgroup}/cpu.stat`]: [""],
+        },
+        0.9,
+      );
+
+      expect(snapshot.cpuCount).toBe(2);
+      expect(snapshot.cpuUtilization).toBeCloseTo(0.6, 9);
+    }),
+  );
 });
 
 describe("HostResources samples", () => {

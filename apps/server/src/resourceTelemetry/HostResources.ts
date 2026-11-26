@@ -31,6 +31,7 @@ import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
@@ -175,8 +176,101 @@ export class HostResources extends Context.Service<
 interface TickState {
   readonly counters: CpuCounters | null;
   readonly totals: HostTotals | null;
+  readonly cgroup: CgroupReading | null;
+  readonly snapshot: HostResourcesSnapshot | null;
   readonly verdict: VerdictState;
   readonly sequence: number;
+}
+
+interface CgroupReading {
+  readonly atMs: number;
+  readonly cpuQuota: number | null;
+  readonly usageUsec: number | null;
+  readonly pinned: { readonly idle: number; readonly total: number; readonly count: number } | null;
+  readonly memoryMax: number | null;
+  readonly memoryCurrent: number | null;
+  readonly reclaimable: number;
+}
+
+// Linux CPU list syntax, as in Cpus_allowed_list: "0-3,8,10-11".
+function parseCpuList(list: string): ReadonlySet<number> | null {
+  const cpus = new Set<number>();
+  for (const range of list.split(",")) {
+    const match = /^(\d+)(?:-(\d+))?$/.exec(range.trim());
+    if (!match) return null;
+    for (let cpu = Number(match[1]); cpu <= Number(match[2] ?? match[1]); cpu++) cpus.add(cpu);
+  }
+  return cpus;
+}
+
+// os.cpus() compacts online CPUs, so its indices are not CPU ids; /proc/stat lines are keyed.
+function pinnedCpu(stat: string, allowed: ReadonlySet<number>) {
+  const cpu = { idle: 0, total: 0, count: 0 };
+  for (const [, id, fields] of stat.matchAll(/^cpu(\d+) (.+)$/gm)) {
+    if (!allowed.has(Number(id))) continue;
+    const counters = (fields ?? "").trim().split(/\s+/).map(Number);
+    const at = (index: number) => counters[index] ?? 0;
+    // user nice system idle iowait irq softirq steal
+    const idle = at(3) + at(4);
+    cpu.idle += idle;
+    cpu.total += idle + at(0) + at(1) + at(2) + at(5) + at(6) + at(7);
+    cpu.count++;
+  }
+  return cpu.count > 0 ? cpu : null;
+}
+
+function limitedSnapshot(
+  totals: HostTotals,
+  previous: CgroupReading | null,
+  cgroup: CgroupReading | null,
+): HostResourcesSnapshot {
+  if (cgroup === null) return toHostResourcesSnapshot(totals);
+  let cpuCount = totals.cpuCount;
+  let hostUtilization = totals.cpuUtilization;
+  if (cgroup.pinned !== null) {
+    const before = previous?.pinned ?? null;
+    const totalDelta = before === null ? 0 : cgroup.pinned.total - before.total;
+    const idleDelta = before === null ? 0 : cgroup.pinned.idle - before.idle;
+    cpuCount = cgroup.pinned.count;
+    hostUtilization =
+      before?.count === cgroup.pinned.count && totalDelta > 0 && idleDelta >= 0
+        ? Math.min(1, Math.max(0, 1 - idleDelta / totalDelta))
+        : null;
+  }
+  let cpuUtilization = hostUtilization;
+  if (cgroup.cpuQuota !== null) {
+    const capacity = Math.min(cgroup.cpuQuota, cpuCount);
+    const elapsedMicros = previous === null ? 0 : (cgroup.atMs - previous.atMs) * 1000;
+    const cgroupIdle =
+      previous?.usageUsec != null && cgroup.usageUsec !== null && elapsedMicros > 0
+        ? capacity - (cgroup.usageUsec - previous.usageUsec) / elapsedMicros
+        : null;
+    // Agents can run in sibling cgroups (agentScope.ts), so a busy host still counts.
+    const hostIdle = hostUtilization === null ? null : cpuCount * (1 - hostUtilization);
+    const idle =
+      cgroupIdle === null || hostIdle === null
+        ? (cgroupIdle ?? hostIdle)
+        : Math.min(cgroupIdle, hostIdle);
+    cpuUtilization = idle === null ? null : Math.min(1, Math.max(0, 1 - idle / capacity));
+    cpuCount = Math.max(1, Math.floor(capacity));
+  }
+  let totalMemoryBytes = totals.memoryTotalBytes;
+  let availableMemoryBytes = totals.memoryAvailableBytes;
+  // Without usage, a capped total would read as a near-empty cgroup; keep host values instead.
+  if (cgroup.memoryMax !== null && cgroup.memoryCurrent !== null) {
+    totalMemoryBytes = Math.min(totalMemoryBytes, cgroup.memoryMax);
+    availableMemoryBytes = Math.min(
+      availableMemoryBytes,
+      cgroup.memoryMax - (cgroup.memoryCurrent - cgroup.reclaimable),
+    );
+  }
+  return {
+    sampledAt: totals.sampledAt,
+    cpuUtilization,
+    cpuCount,
+    availableMemoryBytes: Math.min(totalMemoryBytes, Math.max(0, availableMemoryBytes)),
+    totalMemoryBytes,
+  };
 }
 
 interface SampleSource {
@@ -219,7 +313,13 @@ function toStatusSnapshot(state: TickState, now: number): MachineStatusSnapshot 
   };
 }
 
+function cgroupNumber(text: string, pattern: RegExp): number | null {
+  const value = pattern.exec(text)?.[1];
+  return value === undefined ? null : Number(value);
+}
+
 const make = Effect.fn("makeHostResources")(function* () {
+  const fs = yield* FileSystem.FileSystem;
   const platform = yield* HostProcess.Platform;
   const settings = yield* ServerSettingsService;
   const scheduler = yield* Scheduler;
@@ -227,9 +327,56 @@ const make = Effect.fn("makeHostResources")(function* () {
   const layerScope = yield* Effect.scope;
   const history = new MachineHistoryRing();
 
+  const readFile = (path: string) => fs.readFileString(path).pipe(Effect.orElseSucceed(() => ""));
+
+  const readCgroup: Effect.Effect<CgroupReading | null> =
+    platform === "linux"
+      ? Effect.gen(function* () {
+          // cgroup v2 only; limits of the server's own cgroup, which is `/` inside a container.
+          const cgroupPath = /^0::(\/.*)$/m.exec(yield* readFile("/proc/self/cgroup"))?.[1];
+          const cgroup =
+            cgroupPath === undefined ? null : `/sys/fs/cgroup${cgroupPath.replace(/\/$/, "")}`;
+          const cpuMax = cgroup
+            ? /^(\d+) (\d+)$/.exec((yield* readFile(`${cgroup}/cpu.max`)).trim())
+            : null;
+          const usageUsec = cpuMax
+            ? cgroupNumber(yield* readFile(`${cgroup}/cpu.stat`), /^usage_usec (\d+)$/m)
+            : null;
+          // Affinity (cpuset) pins the server to some CPUs; idle CPUs outside it are of no use.
+          const allowedCpus = parseCpuList(
+            /^Cpus_allowed_list:\s*(\S+)$/m.exec(yield* readFile("/proc/self/status"))?.[1] ?? "",
+          );
+          const pinned = allowedCpus ? pinnedCpu(yield* readFile("/proc/stat"), allowedCpus) : null;
+          const memoryMax = cgroup
+            ? cgroupNumber(yield* readFile(`${cgroup}/memory.max`), /^(\d+)$/m)
+            : null;
+          const memoryCurrent =
+            memoryMax === null
+              ? null
+              : cgroupNumber(yield* readFile(`${cgroup}/memory.current`), /^(\d+)$/m);
+          // inactive_file is page cache the kernel reclaims before hitting memory.max.
+          const reclaimable =
+            memoryCurrent === null
+              ? 0
+              : (cgroupNumber(yield* readFile(`${cgroup}/memory.stat`), /^inactive_file (\d+)$/m) ??
+                0);
+          return {
+            atMs: yield* Clock.currentTimeMillis,
+            cpuQuota: cpuMax ? Number(cpuMax[1]) / Number(cpuMax[2]) : null,
+            usageUsec,
+            pinned,
+            memoryMax,
+            memoryCurrent,
+            reclaimable,
+          };
+        })
+      : Effect.succeed(null);
+
   const state = yield* Ref.make<TickState>({
     counters: null,
     totals: null,
+    cgroup: null,
+    snapshot: null,
     verdict: initialVerdictState(yield* Clock.currentTimeMillis),
     sequence: 0,
   });
@@ -270,6 +417,7 @@ const make = Effect.fn("makeHostResources")(function* () {
     });
     yield* Ref.set(latestGpus, gpus);
     const read = yield* readTotals(prev.counters, nativeTotals);
+    const cgroup = yield* readCgroup;
     const now = yield* Clock.currentTimeMillis;
     const totals: HostTotals | null =
       read._tag === "Some"
@@ -285,6 +433,8 @@ const make = Effect.fn("makeHostResources")(function* () {
     const next: TickState = {
       counters: read._tag === "Some" ? read.value.next : prev.counters,
       totals,
+      cgroup,
+      snapshot: totals === null ? null : limitedSnapshot(totals, prev.cgroup, cgroup),
       verdict,
       sequence: changed ? prev.sequence + 1 : prev.sequence,
     };
@@ -299,17 +449,19 @@ const make = Effect.fn("makeHostResources")(function* () {
   });
 
   const sampleOnDemand = Effect.gen(function* () {
+    const before = yield* readCgroup;
     const first = readCpuCounters();
     yield* Effect.sleep("200 millis");
     const read = yield* readTotals(first);
-    if (read._tag === "Some") return toHostResourcesSnapshot(read.value.totals);
+    const after = yield* readCgroup;
+    if (read._tag === "Some") return limitedSnapshot(read.value.totals, before, after);
     return yield* Effect.die(new Error("Host totals are unavailable."));
   });
 
   const read = Effect.fn("HostResources.read")(function* () {
-    const { totals } = yield* Ref.get(state);
-    if (totals !== null && totals.cpuUtilization !== null) {
-      return toHostResourcesSnapshot(totals);
+    const { totals, snapshot } = yield* Ref.get(state);
+    if (totals !== null && totals.cpuUtilization !== null && snapshot !== null) {
+      return snapshot;
     }
     return yield* sampleOnDemand;
   });

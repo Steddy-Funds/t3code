@@ -20,9 +20,10 @@ import {
   MenuTrigger,
 } from "../ui/menu";
 import { SettingResetButton, SettingsRow } from "./settingsLayout";
-import { searchableSetting } from "./settingsSearch";
+import { useSearchableSetting } from "./settingsSearch";
 
 export function SidebarDetailsItemsRow() {
+  const searchableSetting = useSearchableSetting();
   const visibility = useClientSettings(resolveSidebarDetailsVisibility);
   const isDefault = SIDEBAR_DETAILS_ITEMS.every((item) => visibility[item.id] === item.defaultOn);
   const enabled = SIDEBAR_DETAILS_ITEMS.filter((item) => visibility[item.id]).length;
@@ -33,7 +34,7 @@ export function SidebarDetailsItemsRow() {
       resetAction={
         isDefault ? null : (
           <SettingResetButton
-            label="sidebar details"
+            ariaLabel="Reset sidebar details to default"
             onClick={() => updateClientSettings({ sidebarDetailsItems: {} })}
           />
         )

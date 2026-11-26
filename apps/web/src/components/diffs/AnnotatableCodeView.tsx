@@ -6,7 +6,7 @@ import type {
   FileDiffMetadata,
   SelectedLineRange,
 } from "@pierre/diffs";
-import type { CodeViewHandle } from "@pierre/diffs/react";
+import type { CodeViewHandle, CodeViewProps } from "@pierre/diffs/react";
 import type { EnvironmentId, ProjectId, ScopedThreadRef } from "@t3tools/contracts";
 import {
   type ReviewItem,
@@ -128,6 +128,7 @@ interface AnnotatableCodeViewProps {
   reviewNotes?: DiffReviewNotes | undefined;
   options: StyledDiffCodeViewOptions<DiffCommentAnnotationGroup>;
   viewerRef?: Ref<AnnotatableCodeViewHandle>;
+  onScroll?: CodeViewProps<DiffCommentAnnotationGroup, undefined>["onScroll"];
   className?: string;
   renderCodeViewFooter?: () => ReactNode;
   unsafeCSSExtra?: string;
@@ -138,7 +139,7 @@ interface AnnotatableCodeViewProps {
     fileKey: string,
     collapsed: boolean,
   ) => ReactNode;
-  onRevealSearchMatch: (fileKey: string) => void;
+  onFileCollapsedChange: (fileKey: string, collapsed: boolean) => void;
   onTokenActivate?: DiffCodeViewTokenActivate | undefined;
 }
 
@@ -159,13 +160,14 @@ export function AnnotatableCodeView({
   reviewNotes,
   options,
   viewerRef,
+  onScroll,
   className,
   renderCodeViewFooter,
   unsafeCSSExtra,
   renderHeaderMetadata,
   renderHeaderFilenameSuffix,
   renderHeaderPrefix,
-  onRevealSearchMatch,
+  onFileCollapsedChange,
   onTokenActivate,
 }: AnnotatableCodeViewProps) {
   const [selectedLines, setSelectedLines] = useState<{
@@ -337,6 +339,7 @@ export function AnnotatableCodeView({
       <StyledDiffCodeView<DiffCommentAnnotationGroup>
         key={codeViewKey}
         {...(viewerRef ? { viewerRef } : {})}
+        {...(onScroll ? { onScroll } : {})}
         {...(className ? { className } : {})}
         {...(unsafeCSSExtra ? { unsafeCSSExtra } : {})}
         {...(renderHeaderMetadata
@@ -355,7 +358,8 @@ export function AnnotatableCodeView({
           enableGutterUtility: !boxOpen,
           enableLineSelection: !boxOpen,
           onGutterUtilityClick: beginComment,
-          onRevealSearchMatch: (item) => onRevealSearchMatch(item.id),
+          onItemCollapsedChange: (_item, nextItem) =>
+            onFileCollapsedChange(nextItem.id, nextItem.collapsed === true),
         }}
         renderHeaderFilenameSuffix={(item) =>
           item.type === "diff" ? renderHeaderFilenameSuffix(item.fileDiff) : null

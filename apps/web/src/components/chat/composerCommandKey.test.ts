@@ -11,6 +11,14 @@ function setup(dock: { docked: boolean; available: boolean }) {
   const setComposerDocked = vi.fn<HandlerInput["setComposerDocked"]>();
   const input = {
     keybindings: DEFAULT_RESOLVED_KEYBINDINGS,
+    getShortcutContext: () => ({
+      terminalFocus: false,
+      terminalOpen: false,
+      previewFocus: false,
+      previewOpen: false,
+      isWeb: true,
+      isDesktop: false,
+    }),
     sendShortcut: "enter",
     routeKind: "server",
     phase: "ready",

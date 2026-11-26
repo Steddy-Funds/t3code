@@ -7,7 +7,7 @@ import {
   ServedSiteVisibility,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
-import { Tool, Toolkit } from "effect/ai";
+import { McpSchema, Tool, Toolkit } from "effect/ai";
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 
@@ -32,7 +32,9 @@ const SitePublishTool = Tool.make("t3_site_publish", {
     stopCommand: Schema.optionalKey(Schema.String),
   }),
   success: ServedSite,
-}).annotate(Tool.Destructive, false);
+})
+  .annotate(Tool.Destructive, false)
+  .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenFromOutsideClients);
 
 const SiteListTool = Tool.make("t3_site_list", {
   ...shared,
@@ -40,7 +42,8 @@ const SiteListTool = Tool.make("t3_site_list", {
   success: Schema.Struct({ sites: Schema.Array(ServedSite) }),
 })
   .annotate(Tool.Readonly, true)
-  .annotate(Tool.Destructive, false);
+  .annotate(Tool.Destructive, false)
+  .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenFromOutsideClients);
 
 const SiteStopTool = Tool.make("t3_site_stop", {
   ...shared,
@@ -51,6 +54,8 @@ const SiteStopTool = Tool.make("t3_site_stop", {
     force: Schema.optionalKey(Schema.Boolean),
   }),
   success: ServedSite,
-}).annotate(Tool.Destructive, true);
+})
+  .annotate(Tool.Destructive, true)
+  .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenFromOutsideClients);
 
 export const ServedSitesToolkit = Toolkit.make(SitePublishTool, SiteListTool, SiteStopTool);

@@ -104,7 +104,12 @@ const assertMayChangeThread = Effect.fn("EnvironmentHandlers.assertMayChangeThre
   if (threadId === caller.caller?.id) return;
   const target = yield* caller.threads.getThreadShell(threadId).pipe(Effect.mapError(unavailable));
   if (target === null || target.deletedAt !== null) {
-    return yield* threadNotFound(caller.threads, threadId, "The thread was not found.");
+    return yield* threadNotFound(
+      caller.threads,
+      caller.scope,
+      threadId,
+      "The thread was not found.",
+    );
   }
   yield* assertTargetWithinLimits(caller.limits, target);
   yield* assertSameLink(caller, target);
@@ -161,7 +166,12 @@ export const layer = McpToolAccess.toLayer(
         .getThreadShell(threadId)
         .pipe(Effect.mapError(unavailable));
       if (shell === null || shell.deletedAt !== null) {
-        return yield* threadNotFound(caller.threads, threadId, "The thread was not found.");
+        return yield* threadNotFound(
+          caller.threads,
+          caller.scope,
+          threadId,
+          "The thread was not found.",
+        );
       }
       const { current, history } = yield* threadResources.read(threadId);
       return { threadId, current, recent: history.slice(-RECENT_THREAD_POINTS) };

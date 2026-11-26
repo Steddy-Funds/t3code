@@ -60,8 +60,8 @@ vi.mock(import("./settingsLayout"), async (original) => ({
       {control}
     </div>
   )) as never,
-  SettingResetButton: (({ label, onClick }: { label: string; onClick: () => void }) => (
-    <button type="button" aria-label={`Reset ${label} to default`} onClick={onClick}>
+  SettingResetButton: (({ ariaLabel, onClick }: { ariaLabel: string; onClick: () => void }) => (
+    <button type="button" aria-label={ariaLabel} onClick={onClick}>
       Reset
     </button>
   )) as never,

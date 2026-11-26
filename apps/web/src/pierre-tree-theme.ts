@@ -1,5 +1,5 @@
 import type { ThemeEditorColors } from "@t3tools/shared/themePalettes";
-import type { CSSProperties } from "react";
+import type { CSSProperties, PointerEvent } from "react";
 
 // Lucide Bot Message Square, ISC license: marks the count of comments sent to the agent.
 const AGENT_COMMENTS_ICON = encodeURIComponent(
@@ -47,9 +47,28 @@ export function pierreTreeStyle(
   const style: Record<string, string> = {
     colorScheme,
     "--trees-fg-override": "var(--contrast-foreground)",
+    "--trees-fg-muted-override": "var(--contrast-muted-foreground)",
+    "--trees-status-ignored-override": "var(--contrast-muted-foreground)",
   };
   for (const [status, color] of Object.entries(fileStatus ?? {})) {
     style[`--trees-status-${status}-override`] = color;
   }
   return style;
+}
+
+// Clipped labels are unreadable and the tree cannot scroll sideways, so a clipped row gets its full name as a native tooltip.
+export function titleClippedPierreTreeRow(event: PointerEvent<HTMLElement>) {
+  const row = event.nativeEvent
+    .composedPath()
+    .find(
+      (node): node is HTMLElement =>
+        node instanceof HTMLElement && node.matches("button[data-type='item']"),
+    );
+  if (!row) return;
+  const label = row.getAttribute("aria-label");
+  const clipped = Array.from(
+    row.querySelectorAll<HTMLElement>("[data-truncate-content='visible']"),
+  ).some((element) => element.scrollWidth > element.clientWidth);
+  if (label && clipped) row.title = label;
+  else row.removeAttribute("title");
 }

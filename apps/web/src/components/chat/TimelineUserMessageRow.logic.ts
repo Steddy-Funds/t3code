@@ -6,6 +6,8 @@ import {
   collectAssistantCitations,
 } from "@t3tools/shared/assistantCitations";
 import { replaceComposerContextReferences } from "@t3tools/shared/composerContextReferences";
+import { msg } from "gt-react";
+import { m, type MessageResolver } from "~/i18n/messages";
 import { asKnownContextRecord, resolveUserMessageContext } from "~/lib/composerContextRecords";
 
 /** The user's own words, without the citations they replied to unless nothing else is left. */
@@ -20,8 +22,11 @@ export function withoutRepliedCitations(text: string): string {
   return own || assistantCitationsToPlainText(text).trim();
 }
 
-export function userMessageFileLabel(file: Pick<ChatFileAttachment, "name" | "source">) {
-  return file.source?._tag === "pasted-text" ? "Pasted text" : file.name;
+export function userMessageFileLabel(
+  file: Pick<ChatFileAttachment, "name" | "source">,
+  resolve: MessageResolver = m,
+) {
+  return file.source?._tag === "pasted-text" ? resolve(msg("Pasted text")) : file.name;
 }
 
 /** The words a reply quotes: as the row shows them, without the citations they replied to. */

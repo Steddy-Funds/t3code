@@ -105,7 +105,7 @@ export function useSemanticHighlighting(options: SemanticHighlightingOptions) {
   const chunked = active && lineCount(text) > WHOLE_DOCUMENT_MAX_LINES;
   // The server reads the file on disk, so an edit is asked about once it is saved.
   const optimistic = useAtomValue(optimisticFileAtom(environmentId, cwd, path ?? ""));
-  const unsaved = optimistic != null && optimistic.confirmedAgainst === undefined;
+  const unsaved = optimistic != null && !optimistic.saved;
 
   const [highlighter] = useState(() => new SemanticHighlighter());
   const containerRef = useRef<HTMLElement | null>(null);

@@ -199,7 +199,7 @@ function setup(scenario: Scenario = {}) {
     readPendingEnvironmentChange: () => null,
     pendingApprovals: approvals,
     respondingRequestIds: [],
-    activePendingProgress: scenario.questionOpen ? { questionIndex: 0 } : null,
+    activePendingUserInput: scenario.questionOpen ? { questionIndex: 0 } : null,
     onAdvanceActivePendingUserInput: advanceQuestion,
     onRespondToApproval: respondToApproval,
     beginLocalDispatch: () => {},

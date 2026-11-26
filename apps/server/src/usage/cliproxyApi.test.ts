@@ -48,14 +48,18 @@ const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 
 function fixture(
   options: {
-    accounts?: Array<
-      (typeof accounts)[number] & {
-        disabled?: boolean;
-        id_token: { chatgpt_account_id: string; plan_type?: string; chatgpt_plan_type?: string };
-      }
-    >;
+    accounts?: Array<{
+      id: string;
+      auth_index: string;
+      provider: string;
+      email?: string;
+      disabled?: boolean;
+      project_id?: string;
+      id_token?: { chatgpt_account_id: string; plan_type?: string; chatgpt_plan_type?: string };
+    }>;
     upstream?: (request: RequestBody) => { status: number; body: unknown };
     cooldownStatus?: number;
+    models?: (name: string) => Response;
   } = {},
 ) {
   const requests: Array<{ path: string; body?: RequestBody }> = [];
@@ -68,6 +72,12 @@ function fixture(
           ? decodeRequest(new TextDecoder().decode(request.body.body))
           : undefined;
       requests.push({ path, ...(body ? { body } : {}) });
+      if (path.endsWith("/auth-files/models"))
+        return HttpClientResponse.fromWeb(
+          request,
+          options.models?.(new URL(request.url).searchParams.get("name")!) ??
+            Response.json({}, { status: 404 }),
+        );
       if (path.endsWith("/auth-files"))
         return HttpClientResponse.fromWeb(
           request,
@@ -224,6 +234,24 @@ describe("CLIProxyAPI built-in management API", () => {
       }),
   );
 
+  it.effect("names the models the hub routes to each account, when the hub lists them", () =>
+    Effect.gen(function* () {
+      const test = fixture({
+        accounts: [...accounts, { ...accounts[1]!, id: "third.json", auth_index: "c" }],
+        models: (name) =>
+          name === "first.json"
+            ? Response.json({ models: [{ id: "gpt-5.6-sol" }, { id: " " }] })
+            : name === "third.json"
+              ? Response.json({ models: [] })
+              : Response.json({}, { status: 404 }),
+      });
+      const api = yield* test.api;
+      const result = yield* api.readAccounts(config);
+      expect(result.map((account) => account.models)).toEqual([["gpt-5.6-sol"], undefined, []]);
+      expect(result[1]?.usageLimits.windows).toHaveLength(1);
+    }),
+  );
+
   it.effect("resolves a missing usage plan from current, then legacy, token plans", () =>
     Effect.gen(function* () {
       const test = fixture({
@@ -330,7 +358,10 @@ describe("CLIProxyAPI built-in management API", () => {
       });
       const api = yield* test.api;
       const result = yield* api.readAccounts(config);
-      expect(result[0]?.usageLimits.unavailable?.reason).toBe("probeFailed");
+      expect(result[0]?.usageLimits.unavailable).toEqual({
+        reason: "probeFailed",
+        message: "The provider refused the hub request (HTTP 401).",
+      });
       expect(result[1]?.usageLimits.windows[0]?.usedPercent).toBe(12);
       expect(encodeJson(result)).not.toContain("do-not-publish");
     }),
@@ -430,6 +461,88 @@ describe("CLIProxyAPI built-in management API", () => {
       });
       const result = yield* (yield* test.api).readAccounts(config);
       expect(result[0]?.usageLimits.windows.map((window) => window.id)).toEqual(["five_hour"]);
+    }),
+  );
+
+  it.effect("keeps a Claude account whose window reports no utilization", () =>
+    Effect.gen(function* () {
+      const test = fixture({
+        accounts: [{ ...accounts[0]!, provider: "claude" }],
+        upstream: () => ({
+          status: 200,
+          body: {
+            five_hour: { utilization: null, resets_at: null },
+            seven_day: { utilization: 50, resets_at: "2099-01-01T00:00:00Z" },
+          },
+        }),
+      });
+      const result = yield* (yield* test.api).readAccounts(config);
+      expect(result[0]?.usageLimits.unavailable).toBeUndefined();
+      expect(
+        result[0]?.usageLimits.windows.map((window) => [window.id, window.usedPercent]),
+      ).toEqual([["seven_day", 50]]);
+    }),
+  );
+
+  it.effect("reads an xAI account as Grok with Grok CLI headers", () =>
+    Effect.gen(function* () {
+      const test = fixture({
+        accounts: [{ id: "xai.json", auth_index: "x", provider: "xai", email: "x@example.com" }],
+        upstream: () => ({
+          status: 200,
+          body: {
+            config: {
+              creditUsagePercent: 40,
+              currentPeriod: { type: "USAGE_PERIOD_TYPE_WEEKLY", end: "2099-01-01T00:00:00Z" },
+            },
+          },
+        }),
+      });
+      const [account] = yield* (yield* test.api).readAccounts(config);
+      expect(account).toMatchObject({ driver: "grok", email: "x@example.com" });
+      expect(account?.usageLimits.windows).toMatchObject([
+        { id: "subscription", kind: "weekly", usedPercent: 40 },
+      ]);
+      const call = test.requests.find((request) => request.body?.url)?.body;
+      expect(call?.method).toBe("GET");
+      expect(call?.url).toBe("https://cli-chat-proxy.grok.com/v1/billing?format=credits");
+      expect(call?.header).toMatchObject({
+        "x-xai-token-auth": "xai-grok-cli",
+        "x-grok-client-version": expect.any(String),
+        "User-Agent": expect.stringMatching(/^grok-cli\//),
+      });
+    }),
+  );
+
+  it.effect.each([
+    { name: "a refused xAI call", provider: "xai", status: 403, body: { error: "denied" } },
+    { name: "a malformed xAI answer", provider: "xai", status: 200, body: { config: "x" } },
+  ])("reports $name as unreadable", ({ provider, status, body }) =>
+    Effect.gen(function* () {
+      const test = fixture({
+        accounts: [{ id: `${provider}.json`, auth_index: "a", provider }],
+        upstream: () => ({ status, body }),
+      });
+      const [account] = yield* (yield* test.api).readAccounts(config);
+      expect(account?.usageLimits.unavailable?.reason).toBe("probeFailed");
+    }),
+  );
+
+  it.effect("skips accounts of providers the hub table does not know", () =>
+    Effect.gen(function* () {
+      const test = fixture({
+        accounts: [
+          { id: "kiro.json", auth_index: "k", provider: "kiro", email: "k@example.com" },
+          // Antigravity only allows ACP clients, so its internal quota API is never called.
+          { id: "antigravity.json", auth_index: "g", provider: "antigravity", project_id: "p" },
+          { ...accounts[0]!, provider: "claude" },
+        ],
+        upstream: () => ({ status: 200, body: { five_hour: { utilization: 1, resets_at: null } } }),
+      });
+      const result = yield* (yield* test.api).readAccounts(config);
+      expect(result.map((account) => account.driver)).toEqual(["claudeAgent"]);
+      expect(test.requests.map((request) => request.body?.auth_index)).not.toContain("k");
+      expect(test.requests.map((request) => request.body?.auth_index)).not.toContain("g");
     }),
   );
 

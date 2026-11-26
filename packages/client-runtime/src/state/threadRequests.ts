@@ -7,6 +7,7 @@ import type {
   OrchestrationV2UserInputQuestion,
   ProviderApprovalFullAccessOverride,
   ProviderApprovalOption,
+  ProviderApprovalPushHooks,
   ProviderApprovalDecision,
   ProviderRequestKind,
   RuntimeRequestId,
@@ -18,6 +19,8 @@ import type { EnvironmentThreadShell } from "./models.ts";
 import * as DateTime from "effect/DateTime";
 import type { AtomCommandResult } from "./runtime.ts";
 import type { ThreadStructure, ThreadStructureVisibleTurnItem } from "./models.ts";
+import { mFallback, msg } from "gt-i18n";
+import type { MFunctionType } from "gt-i18n/types";
 
 export type ApprovalResponder = (
   requestId: RuntimeRequestId,
@@ -57,19 +60,57 @@ export interface ThreadPendingApproval {
   readonly reason?: string;
   readonly fullAccessOverride?: ProviderApprovalFullAccessOverride;
   readonly appName?: string;
+  /** Set when T3 Code itself asks to run a repository's push hooks; `detail` is the same in one sentence. */
+  readonly pushHooks?: ProviderApprovalPushHooks;
   readonly options?: ReadonlyArray<ProviderApprovalOption>;
   readonly responseCapability: "live" | "not_resumable";
   readonly supportsFeedback?: boolean;
 }
 
-export const FULL_ACCESS_OVERRIDE_QUESTION = "Why am I being asked this?";
+export const PUSH_HOOKS_APPROVAL_LABEL = msg("Push hooks approval");
+export const PUSH_HOOKS_APPROVAL_QUESTION = msg("Run this repository's push hooks?");
+
+export interface ApprovalDetailRow {
+  readonly label: string;
+  /** Plain text ahead of the code: a configured hook's name. */
+  readonly name?: string;
+  /** A branch, file path or command. */
+  readonly code: string;
+}
+
+/** What a push hooks approval names: the branch, then each hook the push would run. */
+export function pushHooksApprovalRows(
+  pushHooks: ProviderApprovalPushHooks,
+  resolve: MFunctionType = mFallback,
+): ReadonlyArray<ApprovalDetailRow> {
+  return [
+    { label: resolve(msg("Branch", { $context: "field label" })), code: pushHooks.branch },
+    ...pushHooks.files.map((file) => ({ label: resolve(msg("Hook file")), code: file })),
+    ...pushHooks.commands.map(({ name, command }) => ({
+      label: resolve(msg("Configured hook", { $context: "a hook Git's configuration defines" })),
+      name,
+      code: command,
+    })),
+  ];
+}
+
+export const FULL_ACCESS_OVERRIDE_QUESTION = msg("Why am I being asked this?");
 
 export function fullAccessOverrideExplanation(
   override: ProviderApprovalFullAccessOverride,
+  resolve: MFunctionType = mFallback,
 ): string {
   return override === "ask_rule"
-    ? "Full access skips approvals, but an ask rule in the agent's own settings matches this action, so it still asks. Remove or narrow that rule to stop these prompts."
-    : "Full access skips approvals, but the agent still stops for a few safety checks of its own that no setting can skip, such as a delete whose path it can't verify. T3 Code can't turn these off, so check the request and approve it if it's what you expect.";
+    ? resolve(
+        msg(
+          "Full access skips approvals, but an ask rule in the agent's own settings matches this action, so it still asks. Remove or narrow that rule to stop these prompts.",
+        ),
+      )
+    : resolve(
+        msg(
+          "Full access skips approvals, but the agent still stops for a few safety checks of its own that no setting can skip, such as a delete whose path it can't verify. T3 Code can't turn these off, so check the request and approve it if it's what you expect.",
+        ),
+      );
 }
 
 export interface ThreadUserInputQuestion extends Omit<
@@ -168,6 +209,8 @@ export interface ThreadRequestsResolved {
   readonly threadId: ThreadId;
   /** Every request the thread still waits on; drafts for any other request are stale. */
   readonly pendingRequestIds: ReadonlyArray<RuntimeRequestId>;
+  /** Requests that closed without an answer (cancelled or expired), so typed drafts were never sent. */
+  readonly unansweredRequestIds: ReadonlyArray<RuntimeRequestId>;
 }
 
 const threadRequestsResolvedListeners = new Set<(event: ThreadRequestsResolved) => void>();
@@ -198,8 +241,8 @@ function notifyThreadRequestsResolved(event: ThreadRequestsResolved): void {
 }
 
 /**
- * Tracks one thread's announced pending requests. Feed it the pending ids of
- * each authoritative projection; it notifies on the first one and whenever an
+ * Tracks one thread's announced pending requests. Feed it the runtime requests
+ * of each authoritative projection; it notifies on the first one and whenever an
  * announced request is no longer pending. New requests alone stay quiet.
  */
 export function makeThreadRequestsResolvedAnnouncer(
@@ -207,20 +250,28 @@ export function makeThreadRequestsResolvedAnnouncer(
   threadId: ThreadId,
 ) {
   let announced: ReadonlySet<RuntimeRequestId> | null = null;
-  return (pendingRequestIds: ReadonlyArray<RuntimeRequestId>) => {
+  return (
+    runtimeRequests: ReadonlyArray<
+      Pick<OrchestrationV2ThreadProjection["runtimeRequests"][number], "id" | "status">
+    >,
+  ) => {
+    const pendingRequestIds = runtimeRequests.flatMap((request) =>
+      request.status === "pending" ? [request.id] : [],
+    );
     const pending = new Set(pendingRequestIds);
     const resolvedSome = announced === null || [...announced].some((id) => !pending.has(id));
     announced = pending;
-    if (resolvedSome) notifyThreadRequestsResolved({ environmentId, threadId, pendingRequestIds });
+    if (!resolvedSome) return;
+    const unansweredRequestIds = runtimeRequests.flatMap((request) =>
+      request.status === "cancelled" || request.status === "expired" ? [request.id] : [],
+    );
+    notifyThreadRequestsResolved({
+      environmentId,
+      threadId,
+      pendingRequestIds,
+      unansweredRequestIds,
+    });
   };
-}
-
-export function pendingRuntimeRequestIds(
-  projection: Pick<OrchestrationV2ThreadProjection, "runtimeRequests">,
-): RuntimeRequestId[] {
-  return projection.runtimeRequests.flatMap((request) =>
-    request.status === "pending" ? [request.id] : [],
-  );
 }
 
 export function derivePendingThreadRequests(
@@ -268,6 +319,7 @@ export function derivePendingThreadRequests(
         ? { fullAccessOverride: item.fullAccessOverride }
         : {}),
       ...(item?.type === "approval_request" && item.appName ? { appName: item.appName } : {}),
+      ...(item?.type === "approval_request" && item.pushHooks ? { pushHooks: item.pushHooks } : {}),
       ...(item?.type === "approval_request" && item.options !== undefined
         ? { options: item.options }
         : {}),

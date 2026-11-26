@@ -1,5 +1,6 @@
+import { sha256 } from "@noble/hashes/sha2";
+import { bytesToHex } from "@noble/hashes/utils";
 import {
-  DEFAULT_CLIENT_SETTINGS,
   EnvironmentId,
   ProjectId,
   SourceControlProviderKind,
@@ -13,10 +14,13 @@ import { page, userEvent } from "vite-plus/test/browser";
 import type { ComponentProps } from "react";
 
 import "~/index.css";
+import { __setClientSettingsForTests, getClientSettings } from "../../hooks/useSettings";
+import { setAppearanceMode } from "../../hooks/useTheme";
+import { DEFAULT_CLIENT_SETTINGS } from "@t3tools/contracts/settings";
 
-const { diffAtom, pagedDiffAtom } = await vi.hoisted(async () => {
+const diffAtoms = await vi.hoisted(async () => {
   const { AsyncResult, Atom } = await import("effect/reactivity");
-  const filePatch = (path: string) =>
+  const filePatch = (path: string, addition = "after()") =>
     [
       `diff --git a/${path} b/${path}`,
       "index 1111111..2222222 100644",
@@ -24,7 +28,7 @@ const { diffAtom, pagedDiffAtom } = await vi.hoisted(async () => {
       `+++ b/${path}`,
       "@@ -1,6 +1,6 @@",
       "-before()",
-      "+after()",
+      `+${addition}`,
       " one()",
       " two()",
       " three()",
@@ -37,39 +41,110 @@ const { diffAtom, pagedDiffAtom } = await vi.hoisted(async () => {
     truncated: false,
     nextCursor: null,
   };
-  const pages: Record<string, PullRequestDiffResult> = {
+  const sbsPages: Record<string, PullRequestDiffResult> = {
     first: {
       patch: Array.from({ length: 40 }, (_, index) => filePatch(`early-${index}.ts`)).join(""),
       truncated: true,
       nextCursor: "page-2",
     },
-    lone: { patch: filePatch("lone.ts"), truncated: true, nextCursor: "page-2" },
+    lone: { patch: filePatch("alone.ts"), truncated: true, nextCursor: "page-2" },
     "page-2": { patch: filePatch("late.ts"), truncated: false, nextCursor: null },
   };
+  const pagedDiffAtom = Atom.family((shortPages: boolean) => {
+    const pages: Record<string, PullRequestDiffResult> = {
+      first: {
+        patch: Array.from({ length: shortPages ? 2 : 40 }, (_, index) =>
+          filePatch(index === 1 ? "early-1.test.ts" : `early-${index}.ts`),
+        ).join(""),
+        truncated: true,
+        nextCursor: "page-2",
+      },
+      "page-2": {
+        patch: (shortPages ? filePatch("late.ts") : "") + filePatch("late.test.ts"),
+        truncated: false,
+        nextCursor: null,
+      },
+    };
+    return Atom.family((cursor: string) => Atom.make(AsyncResult.success(pages[cursor]!)));
+  });
   return {
     // An environment query whose refetch returns equal content hands back the previous value
     // itself, so a refresh publishes a new result around the very same page.
     diffAtom: Atom.make(() => AsyncResult.success(firstPage)),
-    pagedDiffAtom: Atom.family((cursor: string) =>
-      Atom.make(() => AsyncResult.success(pages[cursor]!)),
+    onlyTestFilesDiffAtom: Atom.make(
+      AsyncResult.success({ ...firstPage, patch: filePatch("a.test.ts") }),
+    ),
+    testFileDiffAtom: Atom.make(() =>
+      AsyncResult.success({
+        patch:
+          filePatch("early-0.ts") +
+          filePatch("early-1.test.ts", "testOnly()") +
+          filePatch("early-2.generated.ts") +
+          (mocks.refreshed ? filePatch("early-3.ts") : ""),
+        truncated: false,
+        nextCursor: null,
+      }),
+    ),
+    pagedDiffAtom,
+    sbsPagedDiffAtom: Atom.family((cursor: string) =>
+      Atom.make(() => AsyncResult.success(sbsPages[cursor]!)),
     ),
   };
 });
+const { diffAtom, onlyTestFilesDiffAtom, testFileDiffAtom, pagedDiffAtom, sbsPagedDiffAtom } =
+  diffAtoms;
 
 const mocks = vi.hoisted(() => ({
   paged: false,
-  firstPage: "first",
+  shortPages: false,
+  sbsPages: null as "first" | "lone" | null,
+  withTestFile: false,
+  onlyTestFiles: false,
+  refreshed: false,
   diffCommits: [] as Array<string | undefined>,
   diffCursors: [] as Array<string | undefined>,
+  viewedPaths: null as ReadonlySet<string> | null,
+  viewedListeners: new Set<() => void>(),
   fileContents: vi.fn(),
   updateClientSettings: vi.fn(),
 }));
+
+function deliverViewedPaths(paths: ReadonlySet<string> | null) {
+  mocks.viewedPaths = paths;
+  for (const listener of mocks.viewedListeners) listener();
+}
 
 vi.mock(import("~/state/use-atom-command"), async (original) => ({
   ...(await original()),
   useAtomCommand: ((command: unknown) =>
     command === "diffFileContents" ? mocks.fileContents : vi.fn()) as never,
 }));
+vi.mock(import("./usePullRequestFilesViewed"), async () => {
+  const { useSyncExternalStore } = await import("react");
+  const subscribe = (listener: () => void) => {
+    mocks.viewedListeners.add(listener);
+    return () => mocks.viewedListeners.delete(listener);
+  };
+  return {
+    usePullRequestFilesViewed: () => {
+      const viewedPaths = useSyncExternalStore(subscribe, () => mocks.viewedPaths);
+      return {
+        enabled: viewedPaths !== null,
+        isViewed: (path: string) => viewedPaths?.has(path) === true,
+        isStale: () => false,
+        setViewed: (path: string, viewed: boolean) => {
+          const next = new Set(mocks.viewedPaths);
+          if (viewed) next.add(path);
+          else next.delete(path);
+          deliverViewedPaths(next);
+        },
+        truncated: false,
+        error: null,
+        refresh: () => {},
+      };
+    },
+  };
+});
 vi.mock(import("~/state/pullRequests"), async (original) => {
   const actual = await original();
   return {
@@ -80,7 +155,10 @@ vi.mock(import("~/state/pullRequests"), async (original) => {
       diff: (({ input }: { input: { cursor?: string; commit?: string } }) => {
         mocks.diffCommits.push(input.commit);
         mocks.diffCursors.push(input.cursor);
-        return mocks.paged ? pagedDiffAtom(input.cursor ?? mocks.firstPage) : diffAtom;
+        if (mocks.sbsPages !== null) return sbsPagedDiffAtom(input.cursor ?? mocks.sbsPages);
+        if (mocks.paged) return pagedDiffAtom(mocks.shortPages)(input.cursor ?? "first");
+        if (mocks.onlyTestFiles) return onlyTestFilesDiffAtom;
+        return mocks.withTestFile ? testFileDiffAtom : diffAtom;
       }) as never,
     },
   };
@@ -104,9 +182,10 @@ vi.mock(import("../diffs/DiffFileTree"), () => ({
   )) as never,
 }));
 
-import { __setClientSettingsForTests, getClientSettings } from "~/hooks/useSettings";
+import { WorkerPoolManager } from "@pierre/diffs/worker";
+import { createWorkspaceFocusController, workspaceAreaProps } from "~/lib/workspaceFocus";
 import type { DiffFileTree } from "../diffs/DiffFileTree";
-import { render, type Screen } from "../../../test/render";
+import { render, stubGlobal, type Screen } from "../../../test/render";
 import PullRequestCodeTab from "./PullRequestCodeTab";
 import { pullRequestReviewKey, usePullRequestReviewStore } from "./pullRequestReviewStore";
 
@@ -177,11 +256,19 @@ const OLD_CONTENTS = [
 ].join("\n");
 const NEW_CONTENTS = OLD_CONTENTS.replace("before()", "after()");
 
-function setup({ paged, firstPage = "first" }: { paged: boolean; firstPage?: "first" | "lone" }) {
+function setup({ paged, sbsPages = null }: { paged: boolean; sbsPages?: "first" | "lone" | null }) {
+  window.localStorage.removeItem("t3code.diffHideTestFiles");
+  __setClientSettingsForTests(DEFAULT_CLIENT_SETTINGS);
   mocks.paged = paged;
-  mocks.firstPage = firstPage;
+  mocks.shortPages = false;
+  mocks.sbsPages = sbsPages;
+  mocks.withTestFile = false;
+  mocks.onlyTestFiles = false;
+  mocks.refreshed = false;
   mocks.diffCommits = [];
   mocks.diffCursors = [];
+  mocks.viewedPaths = null;
+  mocks.viewedListeners.clear();
   mocks.updateClientSettings.mockReset();
   mocks.fileContents.mockReset();
   mocks.fileContents.mockResolvedValue({
@@ -193,6 +280,8 @@ function setup({ paged, firstPage = "first" }: { paged: boolean; firstPage?: "fi
 const tab = (
   refreshToken: number,
   revealRequest: { readonly path: string; readonly nonce: number } | null = null,
+  revealUrl?: string,
+  onRevealSettled?: (url: string) => void,
 ) => (
   <PullRequestCodeTab
     scrollerRef={() => {}}
@@ -204,6 +293,8 @@ const tab = (
     onRefresh={() => {}}
     refreshToken={refreshToken}
     revealRequest={revealRequest}
+    revealUrl={revealUrl}
+    onRevealSettled={onRevealSettled}
   />
 );
 
@@ -220,6 +311,89 @@ it("keeps the diff after a refresh that brings back the same page", async () => 
     .element(screen.getByText("This pull request has no file changes."))
     .not.toBeInTheDocument();
   await expect.element(screen.getByText("1 file", { exact: true })).toBeVisible();
+});
+
+it("can show test files again from the narrow Code tab empty state", async () => {
+  setup({ paged: false });
+  mocks.onlyTestFiles = true;
+  const container = document.createElement("div");
+  container.className = "h-[700px] w-[429px]";
+  await using screen = await render(tab(0), { container });
+  await screen.getByRole("button", { name: "Hide test files", exact: true }).click();
+
+  await expect.element(screen.getByText("1 test file hidden", { exact: true })).toBeVisible();
+  await screen.getByRole("button", { name: "Show test files", exact: true }).click();
+  await expect.element(screen.getByText("a.test.ts", { exact: true }).first()).toBeVisible();
+});
+
+it("restores saved Viewed folds, follows cleared marks, and allows explicit expansion", async () => {
+  setup({ paged: false });
+  __setClientSettingsForTests({ ...DEFAULT_CLIENT_SETTINGS, diffFilesCollapsed: false });
+  using _preferences = {
+    [Symbol.dispose]() {
+      __setClientSettingsForTests(DEFAULT_CLIENT_SETTINGS);
+    },
+  };
+  mocks.viewedPaths = new Set(["a.ts"]);
+  const container = document.createElement("div");
+  container.className = "flex h-[700px] w-[900px]";
+  await using screen = await render(tab(0), { container });
+  await expect.element(screen.getByRole("checkbox", { name: "Viewed" })).toBeChecked();
+  await expect
+    .element(screen.getByRole("button", { name: "Expand diff", exact: true }))
+    .toHaveAttribute("aria-expanded", "false");
+
+  await screen.getByRole("button", { name: "Expand diff", exact: true }).click();
+  await expect.element(screen.getByText("three()", { exact: true })).toBeVisible();
+  screen.getByRole("checkbox", { name: "Viewed" }).element().focus();
+  await userEvent.keyboard(" ");
+  await expect.element(screen.getByRole("checkbox", { name: "Viewed" })).not.toBeChecked();
+  await expect.element(screen.getByText("three()", { exact: true })).toBeVisible();
+  screen.getByRole("checkbox", { name: "Viewed" }).element().focus();
+  await userEvent.keyboard(" ");
+  await expect
+    .element(screen.getByRole("button", { name: "Expand diff", exact: true }))
+    .toHaveAttribute("aria-expanded", "false");
+
+  deliverViewedPaths(new Set());
+  await expect.element(screen.getByRole("checkbox", { name: "Viewed" })).not.toBeChecked();
+  await expect.element(screen.getByText("three()", { exact: true })).toBeVisible();
+  deliverViewedPaths(new Set(["a.ts"]));
+  await expect
+    .element(screen.getByRole("button", { name: "Expand diff", exact: true }))
+    .toHaveAttribute("aria-expanded", "false");
+  await screen.getByRole("button", { name: "Expand all files", exact: true }).click();
+  await expect.element(screen.getByText("three()", { exact: true })).toBeVisible();
+
+  await screen.rerender(<div />);
+  await screen.rerender(tab(1));
+  await expect
+    .element(screen.getByRole("button", { name: "Expand diff", exact: true }))
+    .toHaveAttribute("aria-expanded", "false");
+});
+
+// regression: #13279 a Viewed answer that lands after a link reveals a file must not fold it
+it("keeps a revealed file open when its Viewed mark loads afterwards", async () => {
+  setup({ paged: false });
+  __setClientSettingsForTests({ ...DEFAULT_CLIENT_SETTINGS, diffFilesCollapsed: false });
+  using _preferences = {
+    [Symbol.dispose]() {
+      __setClientSettingsForTests(DEFAULT_CLIENT_SETTINGS);
+    },
+  };
+  mocks.viewedPaths = new Set();
+  const container = document.createElement("div");
+  container.className = "flex h-[700px] w-[900px]";
+  await using screen = await render(tab(0, { path: "a.ts", nonce: 1 }), { container });
+  await expect.element(screen.getByText("three()", { exact: true })).toBeVisible();
+
+  deliverViewedPaths(new Set(["a.ts"]));
+  await expect.element(screen.getByRole("checkbox", { name: "Viewed" })).toBeChecked();
+
+  await expect
+    .element(screen.getByRole("button", { name: "Collapse diff" }))
+    .toHaveAttribute("aria-expanded", "true");
+  await expect.element(screen.getByText("three()", { exact: true })).toBeVisible();
 });
 
 function pagedContainer() {
@@ -253,13 +427,172 @@ it("scrolls to a file asked for as the tab opens", async () => {
 
 it("pages forward to a file asked for that is not loaded yet, then scrolls to it", async () => {
   setup({ paged: true });
+  __setClientSettingsForTests({ ...DEFAULT_CLIENT_SETTINGS, diffFilesCollapsed: true });
+  using _preferences = {
+    [Symbol.dispose]() {
+      window.localStorage.removeItem("t3code.diffHideTestFiles");
+      __setClientSettingsForTests(DEFAULT_CLIENT_SETTINGS);
+    },
+  };
   const container = pagedContainer();
   await using screen = await render(tab(0), { container });
   await expect.element(screen.getByText("early-0.ts", { exact: true }).first()).toBeVisible();
+  await screen.getByRole("button", { name: "Hide test files" }).click();
 
-  await screen.rerender(tab(0, { path: "late.ts", nonce: 1 }));
+  const url = `${detail.url}/files#diff-${bytesToHex(sha256(new TextEncoder().encode("late.test.ts")))}R4-R5`;
+  const settled = vi.fn();
+  await screen.rerender(tab(0, null, url, settled));
 
-  await expectFileHeaderShown(screen, container, "late.ts");
+  await expectFileHeaderShown(screen, container, "late.test.ts");
+  await expect.element(screen.getByText("three()", { exact: true })).toBeVisible();
+  await vi.waitFor(() => expect(settled).toHaveBeenCalledWith(url));
+  // A settled link keeps its test file past the filter, and a later click reveals it again.
+  await screen.rerender(tab(0, { path: "early-0.ts", nonce: 1 }));
+  await expectFileHeaderShown(screen, container, "early-0.ts");
+  await screen.rerender(tab(0, { path: "early-0.ts", nonce: 1 }, url, settled));
+  await expectFileHeaderShown(screen, container, "late.test.ts");
+});
+
+it("keeps a linked test file expanded when a refresh changes the rest of the diff", async () => {
+  setup({ paged: false });
+  mocks.withTestFile = true;
+  __setClientSettingsForTests({ ...DEFAULT_CLIENT_SETTINGS, diffFilesCollapsed: true });
+  using _preferences = {
+    [Symbol.dispose]() {
+      window.localStorage.removeItem("t3code.diffHideTestFiles");
+      __setClientSettingsForTests(DEFAULT_CLIENT_SETTINGS);
+    },
+  };
+  const container = document.createElement("div");
+  container.className = "flex h-[700px] w-[900px]";
+  await using screen = await render(tab(0), { container });
+  await screen.getByRole("button", { name: "Hide test files" }).click();
+
+  const path = "early-1.test.ts";
+  const url = `${detail.url}/files#diff-${bytesToHex(sha256(new TextEncoder().encode(path)))}`;
+  const settled = vi.fn();
+  await screen.rerender(tab(0, null, url, settled));
+  await vi.waitFor(() => expect(settled).toHaveBeenCalledWith(url));
+  await screen.rerender(tab(0));
+  const testLine = screen.getByText("testOnly()", { exact: true });
+  await expect.element(testLine).toBeVisible();
+
+  mocks.refreshed = true;
+  await screen.rerender(tab(1));
+  await expect.element(screen.getByText("4 files", { exact: true })).toBeVisible();
+  await expect.element(testLine).toBeVisible();
+});
+
+// regression: #42199 an agent's push re-keyed every file and dropped the comment being typed
+it("keeps an unfinished inline comment when a background refresh changes another file", async () => {
+  setup({ paged: false });
+  mocks.withTestFile = true;
+  __setClientSettingsForTests({ ...DEFAULT_CLIENT_SETTINGS, diffFilesCollapsed: false });
+  using _preferences = {
+    [Symbol.dispose]() {
+      __setClientSettingsForTests(DEFAULT_CLIENT_SETTINGS);
+    },
+  };
+  const reviewable = {
+    ...detail,
+    capabilities: {
+      ...detail.capabilities,
+      review: { ...detail.capabilities.review, inlineComment: true },
+    },
+    viewerPermissions: { ...detail.viewerPermissions, comment: true },
+  };
+  const reviewTab = (backgroundRefreshToken: number) => (
+    <PullRequestCodeTab
+      scrollerRef={() => {}}
+      environmentId={EnvironmentId.make("environment")}
+      reference={reviewable}
+      detail={reviewable}
+      selectedCommitOid={null}
+      onSelectedCommitChange={() => {}}
+      onRefresh={() => {}}
+      backgroundRefreshToken={backgroundRefreshToken}
+    />
+  );
+  const container = document.createElement("div");
+  container.className = "flex h-[700px] w-[900px]";
+  await using screen = await render(reviewTab(0), { container });
+  const header = screen.getByText("early-0.ts", { exact: true }).first();
+  await expect.element(header).toBeVisible();
+  const root = header.element().getRootNode() as ShadowRoot;
+  await userEvent.click(root.querySelector<HTMLElement>('[data-column-number="1"]')!);
+  const input = () => screen.getByRole("textbox", { name: "Comment on lines early-0.ts:1" });
+  await input().fill("Unsent review note");
+
+  mocks.refreshed = true;
+  await screen.rerender(reviewTab(1));
+
+  await expect.element(screen.getByText("4 files", { exact: true })).toBeVisible();
+  await expect.element(input()).toHaveValue("Unsent review note");
+});
+
+// Two short pages of a source and a test file each; the next page loads only through the file tree.
+async function renderShortPages(stack: AsyncDisposableStack) {
+  setup({ paged: true });
+  mocks.shortPages = true;
+  __setClientSettingsForTests({ ...DEFAULT_CLIENT_SETTINGS, diffFilesCollapsed: false });
+  stack.defer(() => {
+    window.localStorage.removeItem("t3code.diffHideTestFiles");
+    window.localStorage.removeItem("t3code.pullRequestFileTreeOpen");
+    __setClientSettingsForTests(DEFAULT_CLIENT_SETTINGS);
+  });
+  stack.use(
+    stubGlobal(
+      "IntersectionObserver",
+      class extends IntersectionObserver {
+        constructor(callback: IntersectionObserverCallback, options?: IntersectionObserverInit) {
+          super(options?.rootMargin === "240px" ? () => {} : callback, options);
+        }
+      },
+    ),
+  );
+  const container = document.createElement("div");
+  container.className = "h-[1000px] w-[900px]";
+  const screen = stack.use(await render(tab(0), { container }));
+  const loadNextPage = async () => {
+    await screen.getByRole("button", { name: "Show file tree", exact: true }).click();
+    const loadMore = screen.getByRole("button", { name: "Load more files", exact: true });
+    await loadMore.click();
+    await expect.element(loadMore).not.toBeInTheDocument();
+    await screen.getByRole("button", { name: "Hide file tree", exact: true }).click();
+  };
+  // The later page sits at the bottom of the list, which grows as expanded files render.
+  const diffToggle = async (path: string) => {
+    const scroller = container.querySelector(".diff-render-surface")!;
+    const header = await vi.waitFor(() => {
+      scroller.scrollTop = scroller.scrollHeight;
+      return screen.getByText(path, { exact: true }).element();
+    });
+    const { host } = header.getRootNode() as ShadowRoot;
+    return page.elementLocator(host).getByRole("button", { name: /^(Expand|Collapse) diff$/ });
+  };
+  const filter = screen.getByRole("button", { name: "Hide test files" });
+  return { screen, loadNextPage, diffToggle, filter };
+}
+
+it("keeps a later test file folded by hand through a refresh and bulk toggles while hidden", async () => {
+  await using stack = new AsyncDisposableStack();
+  const { screen, loadNextPage, diffToggle, filter } = await renderShortPages(stack);
+  await loadNextPage();
+  const lateTest = await diffToggle("late.test.ts");
+  await lateTest.click();
+  await expect.element(lateTest).toHaveAttribute("aria-expanded", "false");
+  await filter.click();
+
+  // A refresh drops the loaded later page, so the bulk toggles below run without it.
+  await screen.rerender(tab(1));
+  await expect.element(screen.getByText("1 test file hidden", { exact: true })).toBeVisible();
+  await screen.getByRole("button", { name: "Collapse all files", exact: true }).click();
+  await screen.getByRole("button", { name: "Expand all files", exact: true }).click();
+  await loadNextPage();
+  await filter.click();
+
+  await expect.element(screen.getByText("4 files", { exact: true })).toBeVisible();
+  await expect.element(await diffToggle("late.test.ts")).toHaveAttribute("aria-expanded", "false");
 });
 
 it("never requests the diff of a selected commit the pull request no longer has", async () => {
@@ -412,7 +745,7 @@ const commentingDetail: PullRequestDetailView = {
 };
 
 it("shows the first file side by side when the setting is on and the area is wide", async () => {
-  setup({ paged: true });
+  setup({ paged: true, sbsPages: "first" });
   using _settings = withSettings({ diffSideBySide: true });
   await using screen = await render(sbsTab(), { container: areaOf(1000) });
 
@@ -426,7 +759,7 @@ it("shows the first file side by side when the setting is on and the area is wid
 });
 
 it("reads the shown file once while the tab renders again", async () => {
-  setup({ paged: true });
+  setup({ paged: true, sbsPages: "first" });
   using _settings = withSettings({ diffSideBySide: true });
   await using screen = await render(sbsTab(), { container: areaOf(1000) });
   await vi.waitFor(() => expect(sbsRow(screen, "additions", 1)?.textContent).toContain("after()"));
@@ -613,7 +946,7 @@ it("starts a comment from lines picked in the gutter, with its box open in the c
 });
 
 it("keeps a comment's words while side by side steps to another file and back", async () => {
-  setup({ paged: true });
+  setup({ paged: true, sbsPages: "first" });
   using _settings = withSettings({ diffSideBySide: true });
   using _storage = withStorage({ [COLLAPSE_UNCHANGED_KEY]: "false" });
   await using screen = await render(sbsTab({ shown: commentingDetail }), {
@@ -688,7 +1021,7 @@ it("starts no comment when a commit is selected", async () => {
 });
 
 it("selects the file a click in the file tree names, and pages forward from the last one loaded", async () => {
-  setup({ paged: true });
+  setup({ paged: true, sbsPages: "first" });
   using _settings = withSettings({ diffSideBySide: true });
   using _storage = withStorage({ [FILE_TREE_KEY]: "true" });
   await using screen = await render(sbsTab(), { container: areaOf(1200) });
@@ -710,10 +1043,10 @@ it("selects the file a click in the file tree names, and pages forward from the 
 });
 
 it("pages forward in side by side when the one file shown is the last loaded, with the tree closed", async () => {
-  setup({ paged: true, firstPage: "lone" });
+  setup({ paged: true, sbsPages: "lone" });
   using _settings = withSettings({ diffSideBySide: true });
   await using screen = await render(sbsTab(), { container: areaOf(1000) });
-  await vi.waitFor(() => expect(titleOf(screen)).toBe("lone.ts"));
+  await vi.waitFor(() => expect(titleOf(screen)).toBe("alone.ts"));
 
   await expect.element(screen.getByRole("button", { name: "Next file" })).toBeEnabled();
   expect(mocks.diffCursors).toContain("page-2");
@@ -722,7 +1055,7 @@ it("pages forward in side by side when the one file shown is the last loaded, wi
 });
 
 it("selects the file a reveal request names, paging forward to one not loaded yet", async () => {
-  setup({ paged: true });
+  setup({ paged: true, sbsPages: "first" });
   using _settings = withSettings({ diffSideBySide: true });
   await using screen = await render(sbsTab(), { container: areaOf(1000) });
   await vi.waitFor(() => expect(titleOf(screen)).toBe("early-0.ts"));
@@ -749,4 +1082,252 @@ it("keeps the wrap item out of the menu in side by side", async () => {
   await expect
     .element(page.getByRole("menuitemcheckbox", { name: "Wrap lines" }))
     .not.toBeInTheDocument();
+});
+
+it("answers a commit's diff link only once that commit's diff is shown", async () => {
+  setup({ paged: false });
+  const container = document.createElement("div");
+  container.className = "flex h-[700px] w-[900px]";
+  const oid = "c".repeat(40);
+  const withCommit = {
+    ...detail,
+    commits: [{ oid, messageHeadline: "Linked commit", committedDate: "2026-09-01T00:00:00Z" }],
+  };
+  const url = `${detail.url}/commits/${oid}#diff-${bytesToHex(sha256(new TextEncoder().encode("a.ts")))}R2`;
+  const settled = vi.fn();
+  const scoped = (selectedCommitOid: string | null, revealUrl?: string) => (
+    <PullRequestCodeTab
+      scrollerRef={() => {}}
+      environmentId={EnvironmentId.make("environment")}
+      reference={detail}
+      detail={withCommit}
+      selectedCommitOid={selectedCommitOid}
+      onSelectedCommitChange={() => {}}
+      onRefresh={() => {}}
+      revealUrl={revealUrl}
+      onRevealSettled={settled}
+    />
+  );
+  await using screen = await render(scoped(null), { container });
+  await expect.element(screen.getByText("1 file", { exact: true })).toBeVisible();
+
+  // The panel selects the link's commit after this tab has already seen the link.
+  await screen.rerender(scoped(null, url));
+  expect(settled).not.toHaveBeenCalled();
+  await screen.rerender(scoped(oid, url));
+  await vi.waitFor(() => expect(settled).toHaveBeenCalledWith(url));
+});
+
+it("hides a resolved conversation behind avatars on its line until they are clicked", async () => {
+  setup({ paged: false });
+  __setClientSettingsForTests({ ...DEFAULT_CLIENT_SETTINGS, diffFilesCollapsed: false });
+  using _preferences = {
+    [Symbol.dispose]() {
+      __setClientSettingsForTests(DEFAULT_CLIENT_SETTINGS);
+    },
+  };
+  const container = document.createElement("div");
+  container.className = "flex h-[700px] w-[900px]";
+  const comment = {
+    author: { login: "reviewer", name: null, avatarUrl: null },
+    body: "Rename this.",
+    createdAt: "2026-09-01T00:00:00Z",
+    url: null,
+  };
+  const withThread = (isResolved: boolean, oldSideToo = false) => (
+    <PullRequestCodeTab
+      scrollerRef={() => {}}
+      environmentId={EnvironmentId.make("environment")}
+      reference={detail}
+      detail={{
+        ...detail,
+        capabilities: {
+          ...detail.capabilities,
+          review: { ...detail.capabilities.review, reply: true },
+        },
+        viewerPermissions: { ...detail.viewerPermissions, comment: true },
+        reviewThreads: [
+          {
+            id: "thread",
+            path: "a.ts",
+            line: 3,
+            side: "right",
+            isResolved,
+            isOutdated: false,
+            comments: [{ id: "comment", ...comment }],
+          },
+          ...(oldSideToo
+            ? [
+                {
+                  id: "old-side",
+                  path: "a.ts",
+                  line: 3,
+                  side: "left" as const,
+                  isResolved: true,
+                  isOutdated: false,
+                  comments: [{ id: "old-side-comment", ...comment }],
+                },
+              ]
+            : []),
+        ],
+      }}
+      selectedCommitOid={null}
+      onSelectedCommitChange={() => {}}
+      onRefresh={() => {}}
+    />
+  );
+  await using screen = await render(withThread(true), { container });
+  const marker = screen.getByRole("button", { name: "Resolved conversation", exact: true });
+  const card = (state: string) => screen.getByRole("button", { name: `${state} · 1 comment` });
+  const reply = () => screen.getByRole("textbox", { name: "Reply to this conversation" });
+
+  await expect.element(marker).toHaveAttribute("aria-expanded", "false");
+  await expect.element(card("Resolved")).not.toBeInTheDocument();
+
+  await marker.click();
+  await expect.element(marker).toHaveAttribute("aria-expanded", "true");
+  await expect.element(card("Resolved")).toHaveAttribute("aria-expanded", "true");
+  await screen.getByRole("button", { name: "Reply", exact: true }).click();
+  await reply().fill("Unsent");
+
+  // Hidden conversations stay mounted, so the unsent reply is still there.
+  await marker.click();
+  await expect.element(card("Resolved")).not.toBeInTheDocument();
+  await marker.click();
+  await expect.element(reply()).toHaveValue("Unsent");
+  await marker.click();
+
+  // Seen open and then resolved, it stays until the avatars are clicked.
+  await screen.rerender(withThread(false));
+  await expect.element(card("Open")).toBeVisible();
+  await screen.rerender(withThread(true));
+  await expect.element(card("Resolved")).toBeVisible();
+
+  // Stacked view draws a context row once, so both sides' conversations share the avatars.
+  await screen.rerender(withThread(true, true));
+  await expect
+    .element(screen.getByRole("button", { name: "2 resolved conversations" }))
+    .toBeVisible();
+});
+
+// regression: #37996
+it("keeps an unsent reply when the appearance switches between light and dark", async () => {
+  setup({ paged: false });
+  __setClientSettingsForTests({ ...DEFAULT_CLIENT_SETTINGS, diffFilesCollapsed: false });
+  setAppearanceMode("dark");
+  using _preferences = {
+    [Symbol.dispose]() {
+      __setClientSettingsForTests(DEFAULT_CLIENT_SETTINGS);
+      setAppearanceMode("system");
+    },
+  };
+  const container = document.createElement("div");
+  container.className = "flex h-[700px] w-[900px]";
+  await using screen = await render(
+    <PullRequestCodeTab
+      scrollerRef={() => {}}
+      environmentId={EnvironmentId.make("environment")}
+      reference={detail}
+      detail={{
+        ...detail,
+        capabilities: {
+          ...detail.capabilities,
+          review: { ...detail.capabilities.review, reply: true },
+        },
+        viewerPermissions: { ...detail.viewerPermissions, comment: true },
+        reviewThreads: [
+          {
+            id: "thread",
+            path: "a.ts",
+            line: 3,
+            side: "right",
+            isResolved: false,
+            isOutdated: false,
+            comments: [
+              {
+                id: "comment",
+                author: { login: "reviewer", name: null, avatarUrl: null },
+                body: "Rename this.",
+                createdAt: "2026-09-01T00:00:00Z",
+                url: null,
+              },
+            ],
+          },
+        ],
+      }}
+      selectedCommitOid={null}
+      onSelectedCommitChange={() => {}}
+      onRefresh={() => {}}
+    />,
+    { container },
+  );
+  const reply = () => screen.getByRole("textbox", { name: "Reply to this conversation" });
+  await screen.getByRole("button", { name: "Reply", exact: true }).click();
+  await reply().fill("Unsent");
+
+  setAppearanceMode("light");
+
+  await expect.element(reply()).toHaveValue("Unsent");
+});
+
+it("hands panel focus from the loading diff to the diff once the diff workers start", async () => {
+  setup({ paged: false });
+  let start = () => {};
+  const started = new Promise<void>((resolve) => {
+    start = resolve;
+  });
+  using isInitialized = vi
+    .spyOn(WorkerPoolManager.prototype, "isInitialized")
+    .mockReturnValue(false);
+  using initialize = vi.spyOn(WorkerPoolManager.prototype, "initialize").mockReturnValue(started);
+  const container = document.createElement("div");
+  container.className = "flex h-[700px] w-[900px]";
+  // A conversation off the diff puts a panel where the loading body was, which could reuse its node.
+  const withOrphan: PullRequestDetailView = {
+    ...detail,
+    reviewThreads: [
+      {
+        id: "thread",
+        path: "gone.ts",
+        line: 1,
+        side: "right",
+        isResolved: false,
+        isOutdated: false,
+        comments: [
+          {
+            id: "comment",
+            author: { login: "reviewer", name: null, avatarUrl: null },
+            body: "Rename this.",
+            createdAt: "2026-09-01T00:00:00Z",
+            url: null,
+          },
+        ],
+      },
+    ],
+  };
+  await using screen = await render(
+    <div {...workspaceAreaProps("panel", 4, "Workspace panel")} className="flex flex-1">
+      <PullRequestCodeTab
+        scrollerRef={() => {}}
+        environmentId={EnvironmentId.make("environment")}
+        reference={detail}
+        detail={withOrphan}
+        selectedCommitOid={null}
+        onSelectedCommitChange={() => {}}
+        onRefresh={() => {}}
+      />
+    </div>,
+    { container },
+  );
+  const focus = createWorkspaceFocusController(document);
+  using _focus = { [Symbol.dispose]: focus.dispose };
+  await expect.element(screen.getByText("Loading pull request diff...")).toBeVisible();
+  expect(focus.focus("panel")).toBe(true);
+
+  isInitialized.mockRestore();
+  initialize.mockRestore();
+  start();
+  await vi.waitFor(() =>
+    expect(document.activeElement).toBe(container.querySelector(".diff-render-surface")),
+  );
 });

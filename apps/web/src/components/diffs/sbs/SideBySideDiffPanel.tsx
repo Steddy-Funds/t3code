@@ -347,7 +347,7 @@ export function SideBySideDiffPanel(props: SideBySideDiffPanelProps) {
           {title}
         </span>
       )}
-      <DiffFilePathCopyButton filePath={filePath} />
+      <DiffFilePathCopyButton filePath={filePath} workspaceRoot={props.workspaceRoot} />
     </>
   ) : null;
 

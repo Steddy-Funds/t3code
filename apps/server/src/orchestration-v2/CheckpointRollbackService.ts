@@ -493,6 +493,21 @@ export const layer: Layer.Layer<
               },
             }),
           );
+          // An adapter that moved the conversation to a new native session re-points kept turns.
+          const movedTurns = "providerTurns" in snapshot ? snapshot.providerTurns : undefined;
+          for (const providerTurn of movedTurns ?? []) {
+            events.push(
+              yield* makeEvent({
+                type: "provider-turn.updated",
+                threadId: input.threadId,
+                nodeId: providerTurn.nodeId,
+                driver: providerThread.driver,
+                providerInstanceId: providerThread.providerInstanceId,
+                occurredAt: now,
+                payload: providerTurn,
+              }),
+            );
+          }
           for (const staleCheckpoint of staleCheckpoints) {
             events.push(
               yield* makeEvent({

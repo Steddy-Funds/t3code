@@ -3113,6 +3113,45 @@ const isClaudeConversationLine = (line: string): boolean =>
     onSome: (entry) => entry.type === "user" || entry.type === "assistant",
   });
 
+const decodeClaudeTranscriptEntry = Schema.decodeUnknownOption(
+  Schema.fromJsonString(
+    Schema.Struct({
+      type: Schema.String,
+      subtype: Schema.optional(Schema.NullOr(Schema.String)),
+      uuid: Schema.optional(Schema.NullOr(Schema.String)),
+      forkedFrom: Schema.optional(Schema.NullOr(Schema.Struct({ messageUuid: Schema.String }))),
+    }),
+  ),
+);
+
+// Claude's resume re-applies a compaction written anywhere later in the transcript, even one past
+// `resumeSessionAt` on a dead branch, so rolling back before it needs a fork that leaves it out.
+const claudeTranscriptCompactsAfter = (lines: ReadonlyArray<string>, cursor: string): boolean => {
+  let reachedCursor = false;
+  for (const line of lines) {
+    const entry = Option.getOrUndefined(decodeClaudeTranscriptEntry(line));
+    if (entry === undefined) continue;
+    if (!reachedCursor) {
+      reachedCursor = entry.uuid === cursor;
+    } else if (entry.type === "system" && entry.subtype === "compact_boundary") {
+      return true;
+    }
+  }
+  return false;
+};
+
+/** Source uuid to copied uuid, from the `forkedFrom` the SDK writes on each forked message. */
+const claudeForkedUuids = (lines: ReadonlyArray<string>): ReadonlyMap<string, string> => {
+  const forked = new Map<string, string>();
+  for (const line of lines) {
+    const entry = Option.getOrUndefined(decodeClaudeTranscriptEntry(line));
+    if (entry?.uuid != null && entry.forkedFrom != null) {
+      forked.set(entry.forkedFrom.messageUuid, entry.uuid);
+    }
+  }
+  return forked;
+};
+
 const getNativeThreadId = Effect.fnUntraced(function* (
   providerThread: OrchestrationV2ProviderThread,
 ) {
@@ -15154,6 +15193,20 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           return found && !unreadable ? ("empty" as const) : ("missing" as const);
         });
 
+        const readClaudeTranscripts = Effect.fn("ClaudeAdapterV2.readClaudeTranscripts")(function* (
+          nativeThreadId: string,
+        ) {
+          const projectsDir = yield* claudeProjectsDir;
+          const transcripts: Array<ReadonlyArray<string>> = [];
+          for (const project of yield* fileSystem.readDirectory(projectsDir)) {
+            const transcript = yield* fileSystem
+              .readFileString(path.join(projectsDir, project, `${nativeThreadId}.jsonl`))
+              .pipe(Effect.option);
+            if (Option.isSome(transcript)) transcripts.push(transcript.value.split("\n"));
+          }
+          return transcripts;
+        });
+
         const runtime: ProviderAdapter.ProviderAdapterV2SessionRuntime = {
           instanceId: adapterOptions.instanceId,
           driver: CLAUDE_PROVIDER,
@@ -15745,6 +15798,108 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
 
               const { claudeDeliveredAppContext: _delivered, ...nativeMetadata } =
                 rollbackInput.providerThread.nativeMetadata ?? {};
+
+              const target = rollbackInput.target;
+              // A compaction target resumes at the previous turn's cursor; its own boundary must stay.
+              const cursorIsTargets =
+                target.type === "thread_start" || claudeTurnCursor(target.providerTurn) !== null;
+              const transcripts =
+                resumeSessionAt === null || !cursorIsTargets
+                  ? []
+                  : yield* readClaudeTranscripts(nativeThreadId).pipe(
+                      Effect.catch((cause) =>
+                        Effect.logWarning(
+                          "orchestration-v2.claude-rollback-transcript-unreadable",
+                          {
+                            nativeThreadId,
+                            cause,
+                          },
+                        ).pipe(Effect.as([])),
+                      ),
+                    );
+              if (
+                resumeSessionAt !== null &&
+                transcripts.some((lines) => claudeTranscriptCompactsAfter(lines, resumeSessionAt))
+              ) {
+                const forked = yield* queryRunner.forkSession({
+                  sessionId: nativeThreadId,
+                  options: { upToMessageId: resumeSessionAt },
+                  environment: adapterOptions.environment,
+                  threadId: input.threadId,
+                  providerSessionId: input.providerSessionId,
+                });
+                const forkedUuids = claudeForkedUuids(
+                  (yield* readClaudeTranscripts(forked.sessionId).pipe(
+                    Effect.orElseSucceed(() => []),
+                  )).flat(),
+                );
+                // Kept turns move to the fork's uuids so later rollbacks and forks resolve there.
+                const keptTurns =
+                  target.type === "thread_start"
+                    ? []
+                    : rollbackInput.providerThreadTurns.flatMap((turn) => {
+                        const cursor = claudeTurnCursor(turn);
+                        return cursor === null || turn.ordinal > target.providerTurn.ordinal
+                          ? []
+                          : [{ turn, cursor }];
+                      });
+                const forkHead = rollbackInput.providerThread.nativeMetadata?.forkHeadMessageId;
+                const unmapped = [
+                  resumeSessionAt,
+                  ...(forkHead === undefined ? [] : [forkHead]),
+                  ...keptTurns.map((kept) => kept.cursor),
+                ].filter((cursor) => !forkedUuids.has(cursor));
+                if (unmapped.length > 0) {
+                  return yield* new ProviderAdapter.ProviderAdapterRollbackThreadError({
+                    driver: CLAUDE_PROVIDER,
+                    providerThreadId: rollbackInput.providerThread.id,
+                    cause: `Claude session fork ${forked.sessionId} is missing messages ${unmapped.join(", ")}.`,
+                  });
+                }
+                const copyOf = (cursor: string) => forkedUuids.get(cursor) ?? cursor;
+                yield* Ref.update(openedNativeThreads, (current) =>
+                  new Set(current).add(forked.sessionId),
+                );
+                return {
+                  providerThread: {
+                    ...rollbackInput.providerThread,
+                    providerSessionId: input.providerSessionId,
+                    nativeThreadRef: {
+                      driver: CLAUDE_PROVIDER,
+                      nativeId: forked.sessionId,
+                      strength: "strong" as const,
+                    },
+                    nativeConversationHeadRef: {
+                      driver: CLAUDE_PROVIDER,
+                      nativeId: copyOf(resumeSessionAt),
+                      strength: "weak" as const,
+                    },
+                    ...(rollbackInput.providerThread.nativeMetadata === null
+                      ? {}
+                      : {
+                          nativeMetadata: {
+                            ...nativeMetadata,
+                            ...(forkHead === undefined
+                              ? {}
+                              : { forkHeadMessageId: copyOf(forkHead) }),
+                          },
+                        }),
+                    status: "idle" as const,
+                    lastRunOrdinal: rollbackInput.target.appRunOrdinal,
+                    updatedAt: now,
+                  },
+                  providerTurns: keptTurns.map(({ turn, cursor }) => ({
+                    ...turn,
+                    nativeTurnRef:
+                      turn.nativeTurnRef === null
+                        ? null
+                        : { ...turn.nativeTurnRef, nativeId: copyOf(cursor) },
+                  })),
+                  messages: [],
+                  runtimeRequests: [],
+                };
+              }
+
               return {
                 providerThread: {
                   ...rollbackInput.providerThread,

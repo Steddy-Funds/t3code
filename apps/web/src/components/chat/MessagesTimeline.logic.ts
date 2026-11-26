@@ -643,6 +643,7 @@ type MessagesTimelineRowContent =
       showAssistantCopyButton: boolean;
       assistantCopyStreaming: boolean;
       revertTurnCount?: number | undefined;
+      keepTurnCount?: number | undefined;
       /** Another of your messages follows directly, so the two sit closer together. */
       groupedWithNext?: boolean;
       /** Another of your messages sits directly above, so the joined corners tighten. */
@@ -1681,7 +1682,7 @@ export function deriveMessagesTimelineRows(
     );
   };
   const unsettledRunId = deriveUnsettledRunId(input.latestRun ?? null, input.runningRunId ?? null);
-  const revertTurnCountByUserMessageId = input.supportsConversationRollback
+  const revertTurnCounts = input.supportsConversationRollback
     ? deriveRevertTurnCountByUserMessageId({
         timelineEntries: input.timelineEntries,
         checkpoints: input.turnDiffSummaries,
@@ -1689,7 +1690,7 @@ export function deriveMessagesTimelineRows(
         unsettledRunId,
         availableRevertTurnCounts: input.availableRevertTurnCounts,
       })
-    : new Map<MessageId, number>();
+    : null;
   const nextRows: MessagesTimelineRow[] = [];
   const terminalAssistantMessageIds = deriveTerminalAssistantMessageIds(timelineEntries);
   const failedRunIds = failedTimelineRunIds(timelineEntries, input.latestRun ?? null);
@@ -2389,7 +2390,11 @@ export function deriveMessagesTimelineRows(
       assistantCopyStreaming: timelineEntry.message.streaming || assistantResponseStillInProgress,
       revertTurnCount:
         timelineEntry.message.role === "user"
-          ? revertTurnCountByUserMessageId.get(timelineEntry.message.id)
+          ? revertTurnCounts?.edit.get(timelineEntry.message.id)
+          : undefined,
+      keepTurnCount:
+        timelineEntry.message.role === "user"
+          ? revertTurnCounts?.keep.get(timelineEntry.message.id)
           : undefined,
     });
   }
@@ -2994,6 +2999,7 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
         a.showAssistantCopyButton === bm.showAssistantCopyButton &&
         a.assistantCopyStreaming === bm.assistantCopyStreaming &&
         a.revertTurnCount === bm.revertTurnCount &&
+        a.keepTurnCount === bm.keepTurnCount &&
         a.groupedWithNext === bm.groupedWithNext &&
         a.groupedWithPrevious === bm.groupedWithPrevious &&
         a.continuesSteer === bm.continuesSteer

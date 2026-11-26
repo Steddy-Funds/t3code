@@ -664,6 +664,11 @@ export interface ProviderAdapterV2ThreadSnapshot {
   readonly providerPayload?: unknown;
 }
 
+export interface ProviderAdapterV2RollbackThreadResult extends ProviderAdapterV2ThreadSnapshot {
+  /** Kept turns whose native refs moved, as when a rollback forks a new native session. */
+  readonly providerTurns?: ReadonlyArray<OrchestrationV2ProviderTurn>;
+}
+
 export interface ProviderAdapterV2ReadThreadSnapshotInput {
   readonly providerThread: OrchestrationV2ProviderThread;
 }
@@ -886,7 +891,7 @@ export interface ProviderAdapterV2SessionRuntime {
   readonly mcpSignIn?: ProviderAdapterV2McpSignIn;
   readonly rollbackThread: (
     input: ProviderAdapterV2RollbackThreadInput,
-  ) => Effect.Effect<ProviderAdapterV2ThreadSnapshot, ProviderAdapterV2Error>;
+  ) => Effect.Effect<ProviderAdapterV2RollbackThreadResult, ProviderAdapterV2Error>;
   readonly forkThread: (
     input: ProviderAdapterV2ForkThreadInput,
   ) => Effect.Effect<OrchestrationV2ProviderThread, ProviderAdapterV2Error>;

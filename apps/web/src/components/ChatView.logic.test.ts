@@ -957,6 +957,7 @@ describe("waitForRevertedMessage", () => {
       threadId: threadRef.threadId,
       turnCount: 1,
       restoreFiles: false,
+      restorePrompt: true,
       checkpoint: undefined,
       draftTarget: threadRef,
       composerHasPendingAttachments: false,

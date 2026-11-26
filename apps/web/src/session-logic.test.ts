@@ -266,8 +266,9 @@ describe("V2 session presentation", () => {
       ],
     });
 
-    expect([...targets]).toEqual([[turnStartMessageId, 0]]);
-    expect(targets.has(steerMessageId)).toBe(false);
+    expect([...targets.edit]).toEqual([[turnStartMessageId, 0]]);
+    expect(targets.edit.has(steerMessageId)).toBe(false);
+    expect(targets.keep.size).toBe(0);
   });
 
   describe("revert targets after a rewind", () => {
@@ -304,19 +305,21 @@ describe("V2 session presentation", () => {
       assistantMessageId: MessageId.make(`assistant-${ordinal}`),
       completedAt: "2026-06-20T00:00:09.000Z",
     });
-    const targets = (
+    const revertTargets = (
       ordinals: ReadonlyArray<number>,
       checkpoints: ReadonlyArray<ReturnType<typeof checkpoint>>,
       options: { threadStartCheckpointAvailable?: boolean; unsettledRunId?: RunId } = {},
     ) =>
-      Object.fromEntries(
-        deriveRevertTurnCountByUserMessageId({
-          timelineEntries: ordinals.flatMap(turn),
-          checkpoints,
-          threadStartCheckpointAvailable: options.threadStartCheckpointAvailable ?? true,
-          unsettledRunId: options.unsettledRunId ?? null,
-        }),
-      );
+      deriveRevertTurnCountByUserMessageId({
+        timelineEntries: ordinals.flatMap(turn),
+        checkpoints,
+        threadStartCheckpointAvailable: options.threadStartCheckpointAvailable ?? true,
+        unsettledRunId: options.unsettledRunId ?? null,
+      });
+    const targets = (...args: Parameters<typeof revertTargets>) =>
+      Object.fromEntries(revertTargets(...args).edit);
+    const keepTargets = (...args: Parameters<typeof revertTargets>) =>
+      Object.fromEntries(revertTargets(...args).keep);
 
     it("keeps rewound and stopped runs editable at the previous visible checkpoint", () => {
       // Runs 1 and 3 were rewound; run 5 stopped without capturing a checkpoint.
@@ -336,6 +339,10 @@ describe("V2 session presentation", () => {
         "user-1": 0,
         "user-2": 1,
       });
+      // Keeping a prompt targets its own run's checkpoint; the latest run has nothing to drop.
+      expect(
+        keepTargets([2, 4, 5], [checkpoint(2), checkpoint(3, "stale"), checkpoint(4)]),
+      ).toEqual({ "user-2": 2, "user-4": 4 });
     });
 
     it("preserves a notification-only wake run while ignoring inherited and unrelated work", () => {
@@ -380,29 +387,22 @@ describe("V2 session presentation", () => {
         },
       };
 
-      expect(
-        Object.fromEntries(
-          deriveRevertTurnCountByUserMessageId({
-            timelineEntries: [
-              ...turn(1),
-              ...deriveTimelineEntriesFromVisibleTurnItems({
-                visibleTurnItems: [notification, inherited],
-                optimisticMessages: [],
-              }),
-              work,
-              ...turn(3),
-            ],
-            checkpoints: [
-              checkpoint(1),
-              checkpoint(2),
-              checkpoint(3),
-              checkpoint(7),
-              checkpoint(8),
-            ],
-            threadStartCheckpointAvailable: true,
+      const wakeTargets = deriveRevertTurnCountByUserMessageId({
+        timelineEntries: [
+          ...turn(1),
+          ...deriveTimelineEntriesFromVisibleTurnItems({
+            visibleTurnItems: [notification, inherited],
+            optimisticMessages: [],
           }),
-        ),
-      ).toEqual({ "user-1": 0, "user-3": 2 });
+          work,
+          ...turn(3),
+        ],
+        checkpoints: [checkpoint(1), checkpoint(2), checkpoint(3), checkpoint(7), checkpoint(8)],
+        threadStartCheckpointAvailable: true,
+      });
+      expect(Object.fromEntries(wakeTargets.edit)).toEqual({ "user-1": 0, "user-3": 2 });
+      // Reverting to the prompt before a wake run drops the wake from the conversation.
+      expect(Object.fromEntries(wakeTargets.keep)).toEqual({ "user-1": 1 });
     });
 
     it("hides edit when the predecessor is unavailable or the run is unsettled", () => {
@@ -415,6 +415,10 @@ describe("V2 session presentation", () => {
       expect(targets([1, 2], [checkpoint(1), checkpoint(2)], { unsettledRunId: runId(2) })).toEqual(
         { "user-1": 0 },
       );
+      expect(keepTargets([1, 2], [checkpoint(2)])).toEqual({});
+      expect(
+        keepTargets([1, 2], [checkpoint(1), checkpoint(2)], { unsettledRunId: runId(2) }),
+      ).toEqual({ "user-1": 1 });
     });
 
     it("can edit a cancelled run but cannot target its checkpoint without a provider turn", () => {
@@ -425,7 +429,7 @@ describe("V2 session presentation", () => {
             checkpoints: [checkpoint(1), checkpoint(2), checkpoint(3)],
             threadStartCheckpointAvailable: true,
             availableRevertTurnCounts: new Set([0, 1]),
-          }),
+          }).edit,
         ),
       ).toEqual({ "user-1": 0, "user-2": 1 });
     });
@@ -488,7 +492,7 @@ describe("V2 session presentation", () => {
             timelineEntries: [...inheritedEntries, ...turn(2)],
             checkpoints: [{ ...checkpoint(7), runId: fixture.historyRunId }, checkpoint(2)],
             threadStartCheckpointAvailable: true,
-          }),
+          }).edit,
         ),
       ).toEqual({ "user-2": 0 });
     });

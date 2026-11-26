@@ -172,6 +172,8 @@ export async function rewindToMessage(input: {
   readonly threadId: ThreadId;
   readonly turnCount: number;
   readonly restoreFiles: boolean;
+  /** Return the message to the composer; off when reverting to just after its run. */
+  readonly restorePrompt: boolean;
   readonly checkpoint: ReturnType<typeof findRevertCheckpoint>;
   readonly draftTarget: ScopedThreadRef | DraftId;
   readonly composerHasPendingAttachments: boolean;
@@ -191,21 +193,23 @@ export async function rewindToMessage(input: {
   }) => Promise<AtomCommandResult<unknown, unknown>>;
 }): Promise<
   | { readonly error: string; readonly prompt?: never }
-  | { readonly error: null; readonly prompt: string }
+  | { readonly error: null; readonly prompt: string | null }
 > {
   const { message, environmentId, draftTarget } = input;
   try {
-    if (input.composerHasPendingAttachments) {
+    if (input.restorePrompt && input.composerHasPendingAttachments) {
       throw new Error(m(msg("Wait for attachments to finish preparing before rewinding.")));
     }
     const connection = readPreparedConnection(environmentId);
     if (!connection) throw new Error(m(msg("The environment is not connected.")));
-    const files = await prepareRevertedMessageAttachments({
-      message,
-      environmentId,
-      httpBaseUrl: connection.httpBaseUrl,
-      createAssetUrl: input.createAssetUrl,
-    });
+    const files = input.restorePrompt
+      ? await prepareRevertedMessageAttachments({
+          message,
+          environmentId,
+          httpBaseUrl: connection.httpBaseUrl,
+          createAssetUrl: input.createAssetUrl,
+        })
+      : [];
     const store = useComposerDraftStore.getState();
     const draft = store.getComposerDraft(draftTarget);
     if (
@@ -249,6 +253,7 @@ export async function rewindToMessage(input: {
         ),
       });
     }
+    if (!input.restorePrompt) return { error: null, prompt: null };
     const currentPrompt = store.getComposerDraft(draftTarget)?.prompt ?? "";
     const { prompt: restoredPrompt, mentions } = recallComposerMessage(message);
     const nextPrompt =

@@ -35,6 +35,9 @@ import { type TimestampFormat } from "@t3tools/contracts/settings";
 import type { TurnItemDetailSource } from "../../state/queries";
 import { type HandoffTimelineRun } from "./V2LifecycleRow";
 
+/** `edit` drops the prompt into the composer; `keep` keeps it and its reply. */
+export type TimelineRevertMode = "edit" | "keep";
+
 /**
  * Where an expanded row reads an item's detail and a command's output. The owner's rows read them
  * from the environment; the guest page reads them through its own routes.
@@ -68,7 +71,11 @@ export interface TimelineRowSharedState {
   skills: ReadonlyArray<ServerProviderSkill>;
   runs: ReadonlyArray<HandoffTimelineRun>;
   activeThreadEnvironmentId: EnvironmentId;
-  onRevertToTurnCount: (targetTurnCount: number, messageId: MessageId) => void;
+  onRevertToTurnCount: (
+    targetTurnCount: number,
+    messageId: MessageId,
+    mode: TimelineRevertMode,
+  ) => void;
   /** Absent hides "Reply", as in the guest view. */
   onReplyToMessage: ((messageId: MessageId) => void) | undefined;
   onUseArtifactTemplate: (template: CodexArtifactTemplate) => void;

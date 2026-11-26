@@ -35,7 +35,7 @@ function formatScheduledTaskInterval(everyMs: number): string {
   return `Every ${parts.join(" ")}`;
 }
 
-export function scheduledTaskWeekdaysLabel(weekdays: ReadonlyArray<number> | undefined): string {
+function scheduledTaskWeekdaysLabel(weekdays: ReadonlyArray<number> | undefined): string {
   const days = new Set(weekdays ?? []);
   if (days.size === 0 || days.size === 7) return "Every day";
   if (days.size === 5 && [1, 2, 3, 4, 5].every((day) => days.has(day))) return "Weekdays";
